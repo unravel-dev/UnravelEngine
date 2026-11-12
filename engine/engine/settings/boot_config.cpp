@@ -5,6 +5,8 @@
 
 #include <logging/logging.h>
 
+#include <algorithm>
+
 namespace unravel
 {
 
@@ -84,6 +86,41 @@ auto preferred_renderers_for_platform(renderer_platform platform) -> hpp::span<c
         default:
             return windows_backends;
     }
+}
+
+auto get_current_renderer_platform() -> renderer_platform
+{
+#if UNRAVEL_PLATFORM_LINUX
+    return renderer_platform::linux;
+#elif UNRAVEL_PLATFORM_OSX
+    return renderer_platform::macos;
+#elif UNRAVEL_PLATFORM_ANDROID
+    return renderer_platform::android;
+#else
+    return renderer_platform::windows;
+#endif
+}
+
+auto get_renderer_candidates(preferred_renderer preferred, const std::vector<preferred_renderer>& shipped)
+    -> std::vector<preferred_renderer>
+{
+    if(shipped.empty())
+    {
+        return {preferred};
+    }
+    std::vector<preferred_renderer> candidates;
+    if(std::find(shipped.begin(), shipped.end(), preferred) != shipped.end())
+    {
+        candidates.push_back(preferred);
+    }
+    for(const auto renderer : shipped)
+    {
+        if(renderer != preferred)
+        {
+            candidates.push_back(renderer);
+        }
+    }
+    return candidates;
 }
 
 auto is_preferred_renderer_available_on(preferred_renderer value, renderer_platform platform) -> bool
@@ -197,6 +234,7 @@ auto boot_config_from_settings(const settings& project_settings) -> boot_config
     boot_config result{};
     result.renderer = project_settings.graphics.renderer.get_for_current_platform();
     result.physics = project_settings.physics.backend;
+    result.shipped_renderers = project_settings.build.renderers;
     return result;
 }
 

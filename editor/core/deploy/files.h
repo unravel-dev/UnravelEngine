@@ -88,6 +88,9 @@ void copy_file_or_throw(const fs::path& from, const fs::path& to);
 auto write_file(const fs::path& file, const void* data, std::size_t size) -> bool;
 /// Writes `text` to `file` byte for byte, replacing it; throws when any of it did not reach the file.
 void write_text_or_throw(const fs::path& file, const std::string& text);
+/// Removes `file`; a missing one is fine. Throws when it stays (a file another program holds open), for files
+/// whose staying changes what the game loads: an older pack would be mounted over the new files.
+void remove_file_or_throw(const fs::path& file);
 
 /// The key=value lines of a stamp the build left beside what it made; empty for a missing file.
 auto read_stamp(const fs::path& file) -> std::map<std::string, std::string>;

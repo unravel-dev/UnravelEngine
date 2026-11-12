@@ -378,6 +378,34 @@ auto is_overridable_deploy_path(hpp::string_view path) -> bool
     return !serialization::is_path_within(path, "deploy_location");
 }
 
+auto get_desktop_renderers(const desktop_graphics_apis& apis, renderer_platform platform) -> std::vector<preferred_renderer>
+{
+    struct api_choice
+    {
+        preferred_renderer renderer;
+        bool is_chosen;
+    };
+    const api_choice choices[] = {{preferred_renderer::direct3d12, apis.direct3d12},
+                                  {preferred_renderer::direct3d11, apis.direct3d11},
+                                  {preferred_renderer::metal, apis.metal},
+                                  {preferred_renderer::vulkan, apis.vulkan},
+                                  {preferred_renderer::opengl, apis.opengl}};
+    std::vector<preferred_renderer> renderers;
+    for(const auto& choice : choices)
+    {
+        if(choice.is_chosen && is_preferred_renderer_available_on(choice.renderer, platform))
+        {
+            renderers.push_back(choice.renderer);
+        }
+    }
+    return renderers;
+}
+
+auto is_desktop_graphics_restricted(const desktop_graphics_apis& apis, renderer_platform platform) -> bool
+{
+    return get_desktop_renderers(apis, platform).size() < get_desktop_renderers({}, platform).size();
+}
+
 auto resolve_settings(const settings& base, const settings_profile& profile) -> settings
 {
     settings resolved = base;
@@ -388,6 +416,12 @@ auto resolve_settings(const settings& base, const settings_profile& profile) -> 
     }
     resolved.build.profile = profile.name;
     resolved.build.platform = profile.platform;
+    // A desktop build that leaves graphics APIs out names the ones it ships, so its game starts none but them.
+    const auto platform = get_current_renderer_platform();
+    if(profile.platform == target_platform::desktop && is_desktop_graphics_restricted(profile.desktop.graphics, platform))
+    {
+        resolved.build.renderers = get_desktop_renderers(profile.desktop.graphics, platform);
+    }
     return resolved;
 }
 

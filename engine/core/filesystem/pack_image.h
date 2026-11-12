@@ -24,6 +24,8 @@ struct pack_image
     std::uint64_t toc_hash{};
     /// For a patch, the toc_hash of the pack it was made against.
     std::uint64_t base_hash{PACK_NO_BASE};
+    /// Where the table of contents starts: the end of the entries' bytes.
+    std::uint64_t toc_offset{};
 
     /// The record of an entry name (any separators or case the file system accepts); null when absent.
     auto find(const std::string& name) const -> const pack_record*;

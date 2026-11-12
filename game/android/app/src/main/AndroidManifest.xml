@@ -42,13 +42,15 @@
         android:enableOnBackInvokedCallback="false"
         android:hardwareAccelerated="true">
 
+        <!-- configChanges names every change the game takes while it runs: for a change it does not name, such as
+             the display size setting (density), Android would start the activity anew, which ends the game. -->
         <activity
             android:name=".UnravelActivity"
             android:label="${appName}"
             android:screenOrientation="${screenOrientation}"
             android:alwaysRetainTaskState="true"
             android:launchMode="singleInstance"
-            android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|density|keyboard|keyboardHidden|navigation"
             android:preferMinimalPostProcessing="true"
             android:exported="true">
             <intent-filter>

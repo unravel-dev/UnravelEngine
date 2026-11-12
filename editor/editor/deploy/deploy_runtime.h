@@ -1,6 +1,7 @@
 #pragma once
 
 #include <context/context.hpp>
+#include <deploy/assembly_references.h>
 #include <deploy/deploy_settings.h>
 #include <filesystem/filesystem.h>
 
@@ -38,9 +39,17 @@ struct runtime_plan
 /// The runtime step of a deploy with these settings; main thread.
 auto make_runtime_plan(rtti::context& ctx, const deploy_settings& params) -> runtime_plan;
 
-/// Brings the deployed runtime up to date: copies what changed and removes an older version beside the
-/// current one. Throws on failure.
-void deploy_runtime(const runtime_plan& plan);
+/// The libraries of the plan's managed payload that ship: what the game loads from it, which a framework trim
+/// starts from. None on Mono, whose class libraries ship whole.
+auto list_runtime_libraries(const runtime_plan& plan) -> std::vector<fs::path>;
+
+/**
+ * @brief Brings the deployed runtime up to date: copies what changed and removes an older version beside the
+ * current one. Throws on failure.
+ * @param trim The framework assemblies the build leaves out (CoreCLR's shared framework); what an earlier build
+ * shipped of them is removed. It reads the build's script libraries, so they are built by then.
+ */
+void deploy_runtime(const runtime_plan& plan, const framework_trim& trim);
 
 /// Why the editor's runtime cannot ship, if it cannot: a deployed game carries the runtime the editor runs
 /// on, which must be of the preferred .NET major. Empty when it can.

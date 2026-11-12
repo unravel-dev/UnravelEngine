@@ -14,6 +14,7 @@ constexpr const char* PROFILE_CACHES_FOLDER = "profiles";
 constexpr const char* SHADERS_FOLDER = "shaders";
 constexpr const char* AUDIO_FOLDER = "audio";
 constexpr const char* TEXTURE_SET_FOLDER_PREFIX = "textures_";
+constexpr const char* WEB_DATA_FOLDER = "web";
 
 auto get_profile_caches_folder(const fs::path& project_root) -> fs::path
 {
@@ -79,6 +80,11 @@ auto get_profile_audio_folder(const fs::path& project_root, const std::string& p
 auto get_profile_symbols_folder(const fs::path& project_root, const std::string& profile) -> fs::path
 {
     return get_profile_cache_folder(project_root, profile) / SYMBOLS_FOLDER;
+}
+
+auto get_profile_web_data_folder(const fs::path& project_root, const std::string& profile) -> fs::path
+{
+    return get_profile_cache_folder(project_root, profile) / WEB_DATA_FOLDER;
 }
 
 auto sweep_folder(const fs::path& folder, const std::unordered_set<std::string>& kept) -> sweep_report

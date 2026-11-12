@@ -4,6 +4,8 @@
 
 #include <cstddef>
 #include <functional>
+#include <string>
+#include <vector>
 
 namespace fs
 {
@@ -19,6 +21,9 @@ struct mirror_stats
 /// Decides, by source path, which files a mirror takes.
 using mirror_filter = std::function<bool(const path& source_file)>;
 
+/// Whether the files `lhs` and `rhs` hold the same bytes. False with `ec` set when one of them cannot be read.
+auto have_same_content(const path& lhs, const path& rhs, error_code& ec) -> bool;
+
 /**
  * @brief Copies `from` to `to` unless `to` already has its size and write time.
  *
@@ -28,6 +33,19 @@ using mirror_filter = std::function<bool(const path& source_file)>;
  * @return False with `ec` set when the copy fails.
  */
 auto copy_file_if_changed(const path& from, const path& to, bool& is_copied, error_code& ec) -> bool;
+
+/**
+ * @brief Removes the files under `root` that `earlier` names and `kept` does not, then the folders that leaves
+ * empty: what an older list of files left behind once a newer list replaced it.
+ *
+ * Names are relative to `root` and '/' separated, and compare as make_path_key does. A name that leads out of
+ * `root` is skipped. Every file is tried, whatever fails.
+ * @return The number of files removed; `ec` holds the first failure.
+ */
+auto remove_unlisted_files(const path& root,
+                           const std::vector<std::string>& earlier,
+                           const std::vector<std::string>& kept,
+                           error_code& ec) -> std::size_t;
 
 /**
  * @brief Makes the folder `to` hold exactly the files of `from` that `include` accepts (all when empty).

@@ -5,30 +5,44 @@
 // WebGPU is unavailable, as the manifest's graphics block says. Depending on that block it asks the player before the
 // download, or tells them once the game runs. For WebGPU the page creates the device, because bgfx cannot wait for it
 // inside the engine without JSPI or Asyncify, which the .NET runtime does not use; the engine hands it to bgfx. For
-// WebGL 2 bgfx creates the context on the canvas itself. The game's files come from data_manifest.json, which a web
-// deploy writes next to this page, into the module's file system at the paths the engine reads them from. The
-// engine's arguments come from the page's address, one per arg= (index.html?arg=--log-level&arg=trace), with the
-// graphics API the page chose; graphics=webgl2 in the address starts WebGL 2 where the build ships it.
+// WebGL 2 bgfx creates the context on the canvas itself. The engine's arguments come from the page's address, one per
+// arg= (index.html?arg=--log-level&arg=trace), with the graphics API the page chose; graphics=webgl2 in the address
+// starts WebGL 2 where the build ships it. A page that is not served from this computer passes on only the arguments
+// that are harmless in a published game (data.js, filterArguments).
+//
+// The game's files come from data_manifest.json, which a web deploy writes next to this page, in chunks named by
+// their content (data.js): each is checked against the manifest, kept in the browser's Cache Storage for good, and
+// downloaded again a few times when it does not arrive. A pack goes chunk by chunk straight into the player's memory,
+// where the engine maps it, so the page never holds a second copy of it; the other files go into the module's file
+// system at the paths the engine reads them from. The runtime's files are kept in Cache Storage under their names,
+// which carry their fingerprints. Each page keeps its own caches, drops what its deploy no longer lists once the game
+// started, and drops the caches of pages on its site whose build is gone. Cache Storage and WebGPU are only given to
+// secure pages: the page is served over HTTPS, or from this computer.
 //
 // The player's own files (user:/ and cache:/, in the game's folder the manifest names, where SDL puts them) are kept in
 // the browser's IndexedDB, in a database of that folder, so games on one site keep their saves apart: read in before
 // the engine starts, stored again whenever a written file is closed, and at once when the page is hidden or closed.
 //
-// The game's files and the runtime's are kept in the browser's Cache Storage, so a later visit downloads only what a
-// new deploy changed: a data file under its fingerprint from the manifest, a runtime file under its name, which
-// carries its own. Each page keeps its own caches, and drops what its deploy no longer lists once the game started.
-// WebGPU and Cache Storage are only given to secure pages: the page is served over HTTPS, or from this computer.
-//
 // The loading screen (index.html) shows the game's title from the manifest and a bar that the downloads move by
-// their bytes: the runtime's, weighed by the manifest's runtime_size, then the game's files by their sizes.
+// their bytes: the runtime's, weighed by the manifest's runtime_size, then the game's files by their sizes. Once the
+// game runs, the page says so when it stops: the engine ended it, the program failed, or the browser took the
+// graphics device away. The canvas would otherwise keep the last frame as if the game had frozen.
 //
 // A deploy with several texture sets lists them in the manifest (texture_sets, the one computers read first) and
 // names each set's packs (texture_set): the page downloads the packs of the first set the device's GPU reads (on WebGPU
 // it lists the set's feature and creates a texture of its format, on WebGL 2 it offers the set's extensions), the
 // first set's when it reads none, and the engine mounts them over the game's packs. A deploy for both graphics APIs
 // ships their shaders the same way (shader_sets, shader_set), and the page downloads the set of the API it chose.
-import { dotnet } from './_framework/dotnet.js';
-import {
+//
+// The page talks with the game through globalThis.unravelPage (engine/web/web_page.h, the scripts' WebPage class):
+// the functions a page of the project's own offers the game (functions.<name>), and the messages it posts for it
+// (post(text)).
+
+// The page's code is loaded under its build's id (index.html), and so is every module it imports: a host's cached
+// copy of an older build's code never runs beside this build's.
+const BUILD_QUERY = new URL(import.meta.url).search;
+const { dotnet } = await import(`./_framework/dotnet.js${BUILD_QUERY}`);
+const {
   DEFAULT_GRAPHICS_POLICY,
   WEBGL2,
   WEBGPU,
@@ -42,7 +56,16 @@ import {
   readGraphicsArguments,
   recall,
   remember,
-} from './graphics.js';
+} = await import(`./graphics.js${BUILD_QUERY}`);
+const { resumeStoppedDevices } = await import(`./audio.js${BUILD_QUERY}`);
+const {
+  MANIFEST_FORMAT,
+  MEMORY_FILES_ARGUMENT,
+  dropTrimmedAssemblies,
+  fetchWithRetry,
+  filterArguments,
+  loadFiles,
+} = await import(`./data.js${BUILD_QUERY}`);
 
 /// What changes when WebGL 2 stands in for WebGPU, as the page tells the player.
 const WEBGL2_CHANGES = 'The game runs on WebGL 2, with simpler lighting and effects.';
@@ -53,8 +76,8 @@ const FALLBACK_NOTICE_MS = 12000;
 const NOTICE_FADE_MS = 400;
 /// The help links the page opens: a page on the web, never a script.
 const WEB_LINK = /^https?:\/\//i;
-/// Data files downloaded at once: each is held twice while it goes into the cache and the file system, so fewer keep
-/// the page's memory low on a large game.
+/// Chunks downloaded at once: each is held until it is checked, kept and written, so fewer keep the page's memory
+/// low.
 const LOAD_CONCURRENCY = 4;
 /// Where the downloads start on the loading bar. They end where the engine's start takes over, which holds the page
 /// without a repaint: the bar creeps through it on its own (index.html, a transition the browser runs while the page
@@ -75,6 +98,16 @@ const FALLBACK_RUNTIME_SIZE = 40 * 1024 * 1024;
 const BYTES_PER_MEGABYTE = 1024 * 1024;
 /// How long the loading screen takes to fade out (index.html, .loader), with a frame to spare.
 const LOADER_FADE_MS = 650;
+/// What the names of the page's caches start with, before the kind and the page's path; the kinds this page keeps,
+/// and the one pages of older builds kept whole data files in.
+const CACHE_PREFIX = 'unravel-';
+const RUNTIME_CACHE = 'runtime';
+const CHUNKS_CACHE = 'chunks';
+const LEGACY_DATA_CACHE = 'data';
+/// The manifest beside every page, which tells a page that is gone from one that is there.
+const MANIFEST_NAME = 'data_manifest.json';
+/// The boundary a pack's memory starts on, as a mapped file's does.
+const MEMORY_ALIGNMENT = 65536;
 /// The WebGPU feature a GPU reads each texture set's formats with, by the manifest's set names, and a format of the
 /// feature the page creates a texture of before it trusts it: a device can list a feature whose formats it refuses
 /// (Safari on an iPhone 15 Pro lists texture-compression-bc and fails every BC texture).
@@ -94,6 +127,19 @@ const EMPTY_ADAPTER_INFO = {
   subgroupMinSize: 0,
   subgroupMaxSize: 0,
 };
+/// What the page says of a game that stopped, by what stopped it.
+const STOPPED_TEXTS = Object.freeze({
+  ended: { title: 'The game has ended.', text: 'Reload the page to play again.' },
+  failed: {
+    title: 'The game stopped because of an error.',
+    text: 'Reload the page to start it again. The browser\'s console says what went wrong.',
+  },
+  device_lost: {
+    title: 'The game lost its graphics device.',
+    text: 'The browser took the GPU away from the page, as it does when its graphics process restarts or a driver '
+      + 'is updated. Reload the page to go on playing.',
+  },
+});
 
 const loader = {
   root: document.getElementById('loader'),
@@ -114,6 +160,22 @@ const loader = {
   askContinue: document.getElementById('loader-ask-continue'),
   progress: 0,
 };
+
+const stopped = {
+  root: document.getElementById('stopped'),
+  title: document.getElementById('stopped-title'),
+  text: document.getElementById('stopped-text'),
+  reload: document.getElementById('stopped-reload'),
+};
+
+/// Whether the game runs: from the engine's start until the page said it stopped.
+let isGameRunning = false;
+
+/// SDL's window takes the page once the engine creates it, and hides every element of the body but the canvas. The
+/// screens the page shows over the game stay above it as children of the document itself.
+function keepAboveGame(element) {
+  document.documentElement.appendChild(element);
+}
 
 function report(stage) {
   loader.stage.textContent = stage;
@@ -188,6 +250,57 @@ function showError(message, helpLink) {
   console.log('[player] The game could not start: ' + message);
 }
 
+/// Covers the game with the screen that says why it stopped, once: what comes after the first reason follows from it.
+function showStopped(reason) {
+  if (!isGameRunning) {
+    return;
+  }
+  isGameRunning = false;
+  const { title, text } = STOPPED_TEXTS[reason];
+  stopped.title.textContent = title;
+  stopped.text.textContent = text;
+  stopped.root.hidden = false;
+  stopped.reload.focus();
+  console.log(`[player] ${title}`);
+}
+
+/// Whether `error` ended the program: a trap or an abort inside the module, or memory that ran out. Anything else a
+/// page's script throws leaves the game running.
+function isProgramFailure(error) {
+  const message = String(error?.message ?? error ?? '');
+  return error instanceof WebAssembly.RuntimeError || /^Aborted\(|out of memory/i.test(message);
+}
+
+/// Says so when the running game's program fails: the error reaches the page as an uncaught one.
+function watchForProgramFailure() {
+  const check = (error) => isProgramFailure(error) && showStopped('failed');
+  window.addEventListener('error', (event) => check(event.error ?? event.message));
+  window.addEventListener('unhandledrejection', (event) => check(event.reason));
+}
+
+/// Says so when the browser takes the graphics device from the running game. A device the page destroyed itself is
+/// not lost.
+function watchForDeviceLoss(graphics) {
+  if (graphics.device) {
+    graphics.device.lost.then((info) => info.reason !== 'destroyed' && showStopped('device_lost'));
+    return;
+  }
+  document.getElementById('canvas').addEventListener('webglcontextlost', () => showStopped('device_lost'));
+}
+
+/// The object the page and the game talk through. A page of the project's own may have created it before this
+/// script ran, with the functions it offers the game.
+function createPageInterface() {
+  const page = (globalThis.unravelPage ??= {});
+  page.functions ??= {};
+  page.messages ??= [];
+  page.post ??= (text) => {
+    page.messages.push(String(text));
+  };
+  page.onGameEnded = () => showStopped('ended');
+  return page;
+}
+
 /// Resolves after `count` frames: a change shows on the screen once the frame after it starts.
 function nextFrames(count) {
   return new Promise((resolve) => {
@@ -196,13 +309,17 @@ function nextFrames(count) {
   });
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /// Fades the loading screen out over the game's first frames.
 async function hideLoader() {
   loader.fill.style.transition = '';
   setProgress(1);
   await nextFrames(2);
   loader.root.classList.add('is-done');
-  await new Promise((resolve) => setTimeout(resolve, LOADER_FADE_MS));
+  await wait(LOADER_FADE_MS);
   loader.root.remove();
 }
 
@@ -211,24 +328,17 @@ function toMegabytes(bytes) {
 }
 
 /// Counts the bytes of the runtime and of the game's files as they arrive and moves the bar by them up to
-/// `downloadsEnd`. Without the files' sizes (an older manifest) the files count by number, weighed as the runtime.
+/// `downloadsEnd`.
 function createDownloadProgress(manifest, downloadsEnd) {
   const runtimeSize = manifest.runtime_size > 0 ? manifest.runtime_size : FALLBACK_RUNTIME_SIZE;
-  const files = manifest.files;
-  const hasSizes = files.every((file) => Number.isFinite(file.size));
-  const dataSize = hasSizes ? files.reduce((sum, file) => sum + file.size, 0) : runtimeSize;
+  const dataSize = manifest.files.reduce((sum, file) => sum + file.size, 0);
   const totalSize = runtimeSize + dataSize;
   let runtimeBytes = 0;
   let dataBytes = 0;
-  let filesDone = 0;
   const update = () => {
-    const runtime = Math.min(runtimeBytes, runtimeSize);
-    const data = hasSizes ? Math.min(dataBytes, dataSize) : dataSize * filesDone / Math.max(1, files.length);
-    const done = (runtime + data) / totalSize;
-    setProgress(PROGRESS_DOWNLOADS_START + (downloadsEnd - PROGRESS_DOWNLOADS_START) * done);
-    if (hasSizes) {
-      loader.detail.textContent = `${toMegabytes(runtime + data)} of ${toMegabytes(totalSize)} MB`;
-    }
+    const done = Math.min(runtimeBytes, runtimeSize) + Math.min(Math.max(dataBytes, 0), dataSize);
+    setProgress(PROGRESS_DOWNLOADS_START + (downloadsEnd - PROGRESS_DOWNLOADS_START) * done / totalSize);
+    loader.detail.textContent = `${toMegabytes(done)} of ${toMegabytes(totalSize)} MB`;
   };
   return {
     addRuntimeBytes: (count) => {
@@ -241,10 +351,6 @@ function createDownloadProgress(manifest, downloadsEnd) {
     },
     addDataBytes: (count) => {
       dataBytes += count;
-      update();
-    },
-    finishFile: () => {
-      filesDone++;
       update();
     },
   };
@@ -392,14 +498,14 @@ function showNotice({ text, link = '', duration = 0 }) {
   close.className = 'notice-close';
   close.type = 'button';
   close.setAttribute('aria-label', 'Close');
-  close.textContent = '\u00d7';
+  close.textContent = '\u00D7';
   notice.appendChild(close);
   const dismiss = () => {
     notice.classList.add('is-gone');
     setTimeout(() => notice.remove(), NOTICE_FADE_MS);
   };
   close.addEventListener('click', dismiss, { once: true });
-  document.body.appendChild(notice);
+  keepAboveGame(notice);
   if (duration > 0) {
     setTimeout(dismiss, duration);
   }
@@ -447,16 +553,21 @@ function tellAboutGraphics(graphics, policy) {
   });
 }
 
+function getCacheName(kind, pagePath) {
+  return `${CACHE_PREFIX}${kind}:${pagePath}`;
+}
+
 async function openCache(kind) {
   try {
-    return globalThis.caches ? await caches.open(`unravel-${kind}:${location.pathname}`) : null;
+    return globalThis.caches ? await caches.open(getCacheName(kind, location.pathname)) : null;
   } catch {
     return null;
   }
 }
 
-async function download(url) {
-  const response = await fetch(url, { cache: 'no-cache' });
+/// The host's answer for `url`; throws when it is not the file. `cacheMode` is the browser's own cache's part in it.
+async function download(url, cacheMode = 'no-cache') {
+  const response = await fetch(url, { cache: cacheMode });
   if (!response.ok) {
     throw new Error(`${url} could not be downloaded (${response.status}).`);
   }
@@ -464,14 +575,19 @@ async function download(url) {
 }
 
 /// The runtime's response for `url` from `cache` under `key`, or from the network, which then goes into the cache;
-/// its bytes counted into `onBytes`. A download is counted as it arrives: storing it reads it through.
+/// its bytes counted into `onBytes`. A download is counted as it arrives: storing it reads it through. A host with a
+/// passing problem is asked again.
 async function fetchCached(cache, url, key, used, onBytes) {
   used.add(key);
   const cached = cache ? await cache.match(key) : undefined;
   if (cached) {
     return countBytes(cached, onBytes);
   }
-  const response = countBytes(await download(url), onBytes);
+  const answer = await fetchWithRetry(() => fetch(url, { cache: 'no-cache' }), wait);
+  if (!answer.ok) {
+    throw new Error(`${url} could not be downloaded (${answer.status}).`);
+  }
+  const response = countBytes(answer, onBytes);
   if (cache) {
     await cache.put(key, response.clone()).catch(() => {});
   }
@@ -501,14 +617,14 @@ function countBytes(response, onBytes) {
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
-/// The body of `response`, read chunk by chunk into `onBytes`, into a buffer of the `size` the manifest gives.
-async function readBytes(response, size, onBytes) {
-  if (!response.body || !Number.isFinite(size)) {
+/// The body of `response` as bytes, counted into `onBytes` as it arrives.
+async function readBytes(response, onBytes) {
+  if (!response.body) {
     const whole = new Uint8Array(await response.arrayBuffer());
     onBytes(whole.byteLength);
     return whole;
   }
-  let bytes = new Uint8Array(size);
+  const parts = [];
   let length = 0;
   const reader = response.body.getReader();
   for (;;) {
@@ -516,56 +632,90 @@ async function readBytes(response, size, onBytes) {
     if (done) {
       break;
     }
-    if (length + value.byteLength > bytes.byteLength) {
-      const grown = new Uint8Array(Math.max(bytes.byteLength * 2, length + value.byteLength));
-      grown.set(bytes.subarray(0, length));
-      bytes = grown;
-    }
-    bytes.set(value, length);
+    parts.push(value);
     length += value.byteLength;
     onBytes(value.byteLength);
   }
-  return length === bytes.byteLength ? bytes : bytes.slice(0, length);
-}
-
-/// Whether `bytes` are as long as the manifest says their file is; an older manifest lists no sizes.
-function hasListedSize(bytes, size) {
-  return !Number.isFinite(size) || bytes.byteLength === size;
-}
-
-/// The bytes of a data file from `cache` under `key`, or from the network, then stored in the cache from the same
-/// bytes: the download is read once. Bytes of another length than the manifest lists are not the build's file (a
-/// host's page for a missing file, a build replaced mid-download): a cached copy is downloaded again, and a download
-/// is refused before it reaches the cache, where every later visit would read it back.
-async function fetchDataFile(cache, url, key, used, size, onBytes) {
-  used.add(key);
-  const cached = cache ? await cache.match(key) : undefined;
-  if (cached) {
-    const stored = await readBytes(cached, size, onBytes);
-    if (hasListedSize(stored, size)) {
-      return stored;
-    }
-    await cache.delete(key);
-    onBytes(-stored.byteLength);
-  }
-  const bytes = await readBytes(await download(url), size, onBytes);
-  if (!hasListedSize(bytes, size)) {
-    throw new Error(`${url} has ${bytes.byteLength} bytes where the build lists ${size}: the host sent another `
-      + 'file. Try again in a moment.');
-  }
-  if (cache) {
-    await cache.put(key, new Response(bytes)).catch(() => {});
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const part of parts) {
+    bytes.set(part, offset);
+    offset += part.byteLength;
   }
   return bytes;
 }
 
-/// Starts the engine. When it does not start, the cached game files go: one of them may be what stops it, and the
-/// next visit then downloads them again instead of reading the same bytes back.
-async function runEngine(runtime, dataCache) {
-  const dropCachedData = () => dropUnused(dataCache, new Set()).catch(() => {});
+/// What data.js loads chunks through: the manifest's chunks folder on the host, and the page's cache of chunks. A
+/// chunk the page keeps itself stays out of the browser's own cache, which would hold it a second time.
+function createChunkIo(folder, cache, used, onBytes) {
+  const getUrl = (name) => new URL(`${folder}/${name}`, location.href).href;
+  return {
+    readCache: async (name) => {
+      used.add(getUrl(name));
+      const kept = cache ? await cache.match(getUrl(name)) : undefined;
+      return kept ? new Uint8Array(await kept.arrayBuffer()) : null;
+    },
+    writeCache: async (name, bytes) => {
+      if (cache) {
+        await cache.put(getUrl(name), new Response(bytes)).catch(() => {});
+      }
+    },
+    dropCache: async (name) => {
+      await cache?.delete(getUrl(name));
+    },
+    download: async (name, count) => readBytes(await download(getUrl(name), cache ? 'no-store' : 'default'), count),
+    wait,
+    onBytes,
+  };
+}
+
+/// The module's memory as it is now: growing it replaces the buffer, so a view is never kept.
+function getHeap(runtime) {
+  return runtime.localHeapViewU8 ? runtime.localHeapViewU8() : runtime.Module.HEAPU8;
+}
+
+/// Where `size` bytes for a pack start in the module's memory. Never freed: a pack stays mapped while the game runs.
+function allocatePackMemory(module, size) {
+  const block = module._malloc(size + MEMORY_ALIGNMENT) >>> 0;
+  if (block === 0) {
+    throw new Error(`The browser has no memory left for ${toMegabytes(size)} MB of the game's files.`);
+  }
+  return block + (MEMORY_ALIGNMENT - (block % MEMORY_ALIGNMENT)) % MEMORY_ALIGNMENT;
+}
+
+/// Puts `content` into the module's file system at `path`, where the engine reads it as a file.
+function createFile(module, path, content) {
+  const slash = path.lastIndexOf('/');
+  module.FS_createPath('/', path.substring(0, slash), true, true);
+  module.FS_createDataFile('/' + path.substring(0, slash), path.substring(slash + 1), content, true, true, true);
+}
+
+/// The writer of a data file's chunks (data.js, loadFiles). A file the engine maps (a pack) is written straight into
+/// the module's memory and named to the engine in `memoryFiles`, as "path:address:size"; any other becomes a file of
+/// the module's file system once it is whole.
+function openDataFile(runtime, file, memoryFiles) {
+  const module = runtime.Module;
+  if (file.mapped && file.size > 0 && typeof module._malloc === 'function') {
+    const address = allocatePackMemory(module, file.size);
+    return {
+      write: (offset, bytes) => getHeap(runtime).set(bytes, address + offset),
+      close: () => memoryFiles.push(`${file.path}:${address}:${file.size}`),
+    };
+  }
+  const content = new Uint8Array(file.size);
+  return {
+    write: (offset, bytes) => content.set(bytes, offset),
+    close: () => createFile(module, file.path, content),
+  };
+}
+
+/// Starts the engine. When it does not start, the cached chunks go: one of them may be what stops it, and the next
+/// visit then downloads them again instead of reading the same bytes back.
+async function runEngine(runtime, engineArguments, chunkCache) {
+  const dropCachedData = () => dropUnused(chunkCache, new Set()).catch(() => {});
   let result = -1;
   try {
-    result = await runtime.runMain();
+    result = await runtime.runMain(undefined, engineArguments);
   } catch (e) {
     await dropCachedData();
     throw e;
@@ -588,27 +738,36 @@ async function dropUnused(cache, used) {
   }
 }
 
-/// Runs `action` on every item, at most `limit` at a time.
-async function forEachLimited(items, limit, action) {
-  let next = 0;
-  const work = async () => {
-    while (next < items.length) {
-      await action(items[next++]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, work));
+/// The folder a page at `pagePath` lies in, with its last '/'.
+function getPageFolder(pagePath) {
+  return pagePath.substring(0, pagePath.lastIndexOf('/') + 1);
 }
 
-async function loadFiles(module, cache, used, files, progress) {
-  await forEachLimited(files, LOAD_CONCURRENCY, async ({ path, hash, size }) => {
-    const url = new URL(path, location.href);
-    const bytes = await fetchDataFile(cache, url.href, `${url.href}?fingerprint=${hash}`, used, size,
-      progress.addDataBytes);
-    const slash = path.lastIndexOf('/');
-    module.FS_createPath('/', path.substring(0, slash), true, true);
-    module.FS_createDataFile('/' + path.substring(0, slash), path.substring(slash + 1), bytes, true, true, true);
-    progress.finishFile();
-  });
+/// Whether the host says for sure that no page is at `pagePath` any more: its manifest is gone. A host that cannot
+/// be asked says nothing.
+async function isPageGone(pagePath) {
+  try {
+    const manifest = new URL(getPageFolder(pagePath) + MANIFEST_NAME, location.origin);
+    const answer = await fetch(manifest, { method: 'HEAD', cache: 'no-store' });
+    return answer.status === 404 || answer.status === 410;
+  } catch {
+    return false;
+  }
+}
+
+/// Drops the caches this site's pages no longer need: the one pages of older builds kept this page's data files in,
+/// and the caches of other pages whose build is gone from the host (a game that moved, a profile that was renamed).
+async function dropStaleCaches() {
+  if (!globalThis.caches) {
+    return;
+  }
+  await caches.delete(getCacheName(LEGACY_DATA_CACHE, location.pathname));
+  for (const name of await caches.keys()) {
+    const pagePath = name.startsWith(CACHE_PREFIX) ? name.substring(name.indexOf(':') + 1) : '';
+    if (pagePath && getPageFolder(pagePath) !== getPageFolder(location.pathname) && await isPageGone(pagePath)) {
+      await caches.delete(name);
+    }
+  }
 }
 
 /// The runtime's binary files (assemblies, the wasm module, globalization data) from the cache, counted for the
@@ -670,11 +829,36 @@ function unlockAudioOnKey() {
   document.addEventListener('keydown', unlock, true);
 }
 
-async function start() {
+/// Safari stops the page's sound while the page is hidden (another app, the screen off) and leaves it stopped. When the
+/// page shows again, and at the player's next touch for a browser that wants one first, the devices that play are told
+/// to go on.
+function resumeAudioWhenShown() {
+  const resume = () => resumeStoppedDevices(globalThis.miniaudio);
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && resume());
+  document.addEventListener('touchend', resume, true);
+}
+
+/// The engine arguments the page's address gives, without the ones a page that is not this computer's must not pass
+/// on, and the graphics API the address asks for.
+function readAddressArguments() {
+  const { args, forced } = readGraphicsArguments(location.search);
+  const passed = filterArguments(args, location.hostname);
+  if (passed.length < args.length) {
+    console.warn(`[player] ${args.length - passed.length} argument(s) of the page's address are not passed to a `
+      + 'game that is not served from this computer.');
+  }
+  return { args: passed, forced };
+}
+
+async function start(manifest) {
   const downloadsBegin = performance.now();
   report('Getting ready');
-  const manifest = await (await download('data_manifest.json')).json();
+  if (manifest.format !== MANIFEST_FORMAT) {
+    throw new Error('The page and the build\'s list of files come from different engine versions. Deploy the build '
+      + 'again with its dependencies.');
+  }
   showTitle(manifest.title);
+  createPageInterface();
   const last = readLastTimings();
   const engineShare = last
     ? Math.min(MAX_ENGINE_SHARE, Math.max(MIN_ENGINE_SHARE, last.engine_ms / (last.engine_ms + last.downloads_ms)))
@@ -682,7 +866,7 @@ async function start() {
   const downloadsEnd = 1 - engineShare;
   report('Starting the graphics');
   const policy = { ...DEFAULT_GRAPHICS_POLICY, ...manifest.graphics };
-  const { args, forced } = readGraphicsArguments(location.search);
+  const { args, forced } = readAddressArguments();
   const graphics = await chooseGraphics(policy, forced);
   if (!graphics.backend) {
     throw Object.assign(new Error(describeFailure(graphics)), { helpLink: policy.help_link });
@@ -700,19 +884,25 @@ async function start() {
   const progress = createDownloadProgress(manifest, downloadsEnd);
   setProgress(PROGRESS_DOWNLOADS_START);
   report('Loading the runtime');
-  const runtimeCache = await openCache('runtime');
-  const dataCache = await openCache('data');
+  const runtimeCache = await openCache(RUNTIME_CACHE);
+  const chunkCache = await openCache(CHUNKS_CACHE);
   const usedRuntime = new Set();
-  const usedData = new Set();
+  const usedChunks = new Set();
   const runtime = await dotnet
-    .withModuleConfig(graphics.device ? { preinitializedWebGPUDevice: graphics.device } : {})
+    .withModuleConfig({
+      ...(graphics.device ? { preinitializedWebGPUDevice: graphics.device } : {}),
+      onConfigLoaded: (config) => dropTrimmedAssemblies(config, manifest.trimmed),
+    })
     .withResourceLoader(loadRuntimeResource(runtimeCache, usedRuntime, progress.addRuntimeBytes))
-    .withApplicationArguments(...args, ...makeGraphicsArguments(graphics))
     .create();
   progress.finishRuntime();
   const module = runtime.Module;
   report('Loading the game');
-  await loadFiles(module, dataCache, usedData, manifest.files, progress);
+  const memoryFiles = [];
+  await loadFiles(manifest.files,
+    LOAD_CONCURRENCY,
+    createChunkIo(manifest.chunks, chunkCache, usedChunks, progress.addDataBytes),
+    (file) => openDataFile(runtime, file, memoryFiles));
   const isStored = await mountUserFiles(module, manifest.user_folder);
   const downloadsMs = performance.now() - downloadsBegin;
   report('Starting the game');
@@ -723,24 +913,38 @@ async function start() {
   creepProgress(ENGINE_CREEP_END, (last ? last.engine_ms : DEFAULT_ENGINE_START_MS) * ENGINE_CREEP_SLACK);
   await nextFrames(2);
   const engineBegin = performance.now();
-  await runEngine(runtime, dataCache);
+  const engineArguments = [...args, ...makeGraphicsArguments(graphics)];
+  if (memoryFiles.length > 0) {
+    engineArguments.push(MEMORY_FILES_ARGUMENT, memoryFiles.join('|'));
+  }
+  await runEngine(runtime, engineArguments, chunkCache);
+  isGameRunning = true;
+  watchForProgramFailure();
+  watchForDeviceLoss(graphics);
   storeTimings({ downloads_ms: Math.round(downloadsMs), engine_ms: Math.round(performance.now() - engineBegin) });
   if (isStored) {
     storeUserFilesWhenHidden(module);
   }
   unlockAudioOnKey();
+  resumeAudioWhenShown();
   console.log('[player] started');
   hideLoader().then(() => tellAboutGraphics(graphics, policy));
-  return () => Promise.all([dropUnused(runtimeCache, usedRuntime), dropUnused(dataCache, usedData)]);
+  return () => Promise.all([dropUnused(runtimeCache, usedRuntime), dropUnused(chunkCache, usedChunks), dropStaleCaches()]);
 }
 
-let dropUnusedFiles = null;
-try {
-  dropUnusedFiles = await start();
-} catch (e) {
-  showError(e.message, e.helpLink);
-  console.error(e);
-}
-if (dropUnusedFiles) {
-  dropUnusedFiles().catch((e) => console.warn('[player] Older cached files could not be dropped: ' + e.message));
+/// Starts the game the manifest describes, and shows on the loading screen why it could not start.
+export async function run(manifest) {
+  keepAboveGame(loader.root);
+  keepAboveGame(stopped.root);
+  stopped.reload.addEventListener('click', () => location.reload());
+  let dropStaleFiles = null;
+  try {
+    dropStaleFiles = await start(manifest);
+  } catch (e) {
+    showError(e.message, e.helpLink);
+    console.error(e);
+  }
+  if (dropStaleFiles) {
+    dropStaleFiles().catch((e) => console.warn('[player] Older cached files could not be dropped: ' + e.message));
+  }
 }

@@ -11,7 +11,8 @@
 
 /// The profiles' cache in the project, cache/profiles/<profile>/: the cooked texture variants in <protocol>/,
 /// laid out as the protocol's compiled folder, one file per asset and profile; the cooked shaders in
-/// shaders/<protocol>/; the audio variants in audio/<protocol>/; the last deploy's debug files in symbols/.
+/// shaders/<protocol>/; the audio variants in audio/<protocol>/; the last deploy's debug files in symbols/; a web
+/// profile's data as the game reads it in web/, which the build's site holds cut into chunks.
 /// Derived data: any of it can be deleted and is made again by the next deploy that needs it.
 namespace unravel::deployment
 {
@@ -42,6 +43,11 @@ auto get_profile_audio_folder(const fs::path& project_root, const std::string& p
 /// The debug files of the profile's last deploy: its executable and the player's symbols, which a kept
 /// release takes along (cache/profiles/<profile>/symbols).
 auto get_profile_symbols_folder(const fs::path& project_root, const std::string& profile) -> fs::path;
+
+/// The folder a web profile's deploy writes the game's data into, data/<protocol>/ as the game reads it: the site
+/// in the deploy folder holds it as chunks, and the next deploy takes the unchanged entries of the packs kept here
+/// (cache/profiles/<profile>/web).
+auto get_profile_web_data_folder(const fs::path& project_root, const std::string& profile) -> fs::path;
 
 /// What a sweep did: how many files it deleted, and the ones it could not delete.
 struct sweep_report

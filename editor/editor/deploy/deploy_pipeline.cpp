@@ -9,6 +9,7 @@
 #include <deploy/cancellation.h>
 #include <deploy/content.h>
 #include <deploy/dependencies.h>
+#include <deploy/extras.h>
 #include <deploy/files.h>
 #include <deploy/folders.h>
 #include <deploy/icon_image.h>
@@ -30,6 +31,8 @@
 #include <logging/logging.h>
 #include <ospp/url.h>
 #include <process/process.h>
+#include <string_utils/utils.h>
+#include <subprocess/subprocess.hpp>
 #include <version/version.h>
 
 // must be below all
@@ -62,6 +65,10 @@ constexpr const char* STEP_PROJECT_DATA = "Project Data";
 constexpr const char* STEP_ENGINE_DATA = "Engine Data";
 constexpr const char* STEP_ANDROID_PACKAGE = "Android Package";
 constexpr const char* STEP_WEB_PLAYER = "Browser Player";
+constexpr const char* STEP_EXTRA_FILES = "Extra Files";
+constexpr const char* STEP_POST_COMMAND = "Post-Deploy Command";
+/// The lines of a failed post-deploy command's output its step quotes.
+constexpr std::size_t POST_COMMAND_ERROR_LINES = 15;
 /// Uncompiled assets named in the failed step before "and N more".
 constexpr std::size_t LISTED_UNCOMPILED_MAX = 10;
 constexpr const char* COOK_STAGING_PREFIX = "unravel-deploy-cook-";
@@ -79,6 +86,9 @@ struct deploy_plan
     deploy_settings params;
     /// The profile's folder in the deploy folder.
     fs::path output;
+    /// The folder the data steps write data/ into: the profile's folder for a desktop build, the build folder Gradle
+    /// packages for Android, and a web profile's cache, whose files the site holds as chunks.
+    fs::path data_root;
     fs::path executable;
     fs::path player;
     /// The player's symbols; missing where its build leaves none beside it.
@@ -97,6 +107,9 @@ struct deploy_plan
     protocol_job app;
     protocol_job engine;
     runtime_plan runtime;
+    /// How the build trims the .NET framework it ships (assembly_references.h): the desktop's runtime copy, the
+    /// Android package and the browser player each leave out what it names of their own framework.
+    framework_trim trim;
     fs::path cook_staging;
     /// The project's script library as the deploy builds it, in the cooked prefabs' folder of the staging.
     fs::path script_library;
@@ -112,7 +125,80 @@ struct deploy_plan
     android_package_plan android;
     /// Web deploys only: the browser player copied beside the data.
     web_template web_player;
+    /// The profile's folder of extra files; empty for none.
+    fs::path extra_files;
+    /// The names of the extra files the profile's last deploy copied (extras.h).
+    fs::path extra_files_record;
+    /// The command to run once the build is whole; empty for none.
+    std::string post_command;
+    post_command_context post_context;
 };
+
+/// The folder the plan's extra files go into, at the places they have in their own folder: the build's top, which
+/// for Android is the top of what the package carries.
+auto get_extra_files_root(const deploy_plan& plan) -> fs::path
+{
+    return plan.params.deploy_target == deploy_platform::android ? plan.data_root : plan.output;
+}
+
+/// Copies the profile's extra files into the build, over the files the other steps wrote; returns their names.
+auto copy_extra_files(const deploy_plan& plan) -> std::vector<std::string>
+{
+    return deploy_extra_files(plan.extra_files, get_extra_files_root(plan), plan.extra_files_record);
+}
+
+/// Removes the extra files an earlier deploy copied that the profile's folder no longer has, before any step writes
+/// the build: one that had replaced a file of the build makes room for the step that writes that file. Empty, or
+/// why it failed.
+auto remove_earlier_extra_files(const deploy_plan& plan) -> std::string
+{
+    try
+    {
+        remove_stale_extra_files(plan.extra_files, get_extra_files_root(plan), plan.extra_files_record);
+    }
+    catch(const std::exception& ex)
+    {
+        return ex.what();
+    }
+    return {};
+}
+
+/// Runs the profile's post-deploy command from a script file in the deploy's staging folder, its output in the log;
+/// throws when it does not start, is cancelled or fails. Nothing without a command.
+void run_post_command(const deploy_plan& plan)
+{
+    if(plan.post_command.empty())
+    {
+        return;
+    }
+    const auto script = plan.cook_staging / get_post_command_script_name();
+    fs::error_code ec;
+    fs::create_directories(plan.cook_staging, ec);
+    write_text_or_throw(script, make_post_command_script(plan.post_command));
+    APPLOG_INFO("Deploy: running the post-deploy command in {}.", plan.post_context.folder.generic_string());
+    const auto result = subprocess::call(
+        make_post_command_arguments(script),
+        make_post_command_environment(plan.post_context),
+        [](const std::string& line)
+        {
+            if(!line.empty())
+            {
+                APPLOG_INFO("[Post-Deploy] {}", line);
+            }
+        },
+        &is_deploy_cancelled);
+    throw_if_deploy_cancelled();
+    if(!result.started)
+    {
+        throw std::runtime_error("The system's command interpreter did not start.");
+    }
+    if(result.retcode != 0)
+    {
+        throw std::runtime_error(fmt::format("The post-deploy command ended with exit code {}. Its last output:\n{}",
+                                             result.retcode,
+                                             string_utils::get_last_lines(result.out_output, POST_COMMAND_ERROR_LINES)));
+    }
+}
 
 auto is_android(const deploy_plan& plan) -> bool
 {
@@ -301,6 +387,42 @@ void name_web_game(rtti::context& ctx, deploy_plan& plan)
     }
 }
 
+/// The folder the data steps of a deploy write data/ into (deploy_plan::data_root).
+auto get_data_root(const deploy_settings& params) -> fs::path
+{
+    switch(params.deploy_target)
+    {
+        case deploy_platform::android:
+            return get_android_content_dir(params.profile);
+        case deploy_platform::web:
+            return get_profile_web_data_folder(get_project_root(), params.profile);
+        case deploy_platform::desktop:
+            break;
+    }
+    return get_output_location(params);
+}
+
+/// How the plan's build trims the .NET framework: from the libraries it loads itself, which are its script
+/// libraries, the script bridge's libraries and the libraries among its extra files.
+auto make_framework_trim(const deploy_plan& plan) -> framework_trim
+{
+    framework_trim trim;
+    trim.is_on = plan.params.deploy_trim_framework;
+    trim.kept = split_assembly_names(plan.params.deploy_kept_assemblies);
+    trim.roots = list_runtime_libraries(plan.runtime);
+    trim.roots.push_back(plan.script_library);
+    trim.roots.push_back(fs::resolve_protocol(script_system::get_lib_compiled_key(ENGINE_PROTOCOL)));
+    for(const auto& name : list_extra_files(plan.extra_files))
+    {
+        const auto file = plan.extra_files / fs::from_utf8_string(name);
+        if(has_assembly_extension(file))
+        {
+            trim.roots.push_back(file);
+        }
+    }
+    return trim;
+}
+
 auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path& staging, left_out_assets left_out)
     -> deploy_plan
 {
@@ -309,10 +431,9 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
     plan.params = params;
     plan.output = get_output_location(params);
     plan.runtime_settings = ctx.get_cached<project_manager>().get_profile_settings(params.profile);
-    // The data steps write data/ into the profile's folder; for Android into the build folder, where Gradle
-    // packages it, so the profile's folder holds the package only.
+    plan.data_root = get_data_root(params);
     auto data_params = params;
-    data_params.deploy_location = is_android(plan) ? get_android_content_dir(params.profile) : plan.output;
+    data_params.deploy_location = plan.data_root;
     plan.executable = get_deployed_executable(ctx, params);
     plan.player = get_player_file();
     plan.player_symbols = fs::path(plan.player).replace_extension(PLAYER_SYMBOLS_EXTENSION);
@@ -371,12 +492,18 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
     }
     plan.cook_staging = staging;
     plan.script_library = staging / CONTENT_PROTOCOL / script_system::get_lib_name(CONTENT_PROTOCOL);
+    plan.extra_files = get_project_folder(params.deploy_extra_files);
+    plan.extra_files_record = get_profile_cache_folder(get_project_root(), params.profile) / EXTRA_FILES_RECORD_NAME;
+    plan.post_command = params.deploy_post_command;
+    plan.post_context = {plan.output, params.profile, get_platform_name(params.deploy_target), plan.runtime_settings.app.version};
+    plan.trim = make_framework_trim(plan);
     if(is_android(plan))
     {
         // The managed bridge ships as for the desktop; the .NET runtime comes with the Android player.
         plan.runtime.host_source.clear();
         plan.runtime.framework_source.clear();
         plan.android = make_android_package_plan(ctx, params);
+        plan.android.package.trim = plan.trim;
     }
     if(is_web(plan))
     {
@@ -450,6 +577,11 @@ void keep_build_debug_files(const deploy_plan& plan)
 void deploy_dependencies(const deploy_plan& plan)
 {
     std::set<std::string> shipped;
+    // A library among the extra files is the build's too: the sweep of older binaries leaves it.
+    for(const auto& name : list_extra_files(plan.extra_files))
+    {
+        shipped.insert(get_binary_key(fs::from_utf8_string(name)));
+    }
     for(const auto& dependency : find_dependencies(plan.player, plan.dependency_scanner))
     {
         const fs::path library(dependency);
@@ -492,23 +624,31 @@ auto make_steps(const std::shared_ptr<const deploy_plan>& plan) -> std::vector<d
         steps.push_back({STEP_DEPENDENCIES, [plan]() { deploy_dependencies(*plan); }});
     }
     steps.push_back({STEP_SETTINGS, [plan]() { deploy_settings_file(*plan); }});
-    // The browser player carries its .NET runtime and the script bridge.
-    if(!is_web(*plan))
-    {
-        steps.push_back({plan->runtime.step_name, [plan]() { deploy_runtime(plan->runtime); }});
-    }
     return steps;
 }
 
-/// The browser player beside the deployed data, and the list of the data's files the page loads.
+/// The site of a web build: the browser player, and the deployed data cut into chunks with the list of them the page
+/// loads. A deploy without its dependencies leaves the player in the folder as it is, which must be this editor's:
+/// the data is written for its page.
 void deploy_web_site(const deploy_plan& plan)
 {
+    const auto trimmed = find_web_trimmed_files(plan.web_player, plan.trim);
     if(plan.params.deploy_dependencies)
     {
-        copy_web_player(plan.web_player, plan.output);
+        copy_web_player(plan.web_player, plan.output, trimmed);
     }
+    else if(const auto problem = get_web_player_problem(plan.web_player, plan.output, list_extra_files(plan.extra_files), trimmed);
+            !problem.empty())
+    {
+        throw std::runtime_error(problem);
+    }
+    // Before the project's files: a data folder among them is the project's, not an older build's.
+    remove_legacy_web_data(plan.output);
+    // The project's own page files replace the player's, whose precompressed copies no longer hold what they do.
+    remove_precompressed_copies(plan.output, copy_extra_files(plan));
     const auto& app = plan.runtime_settings.app;
     web_page_info page;
+    page.trimmed_runtime_files.assign(trimmed.begin(), trimmed.end());
     page.title = plan.version_info.product_name;
     page.user_folder = get_web_user_folder(app.company, app.product);
     for(const auto& set : plan.app.texture_sets)
@@ -520,7 +660,7 @@ void deploy_web_site(const deploy_plan& plan)
         page.shader_sets.push_back(set.name);
     }
     page.graphics = make_web_graphics_policy(plan.params.web);
-    write_web_data_manifest(plan.output, page);
+    write_web_data(plan.data_root, plan.output, page);
 }
 
 /// Runs `step` here, between its log lines; a cancelled deploy starts no step.
@@ -651,7 +791,7 @@ void open_web_deploy(const deploy_plan& plan)
 /// The stamp of the build `params` deploys.
 auto make_build_stamp(const deploy_settings& params, bool is_finished) -> build_stamp
 {
-    return {params.profile, version::get_full(), is_finished};
+    return {params.profile, version::get_full(), is_finished, get_platform_name(params.deploy_target)};
 }
 
 /// Says in the log how a deploy with a failed step ended.
@@ -706,7 +846,9 @@ void finish_deploy(const deploy_plan& plan, const std::vector<tpp::shared_future
 /// and that session finishes the device steps.
 void deploy_android_package(const deploy_plan& plan)
 {
+    copy_extra_files(plan);
     build_android_package(plan.android);
+    run_post_command(plan);
     if(plan.params.deploy_and_run)
     {
         run_android_game(plan.android);
@@ -734,6 +876,8 @@ struct cook_jobs
 {
     /// Every cook, in the order the step list shows them.
     deploy_jobs all;
+    /// The project's script library.
+    deploy_jobs scripts;
     /// The engine's textures and the shaders.
     deploy_jobs engine;
     /// The project's textures, its audio, its script library and the shaders.
@@ -747,7 +891,7 @@ auto schedule_cooks(threader& th, asset_manager& am, const std::shared_ptr<const
         schedule_step(th, {STEP_COOK_ENGINE_TEXTURES, [plan]() { cook_texture_sets(plan->engine_textures); }});
     const auto audio = schedule_step(th, {STEP_COOK_AUDIO, [plan]() { cook_audio(plan->audio); }});
     const auto scripts = schedule_step(th, {STEP_COMPILE_SCRIPTS, [plan, &am]() { build_script_library(am, *plan); }});
-    cook_jobs cooks{{textures, engine_textures, audio, scripts}, {engine_textures}, {textures, audio, scripts}};
+    cook_jobs cooks{{textures, engine_textures, audio, scripts}, {scripts}, {engine_textures}, {textures, audio, scripts}};
     if(plan->shaders.has_work())
     {
         const auto shaders = schedule_step(th, {STEP_COOK_SHADERS, [plan]() { cook_shaders(plan->shaders); }});
@@ -756,6 +900,12 @@ auto schedule_cooks(threader& th, asset_manager& am, const std::shared_ptr<const
         cooks.app.push_back(shaders);
     }
     return cooks;
+}
+
+/// Whether the plan's extra files have anything to do: a folder to copy, or files an earlier deploy copied to remove.
+auto has_extra_files_work(const deploy_plan& plan) -> bool
+{
+    return !plan.extra_files.empty() || is_present(plan.extra_files_record);
 }
 
 /// Schedules every step of the plan: the cooks and the steps that need only the plan at once, each data step after its
@@ -768,12 +918,30 @@ auto schedule_steps(threader& th, asset_manager& am, const std::shared_ptr<const
     {
         jobs.push_back(schedule_step(th, step));
     }
+    // The script bridge and the .NET runtime; the browser player carries its own. A framework that is copied
+    // trimmed is what the script libraries reference, so that copy waits for the project's.
+    if(!is_web(*plan))
+    {
+        const deploy_step runtime{plan->runtime.step_name, [plan]() { deploy_runtime(plan->runtime, plan->trim); }};
+        const bool reads_scripts = plan->trim.is_on && !plan->runtime.framework_source.empty();
+        jobs.push_back(reads_scripts ? schedule_step_after(runtime, cooks.scripts) : schedule_step(th, runtime));
+    }
     jobs.push_back(schedule_step_after({STEP_ENGINE_DATA, [plan]() { deploy_protocol_data(plan->engine); }}, cooks.engine));
     jobs.push_back(schedule_step_after({STEP_PROJECT_DATA, [plan]() { deploy_protocol_data(plan->app); }}, cooks.app));
     // The browser player's list of files is the deployed data's.
     if(is_web(*plan))
     {
         jobs.push_back(schedule_step_after({STEP_WEB_PLAYER, [plan]() { deploy_web_site(*plan); }}, jobs));
+    }
+    // Over everything the other steps wrote: an extra file named like one of the build's replaces it.
+    if(plan->params.deploy_target == deploy_platform::desktop && has_extra_files_work(*plan))
+    {
+        jobs.push_back(schedule_step_after({STEP_EXTRA_FILES, [plan]() { copy_extra_files(*plan); }}, jobs));
+    }
+    // Once the build is whole. Android's runs inside its package step, between the package and its install.
+    if(!is_android(*plan) && !plan->post_command.empty())
+    {
+        jobs.push_back(schedule_step_after({STEP_POST_COMMAND, [plan]() { run_post_command(*plan); }}, jobs));
     }
     if(is_android(*plan))
     {
@@ -825,11 +993,13 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
         fs::remove_all(staging, ec);
         return make_failed_step(th, STEP_FOLDER, fmt::format("The deploy folder {} cannot be written.", output.generic_string()));
     }
-    if(params.deploy_target == deploy_platform::android)
-    {
-        fs::create_directories(get_android_content_dir(params.profile), ec);
-    }
+    fs::create_directories(get_data_root(params), ec);
     const auto plan = std::make_shared<const deploy_plan>(make_plan(ctx, params, staging, std::move(left_out)));
+    if(const auto removal_error = remove_earlier_extra_files(*plan); !removal_error.empty())
+    {
+        fs::remove_all(staging, ec);
+        return make_failed_step(th, STEP_EXTRA_FILES, removal_error);
+    }
     ++running_deploys;
     auto jobs = schedule_steps(th, am, plan);
     const auto futures = get_futures(jobs);
@@ -847,13 +1017,31 @@ auto is_deploy_running() -> bool
     return running_deploys.load() > 0;
 }
 
+running_deploy_hold::running_deploy_hold()
+{
+    ++running_deploys;
+}
+
+running_deploy_hold::~running_deploy_hold()
+{
+    release();
+}
+
+void running_deploy_hold::release()
+{
+    if(is_held_.exchange(false))
+    {
+        --running_deploys;
+    }
+}
+
 void cancel_deploy()
 {
     if(!is_deploy_running() || is_deploy_cancelled())
     {
         return;
     }
-    APPLOG_INFO("Cancelling the deploy: the running steps stop where they can, and the others are skipped.");
+    APPLOG_INFO("Cancelling: the running steps stop where they can, and the others are skipped.");
     request_deploy_cancel();
 }
 

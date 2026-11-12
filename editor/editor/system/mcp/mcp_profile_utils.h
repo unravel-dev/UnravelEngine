@@ -1,6 +1,7 @@
 #pragma once
 
 #include <context/context.hpp>
+#include <deploy/deploy_settings.h>
 #include <engine/settings/target_platform.h>
 #include <serialization/document_paths.h>
 #include <ser20/external/simdjson/simdjson.h>
@@ -19,9 +20,7 @@ class project_manager;
 namespace unravel::mcp
 {
 
-/// A platform's name in tool arguments and results: "desktop", "android" or "web".
-auto get_platform_name(target_platform platform) -> const char*;
-/// The platform `name` names; false for a name that names none.
+/// The platform `name` names (get_platform_name: "desktop", "android" or "web"); false for a name that names none.
 auto parse_platform_name(hpp::string_view name, target_platform& platform) -> bool;
 
 /// A dotted settings path ("graphics.particles") as the profiles name it ("graphics/particles").

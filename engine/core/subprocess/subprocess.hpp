@@ -26,7 +26,8 @@ struct call_result
 };
 
 /**
- * @brief Runs a process to completion and returns what it printed.
+ * @brief Runs a process to completion and returns what it printed. The process has no input: a question it asks
+ * reads the end of input.
  *
  * @param args_array The program, then its arguments.
  * @param environment_array "NAME=value" entries that add to or replace this process's environment.
@@ -50,8 +51,8 @@ inline auto call(const std::string& process, const std::vector<std::string>& arg
 /**
  * @brief A process that runs until it exits or is stopped, such as a log follower.
  *
- * Its output lines are handed over from a thread of its own. Stopping, or destroying the stream, ends the
- * process and waits for that thread.
+ * Its output lines are handed over from a thread of its own, and it has no input. Stopping, or destroying the
+ * stream, ends the process and waits for that thread.
  */
 class stream
 {

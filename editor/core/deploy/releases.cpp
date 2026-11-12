@@ -174,6 +174,26 @@ auto get_release_symbols_folder(const fs::path& releases, const std::string& nam
     return get_release_folder(releases, name) / SYMBOLS_FOLDER;
 }
 
+auto are_debug_files_of_build(const fs::path& symbols, const fs::path& deploy_location) -> bool
+{
+    fs::error_code ec;
+    bool has_shared_file = false;
+    for(fs::directory_iterator it(symbols, ec), end; !ec && it != end; it.increment(ec))
+    {
+        const auto deployed = deploy_location / it->path().filename();
+        if(!it->is_regular_file(ec) || !is_present(deployed))
+        {
+            continue;
+        }
+        if(!fs::have_same_content(it->path(), deployed, ec))
+        {
+            return false;
+        }
+        has_shared_file = true;
+    }
+    return !ec && has_shared_file;
+}
+
 auto keep_release(const fs::path& releases, const fs::path& deploy_location, const fs::path& symbols, const std::string& name)
     -> result
 {
@@ -205,7 +225,13 @@ auto keep_release(const fs::path& releases, const fs::path& deploy_location, con
             return result::failure(fmt::format("Keeping the release failed: {}", ec.message()));
         }
     }
-    const bool has_symbols = fs::is_directory(symbols, ec);
+    const bool has_symbols = are_debug_files_of_build(symbols, deploy_location);
+    if(!has_symbols && fs::is_directory(symbols, ec))
+    {
+        APPLOG_WARNING("Release {} is kept without debug files: the ones the profile holds are of another build than "
+                       "the folder's. Deploy with Dependencies on before keeping a release to have them.",
+                       name);
+    }
     fs::mirror_stats stats;
     if(has_symbols && !fs::mirror_directory(symbols, get_release_symbols_folder(releases, name), {}, stats, ec))
     {
@@ -266,10 +292,9 @@ auto remove_release(const fs::path& releases, const std::string& name) -> result
 
 void remove_patch_packs(const fs::path& protocol_root, std::uint32_t first_level)
 {
-    fs::error_code ec;
     for(std::uint32_t level = first_level; is_present(protocol_root / ex::get_patch_pack_file_name(level)); ++level)
     {
-        fs::remove(protocol_root / ex::get_patch_pack_file_name(level), ec);
+        remove_file_or_throw(protocol_root / ex::get_patch_pack_file_name(level));
     }
 }
 

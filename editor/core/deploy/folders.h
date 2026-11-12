@@ -1,5 +1,7 @@
 #pragma once
 
+#include "deploy_settings.h"
+
 #include <filesystem/filesystem.h>
 
 #include <string>
@@ -20,13 +22,22 @@ struct build_stamp
     /// False from the deploy's start until its last step succeeded: a failed, cancelled or interrupted deploy
     /// leaves a folder with parts of two builds.
     bool is_finished{};
+    /// The platform the build is for (get_platform_name); empty in the stamp of an editor that did not write it.
+    std::string platform;
 };
 
 /// Writes `stamp` into `folder`; false when the file cannot be written.
 auto write_build_stamp(const fs::path& folder, const build_stamp& stamp) -> bool;
 
+/// The stamp in `folder`; one with empty fields, unfinished, when the folder has none.
+auto read_build_stamp(const fs::path& folder) -> build_stamp;
+
 /// Whether the last deploy into `folder` finished: what uploads the build or keeps it as a release asks first.
 auto is_finished_build(const fs::path& folder) -> bool;
+
+/// Why a deploy for `platform` cannot go into `folder`, in one sentence: the folder's stamp names another platform,
+/// whose files would stay beside the new build and ship with it. Empty when it can.
+auto get_other_platform_problem(const fs::path& folder, deploy_platform platform) -> std::string;
 
 /// What a folder whose build is not finished is refused with.
 constexpr const char* UNFINISHED_BUILD_PROBLEM =
@@ -36,6 +47,10 @@ constexpr const char* UNFINISHED_BUILD_PROBLEM =
 /// Whether `folder` holds a build an earlier deploy wrote: every deploy writes its stamp first, and the app's
 /// asset index, loose or inside its pack.
 auto is_previous_deploy(const fs::path& folder) -> bool;
+
+/// Why a desktop build cannot hold the game's executable at `executable`, in one sentence, or empty: where
+/// executables carry no extension, a project named like the build's data folder would be written over that folder.
+auto get_executable_name_problem(const fs::path& executable) -> std::string;
 
 /// How the name of the native debug symbols a release Android deploy writes beside its package ends.
 constexpr const char* NATIVE_SYMBOLS_FILE_SUFFIX = "-native-debug-symbols.zip";

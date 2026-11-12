@@ -18,7 +18,8 @@ constexpr const char* BUNDLED_FILES_LIST_NAME = "bundle_files.txt";
  * in the package and are mounted in place.
  *
  * A copy of the list is written after the files, so a later start of the same build finds it equal
- * and skips the copy, and an interrupted copy is redone. Does nothing where the application's files
+ * and skips the copy, and an interrupted copy is redone. The files an earlier build extracted that
+ * this build's package does not list are removed first. Does nothing where the application's files
  * lie in folders.
  * @return False when the package has no list or a listed file cannot be read or written (logged).
  */

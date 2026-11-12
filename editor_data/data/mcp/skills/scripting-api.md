@@ -43,7 +43,7 @@ scripts_get_source {"path":"engine:/data/scripts/input/Input.cs"}
 | `assets/` | `Assets`, `Asset` |
 | `audio/` | `Audio`, `AudioVoice`, `AudioBus` |
 | `ui/` | `UIDocument`, `UIElement`, `UIEventManager`, and the event types |
-| `system/` | `Application`, `Screen`, `Attributes`, `Profiler`, `Object` |
+| `system/` | `Application`, `Screen`, `Attributes`, `Profiler`, `Object`, `Permissions` (ask the player for the camera, the microphone, the location or notifications on Android: `await Permissions.RequestAsync(Permissions.Camera)`), `WebPage` (call the page a browser build runs in and read the messages it posts) |
 | `logger/`, `gizmos/`, `kinematics/` | `Logger`, `Gizmos`, `Kinematics` |
 
 ## Start from a sample, not a blank file

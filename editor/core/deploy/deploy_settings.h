@@ -18,6 +18,21 @@ namespace unravel
 /// The platform a deploy builds the game for: the platform of the profile it deploys.
 using deploy_platform = target_platform;
 
+/// A platform's name as build stamps, messages and the editor's tools write it: "desktop", "android" or "web".
+constexpr auto get_platform_name(deploy_platform platform) -> const char*
+{
+    switch(platform)
+    {
+        case deploy_platform::android:
+            return "android";
+        case deploy_platform::web:
+            return "web";
+        case deploy_platform::desktop:
+            break;
+    }
+    return "desktop";
+}
+
 /// How an Android game turns with the phone.
 enum class android_orientation : std::uint8_t
 {
@@ -117,6 +132,9 @@ struct android_deploy_settings
     fs::path keystore;
     std::string key_alias;
     deploy_texture_compression texture_compression{deploy_texture_compression::astc};
+    /// A folder with parts the package takes as they are (android_additions): a manifest merged into the game's,
+    /// Java sources, resources, libraries. A relative folder lies in the project's folder. Empty: none.
+    fs::path additions;
 };
 
 /// Where a desktop build goes on Steam. The upload logs in with the login steamcmd keeps for `account`, so
@@ -134,12 +152,30 @@ struct steam_deploy_settings
     std::string branch;
 };
 
-/// What a desktop build shows of itself besides the project's product, company and version, and where it
-/// goes on Steam. A desktop profile holds one (profiles/<name>/profile.cfg).
+/**
+ * @brief The graphics APIs a desktop build ships shaders for.
+ *
+ * All on: every API the build's platform has ships, and the platform's own choice among them starts the game. Some
+ * off: only the others ship, which makes the build smaller, and the game starts the first of them that starts on
+ * the player's computer, in the order of the fields. An API the build's platform does not have never ships
+ * (get_desktop_renderers).
+ */
+struct desktop_graphics_apis
+{
+    bool direct3d12{true};
+    bool direct3d11{true};
+    bool metal{true};
+    bool vulkan{true};
+    bool opengl{true};
+};
+
+/// What a desktop build shows of itself besides the project's product, company and version, the graphics APIs it
+/// renders with, and where it goes on Steam. A desktop profile holds one (profiles/<name>/profile.cfg).
 struct desktop_deploy_settings
 {
     /// The image the executable's icon is made from, square at best. None: the engine's logo.
     asset_handle<gfx::texture> icon;
+    desktop_graphics_apis graphics;
     steam_deploy_settings steam;
 };
 
@@ -198,6 +234,15 @@ struct deploy_settings
     /// (split_run_arguments), such as --gfx-stats.
     std::string deploy_run_arguments;
 
+    /// A folder whose files ship with the build as they are, at the same places under the build's top: a library
+    /// the game loads beside its executable, a page of the game's own for a web build (an index.html replaces the
+    /// loading page), files the game reads by path. A relative folder lies in the project's folder. Empty: none.
+    fs::path deploy_extra_files;
+    /// A command the deploy runs once the build is whole, through the system's command interpreter, in the
+    /// build's folder (post_command.h): what signs, archives or uploads the build. A command that fails fails the
+    /// deploy. Empty: none.
+    std::string deploy_post_command;
+
     /**
      * @brief Resolve nested prefab instances into the deployed assets.
      *
@@ -218,6 +263,15 @@ struct deploy_settings
     /// Ship the script libraries' debug companions (.pdb symbols, .xml docs). The game runs without
     /// them; with them, managed exceptions name the file and line they came from.
     bool deploy_debug_symbols{false};
+
+    /// Leave out the .NET framework assemblies nothing in the build references (assembly_references.h): the script
+    /// libraries and the script bridge name what they use, and the rest of the framework does not ship. Off: the
+    /// whole framework ships.
+    bool deploy_trim_framework{false};
+    /// Framework assemblies a trimmed build keeps whatever references them, by simple name ("System.Data.Common"),
+    /// separated by spaces or commas (split_assembly_names): what scripts load by a name they build at run time,
+    /// which no reference shows.
+    std::string deploy_kept_assemblies;
 
     /// Write each protocol's compiled assets and asset index into one compressed pack
     /// (data/<protocol>/content.pak) instead of loose files. Off ships them loose, which is easier to
@@ -254,6 +308,13 @@ struct deploy_settings
 inline auto get_deploy_folder(const deploy_settings& params) -> fs::path
 {
     return fs::resolve_relative_to(params.deploy_location, fs::resolve_protocol(PROJECT_ROOT_KEY));
+}
+
+/// The folder `folder` names for the open project: itself when absolute, in the project's folder otherwise. Empty
+/// for an empty one.
+inline auto get_project_folder(const fs::path& folder) -> fs::path
+{
+    return folder.empty() ? fs::path{} : fs::resolve_relative_to(folder, fs::resolve_protocol(PROJECT_ROOT_KEY));
 }
 
 /// The folder a profile builds into under the deploy location: <deploy folder>/<profile>. Empty while no

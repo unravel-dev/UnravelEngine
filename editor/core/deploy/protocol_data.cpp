@@ -34,7 +34,6 @@ auto is_shader_set_file(const protocol_job& job, const fs::path& file) -> bool
 template<typename Names, typename Sets>
 void remove_unshipped_set_packs(const fs::path& protocol_root, const Names& names, const Sets& shipped)
 {
-    fs::error_code ec;
     for(const auto* name : names)
     {
         const bool is_shipped = std::any_of(shipped.begin(),
@@ -45,7 +44,7 @@ void remove_unshipped_set_packs(const fs::path& protocol_root, const Names& name
                                             });
         if(!is_shipped)
         {
-            fs::remove(protocol_root / ex::get_set_pack_file_name(name), ec);
+            remove_file_or_throw(protocol_root / ex::get_set_pack_file_name(name));
         }
     }
 }
@@ -101,8 +100,7 @@ auto make_shipped_filter(const protocol_job& job) -> compiled_file_filter
 void deploy_loose(const protocol_job& job, const fs::path& destination, const compiled_file_filter& is_shipped)
 {
     // A pack left from an earlier build would be mounted over the loose files.
-    fs::error_code ec;
-    fs::remove(job.protocol_root / ex::get_pack_file_name(), ec);
+    remove_file_or_throw(job.protocol_root / ex::get_pack_file_name());
     remove_patch_packs(job.protocol_root, 1);
     mirror_or_throw(job.compiled_root,
                     destination,
@@ -170,8 +168,8 @@ void deploy_protocol_data(const protocol_job& job)
         return;
     }
     deploy_packed(job, destination, index, is_shipped);
-    // The index travels inside the pack.
-    fs::remove(index, ec);
+    // The index travels inside the pack; a loose one beside it is not the build's.
+    remove_file_or_throw(index);
 }
 
 } // namespace unravel::deployment

@@ -13,7 +13,14 @@
  *   - a rename in letter case leaves exactly the source's files;
  *   - a stale file that cannot be removed fails the mirror (Windows, where an open file is locked);
  *   - a missing source fails with an error;
- *   - a source with no file to mirror succeeds and creates no target.
+ *   - a source with no file to mirror succeeds and creates no target;
+ *   - have_same_content: equal files, a difference in the last byte, a shorter file, a missing file;
+ *   - remove_unlisted_files: files only an earlier list names go with the folders they leave empty, files the
+ *     new list names and files no list names stay, a name that leads out of the folder is skipped;
+ *   - shared_read_file: reads at any offset, and the file it holds open is replaced and removed meanwhile (what a
+ *     deploy does to a site's file a browser still downloads), while it goes on reading the file it opened;
+ *   - rename_over: a file another program holds for a moment (a scanner, a watcher) is replaced once it lets go, one
+ *     it keeps holding is not and the error says so (Windows), a missing file fails at once.
  * Everything lives in a temp folder.
  */
 
@@ -21,15 +28,21 @@
 
 #include <filesystem/filesystem.h>
 #include <filesystem/mirror.h>
+#include <filesystem/shared_file.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
 {
+
+/// How long the stand-in for a scanner holds a file: within what a rename waits for.
+constexpr auto HOLD_TIME = std::chrono::milliseconds(60);
 
 int g_checks = 0;
 int g_failures = 0;
@@ -198,6 +211,111 @@ void test_nothing_to_mirror(const fs::path& target)
     check(!fs::exists(target, ec), "and creates no target folder");
 }
 
+void test_same_content(const fs::path& folder)
+{
+    std::printf("test_same_content\n");
+    // Longer than the block two files are compared by, with the difference in the last block.
+    constexpr std::size_t content_size = 150 * 1024;
+    const std::string content(content_size, 'a');
+    auto changed_end = content;
+    changed_end.back() = 'b';
+    write_text(folder / "a.bin", content);
+    write_text(folder / "same.bin", content);
+    write_text(folder / "changed.bin", changed_end);
+    write_text(folder / "shorter.bin", content.substr(0, content_size - 1));
+    fs::error_code ec;
+    check(fs::have_same_content(folder / "a.bin", folder / "same.bin", ec) && !ec, "two files of the same bytes are the same");
+    check(!fs::have_same_content(folder / "a.bin", folder / "changed.bin", ec) && !ec, "a file whose last byte differs is not");
+    check(!fs::have_same_content(folder / "a.bin", folder / "shorter.bin", ec) && !ec, "nor is a shorter file");
+    check(!fs::have_same_content(folder / "a.bin", folder / "missing.bin", ec) && ec, "a missing file fails with an error");
+}
+
+void test_unlisted_files(const fs::path& root)
+{
+    std::printf("test_unlisted_files\n");
+    for(const auto* name : {"kept.txt", "old/gone.txt", "old/deep/gone.txt", "shared/kept.txt", "shared/gone.txt", "own/save.txt"})
+    {
+        write_text(root / name, name);
+    }
+    write_text(root.parent_path() / "outside.txt", "outside");
+    const std::vector<std::string> earlier{"kept.txt", "old/gone.txt", "old/deep/gone.txt", "shared/kept.txt",
+                                           "shared/gone.txt", "never_there.txt", "../outside.txt"};
+    const std::vector<std::string> kept{"kept.txt", "shared/kept.txt", "new.txt"};
+    fs::error_code ec;
+    check(fs::remove_unlisted_files(root, earlier, kept, ec) == 3 && !ec, "the files only the earlier list names are removed");
+    check(!fs::exists(root / "old", ec), "with the folders they leave empty");
+    check(read_text(root / "kept.txt") == "kept.txt" && read_text(root / "shared/kept.txt") == "shared/kept.txt",
+          "the files the new list names stay");
+    check(!fs::exists(root / "shared/gone.txt", ec) && fs::exists(root / "shared", ec), "a folder that still holds a file stays");
+    check(read_text(root / "own/save.txt") == "own/save.txt", "a file no list names is not touched");
+    check(read_text(root.parent_path() / "outside.txt") == "outside", "a name that leads out of the folder is skipped");
+}
+
+void test_shared_read_file(const fs::path& folder)
+{
+    std::printf("test_shared_read_file\n");
+    const std::string first = "the file as it was opened";
+    write_text(folder / "served.txt", first);
+    write_text(folder / "next.txt", "the file a deploy replaces it with");
+    fs::shared_read_file file;
+    check(!file.is_open() && !file.open(folder / "missing.txt"), "a missing file does not open");
+    check(file.open(folder / "served.txt") && file.size() == first.size(), "a file opens, and knows its size");
+    std::string head(4, '\0');
+    check(file.read(0, head.data(), head.size()) == head.size() && head == first.substr(0, 4), "it reads from its start");
+    std::string tail(100, '\0');
+    const auto tail_offset = first.size() - 6;
+    check(file.read(tail_offset, tail.data(), tail.size()) == 6 && tail.substr(0, 6) == first.substr(tail_offset),
+          "a read at its end gives the bytes that are left");
+    check(file.read(first.size(), tail.data(), tail.size()) == 0, "a read past its end gives none");
+    // What a deploy does to a file of the site it updates, while a browser still downloads it.
+    fs::error_code ec;
+    bool is_copied = false;
+    const bool is_replaced = fs::copy_file_if_changed(folder / "next.txt", folder / "served.txt", is_copied, ec);
+    check(is_replaced && is_copied, "the open file is replaced: " + ec.message());
+    check(read_text(folder / "served.txt") == "the file a deploy replaces it with", "its name is the new file's");
+    std::string whole(first.size(), '\0');
+    check(file.read(0, whole.data(), whole.size()) == whole.size() && whole == first, "and it still reads the file it opened");
+    fs::shared_read_file removed;
+    check(removed.open(folder / "next.txt") && fs::remove(folder / "next.txt", ec) && !ec, "an open file is removed: " + ec.message());
+    removed.close();
+    check(!removed.is_open() && !fs::exists(folder / "next.txt", ec), "and is gone once it is closed");
+}
+
+void test_rename_over(const fs::path& folder)
+{
+    std::printf("test_rename_over\n");
+    write_text(folder / "old.txt", "old");
+    write_text(folder / "new.txt", "new");
+    fs::error_code ec;
+    {
+        // A plain open, as a virus scanner or a file watcher makes of a file just written: on Windows it keeps the
+        // file from being replaced until it is closed.
+        std::ifstream holder(folder / "old.txt", std::ios::binary);
+        std::thread release(
+            [&holder]()
+            {
+                std::this_thread::sleep_for(HOLD_TIME);
+                holder.close();
+            });
+        fs::rename_over(folder / "new.txt", folder / "old.txt", ec);
+        release.join();
+    }
+    check(!ec && read_text(folder / "old.txt") == "new" && !fs::exists(folder / "new.txt"),
+          "a file another program holds for a moment is replaced once it lets go: " + ec.message());
+#ifdef _WIN32
+    write_text(folder / "newer.txt", "newer");
+    {
+        std::ifstream holder(folder / "old.txt", std::ios::binary);
+        fs::rename_over(folder / "newer.txt", folder / "old.txt", ec);
+        check(bool(ec) && fs::exists(folder / "newer.txt"), "a file another program keeps holding is not replaced, and the error says so");
+    }
+    check(read_text(folder / "old.txt") == "new", "and it holds what it held");
+#endif
+    const auto begin = std::chrono::steady_clock::now();
+    fs::rename_over(folder / "missing.txt", folder / "old.txt", ec);
+    check(bool(ec) && std::chrono::steady_clock::now() - begin < HOLD_TIME, "a missing file fails at once");
+}
+
 auto run_fs_mirror_suite(rtti::context&) -> int
 {
     g_checks = 0;
@@ -214,6 +332,10 @@ auto run_fs_mirror_suite(rtti::context&) -> int
     test_removal_failure(get_temp_folder() / "locked_target");
     test_missing_source(target);
     test_nothing_to_mirror(get_temp_folder() / "unmade_target");
+    test_same_content(get_temp_folder() / "compared");
+    test_unlisted_files(get_temp_folder() / "listed" / "root");
+    test_shared_read_file(get_temp_folder() / "shared");
+    test_rename_over(get_temp_folder() / "renamed");
     fs::remove_all(get_temp_folder(), ec);
     std::printf("fs mirror: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

@@ -279,6 +279,9 @@ struct settings
         /// The settings profile the build was made from.
         std::string profile;
         target_platform platform{target_platform::desktop};
+        /// The graphics APIs the build ships shaders for, in the order the game tries them when it starts. Empty:
+        /// every API of its platform ships, and the platform's own choice among them starts.
+        std::vector<preferred_renderer> renderers;
 
         friend auto operator==(const build_settings& lhs, const build_settings& rhs) -> bool = default;
     } build;

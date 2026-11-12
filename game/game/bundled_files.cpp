@@ -1,5 +1,6 @@
 #include "bundled_files.h"
 
+#include <filesystem/mirror.h>
 #include <logging/logging.h>
 #include <ospp/bundle.h>
 
@@ -14,6 +15,10 @@ namespace unravel
 {
 namespace
 {
+/// The list of the build whose files are being extracted, beside the extracted list until the last file is
+/// written.
+constexpr const char* PENDING_LIST_NAME = "bundle_files.txt.pending";
+
 auto read_text_file(const fs::path& file) -> std::string
 {
     std::ifstream stream(file, std::ios::binary);
@@ -48,6 +53,26 @@ auto get_listed_names(const std::string& list) -> std::vector<std::string>
         }
     }
     return names;
+}
+
+/// Removes the files earlier builds extracted that this build's package does not list: an older runtime's
+/// libraries, script libraries and assets the game no longer has. The extracted list names a finished copy's
+/// files, the pending list those of a copy that did not finish.
+void remove_earlier_builds_files(const fs::path& binary_path, const std::vector<std::string>& names)
+{
+    auto earlier = get_listed_names(read_text_file(binary_path / BUNDLED_FILES_LIST_NAME));
+    const auto unfinished = get_listed_names(read_text_file(binary_path / PENDING_LIST_NAME));
+    earlier.insert(earlier.end(), unfinished.begin(), unfinished.end());
+    fs::error_code ec;
+    const auto removed = fs::remove_unlisted_files(binary_path, earlier, names, ec);
+    if(removed > 0)
+    {
+        APPLOG_INFO("Removed {} file(s) an earlier build had extracted.", removed);
+    }
+    if(ec)
+    {
+        APPLOG_WARNING("A file an earlier build had extracted could not be removed: {}", ec.message());
+    }
 }
 
 auto extract_file(const std::string& name, const fs::path& destination, std::uint64_t& total_size) -> bool
@@ -89,6 +114,13 @@ auto extract_bundled_files() -> bool
     }
     const auto start = std::chrono::steady_clock::now();
     const auto names = get_listed_names(list);
+    const fs::path pending_list = binary_path / PENDING_LIST_NAME;
+    remove_earlier_builds_files(binary_path, names);
+    if(!write_file(pending_list, list))
+    {
+        APPLOG_ERROR("Cannot write {}.", pending_list.generic_string());
+        return false;
+    }
     std::uint64_t total_size = 0;
     for(const auto& name : names)
     {
@@ -102,6 +134,8 @@ auto extract_bundled_files() -> bool
         APPLOG_ERROR("Cannot write {}.", extracted_list.generic_string());
         return false;
     }
+    fs::error_code ec;
+    fs::remove(pending_list, ec);
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
     APPLOG_INFO("Extracted {} packaged files ({} KB) in {} ms.", names.size(), total_size / 1024, elapsed.count());
     return true;

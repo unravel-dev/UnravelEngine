@@ -214,6 +214,33 @@ auto mount_image(const std::string& protocol,
 }
 } // namespace
 
+auto read_pack_layout(const path& pack_file, pack_layout& layout, std::string& err) -> bool
+{
+    pack_detail::pack_image image;
+    if(!pack_detail::open_pack_image(pack_file, image, err))
+    {
+        err = pack_file.generic_string() + ": " + err;
+        return false;
+    }
+    layout.entries.clear();
+    for(const auto& [key, record] : image.entries)
+    {
+        if(!record.is_deleted() && record.stored_size > 0)
+        {
+            layout.entries.push_back({record.name, record.offset, record.stored_size});
+        }
+    }
+    std::sort(layout.entries.begin(),
+              layout.entries.end(),
+              [](const pack_entry_span& lhs, const pack_entry_span& rhs)
+              {
+                  return lhs.offset < rhs.offset;
+              });
+    layout.contents_offset = image.toc_offset;
+    layout.file_size = image.file.size();
+    return true;
+}
+
 auto mount_pack(const std::string& protocol, const path& pack_file, std::string& err) -> bool
 {
     auto image = std::make_shared<pack_detail::pack_image>();

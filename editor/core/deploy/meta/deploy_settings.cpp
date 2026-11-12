@@ -292,6 +292,22 @@ REFLECT(android_deploy_settings)
             entt::attribute{"pretty_name", "Key Alias"},
             entt::attribute{"tooltip", "The key in the keystore that signs release packages."},
         })
+        .data<&android_deploy_settings::additions>("additions"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "additions"},
+            entt::attribute{"pretty_name", "Additions Folder"},
+            entt::attribute{"tooltip",
+                            "A folder with parts the package takes as they are, for what the game\n"
+                            "needs from Android beyond the engine:\n\n"
+                            "AndroidManifest.xml is merged into the game's manifest.\n"
+                            "java holds Java sources, res resources.\n"
+                            "libs holds .jar and .aar libraries, jniLibs/arm64-v8a native ones.\n"
+                            "dependencies.txt lists libraries Gradle downloads, one per line,\n"
+                            "such as com.google.android.gms:play-services-games-v2:20.1.2.\n\n"
+                            "A relative path is in the project's folder. Empty: nothing is added."},
+            entt::attribute{"relative_to", std::string(PROJECT_ROOT_KEY)},
+            entt::attribute{"hint", "A folder of the project, such as android"},
+        })
         .data<&android_deploy_settings::texture_compression>("texture_compression"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "texture_compression"},
@@ -349,6 +365,7 @@ SAVE(android_deploy_settings)
     try_save(ar, ser20::make_nvp("keystore", fs::to_utf8_string(obj.keystore)));
     try_save(ar, ser20::make_nvp("key_alias", obj.key_alias));
     try_save(ar, ser20::make_nvp("texture_compression", obj.texture_compression));
+    try_save(ar, ser20::make_nvp("additions", fs::to_utf8_string(obj.additions)));
 }
 SAVE_INSTANTIATE(android_deploy_settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(android_deploy_settings, ser20::oarchive_binary_t);
@@ -369,6 +386,11 @@ LOAD(android_deploy_settings)
     }
     try_load(ar, ser20::make_nvp("key_alias", obj.key_alias));
     try_load(ar, ser20::make_nvp("texture_compression", obj.texture_compression));
+    std::string additions;
+    if(try_load(ar, ser20::make_nvp("additions", additions)))
+    {
+        obj.additions = fs::from_utf8_string(additions);
+    }
 }
 LOAD_INSTANTIATE(android_deploy_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(android_deploy_settings, ser20::iarchive_binary_t);
@@ -440,6 +462,71 @@ LOAD(steam_deploy_settings)
 LOAD_INSTANTIATE(steam_deploy_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(steam_deploy_settings, ser20::iarchive_binary_t);
 
+REFLECT(desktop_graphics_apis)
+{
+    entt::meta_factory<desktop_graphics_apis>{}
+        .type("desktop_graphics_apis"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "desktop_graphics_apis"},
+            entt::attribute{"category", "EDITOR"},
+            entt::attribute{"pretty_name", "Graphics APIs"},
+        })
+        .data<&desktop_graphics_apis::direct3d12>("direct3d12"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "direct3d12"},
+            entt::attribute{"pretty_name", "Direct3D 12"},
+            entt::attribute{"tooltip", "Ship the shaders for Direct3D 12, which Windows 10 and later offer."},
+        })
+        .data<&desktop_graphics_apis::direct3d11>("direct3d11"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "direct3d11"},
+            entt::attribute{"pretty_name", "Direct3D 11"},
+            entt::attribute{"tooltip", "Ship the shaders for Direct3D 11, which every supported Windows offers."},
+        })
+        .data<&desktop_graphics_apis::metal>("metal"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "metal"},
+            entt::attribute{"pretty_name", "Metal"},
+            entt::attribute{"tooltip", "Ship the shaders for Metal, which every supported macOS offers."},
+        })
+        .data<&desktop_graphics_apis::vulkan>("vulkan"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "vulkan"},
+            entt::attribute{"pretty_name", "Vulkan"},
+            entt::attribute{"tooltip", "Ship the shaders for Vulkan."},
+        })
+        .data<&desktop_graphics_apis::opengl>("opengl"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "opengl"},
+            entt::attribute{"pretty_name", "OpenGL"},
+            entt::attribute{"tooltip",
+                            "Ship the shaders for OpenGL, the largest set, which runs on the oldest\n"
+                            "graphics drivers."},
+        });
+}
+
+SAVE(desktop_graphics_apis)
+{
+    try_save(ar, ser20::make_nvp("direct3d12", obj.direct3d12));
+    try_save(ar, ser20::make_nvp("direct3d11", obj.direct3d11));
+    try_save(ar, ser20::make_nvp("metal", obj.metal));
+    try_save(ar, ser20::make_nvp("vulkan", obj.vulkan));
+    try_save(ar, ser20::make_nvp("opengl", obj.opengl));
+}
+SAVE_INSTANTIATE(desktop_graphics_apis, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(desktop_graphics_apis, ser20::oarchive_binary_t);
+
+LOAD(desktop_graphics_apis)
+{
+    try_load(ar, ser20::make_nvp("direct3d12", obj.direct3d12));
+    try_load(ar, ser20::make_nvp("direct3d11", obj.direct3d11));
+    try_load(ar, ser20::make_nvp("metal", obj.metal));
+    try_load(ar, ser20::make_nvp("vulkan", obj.vulkan));
+    try_load(ar, ser20::make_nvp("opengl", obj.opengl));
+}
+LOAD_INSTANTIATE(desktop_graphics_apis, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(desktop_graphics_apis, ser20::iarchive_binary_t);
+
 REFLECT(desktop_deploy_settings)
 {
     entt::meta_factory<desktop_deploy_settings>{}
@@ -464,6 +551,7 @@ REFLECT(desktop_deploy_settings)
 SAVE(desktop_deploy_settings)
 {
     try_save(ar, ser20::make_nvp("icon", obj.icon));
+    try_save(ar, ser20::make_nvp("graphics", obj.graphics));
     try_save(ar, ser20::make_nvp("steam", obj.steam));
 }
 SAVE_INSTANTIATE(desktop_deploy_settings, ser20::oarchive_associative_t);
@@ -472,6 +560,7 @@ SAVE_INSTANTIATE(desktop_deploy_settings, ser20::oarchive_binary_t);
 LOAD(desktop_deploy_settings)
 {
     try_load(ar, ser20::make_nvp("icon", obj.icon));
+    try_load(ar, ser20::make_nvp("graphics", obj.graphics));
     try_load(ar, ser20::make_nvp("steam", obj.steam));
 }
 LOAD_INSTANTIATE(desktop_deploy_settings, ser20::iarchive_associative_t);
@@ -640,6 +729,31 @@ REFLECT(deploy_settings)
                             "The game runs without them. With them, script exceptions\n"
                             "name the file and line they came from."},
         })
+        .data<&deploy_settings::deploy_trim_framework>("deploy_trim_framework"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_trim_framework"},
+            entt::attribute{"pretty_name", "Trim .NET Framework"},
+            entt::attribute{"tooltip",
+                            "Leave out the .NET framework libraries nothing in the build references,\n"
+                            "which makes the build smaller.\n\n"
+                            "The deploy follows the references of the script libraries and of the\n"
+                            "script bridge through the framework and ships only what they reach.\n"
+                            "A library that scripts load by a name they build while the game runs\n"
+                            "(reflection, a serializer's type names) shows in no reference: name it\n"
+                            "in Kept Assemblies, or the game fails where it loads it.\n\n"
+                            "Off: the whole framework ships."},
+        })
+        .data<&deploy_settings::deploy_kept_assemblies>("deploy_kept_assemblies"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_kept_assemblies"},
+            entt::attribute{"pretty_name", "Kept Assemblies"},
+            entt::attribute{"tooltip",
+                            "Framework libraries a trimmed build keeps whatever references them,\n"
+                            "by name and separated by spaces or commas, such as System.Data.Common.\n"
+                            "What each of them references stays as well.\n\n"
+                            "A game that fails with a FileNotFoundException names the library to add."},
+            entt::attribute{"hint", "Library names, such as System.Data.Common"},
+        })
         .data<&deploy_settings::deploy_packed_assets>("deploy_packed_assets"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "deploy_packed_assets"},
@@ -659,6 +773,38 @@ REFLECT(deploy_settings)
                             "content_p1.pak holds every change since, so players who have it\n"
                             "download only the patch.\n\n"
                             "None: a full build."},
+        })
+        .data<&deploy_settings::deploy_extra_files>("deploy_extra_files"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_extra_files"},
+            entt::attribute{"pretty_name", "Extra Files"},
+            entt::attribute{"tooltip",
+                            "A folder whose files ship with the build as they are, at the same\n"
+                            "places under the build's top folder.\n\n"
+                            "Desktop: a library the game loads goes beside the executable\n"
+                            "(steam_api64.dll at the folder's top).\n"
+                            "Web: the files join the page. An index.html replaces the loading page;\n"
+                            "start from a copy of the one a deploy writes.\n"
+                            "Android: the files ship in the package and lie beside the game's data.\n\n"
+                            "A file an earlier deploy copied and the folder no longer has is removed\n"
+                            "from the build. A relative path is in the project's folder. Empty: none."},
+            entt::attribute{"relative_to", std::string(PROJECT_ROOT_KEY)},
+            entt::attribute{"hint", "A folder of the project, such as deploy/extra"},
+        })
+        .data<&deploy_settings::deploy_post_command>("deploy_post_command"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_post_command"},
+            entt::attribute{"pretty_name", "Post-Deploy Command"},
+            entt::attribute{"tooltip",
+                            "A command the deploy runs once the build is whole: what signs, archives\n"
+                            "or uploads it. It runs through the system's command interpreter in the\n"
+                            "build's folder, and its output shows in the Console.\n\n"
+                            "It can read UNRAVEL_DEPLOY_FOLDER, UNRAVEL_DEPLOY_PROFILE,\n"
+                            "UNRAVEL_DEPLOY_PLATFORM (desktop, android or web) and\n"
+                            "UNRAVEL_DEPLOY_VERSION (the product version).\n\n"
+                            "A command that fails fails the deploy. On Android it runs after the\n"
+                            "package is built and before it is installed. Empty: none."},
+            entt::attribute{"hint", "A command, such as a script of the project"},
         })
         .data<&deploy_settings::deploy_and_run>("deploy_and_run"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -697,8 +843,12 @@ SAVE(deploy_settings)
     try_save(ar, ser20::make_nvp("deploy_dependencies", obj.deploy_dependencies));
     try_save(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
     try_save(ar, ser20::make_nvp("deploy_run_arguments", obj.deploy_run_arguments));
+    try_save(ar, ser20::make_nvp("deploy_extra_files", fs::to_utf8_string(obj.deploy_extra_files)));
+    try_save(ar, ser20::make_nvp("deploy_post_command", obj.deploy_post_command));
     try_save(ar, ser20::make_nvp("deploy_cooked_assets", obj.deploy_cooked_assets));
     try_save(ar, ser20::make_nvp("deploy_debug_symbols", obj.deploy_debug_symbols));
+    try_save(ar, ser20::make_nvp("deploy_trim_framework", obj.deploy_trim_framework));
+    try_save(ar, ser20::make_nvp("deploy_kept_assemblies", obj.deploy_kept_assemblies));
     try_save(ar, ser20::make_nvp("deploy_packed_assets", obj.deploy_packed_assets));
     try_save(ar, ser20::make_nvp("deploy_patch_release", obj.deploy_patch_release));
     try_save(ar, ser20::make_nvp("deploy_only_used_assets", obj.deploy_only_used_assets));
@@ -719,8 +869,16 @@ LOAD(deploy_settings)
     try_load(ar, ser20::make_nvp("deploy_dependencies", obj.deploy_dependencies));
     try_load(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
     try_load(ar, ser20::make_nvp("deploy_run_arguments", obj.deploy_run_arguments));
+    std::string deploy_extra_files;
+    if(try_load(ar, ser20::make_nvp("deploy_extra_files", deploy_extra_files)))
+    {
+        obj.deploy_extra_files = fs::from_utf8_string(deploy_extra_files);
+    }
+    try_load(ar, ser20::make_nvp("deploy_post_command", obj.deploy_post_command));
     try_load(ar, ser20::make_nvp("deploy_cooked_assets", obj.deploy_cooked_assets));
     try_load(ar, ser20::make_nvp("deploy_debug_symbols", obj.deploy_debug_symbols));
+    try_load(ar, ser20::make_nvp("deploy_trim_framework", obj.deploy_trim_framework));
+    try_load(ar, ser20::make_nvp("deploy_kept_assemblies", obj.deploy_kept_assemblies));
     try_load(ar, ser20::make_nvp("deploy_packed_assets", obj.deploy_packed_assets));
     try_load(ar, ser20::make_nvp("deploy_patch_release", obj.deploy_patch_release));
     try_load(ar, ser20::make_nvp("deploy_only_used_assets", obj.deploy_only_used_assets));

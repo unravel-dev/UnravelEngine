@@ -17,6 +17,15 @@
 
 #if UNRAVEL_PLATFORM_EMSCRIPTEN
 #include <emscripten/emscripten.h>
+
+// Tells the page the application ended: its canvas keeps the last frame, and only the page can say so
+// (game/web/wwwroot/main.js, unravelPage.onGameEnded).
+EM_JS(void, unravel_notify_page_of_end, (), {
+    const page = globalThis.unravelPage;
+    if (page && typeof page.onGameEnded === 'function') {
+        page.onGameEnded();
+    }
+});
 #endif
 
 using namespace std::chrono_literals;
@@ -47,6 +56,7 @@ void run_browser_frame()
         std::cerr << "The application did not unload cleanly." << std::endl;
     }
     browser_runner.reset();
+    unravel_notify_page_of_end();
 }
 #endif
 

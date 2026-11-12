@@ -24,7 +24,11 @@
  *     unmount return the whole entry or nothing;
  *   - the parser refuses huge counts and sizes before allocating, other codecs and versions;
  *   - a pack can be replaced reusing itself; a damaged entry is reported (lookup status) and never reused;
- *   - a protocol path no pack holds is read from disk.
+ *   - a protocol path no pack holds is read from disk;
+ *   - read_pack_layout lists the entries that hold bytes in file order with their stored spans, and where the
+ *     table of contents starts;
+ *   - a pack mounts from bytes named for its path (add_memory_file) where no file is, and not once they are
+ *     forgotten.
  * Everything lives in a temp folder under a protocol the suite registers.
  */
 
@@ -37,6 +41,7 @@
 #define XXH_INLINE_ALL
 #include <filesystem/xxhash.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -709,6 +714,73 @@ void test_protocol_path_disk_fallback()
     fs::unmount_packs();
 }
 
+void test_pack_layout()
+{
+    std::printf("test_pack_layout\n");
+    const auto pack_file = get_temp_folder() / "stored.pak";
+    const auto bytes = read_disk_file(pack_file);
+    fs::pack_layout layout;
+    std::string error;
+    check(fs::read_pack_layout(pack_file, layout, error), "a pack's layout is read: " + error);
+    const auto files = make_test_files();
+    std::size_t holding_bytes = 0;
+    for(const auto& file : files)
+    {
+        holding_bytes += file.bytes.empty() ? 0 : 1;
+    }
+    check(layout.entries.size() == holding_bytes, "every entry that holds bytes is listed");
+    check(layout.file_size == bytes.size() && layout.contents_offset < layout.file_size,
+          "the table of contents lies between the entries and the end of the file");
+    std::uint64_t end = 0;
+    bool is_ordered = true;
+    bool has_stored_bytes = true;
+    for(const auto& entry : layout.entries)
+    {
+        is_ordered = is_ordered && entry.offset >= end && entry.offset + entry.size <= layout.contents_offset;
+        end = entry.offset + entry.size;
+        const auto source = std::find_if(files.begin(),
+                                         files.end(),
+                                         [&entry](const test_input& file)
+                                         {
+                                             return file.name == entry.name;
+                                         });
+        has_stored_bytes = has_stored_bytes && source != files.end() && entry.size == source->bytes.size() &&
+                           std::equal(source->bytes.begin(), source->bytes.end(), bytes.begin() + std::ptrdiff_t(entry.offset));
+    }
+    check(is_ordered, "the entries are in file order, apart, before the table of contents");
+    check(has_stored_bytes, "an entry's span holds its bytes in a stored pack");
+    check(!fs::read_pack_layout(get_temp_folder() / "no_such.pak", layout, error) && !error.empty(), "a missing pack has no layout");
+}
+
+void test_memory_files()
+{
+    std::printf("test_memory_files\n");
+    fs::unmount_packs();
+    const auto bytes = read_disk_file(get_temp_folder() / "compressed.pak");
+    // No file is at this path: the pack's bytes are named for it.
+    const auto memory_pack = get_temp_folder() / "in_memory" / "content.pak";
+    std::string error;
+    check(!fs::has_memory_file(memory_pack) && !fs::mount_pack(TEST_PROTOCOL, memory_pack, error),
+          "a path with neither a file nor bytes named for it does not mount");
+    fs::add_memory_file(memory_pack, bytes.data(), bytes.size());
+    check(fs::has_memory_file(get_temp_folder() / "in_memory" / "." / "content.pak"), "bytes are named for a path, however it is spelled");
+    check(fs::mount_pack(TEST_PROTOCOL, memory_pack, error), "a pack mounts from the bytes named for its path: " + error);
+    for(const auto& file : make_test_files())
+    {
+        check(read_packed_bytes(get_protocol_root() / file.name) == file.bytes, file.name + " reads back from the memory pack");
+    }
+    fs::unmount_packs();
+    fs::remove_memory_file(memory_pack);
+    check(!fs::has_memory_file(memory_pack) && !fs::mount_pack(TEST_PROTOCOL, memory_pack, error),
+          "forgotten bytes no longer stand in for the file");
+    const auto listed = fs::parse_host_memory_files("data/engine/content.pak:65536:1024|no numbers|data/app/a:b.pak:131072:7|"
+                                                    "null:0:5|empty:9:0|half:9:|:9:9");
+    check(listed.size() == 2 && listed[0].name == "data/engine/content.pak" && listed[0].address == 65536 &&
+              listed[0].size == 1024 && listed[1].name == "data/app/a:b.pak" && listed[1].address == 131072 && listed[1].size == 7,
+          "a host's list of memory files reads item by item, and items that name no bytes are left out");
+    check(fs::parse_host_memory_files("").empty(), "an empty list names no file");
+}
+
 auto run_asset_packs_suite(rtti::context&) -> int
 {
     g_checks = 0;
@@ -734,6 +806,8 @@ auto run_asset_packs_suite(rtti::context&) -> int
     test_lookup_status_and_damaged_reuse();
     test_patch_rules();
     test_protocol_path_disk_fallback();
+    test_pack_layout();
+    test_memory_files();
     fs::unmount_packs();
     fs::remove_all(get_temp_folder(), ec);
     std::printf("asset packs: %d checks, %d failures\n", g_checks, g_failures);

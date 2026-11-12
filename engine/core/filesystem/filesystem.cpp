@@ -401,6 +401,31 @@ bool is_taken_as_written(const std::wstring& text)
 } // namespace
 #endif
 
+std::uintmax_t get_folder_size(const path& folder, error_code& ec)
+{
+    ec.clear();
+    std::uintmax_t size = 0;
+    error_code walk_ec;
+    for(recursive_directory_iterator it(make_extended_length_path(folder), walk_ec), end; !walk_ec && it != end; it.increment(walk_ec))
+    {
+        error_code file_ec;
+        if(it->is_regular_file(file_ec) && !file_ec)
+        {
+            const auto file_size = it->file_size(file_ec);
+            size += file_ec ? 0 : file_size;
+        }
+        if(file_ec && !ec)
+        {
+            ec = file_ec;
+        }
+    }
+    if(walk_ec && !ec)
+    {
+        ec = walk_ec;
+    }
+    return size;
+}
+
 path make_extended_length_path(const path& _path)
 {
 #if defined(_WIN32)

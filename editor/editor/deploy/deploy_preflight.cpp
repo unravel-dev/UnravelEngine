@@ -25,8 +25,9 @@ constexpr auto PROBLEMS_REFRESH_INTERVAL = std::chrono::milliseconds(500);
 /// into a folder of its own in it, created when missing, which must be empty or an earlier build of a
 /// profile of its platform, since a deploy replaces and removes files in it. An Android folder holds
 /// packages only.
-auto get_folder_problem(const fs::path& location, const fs::path& output, bool is_android) -> std::string
+auto get_folder_problem(const fs::path& location, const fs::path& output, deploy_platform platform) -> std::string
 {
+    const bool is_android = platform == deploy_platform::android;
     fs::error_code ec;
     if(location.empty())
     {
@@ -56,6 +57,10 @@ auto get_folder_problem(const fs::path& location, const fs::path& output, bool i
     if(!is_present(output))
     {
         return {};
+    }
+    if(auto problem = get_other_platform_problem(output, platform); !problem.empty())
+    {
+        return problem;
     }
     const auto folder = output.filename().generic_string();
     if(is_android)
@@ -184,7 +189,7 @@ auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vec
     }
     const bool is_android = params.deploy_target == deploy_platform::android;
     const bool is_desktop = params.deploy_target == deploy_platform::desktop;
-    const auto folder_problem = get_folder_problem(get_deploy_folder(params), get_output_location(params), is_android);
+    const auto folder_problem = get_folder_problem(get_deploy_folder(params), get_output_location(params), params.deploy_target);
     add_problem(problems, folder_problem);
     if(folder_problem.empty() && is_desktop && is_executable_in_use(get_deployed_executable(ctx, params)))
     {
@@ -193,6 +198,12 @@ auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vec
     if(!pm.get_profile_settings(params.profile).standalone.startup_scene.is_valid())
     {
         add_problem(problems, "Choose the scene the game starts with.");
+    }
+    const auto extra_files = get_project_folder(params.deploy_extra_files);
+    if(!extra_files.empty() && !is_present(extra_files))
+    {
+        add_problem(problems,
+                    fmt::format("The Extra Files folder {} is missing. Create it, or clear Extra Files.", extra_files.generic_string()));
     }
     if(params.deploy_cooked_assets && ctx.get_cached<play_mode>().is_active())
     {
@@ -209,6 +220,11 @@ auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vec
     }
     else if(is_desktop)
     {
+        add_problem(problems, get_executable_name_problem(get_deployed_executable(ctx, params)));
+        if(get_desktop_renderers(params.desktop.graphics, get_current_renderer_platform()).empty())
+        {
+            add_problem(problems, "Choose at least one graphics API the game renders with on this platform.");
+        }
         add_problem(problems, get_runtime_problem());
         if(params.deploy_dependencies)
         {

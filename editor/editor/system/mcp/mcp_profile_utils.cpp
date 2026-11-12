@@ -21,8 +21,12 @@ constexpr deploy_argument DEPLOY_ARGUMENTS[] = {
     {"deploy_dependencies", "deploy_dependencies"},
     {"run_after_deploy", "deploy_and_run"},
     {"run_arguments", "deploy_run_arguments"},
+    {"extra_files", "deploy_extra_files"},
+    {"post_command", "deploy_post_command"},
     {"cook_assets", "deploy_cooked_assets"},
     {"include_debug_symbols", "deploy_debug_symbols"},
+    {"trim_framework", "deploy_trim_framework"},
+    {"kept_assemblies", "deploy_kept_assemblies"},
     {"pack_assets", "deploy_packed_assets"},
     {"patch_release", "deploy_patch_release"},
     {"only_used_assets", "deploy_only_used_assets"},
@@ -31,20 +35,6 @@ constexpr deploy_argument DEPLOY_ARGUMENTS[] = {
     {"exclude", "deploy_excluded"},
 };
 } // namespace
-
-auto get_platform_name(target_platform platform) -> const char*
-{
-    switch(platform)
-    {
-        case target_platform::android:
-            return "android";
-        case target_platform::web:
-            return "web";
-        case target_platform::desktop:
-        default:
-            return "desktop";
-    }
-}
 
 auto parse_platform_name(hpp::string_view name, target_platform& platform) -> bool
 {

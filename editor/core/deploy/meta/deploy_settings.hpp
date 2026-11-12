@@ -16,6 +16,10 @@ SAVE_EXTERN(steam_deploy_settings);
 LOAD_EXTERN(steam_deploy_settings);
 REFLECT_EXTERN(steam_deploy_settings);
 
+SAVE_EXTERN(desktop_graphics_apis);
+LOAD_EXTERN(desktop_graphics_apis);
+REFLECT_EXTERN(desktop_graphics_apis);
+
 SAVE_EXTERN(desktop_deploy_settings);
 LOAD_EXTERN(desktop_deploy_settings);
 REFLECT_EXTERN(desktop_deploy_settings);

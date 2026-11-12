@@ -3,7 +3,9 @@
 #include "folders.h"
 #include "run_arguments.h"
 
+#include <engine/permissions/permission_requests.h>
 #include <logging/logging.h>
+#include <subprocess/subprocess.hpp>
 
 #include <algorithm>
 #include <array>
@@ -11,6 +13,7 @@
 #include <cstdlib>
 #include <map>
 #include <sstream>
+#include <utility>
 
 namespace unravel::deployment
 {
@@ -28,11 +31,33 @@ constexpr const char* DEFAULT_PRODUCT_PART = "game";
 /// Put before an application id part that does not start with a letter.
 constexpr const char* LEADING_LETTERS = "app";
 constexpr const char* GRADLE_WRAPPER_MAIN = "org.gradle.wrapper.GradleWrapperMain";
+/// The wrapper's property that names the Gradle distribution, how the distribution's file name ends, and where
+/// Gradle keeps the distributions it downloaded, under its own folder.
+constexpr const char* GRADLE_DISTRIBUTION_KEY = "distributionUrl=";
+constexpr const char* GRADLE_DISTRIBUTION_EXTENSION = ".zip";
+constexpr const char* GRADLE_DISTRIBUTIONS_FOLDER = "wrapper/dists";
+/// A release build leaves no Gradle daemon behind: one would keep the keystore's passwords in its environment.
+constexpr const char* GRADLE_NO_DAEMON = "--no-daemon";
+/// A debug build's daemon, which makes the next build start fast, ends after this long without one; Gradle's own
+/// three hours keep its memory long after the editor closed.
+constexpr const char* GRADLE_DAEMON_IDLE_TIMEOUT = "-Dorg.gradle.daemon.idletimeout=600000";
+/// How a manifest's root element starts and ends.
+constexpr const char* MANIFEST_TAG = "<manifest";
+constexpr const char* MANIFEST_END_TAG = "</manifest>";
+/// Java 8 and older name their version "1.<major>".
+constexpr int OLD_JAVA_FIRST_NUMBER = 1;
+/// The file at a JDK's top that describes it, and the line of it that gives the version (JAVA_VERSION="21.0.3").
+constexpr const char* JDK_RELEASE_FILE = "release";
+constexpr const char* JDK_VERSION_KEY = "JAVA_VERSION=";
+/// How a crash report in a device's log starts, and how the line that names its process starts.
+constexpr const char* CRASH_REPORT_START = "*** *** ***";
+constexpr const char* CRASH_REPORT_PROCESS = "pid: ";
+/// The lines of a crash report held until it names its process, which it does within its first ten.
+constexpr std::size_t CRASH_REPORT_HELD_MAX = 64;
 constexpr const char* PLAYER_ACTIVITY = "com.unravel.player.UnravelActivity";
 /// The start intent's extra that UnravelActivity reads the game's command line options from.
 constexpr const char* ARGUMENTS_EXTRA = "arguments";
 /// What a permission named without a package gets in front.
-constexpr const char* ANDROID_PERMISSION_PREFIX = "android.permission.";
 /// The engine's tag: spdlog's Android sink.
 constexpr const char* ENGINE_LOG_TAG = "spdlog";
 /// The tags of the game's own libraries: the engine, SDL's Java side and its HID support, OpenAL Soft and
@@ -204,6 +229,12 @@ auto android_template::get_sdl_java_dir() const -> fs::path
 auto android_template::get_dotnet_dir() const -> fs::path
 {
     return root / "dotnet";
+}
+
+auto android_template::get_framework_dir() const -> fs::path
+{
+    // The folder is named after the runtime's target framework: net<major>.<minor> of its version.
+    return get_dotnet_dir() / "lib" / ("net" + dotnet_runtime.substr(0, dotnet_runtime.rfind('.')));
 }
 
 namespace
@@ -385,11 +416,6 @@ auto get_android_permission_entries() -> const std::vector<android_permission_en
     return entries;
 }
 
-auto get_android_permission_name(const std::string& name) -> std::string
-{
-    return name.find('.') == std::string::npos ? ANDROID_PERMISSION_PREFIX + name : name;
-}
-
 auto check_android_permission_name(const std::string& name) -> std::string
 {
     std::stringstream parts(get_android_permission_name(name));
@@ -430,15 +456,71 @@ auto get_android_permission_names(const android_permissions& permissions) -> std
     return names;
 }
 
-auto make_android_permissions_manifest(const std::vector<std::string>& names) -> std::string
+namespace
 {
-    std::string text = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
-                       "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n";
+/// The uses-permission elements of `names`, a line each.
+auto make_permission_lines(const std::vector<std::string>& names) -> std::string
+{
+    std::string lines;
     for(const auto& name : names)
     {
-        text += "    <uses-permission android:name=\"" + name + "\" />\n";
+        lines += "    <uses-permission android:name=\"" + name + "\" />\n";
     }
-    return text + "</manifest>\n";
+    return lines;
+}
+
+/// Where the opening tag that starts at `tag_begin` ends in `xml`: its '>', which a quoted attribute value may
+/// hold without ending the tag. npos when the tag does not end.
+auto find_tag_end(const std::string& xml, std::size_t tag_begin) -> std::size_t
+{
+    char quote = 0;
+    for(std::size_t index = tag_begin; index < xml.size(); ++index)
+    {
+        const char c = xml[index];
+        if(quote != 0)
+        {
+            quote = c == quote ? char(0) : quote;
+        }
+        else if(c == '"' || c == '\'')
+        {
+            quote = c;
+        }
+        else if(c == '>')
+        {
+            return index;
+        }
+    }
+    return std::string::npos;
+}
+} // namespace
+
+auto make_android_permissions_manifest(const std::vector<std::string>& names) -> std::string
+{
+    return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+           "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n" +
+           make_permission_lines(names) + "</manifest>\n";
+}
+
+auto make_android_build_manifest(const std::string& additions_manifest, const std::vector<std::string>& names) -> std::string
+{
+    if(additions_manifest.empty())
+    {
+        return make_android_permissions_manifest(names);
+    }
+    const auto tag_begin = additions_manifest.find(MANIFEST_TAG);
+    const auto tag_end = tag_begin == std::string::npos ? tag_begin : find_tag_end(additions_manifest, tag_begin);
+    if(tag_end == std::string::npos)
+    {
+        return {};
+    }
+    // "<manifest ... />" holds nothing: it is opened to take the permissions, and closed after them.
+    const bool is_empty_element = tag_end > 0 && additions_manifest[tag_end - 1] == '/';
+    if(is_empty_element)
+    {
+        return additions_manifest.substr(0, tag_end - 1) + ">\n" + make_permission_lines(names) + MANIFEST_END_TAG +
+               additions_manifest.substr(tag_end + 1);
+    }
+    return additions_manifest.substr(0, tag_end + 1) + "\n" + make_permission_lines(names) + additions_manifest.substr(tag_end + 1);
 }
 
 auto android_device::is_wireless() const -> bool
@@ -741,11 +823,68 @@ auto get_android_toolchain_search() -> android_toolchain_search
     // older ones one folder down (/snap/android-studio/current/android-studio).
     add_matching_children("/snap", "android-studio", fs::path("current") / "jbr", search.jdk_candidates);
     add_matching_children("/snap", "android-studio", fs::path("current") / "android-studio" / "jbr", search.jdk_candidates);
+    // The distribution's own JDKs (java-17-openjdk-amd64), which install_android_studio.sh installs: a JAVA_HOME
+    // that names an older Java gives way to one of them.
+    add_matching_children("/usr/lib/jvm", "java-", fs::path{}, search.jdk_candidates);
 #endif
     return search;
 }
 
-auto find_android_toolchain(const android_toolchain_search& search) -> android_toolchain
+auto parse_java_version(const std::string& report) -> int
+{
+    // The version is the first quoted text: "21.0.3", or "1.8.0_281" for Java 8 and older, which name their major
+    // version second.
+    const auto begin = report.find('"');
+    const auto end = begin == std::string::npos ? begin : report.find('"', begin + 1);
+    if(end == std::string::npos)
+    {
+        return 0;
+    }
+    std::stringstream numbers(report.substr(begin + 1, end - begin - 1));
+    int first = 0;
+    int second = 0;
+    char separator = 0;
+    if(!(numbers >> first))
+    {
+        return 0;
+    }
+    if(first != OLD_JAVA_FIRST_NUMBER)
+    {
+        return first;
+    }
+    return (numbers >> separator >> second) ? second : first;
+}
+
+auto parse_jdk_release_version(const std::string& release) -> int
+{
+    // The key starts a line: JAVA_RUNTIME_VERSION and the like only end with it.
+    const std::string key(JDK_VERSION_KEY);
+    for(auto found = release.find(key); found != std::string::npos; found = release.find(key, found + 1))
+    {
+        if(found == 0 || release[found - 1] == '\n')
+        {
+            const auto line_end = std::min(release.find('\n', found), release.size());
+            return parse_java_version(release.substr(found, line_end - found));
+        }
+    }
+    return 0;
+}
+
+auto get_java_version(const fs::path& java) -> int
+{
+    // A JDK says its version in a file at its top, two folders above its java: reading it starts no program. Only a
+    // Java without that file is started and asked.
+    std::string release;
+    read_whole_file(java.parent_path().parent_path() / JDK_RELEASE_FILE, release);
+    if(const int version = parse_jdk_release_version(release); version > 0)
+    {
+        return version;
+    }
+    const auto report = subprocess::call({java.string(), "-version"});
+    return report.started ? parse_java_version(report.out_output) : 0;
+}
+
+auto find_android_toolchain(const android_toolchain_search& search, const java_version_probe& get_version) -> android_toolchain
 {
     android_toolchain tools;
     const auto adb_name = get_executable_name("adb");
@@ -759,23 +898,139 @@ auto find_android_toolchain(const android_toolchain_search& search) -> android_t
         }
     }
     const auto java_name = get_executable_name("java");
+    fs::path old_java;
+    int old_java_version = 0;
     for(const auto& jdk : search.jdk_candidates)
     {
-        if(is_present(jdk / "bin" / java_name))
+        const auto java = jdk / "bin" / java_name;
+        if(!is_present(java))
         {
-            tools.java = jdk / "bin" / java_name;
+            continue;
+        }
+        const int version = get_version(java);
+        if(version >= MIN_ANDROID_JAVA_VERSION)
+        {
+            tools.java = java;
             break;
+        }
+        if(old_java.empty())
+        {
+            old_java = java;
+            old_java_version = version;
         }
     }
     if(tools.sdk.empty())
     {
         tools.error = "No Android SDK was found. Install Android Studio, or set ANDROID_HOME to the SDK folder.";
     }
+    else if(tools.java.empty() && !old_java.empty())
+    {
+        tools.error = fmt::format("The Java at {} is version {}, and Android builds need {} or newer. Install Android "
+                                  "Studio, which bundles one, or point JAVA_HOME at a newer JDK.",
+                                  old_java.generic_string(),
+                                  old_java_version,
+                                  MIN_ANDROID_JAVA_VERSION);
+    }
     else if(tools.java.empty())
     {
         tools.error = "No Java was found. Install Android Studio, which bundles one, or set JAVA_HOME.";
     }
     return tools;
+}
+
+auto get_gradle_distribution_name(const std::string& wrapper_properties) -> std::string
+{
+    const auto key = wrapper_properties.find(GRADLE_DISTRIBUTION_KEY);
+    if(key == std::string::npos)
+    {
+        return {};
+    }
+    const auto line_end = std::min(wrapper_properties.find_first_of("\r\n", key), wrapper_properties.size());
+    const auto address = wrapper_properties.substr(key, line_end - key);
+    const auto name_begin = address.rfind('/');
+    const auto name_end = address.rfind(GRADLE_DISTRIBUTION_EXTENSION);
+    if(name_begin == std::string::npos || name_end == std::string::npos || name_end <= name_begin)
+    {
+        return {};
+    }
+    return address.substr(name_begin + 1, name_end - name_begin - 1);
+}
+
+auto has_gradle_distribution(const fs::path& gradle_home, const std::string& name) -> bool
+{
+    return !name.empty() && is_present(gradle_home / GRADLE_DISTRIBUTIONS_FOLDER / fs::from_utf8_string(name));
+}
+
+auto get_gradle_home() -> fs::path
+{
+    const auto set_home = get_environment("GRADLE_USER_HOME");
+    if(!set_home.empty())
+    {
+        return set_home;
+    }
+#if defined(_WIN32)
+    return get_environment("USERPROFILE") / ".gradle";
+#else
+    return get_environment("HOME") / ".gradle";
+#endif
+}
+
+auto parse_android_process_id(const std::string& output, int exit_code) -> std::string
+{
+    std::stringstream words(output);
+    std::string first;
+    words >> first;
+    const bool is_id = !first.empty() && std::all_of(first.begin(),
+                                                     first.end(),
+                                                     [](unsigned char c)
+                                                     {
+                                                         return std::isdigit(c) != 0;
+                                                     });
+    return exit_code == 0 && is_id ? first : std::string{};
+}
+
+android_crash_report_filter::android_crash_report_filter(std::string process)
+    : process_(std::move(process))
+{
+}
+
+auto android_crash_report_filter::add(android_crash_line line) -> std::vector<android_crash_line>
+{
+    if(line.message.rfind(CRASH_REPORT_START, 0) == 0)
+    {
+        owner_ = owner::unknown;
+        held_.clear();
+    }
+    if(owner_ == owner::other_process)
+    {
+        return {};
+    }
+    if(owner_ == owner::this_process)
+    {
+        return {std::move(line)};
+    }
+    const bool names_process = line.message.rfind(CRASH_REPORT_PROCESS, 0) == 0;
+    const auto named = names_process ? line.message.substr(std::char_traits<char>::length(CRASH_REPORT_PROCESS)) : std::string{};
+    if(held_.size() < CRASH_REPORT_HELD_MAX)
+    {
+        held_.push_back(std::move(line));
+    }
+    if(!names_process)
+    {
+        return {};
+    }
+    // "pid: 123, tid: 456, name: ...": the id ends at the comma.
+    owner_ = named.substr(0, named.find(',')) == process_ ? owner::this_process : owner::other_process;
+    return owner_ == owner::this_process ? std::exchange(held_, {}) : std::vector<android_crash_line>{};
+}
+
+auto check_android_version_code(std::uint32_t version_code) -> std::string
+{
+    if(version_code <= MAX_ANDROID_VERSION_CODE)
+    {
+        return {};
+    }
+    return fmt::format("The version code {} is above {}, the largest Google Play takes.", version_code, MAX_ANDROID_VERSION_CODE);
 }
 
 auto make_signing_environment(const android_signing_passwords& passwords) -> std::vector<std::string>
@@ -804,6 +1059,7 @@ auto make_gradle_arguments(const android_toolchain& tools, const android_package
         GRADLE_WRAPPER_MAIN,
         "--project-dir",
         params.project_dir.string(),
+        params.is_release ? GRADLE_NO_DAEMON : GRADLE_DAEMON_IDLE_TIMEOUT,
         params.is_release ? "assembleRelease" : "assembleDebug",
         "-Punravel.player=" + player.get_player_dir().generic_string(),
         "-Punravel.symbols=" + player.get_symbols_dir().generic_string(),
@@ -818,6 +1074,7 @@ auto make_gradle_arguments(const android_toolchain& tools, const android_package
         "-Punravel.orientation=" + get_screen_orientation(params.orientation),
         "-Punravel.icon=" + params.icon_dir.generic_string(),
         "-Punravel.permissions=" + params.permissions_manifest.generic_string(),
+        "-Punravel.trimmedFramework=" + params.trimmed_framework_list.generic_string(),
     };
     if(params.is_release)
     {
@@ -828,6 +1085,10 @@ auto make_gradle_arguments(const android_toolchain& tools, const android_package
     {
         arguments.push_back("-Punravel.keystore=" + params.keystore.generic_string());
         arguments.push_back("-Punravel.keyAlias=" + params.key_alias);
+    }
+    if(!params.additions.empty())
+    {
+        arguments.push_back("-Punravel.additions=" + params.additions.generic_string());
     }
     return arguments;
 }

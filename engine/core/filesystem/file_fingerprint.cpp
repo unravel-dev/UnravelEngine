@@ -208,6 +208,16 @@ auto hash_file_fingerprint(const path& file_path, bool normalize_text_line_endin
     return hash_stream_fingerprint(input, normalize_text_line_endings);
 }
 
+auto hash_bytes_fingerprint(const void* data, size_t size) -> std::string
+{
+    return xxh128_to_hex(XXH3_128bits(data, size));
+}
+
+auto hash_bytes_check(const void* data, size_t size) -> uint32_t
+{
+    return XXH32(data, size, 0);
+}
+
 auto combine_file_fingerprints(const std::string& first_fingerprint,
                                const std::string* additional_fingerprints,
                                size_t additional_count) -> std::string

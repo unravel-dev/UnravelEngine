@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -55,8 +56,12 @@ constexpr auto PROCESS_POLL_INTERVAL = std::chrono::milliseconds(1000);
 constexpr auto PROCESS_START_TIMEOUT = std::chrono::seconds(15);
 /// How long the log keeps reading after the game ended, for the crash report that follows it.
 constexpr auto CRASH_REPORT_GRACE = std::chrono::milliseconds(2000);
+/// The Gradle wrapper's properties in a Gradle project, which name the Gradle the project builds with.
+constexpr const char* GRADLE_WRAPPER_PROPERTIES = "gradle/wrapper/gradle-wrapper.properties";
 /// The tag of the system's crash reports (tombstones) in the device log.
 constexpr const char* CRASH_REPORT_TAG = "DEBUG";
+/// The lines of its past a device's log prints when it is followed from now on: logcat takes no fewer than one.
+constexpr const char* LOG_FROM_NOW_LINES = "1";
 // Deploy and Run's steps on the device, as the Deploy window lists them.
 constexpr const char* STEP_INSTALL = "Install on Device";
 constexpr const char* STEP_START = "Start on Device";
@@ -91,10 +96,87 @@ void remove_build_dir(const fs::path& build_dir, fs::error_code& ec)
 
 } // namespace
 
+namespace
+{
+/// A build folder's size as last measured, and whether a measure of it runs.
+struct measured_usage
+{
+    android_build_usage usage;
+    bool is_measuring{};
+    /// The folder changed since the measure: it is measured again when next asked for.
+    bool is_stale{true};
+};
+
+std::mutex usage_mutex;
+/// By build folder.
+std::map<fs::path, measured_usage> measured_usages;
+
+/// Measures `build_dir` on this thread and keeps the result.
+void measure_build_dir(const fs::path& build_dir)
+{
+    fs::error_code ec;
+    const auto bytes = fs::get_folder_size(build_dir, ec);
+    const std::lock_guard<std::mutex> lock(usage_mutex);
+    auto& measured = measured_usages[build_dir];
+    measured.usage = {bytes, true};
+    measured.is_measuring = false;
+}
+
+/// Marks the size of `build_dir` as out of date: a build or a clear changed the folder.
+void invalidate_build_usage(const fs::path& build_dir)
+{
+    const std::lock_guard<std::mutex> lock(usage_mutex);
+    measured_usages[build_dir].is_stale = true;
+}
+} // namespace
+
 void remove_android_build_dir(const std::string& profile)
 {
     fs::error_code ec;
     remove_build_dir(get_build_dir(profile), ec);
+    invalidate_build_usage(get_build_dir(profile));
+}
+
+auto get_android_build_usage(rtti::context& ctx, const std::string& profile) -> android_build_usage
+{
+    const auto build_dir = get_build_dir(profile);
+    const std::lock_guard<std::mutex> lock(usage_mutex);
+    auto& measured = measured_usages[build_dir];
+    if(measured.is_stale && !measured.is_measuring)
+    {
+        measured.is_stale = false;
+        measured.is_measuring = true;
+        ctx.get_cached<threader>().pool->schedule("Measuring the Android build folder",
+                                                  [build_dir]()
+                                                  {
+                                                      measure_build_dir(build_dir);
+                                                  });
+    }
+    return measured.usage;
+}
+
+void clear_android_build_dir(rtti::context& ctx, const std::string& profile)
+{
+    ctx.get_cached<threader>().pool->schedule("Clearing the Android build folder",
+                                              [profile]()
+                                              {
+                                                  const auto build_dir = get_build_dir(profile);
+                                                  fs::error_code ec;
+                                                  remove_build_dir(build_dir, ec);
+                                                  invalidate_build_usage(build_dir);
+                                                  if(!ec)
+                                                  {
+                                                      APPLOG_INFO("Deploy: cleared the Android build folder of profile {}.", profile);
+                                                      return;
+                                                  }
+                                                  // Gradle goes on running for ten minutes after a debug build, for the
+                                                  // next one, and holds files of the folder meanwhile.
+                                                  APPLOG_WARNING("Deploy: part of the Android build folder of profile {} could not be "
+                                                                 "removed ({}). The Gradle of its last build may still hold files "
+                                                                 "of it; clear it again in ten minutes.",
+                                                                 profile,
+                                                                 ec.message());
+                                              });
 }
 
 namespace
@@ -182,10 +264,27 @@ auto run_adb(const android_toolchain& tools, const std::string& device, std::vec
     return subprocess::call(make_adb_command(tools.adb, device, std::move(arguments)));
 }
 
-auto get_game_process(const android_toolchain& tools, const std::string& device, const std::string& application_id)
-    -> std::string
+/// What a device answers when asked for the game's process.
+struct process_lookup
 {
-    return string_utils::trim(run_adb(tools, device, {"shell", "pidof", application_id}).out_output);
+    /// The process's id; empty when the game does not run or the device did not answer.
+    std::string process;
+    /// Whether the device answered: one that dropped off says nothing of the game.
+    bool is_answered{};
+};
+
+auto find_game_process(const android_toolchain& tools, const std::string& device, const std::string& application_id)
+    -> process_lookup
+{
+    const auto listed = run_adb(tools, device, {"shell", "pidof", application_id});
+    const auto process = parse_android_process_id(listed.out_output, listed.retcode);
+    if(!process.empty())
+    {
+        return {process, true};
+    }
+    // No id: the game does not run, or the device did not answer, which only its state tells apart.
+    const auto state = run_adb(tools, device, {"get-state"});
+    return {{}, state.started && state.retcode == 0};
 }
 
 /// Logs a line of the game's process: the game's own as [Device], the device system's as [Device System],
@@ -360,16 +459,22 @@ private:
 
     void follow_running(const android_package_plan& plan)
     {
-        const auto process = get_game_process(plan.tools, plan.device, plan.package.application_id);
-        if(process.empty())
+        const auto found = find_game_process(plan.tools, plan.device, plan.package.application_id);
+        if(!found.is_answered)
+        {
+            APPLOG_WARNING("Deploy: {} does not answer. Reconnect it and refresh the device list.", plan.device);
+            return;
+        }
+        if(found.process.empty())
         {
             APPLOG_WARNING("Deploy: {} does not run on {}. Run Last Build or Deploy and Run starts it.",
                            plan.package.application_id,
                            plan.device);
             return;
         }
-        APPLOG_INFO("Deploy: following the game on {} (process {}). Its log follows.", plan.device, process);
-        follow_log(plan, process);
+        APPLOG_INFO("Deploy: following the game on {} (process {}). Its log follows.", plan.device, found.process);
+        // The device's log still holds what ran before: only what comes from now on is this game's.
+        follow_log(plan, found.process, log_start::now);
     }
 
     void run(const android_package_plan& plan)
@@ -409,10 +514,21 @@ private:
             return;
         }
         complete_step(plan.install_step);
+        // Stop Game while the package installed: the game is not started.
+        if(leave_requested_)
+        {
+            return;
+        }
         run_adb(tools, device, {"shell", "am", "force-stop", application_id});
         run_adb(tools, device, {"logcat", "-c"});
         const auto started = run_adb(tools, device, make_start_arguments(application_id, plan.run_arguments));
         const auto process = wait_for_process(tools, device, application_id);
+        if(stop_requested_)
+        {
+            run_adb(tools, device, {"shell", "am", "force-stop", application_id});
+            APPLOG_INFO("Deploy: stopped the game on {}.", device);
+            return;
+        }
         if(process.empty())
         {
             fail_device_steps(plan, "The game did not start on the device.");
@@ -421,7 +537,8 @@ private:
         }
         complete_step(plan.start_step);
         APPLOG_INFO("Deploy: the game runs on {} (process {}). Its log follows.", device, process);
-        follow_log(plan, process);
+        // The log was cleared before the start, so all of it is this run's.
+        follow_log(plan, process, log_start::whole);
     }
 
     static void complete_step(const std::shared_ptr<device_step>& step)
@@ -482,24 +599,47 @@ private:
         const auto deadline = std::chrono::steady_clock::now() + PROCESS_START_TIMEOUT;
         while(!leave_requested_ && std::chrono::steady_clock::now() < deadline)
         {
-            auto process = get_game_process(tools, device, application_id);
-            if(!process.empty())
+            auto found = find_game_process(tools, device, application_id);
+            if(!found.process.empty())
             {
-                return process;
+                return found.process;
             }
             std::this_thread::sleep_for(PROCESS_POLL_INTERVAL);
         }
         return {};
     }
 
-    void follow_log(const android_package_plan& plan, const std::string& process)
+    /// Whether the game still runs as `process` on the plan's device. `is_device_lost` is set when the device no
+    /// longer answers, which says nothing of the game.
+    static auto is_process_running(const android_package_plan& plan, const std::string& process, bool& is_device_lost) -> bool
+    {
+        const auto found = find_game_process(plan.tools, plan.device, plan.package.application_id);
+        is_device_lost = !found.is_answered;
+        return found.is_answered && found.process == process;
+    }
+
+    /// Where the device's log is read from: all it holds, or only what it gets from now on.
+    enum class log_start
+    {
+        whole,
+        now,
+    };
+
+    void follow_log(const android_package_plan& plan, const std::string& process, log_start start)
     {
         const auto& tools = plan.tools;
         std::mutex report_mutex;
         std::vector<std::string> crash_report;
+        // The device reports every process that crashes: only this game's report is shown and symbolized.
+        android_crash_report_filter crash_filter(process);
+        std::vector<std::string> log_arguments{"logcat", "-v", "threadtime"};
+        if(start == log_start::now)
+        {
+            log_arguments.insert(log_arguments.end(), {"-T", LOG_FROM_NOW_LINES});
+        }
         subprocess::stream log;
-        log.start(make_adb_command(tools.adb, plan.device, {"logcat", "-v", "threadtime"}),
-                  [&process, &report_mutex, &crash_report](const std::string& text)
+        log.start(make_adb_command(tools.adb, plan.device, log_arguments),
+                  [&process, &report_mutex, &crash_report, &crash_filter](const std::string& text)
                   {
                       logcat_line line;
                       if(!parse_logcat_line(text, line))
@@ -508,9 +648,12 @@ private:
                       }
                       if(line.tag == CRASH_REPORT_TAG)
                       {
-                          APPLOG_ERROR("{}{}", DEVICE_LOG_PREFIX, line.message);
                           std::lock_guard<std::mutex> lock(report_mutex);
-                          crash_report.push_back(text);
+                          for(auto& released : crash_filter.add({text, line.message}))
+                          {
+                              APPLOG_ERROR("{}{}", DEVICE_LOG_PREFIX, released.message);
+                              crash_report.push_back(std::move(released.text));
+                          }
                           return;
                       }
                       if(line.pid == process)
@@ -518,9 +661,17 @@ private:
                           log_device_line(line);
                       }
                   });
-        while(!leave_requested_ && get_game_process(tools, plan.device, plan.package.application_id) == process)
+        bool is_device_lost = false;
+        while(!leave_requested_ && is_process_running(plan, process, is_device_lost))
         {
             std::this_thread::sleep_for(PROCESS_POLL_INTERVAL);
+        }
+        if(is_device_lost && !leave_requested_)
+        {
+            log.stop();
+            APPLOG_WARNING("Deploy: {} no longer answers, so the game on it is no longer followed. It may still run.",
+                           plan.device);
+            return;
         }
         if(stop_requested_)
         {
@@ -815,7 +966,7 @@ auto get_android_toolchain() -> android_toolchain
     std::lock_guard<std::mutex> lock(tools_mutex);
     if(!has_searched_tools)
     {
-        found_tools = find_android_toolchain(get_android_toolchain_search());
+        found_tools = find_android_toolchain(get_android_toolchain_search(), &get_java_version);
         has_searched_tools = true;
     }
     return found_tools;
@@ -872,6 +1023,17 @@ auto get_android_problems(rtti::context& ctx, const deploy_settings& params) -> 
     if(!id_problem.empty())
     {
         problems.push_back(id_problem);
+    }
+    const auto version_problem = check_android_version_code(params.android.version_code);
+    if(!version_problem.empty())
+    {
+        problems.push_back(version_problem);
+    }
+    const auto additions = get_project_folder(params.android.additions);
+    if(!additions.empty() && !is_present(additions))
+    {
+        problems.push_back(fmt::format("The Android additions folder {} is missing. Create it, or clear Additions Folder.",
+                                       additions.generic_string()));
     }
     for(const auto& name : params.android.permissions.other)
     {
@@ -977,9 +1139,11 @@ auto make_android_package_plan(rtti::context& ctx, const deploy_settings& params
     package.icon_dir = get_build_dir(params.profile) / "icon";
     package.permissions = get_android_permission_names(params.android.permissions);
     package.permissions_manifest = get_build_dir(params.profile) / "permissions" / "AndroidManifest.xml";
+    package.trimmed_framework_list = get_build_dir(params.profile) / "trimmed_framework.txt";
     package.is_release = params.android.release;
     package.keystore = params.android.keystore;
     package.key_alias = params.android.key_alias;
+    package.additions = get_project_folder(params.android.additions);
     return plan;
 }
 
@@ -1007,6 +1171,82 @@ void remove_unused_android_build_dirs(const android_package_plan& plan)
     }
 }
 
+namespace
+{
+/// Removes the package an earlier build left in the Gradle project. Gradle then writes the package anew: over an
+/// existing one it replaces only the entries that changed and leaves the old ones' bytes in the file as dead space,
+/// a quarter of a package after a few deploys.
+void remove_built_package(const android_package_params& package)
+{
+    const auto built = get_built_package(package.project_dir, package.is_release);
+    fs::error_code ec;
+    fs::remove(built, ec);
+    if(ec)
+    {
+        throw std::runtime_error(fmt::format("Removing {} failed: {}", built.generic_string(), ec.message()));
+    }
+}
+
+/// The project's own manifest in its additions folder; empty without one.
+auto read_additions_manifest(const fs::path& additions) -> std::string
+{
+    std::string text;
+    if(!additions.empty())
+    {
+        read_whole_file(additions / ANDROID_ADDITIONS_MANIFEST, text);
+    }
+    return text;
+}
+
+/// The manifest Gradle merges over the player's: the profile's permissions, in the project's own manifest when its
+/// additions folder has one.
+auto make_build_manifest(const android_package_params& package) -> std::string
+{
+    const auto manifest = make_android_build_manifest(read_additions_manifest(package.additions), package.permissions);
+    if(manifest.empty())
+    {
+        throw std::runtime_error(fmt::format("{} has no manifest element. Start it with <manifest "
+                                             "xmlns:android=\"http://schemas.android.com/apk/res/android\">.",
+                                             (package.additions / ANDROID_ADDITIONS_MANIFEST).generic_string()));
+    }
+    return manifest;
+}
+
+/// Says so before a build that downloads Gradle first: a computer's first Android build takes minutes on the
+/// network, which a step that only says "Android Package" would not explain.
+void announce_first_gradle_build(const fs::path& project_dir)
+{
+    std::string properties;
+    read_whole_file(project_dir / GRADLE_WRAPPER_PROPERTIES, properties);
+    const auto distribution = get_gradle_distribution_name(properties);
+    if(distribution.empty() || has_gradle_distribution(get_gradle_home(), distribution))
+    {
+        return;
+    }
+    APPLOG_INFO("Deploy: this computer has no {} yet. The build downloads it and what Android builds need from the "
+                "internet first, which takes a few minutes. Cancel Deploy stops it.",
+                distribution);
+}
+
+/// Writes the names of the framework files the package leaves out where Gradle reads them, and says in the log how
+/// many a trimmed build leaves out.
+void write_trimmed_framework_list(const android_package_params& package)
+{
+    const auto trimmed = find_trimmed_files(package.player.get_framework_dir(), package.trim);
+    std::string list;
+    for(const auto& name : trimmed)
+    {
+        list += name + "\n";
+    }
+    write_text_or_throw(package.trimmed_framework_list, list);
+    if(package.trim.is_on)
+    {
+        APPLOG_INFO("Deploy: the package's .NET framework ships without {} libraries nothing in the build references.",
+                    trimmed.size());
+    }
+}
+} // namespace
+
 void build_android_package(const android_package_plan& plan)
 {
     const auto& package = plan.package;
@@ -1023,7 +1263,10 @@ void build_android_package(const android_package_plan& plan)
     }
     fs::error_code ec;
     fs::create_directories(package.permissions_manifest.parent_path(), ec);
-    write_text_or_throw(package.permissions_manifest, make_android_permissions_manifest(package.permissions));
+    write_text_or_throw(package.permissions_manifest, make_build_manifest(package));
+    write_trimmed_framework_list(package);
+    remove_built_package(package);
+    announce_first_gradle_build(package.project_dir);
     APPLOG_INFO("Deploy: building the Android package with Gradle in {}.", package.project_dir.generic_string());
     const auto environment = package.is_release ? make_signing_environment(get_android_signing_passwords()) : std::vector<std::string>{};
     const auto result = subprocess::call(make_gradle_arguments(plan.tools, package),
@@ -1069,6 +1312,7 @@ void build_android_package(const android_package_plan& plan)
         fs::remove(symbols, ec);
     }
     remove_earlier_data(plan.output.parent_path());
+    invalidate_build_usage(plan.build_dir);
 }
 
 void run_android_game(const android_package_plan& plan)
@@ -1156,7 +1400,7 @@ auto has_listed_android_devices() -> bool
 
 void update_android_devices()
 {
-    const auto tools = find_android_toolchain(get_android_toolchain_search());
+    const auto tools = find_android_toolchain(get_android_toolchain_search(), &get_java_version);
     auto devices = list_devices(tools);
     std::lock_guard<std::mutex> lock(tools_mutex);
     found_tools = tools;

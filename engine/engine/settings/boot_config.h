@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace unravel
 {
@@ -89,6 +90,10 @@ struct boot_config
 {
     preferred_renderer renderer{preferred_renderer::auto_detect};
     physics_backend_type physics{physics_backend_type::auto_detect};
+    /// The graphics APIs a deployed game ships shaders for (settings::build_settings::renderers), in the order it
+    /// tries them. Empty in the editor and in a build that ships every API of its platform. No restart depends on
+    /// it: a running process never gets another build's list.
+    std::vector<preferred_renderer> shipped_renderers;
 
     struct cli_overrides
     {
@@ -109,6 +114,20 @@ struct boot_config
 
 [[nodiscard]] ENGINE_EXPORT auto preferred_renderers_for_platform(renderer_platform platform)
     -> hpp::span<const preferred_renderer>;
+
+/// The platform this binary was built for, as the renderer preferences name it; Windows for a platform they do not
+/// name.
+[[nodiscard]] ENGINE_EXPORT auto get_current_renderer_platform() -> renderer_platform;
+
+/**
+ * @brief The graphics APIs a start tries, in order. A build that ships every API (`shipped` empty) tries
+ * `preferred` alone, where auto lets the platform choose. A build that ships some tries those only: `preferred`
+ * first when it is one of them, then the others in the build's order. A `preferred` the build does not ship has
+ * no shaders to draw with and is left out.
+ */
+[[nodiscard]] ENGINE_EXPORT auto get_renderer_candidates(preferred_renderer preferred,
+                                                        const std::vector<preferred_renderer>& shipped)
+    -> std::vector<preferred_renderer>;
 [[nodiscard]] ENGINE_EXPORT auto is_preferred_renderer_available_on(preferred_renderer value,
                                                                    renderer_platform platform) -> bool;
 

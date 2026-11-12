@@ -80,6 +80,7 @@ constexpr const char* REMOVE_PROFILE_POPUP = "##remove_profile_confirm";
 constexpr const char* STEAM_UPLOAD_POPUP = "##steam_upload_confirm";
 constexpr const char* STEAM_UPLOAD_LABEL = ICON_MDI_STEAM " Upload to Steam";
 constexpr const char* CANCEL_DEPLOY_LABEL = ICON_MDI_CLOSE_CIRCLE_OUTLINE " Cancel Deploy";
+constexpr const char* CANCEL_UPLOAD_LABEL = ICON_MDI_CLOSE_CIRCLE_OUTLINE " Cancel Upload";
 const std::string DEPLOY_RUNNING_PROBLEM = "A deploy is running.";
 // The space between a device's name and its details, in item spacings.
 constexpr float DEVICE_DETAILS_GAP = 2.0f;
@@ -96,7 +97,8 @@ void draw_header()
     widgets::draw_icon_line(ICON_MDI_PACKAGE_VARIANT, widgets::get_accent_u32(), "Deploy Project", ImGui::GetColorU32(ImGuiCol_Text));
     ImGui::PopWindowFontScale();
     ImGui::PopFont();
-    widgets::draw_muted_text("Builds the game into a folder, for this computer or an Android device, with the settings of a profile.");
+    widgets::draw_muted_text("Builds the game into a folder, for this computer, an Android device or a browser, with the settings "
+                             "of a profile.");
 }
 
 /// The close button in the top right corner of the window.
@@ -404,19 +406,32 @@ auto is_cancelled(const deployment::deploy_jobs& steps) -> bool
                        });
 }
 
-/// Cancel, where Deploy stands while no deploy runs; disabled once the deploy was asked to stop.
-void draw_cancel_button()
+/// What the Cancel button says of the work it stops: a deploy, or the upload of a build.
+struct cancel_wording
+{
+    const char* label;
+    const char* tooltip;
+    const char* stopping_tooltip;
+};
+
+constexpr cancel_wording CANCEL_DEPLOY_WORDING{CANCEL_DEPLOY_LABEL,
+                                               "Stop the deploy. Its folder keeps an unfinished build until the next deploy.",
+                                               "The deploy is stopping: its running steps end where they can."};
+constexpr cancel_wording CANCEL_UPLOAD_WORDING{CANCEL_UPLOAD_LABEL,
+                                               "Stop the upload. Steam keeps no build of an upload that did not finish.",
+                                               "The upload is stopping."};
+
+/// Cancel, where Deploy stands while no deploy runs; disabled once the work was asked to stop.
+void draw_cancel_button(const cancel_wording& wording)
 {
     const bool is_stopping = deployment::is_deploy_cancelled();
-    if(widgets::draw_button(CANCEL_DEPLOY_LABEL, false, !is_stopping))
+    if(widgets::draw_button(wording.label, false, !is_stopping))
     {
         deployment::cancel_deploy();
     }
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     {
-        ImGui::SetTooltip("%s",
-                          is_stopping ? "The deploy is stopping: its running steps end where they can."
-                                      : "Stop the deploy. Its folder keeps an unfinished build until the next deploy.");
+        ImGui::SetTooltip("%s", is_stopping ? wording.stopping_tooltip : wording.tooltip);
     }
 }
 
@@ -1007,7 +1022,14 @@ void deploy_panel::draw_common_settings(rtti::context& ctx)
         inspect_deploy_properties(ctx, {"deploy_dependencies"_hs});
     }
     ImGui::SeparatorText("Packaging");
-    inspect_deploy_properties(ctx, {"deploy_packed_assets"_hs, "deploy_cooked_assets"_hs, "deploy_debug_symbols"_hs});
+    inspect_deploy_properties(ctx,
+                              {"deploy_packed_assets"_hs,
+                               "deploy_cooked_assets"_hs,
+                               "deploy_debug_symbols"_hs,
+                               "deploy_trim_framework"_hs,
+                               "deploy_kept_assemblies"_hs});
+    ImGui::SeparatorText("Additions");
+    inspect_deploy_properties(ctx, {"deploy_extra_files"_hs, "deploy_post_command"_hs});
     draw_message(settings_editor_.get_error(), true);
 }
 
@@ -1243,6 +1265,37 @@ void deploy_panel::set_profile_message(const deployment::result& outcome, const 
     profile_message_ = is_profile_message_error_ ? outcome.error : success;
 }
 
+namespace
+{
+/// A graphics API of a desktop profile: the renderer, and the property of desktop_graphics_apis that chooses it.
+struct graphics_api_property
+{
+    preferred_renderer renderer;
+    entt::hashed_string property;
+};
+
+/// The graphics APIs of a desktop profile that this computer's platform has, as checkboxes: a build is made on
+/// the platform it runs on, so the others never ship.
+auto draw_desktop_graphics(rtti::context& ctx, desktop_graphics_apis& apis) -> inspect_result
+{
+    const graphics_api_property properties[] = {{preferred_renderer::direct3d12, "direct3d12"_hs},
+                                                {preferred_renderer::direct3d11, "direct3d11"_hs},
+                                                {preferred_renderer::metal, "metal"_hs},
+                                                {preferred_renderer::vulkan, "vulkan"_hs},
+                                                {preferred_renderer::opengl, "opengl"_hs}};
+    const auto platform = get_current_renderer_platform();
+    inspect_result result;
+    for(const auto& api : properties)
+    {
+        if(is_preferred_renderer_available_on(api.renderer, platform))
+        {
+            result |= inspect_profile_properties(ctx, apis, {api.property});
+        }
+    }
+    return result;
+}
+} // namespace
+
 void deploy_panel::draw_desktop_section(rtti::context& ctx)
 {
     widgets::draw_muted_text("The player for this computer, with the game's data beside it. Run After Deploy starts it.");
@@ -1257,6 +1310,10 @@ void deploy_panel::draw_desktop_section(rtti::context& ctx)
     {
         widgets::draw_muted_text("Without an image, the icon is the engine's logo.");
     }
+    ImGui::SeparatorText("Graphics APIs");
+    widgets::draw_muted_text("The build ships the shaders of the chosen APIs, and the game starts the first of them that "
+                             "starts on the player's computer. Leaving one out makes the build smaller.");
+    result |= draw_desktop_graphics(ctx, desktop.graphics);
     result |= draw_steam_settings(ctx, desktop.steam);
     if(result.edit_finished)
     {
@@ -1436,7 +1493,7 @@ void deploy_panel::draw_android_section(rtti::context& ctx)
     {
         widgets::draw_muted_text("Without an image, the icon is the engine's logo.");
     }
-    inspect_android_properties(ctx, {"icon_background"_hs});
+    inspect_android_properties(ctx, {"icon_background"_hs, "additions"_hs});
     ImGui::SeparatorText("Signing");
     inspect_android_properties(ctx, {"release"_hs});
     if(android.release)
@@ -1446,6 +1503,34 @@ void deploy_panel::draw_android_section(rtti::context& ctx)
     }
     ImGui::SeparatorText("Permissions");
     draw_android_permissions(ctx);
+    ImGui::SeparatorText("This Computer");
+    draw_android_build_folder(ctx);
+}
+
+void deploy_panel::draw_android_build_folder(rtti::context& ctx)
+{
+    const auto profile = ctx.get_cached<project_manager>().get_deploy_request().profile;
+    const auto usage = deployment::get_android_build_usage(ctx, profile);
+    property_layout layout("Build Folder",
+                           "The folder on this computer the package is built in: Gradle's build and a copy of the game's "
+                           "data, kept so that the next deploy of the profile builds only what changed. Clearing it frees "
+                           "the space; the next deploy then builds everything again.");
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(usage.is_known ? format_bytes(static_cast<std::uint64_t>(usage.bytes)).c_str() : "Measuring");
+    std::string tooltip = "Delete the profile's build folder on this computer.";
+    if(is_deploying())
+    {
+        tooltip = "Wait until the deploy ends.";
+    }
+    else if(!usage.is_known || usage.bytes == 0)
+    {
+        tooltip = "The folder holds nothing.";
+    }
+    const bool can_clear = !is_deploying() && usage.is_known && usage.bytes > 0;
+    if(draw_device_action(ICON_MDI_BROOM " Clear", tooltip, can_clear, false))
+    {
+        deployment::clear_android_build_dir(ctx, profile);
+    }
 }
 
 auto deploy_panel::draw_android_device_picker(rtti::context& ctx) -> bool
@@ -1866,7 +1951,8 @@ void deploy_panel::draw_status(rtti::context& ctx)
     }
     else if(is_cancelled(deploy_jobs_))
     {
-        summary = fmt::format("Deploy to {} was cancelled", location);
+        summary = is_steam_upload_ ? fmt::format("Upload of {} to Steam was cancelled", location)
+                                   : fmt::format("Deploy to {} was cancelled", location);
     }
     else if(has_failed)
     {
@@ -1896,10 +1982,11 @@ void deploy_panel::draw_actions(rtti::context& ctx)
     const char* stop_label = ICON_MDI_STOP " Stop Game";
     const bool is_game_running = deployment::is_android_game_running();
     const bool has_steam_upload = deployment::has_steam_upload(params);
-    // A running deploy shows Cancel where Deploy stands; a Steam upload and a run of the last build cannot stop.
+    // A running deploy or upload shows Cancel where Deploy stands; a run of the last build cannot stop.
     const bool can_cancel = deployment::is_deploy_running();
+    const auto& cancel = is_steam_upload_ ? CANCEL_UPLOAD_WORDING : CANCEL_DEPLOY_WORDING;
     float buttons_width = widgets::calc_button_width(open_label) + ImGui::GetStyle().ItemSpacing.x +
-                          widgets::calc_button_width(can_cancel ? CANCEL_DEPLOY_LABEL : deploy_label);
+                          widgets::calc_button_width(can_cancel ? cancel.label : deploy_label);
     if(is_game_running)
     {
         buttons_width += widgets::calc_button_width(stop_label) + ImGui::GetStyle().ItemSpacing.x;
@@ -1938,7 +2025,7 @@ void deploy_panel::draw_actions(rtti::context& ctx)
     }
     if(can_cancel)
     {
-        draw_cancel_button();
+        draw_cancel_button(cancel);
         return;
     }
     // The cached answer may be a moment old: the deploy itself checks again.

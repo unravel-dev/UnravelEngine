@@ -17,9 +17,10 @@
 namespace unravel::deployment
 {
 
+
 /// The renderer extensions of the compiled shaders a deploy ships: Android's player renders with Vulkan, the browser
-/// player with the Web profile's graphics APIs (WebGPU, WebGL 2 or both). Empty for the desktop, which ships every
-/// variant its platform compiles, since the game picks its renderer when it starts.
+/// player with the Web profile's graphics APIs (WebGPU, WebGL 2 or both), a desktop game with the profile's graphics
+/// APIs that the editor's platform has (the game picks one of them when it starts).
 auto get_shader_variants(const deploy_settings& params) -> std::set<std::string>;
 
 /**

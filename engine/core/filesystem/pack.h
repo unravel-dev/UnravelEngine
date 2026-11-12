@@ -70,6 +70,32 @@ auto write_pack(const path& pack_file,
                 std::string& err,
                 pack_write_stats* stats = nullptr) -> bool;
 
+/// Where a pack file holds one entry's stored bytes.
+struct pack_entry_span
+{
+    /// The entry's name, as written.
+    std::string name;
+    std::uint64_t offset{};
+    std::uint64_t size{};
+};
+
+/// How a pack file is laid out: its entries' stored bytes, then the table of contents to the end of the file.
+struct pack_layout
+{
+    /// The entries that hold bytes, in file order; deleted entries hold none.
+    std::vector<pack_entry_span> entries;
+    /// Where the table of contents starts.
+    std::uint64_t contents_offset{};
+    std::uint64_t file_size{};
+};
+
+/**
+ * @brief Reads the layout of the pack `pack_file`: what cuts it into pieces that hold whole entries, so a piece
+ * changes only when one of its entries does.
+ * @return False with `err` set when the file is missing, is not a pack or is damaged.
+ */
+auto read_pack_layout(const path& pack_file, pack_layout& layout, std::string& err) -> bool;
+
 /**
  * @brief Mounts a pack: its entries answer for the files under the root of `protocol`.
  *

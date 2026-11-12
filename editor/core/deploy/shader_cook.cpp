@@ -1,6 +1,7 @@
 #include "shader_cook.h"
 #include "files.h"
 #include "keys.h"
+#include "profile.h"
 #include "profile_cache.h"
 
 #include <asset_compiler/asset_compiler.h>
@@ -156,8 +157,20 @@ auto get_shader_variants(const deploy_settings& params) -> std::set<std::string>
             return get_web_shader_variants(params.web.graphics);
         case deploy_platform::desktop:
         default:
-            return {};
+            break;
     }
+    // A desktop build ships every renderer its platform compiles shaders for, unless its profile leaves some out.
+    const auto platform = get_current_renderer_platform();
+    std::set<std::string> variants;
+    if(!is_desktop_graphics_restricted(params.desktop.graphics, platform))
+    {
+        return variants;
+    }
+    for(const auto renderer : get_desktop_renderers(params.desktop.graphics, platform))
+    {
+        variants.insert(gfx::get_renderer_filename_extension(preferred_renderer_to_gfx_type(renderer)));
+    }
+    return variants;
 }
 
 auto get_web_shader_sets(const deploy_settings& params) -> std::vector<shader_set_job>

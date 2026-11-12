@@ -42,9 +42,16 @@ auto list_releases(const fs::path& releases) -> std::vector<std::string>;
 auto get_release_symbols_folder(const fs::path& releases, const std::string& name) -> fs::path;
 
 /**
+ * @brief Whether the debug files in `symbols` are of the build in `deploy_location`: the files both hold by name
+ * (the executable a deploy keeps beside its symbols) have the same bytes, and there is at least one. Symbols read
+ * a crash dump only of the executable they were built with.
+ */
+auto are_debug_files_of_build(const fs::path& symbols, const fs::path& deploy_location) -> bool;
+
+/**
  * @brief Keeps the full packed build in `deploy_location` as release `name`, with its debug files.
  * @param symbols The build's debug files (keep_debug_files); a release without them is kept when the
- *        folder is missing.
+ *        folder is missing or holds another build's (are_debug_files_of_build).
  */
 auto keep_release(const fs::path& releases, const fs::path& deploy_location, const fs::path& symbols, const std::string& name)
     -> result;
@@ -58,7 +65,7 @@ auto remove_release(const fs::path& releases, const std::string& name) -> result
 auto move_releases_into_profile(const fs::path& project_root, const std::string& profile) -> result;
 
 /// Removes a protocol's patch packs from `first_level` up: the game would mount them over a pack they were
-/// not made for.
+/// not made for. Throws when one stays.
 void remove_patch_packs(const fs::path& protocol_root, std::uint32_t first_level);
 
 /// A pack at `pack_file` holding `inputs`, its entries reused from the pack it replaces; a failed write leaves that

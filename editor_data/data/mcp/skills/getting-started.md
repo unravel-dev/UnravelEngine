@@ -102,6 +102,13 @@ Building a scene is not shipping a game. The rest of the chain:
   deploy_cancel stops it. A deploy builds the project's scripts optimized (Compiling Scripts), whatever mode the
   editor's scripts run in. A deploy that failed or was cancelled leaves its folder marked as unfinished (build.stamp):
   deploy_keep_release and deploy_upload_steam refuse it until the profile is deployed again.
+  Beyond the engine's own files: extra_files names a folder of the project whose files ship as they are (a library
+  beside the executable, an index.html of the game's own on the web), post_command a command run once the build is
+  whole (sign, archive, upload), android_additions a folder with Java, resources, libraries and a manifest the
+  package takes. desktop_graphics limits a desktop build to some graphics APIs, which drops the other APIs' shaders.
+  trim_framework leaves out the .NET framework libraries no script and no engine library references (smaller
+  desktop, Android and web builds); a library a script loads by a name it builds at run time must then be named in
+  kept_assemblies, or the game throws FileNotFoundException where it loads it.
 - Android: project_deploy with an Android profile (a new project has one;
   settings_profiles_create platform android makes more) builds <project>.apk; with run_after_deploy it is
   installed and started on android_device, and the game's log reaches the

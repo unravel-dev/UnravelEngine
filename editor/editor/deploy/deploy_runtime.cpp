@@ -29,6 +29,7 @@ constexpr const char* DOTNET_FOLDER = "dotnet";
 constexpr const char* HOST_FXR_FOLDER = "host/fxr";
 constexpr const char* SHARED_FRAMEWORK_FOLDER = "shared/Microsoft.NETCore.App";
 constexpr const char* DOTNET_DOWNLOAD_URL = "https://dotnet.microsoft.com/download";
+constexpr double BYTES_PER_MEGABYTE = 1024.0 * 1024.0;
 
 /// A leading dotted version from a directory name ("8.0.4" -> {8, 0, 4}).
 auto parse_version_name(const std::string& name) -> std::vector<int>
@@ -133,7 +134,12 @@ auto make_runtime_plan(rtti::context& ctx, const deploy_settings& params) -> run
     return plan;
 }
 
-void deploy_runtime(const runtime_plan& plan)
+auto list_runtime_libraries(const runtime_plan&) -> std::vector<fs::path>
+{
+    return {};
+}
+
+void deploy_runtime(const runtime_plan& plan, const framework_trim&)
 {
     for(const auto& name : plan.library_names)
     {
@@ -194,12 +200,60 @@ auto make_runtime_plan(rtti::context&, const deploy_settings& params) -> runtime
     return plan;
 }
 
-void deploy_runtime(const runtime_plan& plan)
+namespace
+{
+/// Whether a deploy ships a file of the managed bridge payload.
+auto is_shipped_bridge_file(const runtime_plan& plan, const fs::path& file) -> bool
+{
+    return !is_editor_only_bridge_file(plan.managed_source, file) && (plan.with_debug_symbols || !is_debug_companion_file(file));
+}
+
+/// Mirrors the shared framework without the files the trim leaves out, and says in the log what that saved.
+void deploy_framework(const runtime_plan& plan, const framework_trim& trim)
+{
+    const auto trimmed = find_trimmed_files(plan.framework_source, trim);
+    mirror_or_throw(plan.framework_source,
+                    plan.framework_destination,
+                    [&trimmed](const fs::path& file)
+                    {
+                        return !trimmed.contains(fs::to_utf8_string(file.filename()));
+                    });
+    if(!trim.is_on)
+    {
+        return;
+    }
+    std::uintmax_t trimmed_size = 0;
+    for(const auto& name : trimmed)
+    {
+        fs::error_code ec;
+        const auto size = fs::file_size(plan.framework_source / fs::from_utf8_string(name), ec);
+        trimmed_size += ec ? 0 : size;
+    }
+    APPLOG_INFO("Deploy: the .NET framework ships without {} libraries nothing in the build references ({:.1f} MB).",
+                trimmed.size(),
+                double(trimmed_size) / BYTES_PER_MEGABYTE);
+}
+} // namespace
+
+auto list_runtime_libraries(const runtime_plan& plan) -> std::vector<fs::path>
+{
+    std::vector<fs::path> libraries;
+    fs::error_code ec;
+    for(fs::recursive_directory_iterator it(plan.managed_source, ec), end; !ec && it != end; it.increment(ec))
+    {
+        if(it->is_regular_file(ec) && has_assembly_extension(it->path()) && is_shipped_bridge_file(plan, it->path()))
+        {
+            libraries.push_back(it->path());
+        }
+    }
+    return libraries;
+}
+
+void deploy_runtime(const runtime_plan& plan, const framework_trim& trim)
 {
     const fs::mirror_filter include = [&plan](const fs::path& file)
     {
-        return !is_editor_only_bridge_file(plan.managed_source, file) &&
-               (plan.with_debug_symbols || !is_debug_companion_file(file));
+        return is_shipped_bridge_file(plan, file);
     };
     mirror_or_throw(plan.managed_source, plan.managed_destination, include);
     if(plan.framework_source.empty())
@@ -213,7 +267,7 @@ void deploy_runtime(const runtime_plan& plan)
         mirror_or_throw(plan.host_source, plan.host_destination);
         remove_siblings(plan.host_destination);
     }
-    mirror_or_throw(plan.framework_source, plan.framework_destination);
+    deploy_framework(plan, trim);
     remove_siblings(plan.framework_destination);
 }
 

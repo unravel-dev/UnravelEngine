@@ -271,6 +271,16 @@ void write_text_or_throw(const fs::path& file, const std::string& text)
     }
 }
 
+void remove_file_or_throw(const fs::path& file)
+{
+    fs::error_code ec;
+    fs::remove(file, ec);
+    if(ec)
+    {
+        throw std::runtime_error(fmt::format("Removing {} failed: {}", file.generic_string(), ec.message()));
+    }
+}
+
 auto read_stamp(const fs::path& file) -> std::map<std::string, std::string>
 {
     std::map<std::string, std::string> values;
@@ -395,10 +405,7 @@ void remove_stale_binaries(const fs::path& deploy_root, const std::set<std::stri
     for(const auto& file : stale)
     {
         APPLOG_TRACE("Removing {}, which this build no longer ships", file.generic_string());
-        if(!fs::remove(file, ec))
-        {
-            throw std::runtime_error(fmt::format("Removing {} failed: {}", file.generic_string(), ec.message()));
-        }
+        remove_file_or_throw(file);
     }
 }
 

@@ -17,6 +17,8 @@
  *     file system root, which every absolute path lies under);
  *   - a path that does not exist yet converts, and resolve_protocol maps the result back to the same file;
  *   - a path with letters outside the system code page survives to_utf8_string / from_utf8_string;
+ *   - a narrow string names a file as UTF-8 whatever the system's code page is (on Windows through the manifest
+ *     every executable of the build carries): a path's narrow string, a path made from one, a file opened by one;
  *   - make_extended_length_path: the "\\?\" form of drive, relative and network share paths on Windows, a path
  *     already in it left alone, the path unchanged on other systems, and a folder with paths past 260
  *     characters made and removed through it.
@@ -240,6 +242,32 @@ void test_utf8_round_trip(const fs::path& run_root)
     check(fs::to_utf8_string(fs::path("a") / "b") == "a/b", "separators are written as '/'");
 }
 
+/// A path's narrow string; empty when the process's code page cannot hold it.
+auto get_narrow_string(const fs::path& path) -> std::string
+{
+    try
+    {
+        return path.string();
+    }
+    catch(const std::exception&)
+    {
+        return {};
+    }
+}
+
+void test_narrow_paths(const fs::path& run_root)
+{
+    std::printf("test_narrow_paths\n");
+    // "<Greek delta><Cyrillic d><Hiragana a>.txt" in UTF-8: of all code pages only UTF-8 holds the three.
+    const std::string name = "\xce\xb4\xd0\x94\xe3\x81\x82.txt";
+    const auto file = run_root / fs::from_utf8_string(name);
+    write_file(file);
+    check_equal(get_narrow_string(file.filename()), name, "a path's narrow string is UTF-8");
+    check(fs::path(name) == fs::from_utf8_string(name), "a path made from a narrow string reads it as UTF-8");
+    const auto narrow_file = get_narrow_string(file);
+    check(!narrow_file.empty() && std::ifstream(narrow_file).is_open(), "a file opens by its narrow path");
+}
+
 void test_extended_length_paths(const fs::path& run_root)
 {
     std::printf("test_extended_length_paths\n");
@@ -274,6 +302,11 @@ void test_extended_length_paths(const fs::path& run_root)
     fs::create_directories(fs::make_extended_length_path(deep), err);
     write_file(fs::make_extended_length_path(deep / "file.bin"));
     check(!err && fs::exists(fs::make_extended_length_path(deep / "file.bin"), err), "a folder with paths past 260 characters is made");
+    write_file(run_root / "long" / "near.bin");
+    const auto file_bytes = fs::file_size(run_root / "long" / "near.bin", err);
+    check(fs::get_folder_size(run_root / "long", err) == 2 * file_bytes && !err && file_bytes > 0,
+          "a folder's size counts its files at any depth, the ones past 260 characters too");
+    check(fs::get_folder_size(run_root / "no_such_folder", err) == 0 && err, "a missing folder has no size, and says why");
     fs::remove_all(fs::make_extended_length_path(run_root / "long"), err);
     check(!err && !fs::exists(run_root / "long", err), "and removed whole");
 }
@@ -291,6 +324,7 @@ auto run_fs_protocols_suite(rtti::context& /*ctx*/) -> int
     test_protocol_path_unchanged(run_root);
     test_missing_file_round_trip(run_root);
     test_utf8_round_trip(run_root);
+    test_narrow_paths(run_root);
     test_extended_length_paths(run_root);
     std::printf("fs protocols: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

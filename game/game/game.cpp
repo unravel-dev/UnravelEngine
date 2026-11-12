@@ -50,6 +50,12 @@ constexpr int NO_DEBUG_PASS = -1;
 constexpr const char* GRAPHICS_OFF_OPTION = "graphics-off";
 constexpr char GRAPHICS_OFF_SEPARATOR = ',';
 
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+/// The option the page names the packs with that it downloaded straight into the player's memory, by their paths
+/// in the application's folder (fs::parse_host_memory_files).
+constexpr const char* MEMORY_FILES_OPTION = "memory-files";
+#endif
+
 /// What a failed start tells the player, as far as the start got: the game's name, and the folder of its log.
 struct start_report
 {
@@ -197,6 +203,30 @@ void set_window_icon(os::window& window)
     }
 }
 
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+/// Names the packs the page holds in the player's memory, so mounting one maps those bytes where it would
+/// otherwise copy a file of the browser's memory file system.
+void add_page_memory_files(const cmd_line::parser& parser)
+{
+    std::string listed;
+    parser.try_get(MEMORY_FILES_OPTION, listed);
+    const fs::path binary_path = fs::resolve_protocol("binary:/");
+    for(const auto& file : fs::parse_host_memory_files(listed))
+    {
+        fs::add_memory_file(binary_path / fs::from_utf8_string(file.name),
+                            reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(file.address)),
+                            file.size);
+    }
+}
+#endif
+
+/// Whether a pack is at `pack`: a file, or bytes its host named for the path.
+auto has_pack(const fs::path& pack) -> bool
+{
+    fs::error_code ec;
+    return fs::has_memory_file(pack) || fs::exists(pack, ec);
+}
+
 auto mount_pack_file(const std::string& protocol, const fs::path& pack) -> bool
 {
     std::string error;
@@ -207,8 +237,8 @@ auto mount_pack_file(const std::string& protocol, const fs::path& pack) -> bool
     }
     APPLOG_INFO("Mounted asset pack {}", pack.generic_string());
 #if UNRAVEL_PLATFORM_EMSCRIPTEN
-    // The page put the pack in the browser's memory file system, and mapping it copied it into the module's memory.
-    // Nothing reads the file again, and dropping it frees its first copy.
+    // A pack that is a file of the browser's memory file system was copied into the module's memory by mapping
+    // it. Nothing reads the file again, and dropping it frees its first copy.
     fs::error_code ec;
     fs::remove(pack, ec);
 #endif
@@ -247,11 +277,10 @@ auto mount_bundled_packs(const std::string& protocol, const fs::path& root) -> b
 template<typename Sets>
 auto mount_set_pack(const std::string& protocol, const fs::path& root, const Sets& sets) -> bool
 {
-    fs::error_code ec;
     for(const auto* set : sets)
     {
         const auto pack = root / ex::get_set_pack_file_name(set);
-        if(fs::exists(pack, ec))
+        if(has_pack(pack))
         {
             return mount_pack_file(protocol, pack);
         }
@@ -269,8 +298,7 @@ auto mount_asset_packs(const std::string& protocol) -> bool
     {
         return mount_bundled_packs(protocol, root);
     }
-    fs::error_code ec;
-    if(!fs::exists(root / ex::get_pack_file_name(), ec))
+    if(!has_pack(root / ex::get_pack_file_name()))
     {
         return true;
     }
@@ -278,7 +306,7 @@ auto mount_asset_packs(const std::string& protocol) -> bool
     {
         return false;
     }
-    for(std::uint32_t level = 1; fs::exists(root / ex::get_patch_pack_file_name(level), ec); ++level)
+    for(std::uint32_t level = 1; has_pack(root / ex::get_patch_pack_file_name(level)); ++level)
     {
         if(!mount_pack_file(protocol, root / ex::get_patch_pack_file_name(level)))
         {
@@ -317,6 +345,13 @@ auto game::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<display_manager>(ctx, parser);
 
     parser.set_optional<std::string>("a", "appdata", "", "Application data directory. Defaults to binary directory.");
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    parser.set_optional<std::string>("",
+                                     MEMORY_FILES_OPTION,
+                                     "",
+                                     "The packs the page holds in the player's memory, as name:address:size items "
+                                     "separated by '|'. Set by the page only.");
+#endif
     parser.set_optional<bool>("",
                               "log-here",
                               false,
@@ -349,6 +384,9 @@ auto game::init(const cmd_line::parser& parser) -> bool
     {
         return false;
     }
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    add_page_memory_files(parser);
+#endif
 
     if(!ls.check(init_protocols(parser)))
     {

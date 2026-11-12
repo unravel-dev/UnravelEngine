@@ -4,6 +4,7 @@
 #include "../script_interop.h"
 
 #include <engine/events.h>
+#include <engine/permissions/permission_requests.h>
 #include <engine/play_mode.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/display_manager.h>
@@ -11,6 +12,7 @@
 #include <engine/rendering/renderer.h>
 #include <engine/settings/settings.h>
 #include <engine/third_party_notices.h>
+#include <engine/web/web_page.h>
 #include <filesystem/filesystem.h>
 #include <seq/seq.h>
 #include <simulation/simulation.h>
@@ -359,6 +361,53 @@ void internal_m2n_application_set_target_frame_rate(int frame_rate)
     display->set_max_fps(engine::context(), static_cast<std::uint32_t>(std::max(frame_rate, 0)));
 }
 
+/// The game's permission requests, whose answers scripts read by id.
+auto get_permission_requests() -> permission_requests&
+{
+    static permission_requests requests;
+    return requests;
+}
+
+auto internal_m2n_permissions_request(const std::string& permission) -> std::uint32_t
+{
+    return get_permission_requests().request(permission);
+}
+
+auto internal_m2n_permissions_get_state(std::uint32_t request) -> int
+{
+    return static_cast<int>(get_permission_requests().get_state(request));
+}
+
+void internal_m2n_permissions_forget(std::uint32_t request)
+{
+    get_permission_requests().forget(request);
+}
+
+auto internal_m2n_web_page_is_available() -> bool
+{
+    return web_page::is_available();
+}
+
+auto internal_m2n_web_page_has_function(const std::string& name) -> bool
+{
+    return web_page::has_function(name);
+}
+
+auto internal_m2n_web_page_call(const std::string& name, const std::string& argument) -> std::string
+{
+    return web_page::call(name, argument);
+}
+
+auto internal_m2n_web_page_get_message_count() -> int
+{
+    return web_page::get_message_count();
+}
+
+auto internal_m2n_web_page_take_message() -> std::string
+{
+    return web_page::take_message();
+}
+
 auto internal_m2n_application_get_run_in_background() -> bool
 {
     return engine::context().get_cached<simulation>().get_max_inactive_fps() == 0;
@@ -475,6 +524,21 @@ void register_core_runtime_script_bindings()
         reg.add_internal_call("internal_m2n_application_set_run_in_background",
                               script_internal_call(internal_m2n_application_set_run_in_background));
 
+    }
+    {
+        auto reg = dotnet::internal_call_registry("Unravel.Core.Permissions");
+        reg.add_internal_call("internal_m2n_permissions_request", script_internal_call(internal_m2n_permissions_request));
+        reg.add_internal_call("internal_m2n_permissions_get_state", script_internal_call(internal_m2n_permissions_get_state));
+        reg.add_internal_call("internal_m2n_permissions_forget", script_internal_call(internal_m2n_permissions_forget));
+    }
+    {
+        auto reg = dotnet::internal_call_registry("Unravel.Core.WebPage");
+        reg.add_internal_call("internal_m2n_web_page_is_available", script_internal_call(internal_m2n_web_page_is_available));
+        reg.add_internal_call("internal_m2n_web_page_has_function", script_internal_call(internal_m2n_web_page_has_function));
+        reg.add_internal_call("internal_m2n_web_page_call", script_internal_call(internal_m2n_web_page_call));
+        reg.add_internal_call("internal_m2n_web_page_get_message_count",
+                              script_internal_call(internal_m2n_web_page_get_message_count));
+        reg.add_internal_call("internal_m2n_web_page_take_message", script_internal_call(internal_m2n_web_page_take_message));
     }
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.Screen");

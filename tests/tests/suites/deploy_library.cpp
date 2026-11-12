@@ -26,7 +26,8 @@
  *     binaries, older runtime versions;
  *   - cooked shaders: the renderers a web build ships and cooks, the plan of what a deploy cooks;
  *   - web: the browser player template's stamp checks, the player copied beside the deployed data, and
- *     the list of the data's files the page loads; a public link's cloudflared command, the tunnel address
+ *     the list of the data's files the page loads; a trimmed build's runtime files left out of the copy, not
+ *     missed in the site and listed for the page; a public link's cloudflared command, the tunnel address
  *     its output announces, and the requests that count as the tunnel's;
  *   - profile folders under the deploy folder; deploy locations relative to the project, and the
  *     project folders the editor manages;
@@ -67,10 +68,12 @@
 #include <deploy/content.h>
 #include <deploy/content_tree.h>
 #include <deploy/dependencies.h>
+#include <deploy/extras.h>
 #include <deploy/files.h>
 #include <deploy/folders.h>
 #include <deploy/icon_image.h>
 #include <deploy/keys.h>
+#include <deploy/profile.h>
 #include <deploy/profile_cache.h>
 #include <deploy/protocol_data.h>
 #include <deploy/releases.h>
@@ -1081,6 +1084,56 @@ void test_web_template(const fs::path& root)
     check(!deployment::find_web_template(root / "template", "v1").is_found(), "a player without its runtime is refused");
 }
 
+/// A chunk as a manifest lists it: ["<name>", size, check].
+auto make_chunk_json(const std::string& bytes) -> std::string
+{
+    return "[\"" + fs::hash_bytes_fingerprint(bytes.data(), bytes.size()) + deployment::WEB_CHUNK_EXTENSION + "\", " +
+           std::to_string(bytes.size()) + ", " + std::to_string(fs::hash_bytes_check(bytes.data(), bytes.size())) + "]";
+}
+
+void test_web_chunk_cuts()
+{
+    std::printf("test_web_chunk_cuts\n");
+    constexpr std::uint64_t mib = 1024 * 1024;
+    constexpr std::uint64_t min_size = deployment::WEB_CHUNK_MIN_SIZE;
+    constexpr std::uint64_t max_size = deployment::WEB_CHUNK_MAX_SIZE;
+    using cuts = std::vector<std::uint64_t>;
+    check(deployment::find_web_chunk_cuts(0, {}).empty() && deployment::find_web_chunk_cuts(max_size, {}).empty(),
+          "a file no larger than a chunk is one chunk");
+    check(deployment::find_web_chunk_cuts(2 * max_size + 1, {}) == cuts{max_size, 2 * max_size},
+          "a file without units is cut in even steps, the rest last");
+    // Keys: an even one lets a chunk start at its unit, an odd one never does.
+    constexpr std::uint64_t picked = 0;
+    constexpr std::uint64_t passed = 1;
+    const std::vector<deployment::web_chunk_unit> few_units{{0, mib, picked}, {mib, mib, picked}, {2 * mib, mib, picked},
+                                                         {3 * mib, mib, passed}, {4 * mib, mib, picked}};
+    check(deployment::find_web_chunk_cuts(5 * mib, few_units) == cuts{2 * mib, 4 * mib},
+          "a chunk is closed before the first unit the rule picks once it holds the least a chunk may");
+    check(min_size == 2 * mib, "(the test's units are sized for that least)");
+    std::vector<deployment::web_chunk_unit> unpicked;
+    for(std::uint64_t index = 0; index < 20; ++index)
+    {
+        unpicked.push_back({index * mib, mib, passed});
+    }
+    check(deployment::find_web_chunk_cuts(20 * mib, unpicked) == cuts{8 * mib, 16 * mib},
+          "units the rule never picks fill a chunk to the most it may hold, whole");
+    const std::vector<deployment::web_chunk_unit> large{{0, mib, passed}, {mib, 20 * mib, passed}, {21 * mib, mib, passed}};
+    check(deployment::find_web_chunk_cuts(22 * mib, large) == cuts{mib, 9 * mib, 17 * mib, 21 * mib},
+          "a unit larger than a chunk is cut on its own, in even steps from its start");
+    const std::vector<deployment::web_chunk_unit> with_contents{{0, mib, passed}, {mib, mib / 2, passed, true}};
+    check(deployment::find_web_chunk_cuts(mib + mib / 2, with_contents) == cuts{mib},
+          "a unit that starts a chunk does, however little the chunk before it holds");
+    // The same units with one of them grown: only the cuts beside it move.
+    auto grown = few_units;
+    grown[0].size += 100;
+    for(std::size_t index = 1; index < grown.size(); ++index)
+    {
+        grown[index].offset += 100;
+    }
+    check(deployment::find_web_chunk_cuts(5 * mib + 100, grown) == cuts{2 * mib + 100, 4 * mib + 100},
+          "a unit that grows moves the cuts after it by as much, so the chunks behind it hold the same bytes");
+}
+
 void test_web_site(const fs::path& root)
 {
     std::printf("test_web_site\n");
@@ -1088,77 +1141,204 @@ void test_web_site(const fs::path& root)
     deployment::web_template player;
     player.root = root / "template";
     const auto site = root / "site";
-    write_text(site / "data/engine/content.pak", "engine pack");
-    write_text(site / "data/app/settings/settings.cfg", "settings");
+    const auto data_root = root / "data_root";
+    const std::string pack_text = "engine pack";
+    const std::string settings_text = "settings";
+    write_text(data_root / "data/engine/content.pak", pack_text);
+    write_text(data_root / "data/app/settings/settings.cfg", settings_text);
+    write_text(data_root / "data/app/empty.txt", "");
     write_text(site / "_framework/stale.wasm", "older runtime");
+    write_text(site / "data/engine/content.pak", "an older editor's whole file");
+    write_text(site / deployment::WEB_CHUNKS_FOLDER / "older.bin", "an older build's chunk");
+    check(!deployment::get_web_player_problem(player, site).empty(), "a folder without this editor's player cannot take its data");
     deployment::copy_web_player(player, site);
     check(read_text(site / "index.html") == "page" && read_text(site / "_framework/dotnet.js") == "loader",
-          "the page and the runtime are copied beside the data");
+          "the page and the runtime are copied into the site");
     check(!is_present(site / "_framework/stale.wasm"), "runtime files an older player had are removed");
-    check(read_text(site / "data/engine/content.pak") == "engine pack", "the deployed data stays");
+    check(deployment::get_web_player_problem(player, site).empty(), "the copied player is this editor's");
     // A server's precompressed copy of a runtime file is no download of its own.
     write_text(site / "_framework/dotnet.js.br", "packed");
     const deployment::web_page_info page{"Game \"Two\"", deployment::get_web_user_folder("Studio", "Game")};
-    deployment::write_web_data_manifest(site, page);
-    const auto settings_hash = fs::hash_file_fingerprint(site / "data/app/settings/settings.cfg", false);
-    const auto pack_hash = fs::hash_file_fingerprint(site / "data/engine/content.pak", false);
+    deployment::write_web_data(data_root, site, page);
+    const auto build = deployment::get_web_page_build(site);
     check(read_text(site / deployment::WEB_DATA_MANIFEST_NAME) ==
-              "{\n  \"title\": \"Game \\\"Two\\\"\",\n  \"user_folder\": \"/libsdl/Studio/Game\",\n  \"runtime_size\": 6,\n"
-              "  \"graphics\": {\"backends\": [\"webgpu\"], \"fallback_notice\": \"tell\", \"help_link\": \"\"},\n"
-              "  \"files\": [\n    {\"path\": \"data/app/settings/settings.cfg\", \"hash\": \"" + settings_hash +
-                  "\", \"size\": 8},\n    {\"path\": \"data/engine/content.pak\", \"hash\": \"" + pack_hash +
-                  "\", \"size\": 11}\n  ]\n}\n",
-          "the manifest names the game and its folder, weighs the runtime without its precompressed copies, gives the "
-          "graphics policy (WebGPU only by default) and lists the data's files by name with their content's fingerprint "
-          "and size, as the page fetches, caches and counts them");
-    write_text(site / "data/engine/content.pak", "another engine pack");
-    check(deployment::make_web_data_manifest(site, page).find(pack_hash) == std::string::npos,
-          "a changed file has another fingerprint, so the page fetches it again");
+              "{\n  \"format\": 2,\n  \"build\": \"" + build +
+                  "\",\n  \"title\": \"Game \\\"Two\\\"\",\n  \"user_folder\": \"/libsdl/Studio/Game\",\n  \"runtime_size\": 6,\n"
+                  "  \"graphics\": {\"backends\": [\"webgpu\"], \"fallback_notice\": \"tell\", \"help_link\": \"\"},\n"
+                  "  \"chunks\": \"chunks\",\n"
+                  "  \"files\": [\n    {\"path\": \"data/app/empty.txt\", \"size\": 0, \"chunks\": []},\n"
+                  "    {\"path\": \"data/app/settings/settings.cfg\", \"size\": 8, \"chunks\": [" + make_chunk_json(settings_text) +
+                  "]},\n    {\"path\": \"data/engine/content.pak\", \"size\": 11, \"mapped\": true, \"chunks\": [" +
+                  make_chunk_json(pack_text) + "]}\n  ]\n}\n",
+          "the manifest names its format and the build's page code, the game and its folder, weighs the runtime without "
+          "its precompressed copies, gives the graphics policy (WebGPU only by default) and lists the data's files by "
+          "path with their sizes and chunks, a pack marked as mapped");
+    const auto pack_chunk = fs::hash_bytes_fingerprint(pack_text.data(), pack_text.size()) + deployment::WEB_CHUNK_EXTENSION;
+    check(read_text(site / deployment::WEB_CHUNKS_FOLDER / pack_chunk) == pack_text, "a chunk is a file named by its content");
+    check(!is_present(site / deployment::WEB_CHUNKS_FOLDER / "older.bin"), "chunks no file of the build has are removed");
+    check(is_present(site / "data/engine/content.pak"), "what else the site holds is not the data step's to remove");
+    deployment::remove_legacy_web_data(site);
+    check(!is_present(site / "data") && is_present(site / "index.html") && is_present(site / deployment::WEB_CHUNKS_FOLDER),
+          "the whole files a build of an older editor left are removed on their own, before a project's files are copied");
+    check(build.size() == 16 && deployment::get_web_page_build(site) == build, "a site's page code has one name");
+    write_text(site / "main.js", "changed page code");
+    check(deployment::get_web_page_build(site) != build, "changed page code has another name, so browsers load it anew");
+    write_text(site / deployment::WEB_DATA_MANIFEST_NAME, "another manifest");
+    write_text(site / "main.js.br", "packed");
+    const auto changed_build = deployment::get_web_page_build(site);
+    write_text(site / deployment::WEB_DATA_MANIFEST_NAME, "yet another manifest");
+    check(deployment::get_web_page_build(site) == changed_build, "the manifest and precompressed copies are no page code");
+    write_text(data_root / "data/engine/content.pak", "another engine pack");
+    deployment::write_web_data(data_root, site, page);
+    check(!is_present(site / deployment::WEB_CHUNKS_FOLDER / pack_chunk) &&
+              read_text(site / deployment::WEB_DATA_MANIFEST_NAME).find(pack_chunk) == std::string::npos,
+          "a changed file is other chunks, so the page fetches them and the old ones go");
     const std::string accented = "data/app/compiled/men\xc3\xbc.asset";
-    write_text(site / fs::from_utf8_string(accented), "menu");
-    const auto accented_hash = fs::hash_file_fingerprint(site / fs::from_utf8_string(accented), false);
-    check(!accented_hash.empty() &&
-              deployment::make_web_data_manifest(site, page).find("\"" + accented + "\", \"hash\": \"" + accented_hash) !=
-                  std::string::npos,
-          "a file named outside ASCII is listed in UTF-8 with its own fingerprint");
-    write_text(site / "data/app/content_astc.pak", "phone textures");
-    write_text(site / "data/app/content_bc.pak", "computer textures");
-    const deployment::web_page_info sets_page{"Game", "/libsdl/Game", {"bc", "astc"}};
-    const auto sets_manifest = deployment::make_web_data_manifest(site, sets_page);
+    write_text(data_root / fs::from_utf8_string(accented), "menu");
+    deployment::write_web_data(data_root, site, page);
+    check(read_text(site / deployment::WEB_DATA_MANIFEST_NAME).find("{\"path\": \"" + accented + "\", \"size\": 4, \"chunks\": [" +
+                                                                    make_chunk_json("menu") + "]}") != std::string::npos,
+          "a file named outside ASCII is listed in UTF-8, and its chunk's name is plain");
+    deployment::web_manifest sets;
+    sets.page = {"Game", "/libsdl/Game", {"bc", "astc"}};
+    sets.files = {{"data/app/content_astc.pak", 14, {}, true}, {"data/app/content_bc.pak", 17, {}, true}};
+    const auto sets_manifest = deployment::make_web_data_manifest(sets);
     check(sets_manifest.find("\"texture_sets\": [\"bc\", \"astc\"],") != std::string::npos &&
-              sets_manifest.find("content_astc.pak\", \"hash\": \"" +
-                                 fs::hash_file_fingerprint(site / "data/app/content_astc.pak", false) +
-                                 "\", \"size\": 14, \"texture_set\": \"astc\"}") != std::string::npos &&
-              sets_manifest.find("content_bc.pak\", \"hash\": \"" +
-                                 fs::hash_file_fingerprint(site / "data/app/content_bc.pak", false) +
-                                 "\", \"size\": 17, \"texture_set\": \"bc\"}") != std::string::npos,
+              sets_manifest.find("content_astc.pak\", \"size\": 14, \"mapped\": true, \"texture_set\": \"astc\", \"chunks\": []}") !=
+                  std::string::npos &&
+              sets_manifest.find("content_bc.pak\", \"size\": 17, \"mapped\": true, \"texture_set\": \"bc\", \"chunks\": []}") !=
+                  std::string::npos,
           "with texture sets the manifest lists them, the computers' first, and names each set's pack");
-    check(deployment::make_web_data_manifest(site, page).find("texture_set") == std::string::npos,
-          "a build with one set names none");
-    write_text(site / "data/engine/content_webgl2.pak", "gles shaders");
-    write_text(site / "data/engine/content_webgpu.pak", "webgpu shaders");
+    sets.page.texture_sets.clear();
+    check(deployment::make_web_data_manifest(sets).find("texture_set") == std::string::npos, "a build with one set names none");
     unravel::web_deploy_settings web;
     web.graphics = unravel::web_graphics::webgpu_then_webgl2;
     web.fallback_notice = unravel::web_fallback_notice::ask;
     web.help_link = "https://example.com/webgpu";
-    deployment::web_page_info shaders_page{"Game", "/libsdl/Game", {}, {"webgpu", "webgl2"}};
-    shaders_page.graphics = deployment::make_web_graphics_policy(web);
-    const auto shaders_manifest = deployment::make_web_data_manifest(site, shaders_page);
+    deployment::web_manifest shaders;
+    shaders.page = {"Game", "/libsdl/Game", {}, {"webgpu", "webgl2"}};
+    shaders.page.graphics = deployment::make_web_graphics_policy(web);
+    shaders.files = {{"data/engine/content_webgl2.pak", 12, {}, true}, {"data/engine/content_webgpu.pak", 14, {}, true}};
+    const auto shaders_manifest = deployment::make_web_data_manifest(shaders);
     check(shaders_manifest.find("  \"graphics\": {\"backends\": [\"webgpu\", \"webgl2\"], \"fallback_notice\": \"ask\", "
                                 "\"help_link\": \"https://example.com/webgpu\"},\n") !=
               std::string::npos,
           "the graphics block carries the profile's APIs in the order the page tries them and what it tells the player");
     check(shaders_manifest.find("\"shader_sets\": [\"webgpu\", \"webgl2\"],") != std::string::npos &&
-              shaders_manifest.find("content_webgl2.pak\", \"hash\": \"" +
-                                    fs::hash_file_fingerprint(site / "data/engine/content_webgl2.pak", false) +
-                                    "\", \"size\": 12, \"shader_set\": \"webgl2\"}") != std::string::npos &&
-              shaders_manifest.find("content_webgpu.pak\", \"hash\": \"" +
-                                    fs::hash_file_fingerprint(site / "data/engine/content_webgpu.pak", false) +
-                                    "\", \"size\": 14, \"shader_set\": \"webgpu\"}") != std::string::npos,
+              shaders_manifest.find("content_webgl2.pak\", \"size\": 12, \"mapped\": true, \"shader_set\": \"webgl2\", \"chunks\": []}") !=
+                  std::string::npos &&
+              shaders_manifest.find("content_webgpu.pak\", \"size\": 14, \"mapped\": true, \"shader_set\": \"webgpu\", \"chunks\": []}") !=
+                  std::string::npos,
           "with shader sets the manifest lists them and names each set's pack");
     web.graphics = unravel::web_graphics::webgl2;
     check(deployment::make_web_graphics_policy(web).backends == std::vector<std::string>{"webgl2"},
           "a WebGL 2 only build lists WebGL 2 only");
+}
+
+/// A trimmed web build: the runtime files it leaves out are neither copied nor missed, and the page is told of them.
+void test_web_trim(const fs::path& root)
+{
+    std::printf("test_web_trim\n");
+    write_web_template(root / "template", "v1");
+    for(const auto* name : {"kept.wasm", "kept.wasm.br", "unused.wasm", "unused.wasm.br", "unused.wasm.gz"})
+    {
+        write_text(root / "template/wwwroot/_framework" / name, name);
+    }
+    deployment::web_template player;
+    player.root = root / "template";
+    const auto site = root / "site";
+    const std::set<std::string> trimmed{"unused.wasm"};
+    deployment::copy_web_player(player, site);
+    check(is_present(site / "_framework/unused.wasm") && is_present(site / "_framework/unused.wasm.gz"),
+          "a build that trims nothing copies the whole runtime");
+    check(deployment::get_web_player_problem(player, site, {}, trimmed).empty(),
+          "a site with more than the build downloads has no problem");
+    deployment::copy_web_player(player, site, trimmed);
+    check(!is_present(site / "_framework/unused.wasm") && !is_present(site / "_framework/unused.wasm.br") &&
+              !is_present(site / "_framework/unused.wasm.gz"),
+          "a trimmed build removes the files it leaves out, with their precompressed copies");
+    check(is_present(site / "_framework/kept.wasm") && is_present(site / "_framework/kept.wasm.br") &&
+              read_text(site / "_framework/dotnet.js") == "loader",
+          "and keeps the rest of the runtime as the template has it");
+    check(deployment::get_web_player_problem(player, site, {}, trimmed).empty(), "the trimmed site is whole for its own build");
+    const auto untrimmed_problem = deployment::get_web_player_problem(player, site);
+    check(untrimmed_problem.find("unused.wasm") != std::string::npos && untrimmed_problem.find("dependencies") != std::string::npos,
+          "a build that downloads a file the site lacks names the file and what copies it");
+    write_text(site / "index.html", "the project's own page");
+    check(!deployment::get_web_player_problem(player, site, {}, trimmed).empty(), "a page that is not the template's is refused");
+    check(deployment::get_web_player_problem(player, site, {"index.html", "styles/game.css"}, trimmed).empty(),
+          "unless the project's extra files put it there");
+    deployment::web_manifest manifest;
+    manifest.page.trimmed_runtime_files = {"unused.wasm", "other.wasm"};
+    check(deployment::make_web_data_manifest(manifest).find("  \"trimmed\": [\"unused.wasm\", \"other.wasm\"],\n") != std::string::npos,
+          "the manifest lists the runtime files a trimmed build left out");
+    check(deployment::make_web_data_manifest({}).find("trimmed") == std::string::npos, "a build that ships the whole runtime lists none");
+    check(deployment::find_web_trimmed_files(player, {}).empty(), "a trim that is off leaves no runtime file out");
+}
+
+void test_web_chunks(const fs::path& root)
+{
+    std::printf("test_web_chunks\n");
+    // The texts and values the page's test of its own check uses (game/web/tests/data.test.mjs).
+    const auto get_check = [](const std::string& text)
+    {
+        return fs::hash_bytes_check(text.data(), text.size());
+    };
+    check(get_check("") == 0x02CC5D05u && get_check("a") == 0x550D7456u && get_check("abc") == 0x32D153FFu &&
+              get_check("Nobody inspects the spammish repetition") == 0xE2293B2Fu,
+          "a chunk's check is XXH32 with seed 0, which the page computes too");
+    const auto chunks_folder = root / "chunks";
+    // Three chunks: two of the most a chunk holds and the rest.
+    const std::size_t rest = 1000;
+    std::string content(2 * deployment::WEB_CHUNK_MAX_SIZE + rest, 'a');
+    content[deployment::WEB_CHUNK_MAX_SIZE] = 'b';
+    write_text(root / "large.bin", content);
+    const auto chunks = deployment::write_web_chunks(root / "large.bin", chunks_folder);
+    check(chunks.size() == 3 && chunks[0].size == deployment::WEB_CHUNK_MAX_SIZE && chunks[2].size == rest,
+          "a file is cut into chunks of the most a chunk holds, the rest last");
+    check(chunks[0].name != chunks[1].name && chunks[0].check != chunks[1].check, "chunks of other bytes have other names and checks");
+    std::string joined;
+    for(const auto& chunk : chunks)
+    {
+        const auto bytes = read_text(chunks_folder / chunk.name);
+        check(bytes.size() == chunk.size && get_check(bytes) == chunk.check, "a chunk's file holds the bytes its size and check name");
+        joined += bytes;
+    }
+    check(joined == content, "the chunks in order are the file");
+    bool is_thrown = false;
+    try
+    {
+        deployment::write_web_chunks(root / "empty.bin", chunks_folder);
+    }
+    catch(const std::exception&)
+    {
+        is_thrown = true;
+    }
+    check(is_thrown, "a file that cannot be read throws");
+    write_text(root / "empty.bin", "");
+    check(deployment::write_web_chunks(root / "empty.bin", chunks_folder).empty(), "an empty file has no chunk");
+    // A pack is cut between its entries, and its table of contents starts a chunk.
+    std::vector<fs::pack_input> inputs;
+    for(const auto* name : {"compiled/a.asset", "compiled/b.asset", "compiled/c.asset"})
+    {
+        write_text(root / "pack_source" / name, std::string(1000, name[9]));
+        inputs.push_back({name, root / "pack_source" / name});
+    }
+    fs::pack_write_options options;
+    options.compress = false;
+    std::string error;
+    const auto pack = root / "content.pak";
+    check(fs::write_pack(pack, inputs, options, error), "a pack is written: " + error);
+    fs::pack_layout layout;
+    check(fs::read_pack_layout(pack, layout, error), "its layout is read: " + error);
+    const auto units = deployment::find_web_chunk_units(pack);
+    check(units.size() == layout.entries.size() + 1 && units.back().starts_chunk && units.back().offset == layout.contents_offset &&
+              units.back().offset + units.back().size == layout.file_size,
+          "a pack's units are its entries and its table of contents, which starts a chunk");
+    check(deployment::find_web_chunk_units(root / "large.bin").empty(), "any other file has no units");
+    const auto pack_chunks = deployment::write_web_chunks(pack, chunks_folder);
+    check(pack_chunks.size() == 2 && pack_chunks[0].size == layout.contents_offset,
+          "a small pack is its entries in one chunk and its table of contents in another");
 }
 
 void test_web_addresses()
@@ -1288,9 +1468,12 @@ void test_gradle_arguments()
     params.orientation = unravel::android_orientation::portrait;
     params.icon_dir = "/tmp/icon";
     params.permissions_manifest = "/tmp/permissions/AndroidManifest.xml";
+    params.trimmed_framework_list = "/tmp/trimmed_framework.txt";
     auto arguments = deployment::make_gradle_arguments(tools, params);
     check(!arguments.empty() && arguments.front() == tools.java.string(), "Java runs Gradle's wrapper");
     check(contains_argument(arguments, "assembleDebug") && !contains_argument(arguments, "assembleRelease"), "a debug build");
+    check(!contains_argument(arguments, "--no-daemon") && contains_argument(arguments, "-Dorg.gradle.daemon.idletimeout=600000"),
+          "a debug build keeps Gradle's daemon for the next build, for ten minutes");
     check(!contains_argument(arguments, "bundleRelease") && !contains_argument(arguments, "packageNativeDebugSymbols"),
           "a debug build writes no store files");
     check(contains_argument(arguments, "-Punravel.symbols=/editor/players/android-arm64/symbols"), "the symbol table's folder is passed");
@@ -1301,6 +1484,10 @@ void test_gradle_arguments()
               contains_argument(arguments, "-Punravel.content=/deploy") && contains_argument(arguments, "-Punravel.icon=/tmp/icon") &&
               contains_argument(arguments, "-Punravel.permissions=/tmp/permissions/AndroidManifest.xml"),
           "the game's identity, its icon and the template's folders are passed");
+    check(contains_argument(arguments, "-Punravel.trimmedFramework=/tmp/trimmed_framework.txt"),
+          "the list of the framework files the package leaves out is passed");
+    check(params.player.get_framework_dir() == fs::path("/editor/players/android-arm64/dotnet/lib/net10.0"),
+          "the runtime's managed framework lies in the folder named after its version's target framework");
     params.is_release = true;
     params.keystore = "/keys/game.jks";
     params.key_alias = "game";
@@ -1310,6 +1497,8 @@ void test_gradle_arguments()
           "a release build names its keystore and key");
     check(contains_argument(arguments, "bundleRelease") && contains_argument(arguments, "packageNativeDebugSymbols"),
           "a release build also writes the store's bundle and symbols");
+    check(contains_argument(arguments, "--no-daemon") && !contains_argument(arguments, "-Dorg.gradle.daemon.idletimeout=600000"),
+          "a release build leaves no daemon with the keystore's passwords behind");
     check(deployment::get_built_bundle("/p") == fs::path("/p/app/build/outputs/bundle/release/app-release.aab"), "the bundle's place");
     check(deployment::get_built_native_symbols("/p") == fs::path("/p/app/build/outputs/native-debug-symbols/native-debug-symbols.zip"),
           "the symbols' place");
@@ -1373,6 +1562,310 @@ auto read_png_alpha(const fs::path& file, std::uint32_t x, std::uint32_t y, std:
     const int alpha = x < image->m_width && y < image->m_height ? texels[(std::size_t(y) * image->m_width + x) * 4 + 3] : -1;
     bimg::imageFree(image);
     return alpha;
+}
+
+void test_android_java(const fs::path& root)
+{
+    std::printf("test_android_java\n");
+    check(deployment::parse_java_version("openjdk version \"21.0.3\" 2024-04-16\nOpenJDK Runtime Environment") == 21,
+          "a Java names its major version first");
+    check(deployment::parse_java_version("java version \"1.8.0_281\"\nJava(TM) SE Runtime Environment") == 8,
+          "Java 8 and older name it second, after 1");
+    check(deployment::parse_java_version("openjdk version \"17\" 2021-09-14") == 17, "a version of one number reads");
+    check(deployment::parse_jdk_release_version("IMPLEMENTOR=\"JetBrains s.r.o.\"\nJAVA_RUNTIME_VERSION=\"11.0.1+7\"\nJAVA_VERSION=\"21.0.3\"\n"
+                                                "JAVA_VERSION_DATE=\"2024-04-16\"\n") == 21,
+          "a JDK's release file gives its version on its own line, whatever other keys end the same way");
+    check(deployment::parse_jdk_release_version("JAVA_VERSION=\"1.8.0_281\"\r\nOS_NAME=\"Windows\"\r\n") == 8 &&
+              deployment::parse_jdk_release_version("") == 0 && deployment::parse_jdk_release_version("JAVA_RUNTIME_VERSION=\"17\"") == 0,
+          "an old Java's release file reads too, and text without the line gives no version");
+    check(deployment::parse_java_version("") == 0 && deployment::parse_java_version("'java' is not recognized") == 0 &&
+              deployment::parse_java_version("version \"abc\"") == 0,
+          "text that names no version gives none");
+    // An SDK, an old Java where JAVA_HOME points, and a newer one in Android Studio's folder.
+    const auto java_name = fs::path("java").replace_extension(fs::executable_extension());
+    const auto adb_name = fs::path("adb").replace_extension(fs::executable_extension());
+    write_text(root / "sdk" / "platform-tools" / adb_name, "adb");
+    write_text(root / "old_jdk" / "bin" / java_name, "java 8");
+    write_text(root / "studio_jdk" / "bin" / java_name, "java 21");
+    const auto probe = [&root](const fs::path& java)
+    {
+        return java.parent_path().parent_path() == root / "old_jdk" ? 8 : 21;
+    };
+    deployment::android_toolchain_search search;
+    search.sdk_candidates = {root / "no_sdk", root / "sdk"};
+    search.jdk_candidates = {root / "no_jdk", root / "old_jdk", root / "studio_jdk"};
+    auto tools = deployment::find_android_toolchain(search, probe);
+    check(tools.is_complete() && tools.sdk == root / "sdk" && tools.adb == root / "sdk" / "platform-tools" / adb_name,
+          "the first SDK that has its platform tools is taken");
+    check(tools.java == root / "studio_jdk" / "bin" / java_name, "a Java too old gives way to the next one that is new enough");
+    search.jdk_candidates = {root / "old_jdk"};
+    tools = deployment::find_android_toolchain(search, probe);
+    check(!tools.is_complete() && tools.java.empty() && tools.error.find("version 8") != std::string::npos &&
+              tools.error.find("17") != std::string::npos,
+          "with only a Java too old, the problem names its version and the one a build needs");
+    search.jdk_candidates = {root / "no_jdk"};
+    check(deployment::find_android_toolchain(search, probe).error.find("No Java") != std::string::npos, "no Java at all is said so");
+    search.sdk_candidates = {root / "no_sdk"};
+    check(deployment::find_android_toolchain(search, probe).error.find("No Android SDK") != std::string::npos,
+          "a missing SDK is named first");
+    const std::string properties = "distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\n"
+                                   "distributionUrl=https\\://services.gradle.org/distributions/gradle-9.8.1-bin.zip\r\n"
+                                   "zipStoreBase=GRADLE_USER_HOME\n";
+    check(deployment::get_gradle_distribution_name(properties) == "gradle-9.8.1-bin", "a wrapper's properties name the Gradle it runs");
+    check(deployment::get_gradle_distribution_name("distributionPath=wrapper/dists\n").empty() &&
+              deployment::get_gradle_distribution_name("distributionUrl=gradle\n").empty(),
+          "properties without a distribution name none");
+    const auto gradle_home = root / "gradle_home";
+    check(!deployment::has_gradle_distribution(gradle_home, "gradle-9.8.1-bin"), "a computer that never ran that Gradle has no copy");
+    write_text(gradle_home / "wrapper" / "dists" / "gradle-9.8.1-bin" / "hash" / "gradle-9.8.1-bin.zip.ok", "");
+    check(deployment::has_gradle_distribution(gradle_home, "gradle-9.8.1-bin") && !deployment::has_gradle_distribution(gradle_home, ""),
+          "one that did has it under Gradle's folder");
+    check(deployment::check_android_version_code(1).empty() &&
+              deployment::check_android_version_code(deployment::MAX_ANDROID_VERSION_CODE).empty() &&
+              !deployment::check_android_version_code(deployment::MAX_ANDROID_VERSION_CODE + 1).empty(),
+          "a version code up to the store's largest is taken");
+}
+
+void test_android_device_answers()
+{
+    std::printf("test_android_device_answers\n");
+    check(deployment::parse_android_process_id("12345\n", 0) == "12345", "the game's process id is read");
+    check(deployment::parse_android_process_id("12345 678\r\n", 0) == "12345", "of several ids the first is taken");
+    check(deployment::parse_android_process_id("", 1).empty(), "a game that does not run has none");
+    check(deployment::parse_android_process_id("error: device offline\n", 1).empty() &&
+              deployment::parse_android_process_id("adb.exe: device 'R5' not found", 1).empty() &&
+              deployment::parse_android_process_id("error: closed", 0).empty() && deployment::parse_android_process_id("12345", 1).empty(),
+          "adb's error text and a failed call are no process id");
+    using lines = std::vector<std::string>;
+    const auto feed = [](deployment::android_crash_report_filter& filter, const lines& messages)
+    {
+        lines released;
+        for(const auto& message : messages)
+        {
+            for(const auto& line : filter.add({"raw " + message, message}))
+            {
+                released.push_back(line.message);
+                check(line.text == "raw " + line.message, "a released line keeps its text as the log printed it");
+            }
+        }
+        return released;
+    };
+    const lines other_report{"*** *** *** *** *** *** *** ***", "Build fingerprint: 'samsung'", "pid: 777, tid: 778, name: other  >>> com.other <<<",
+                             "signal 11 (SIGSEGV)", "backtrace:"};
+    const lines game_report{"*** *** *** *** *** *** *** ***", "Build fingerprint: 'samsung'", "ABI: 'arm64'",
+                            "pid: 1234, tid: 1260, name: SDLThread  >>> com.company.game <<<", "signal 11 (SIGSEGV)",
+                            "      #00 pc 0000000000012345  /data/app/lib/arm64/libmain.so"};
+    deployment::android_crash_report_filter filter("1234");
+    check(feed(filter, other_report).empty(), "the crash report of another process is dropped");
+    check(feed(filter, game_report) == game_report, "the game's own report is released whole, from its first line");
+    check(feed(filter, {"      #01 pc 0000000000023456  /data/app/lib/arm64/libmain.so"}).size() == 1, "and so is what follows it");
+    check(feed(filter, other_report).empty(), "a later report of another process is dropped again");
+    deployment::android_crash_report_filter other_filter("12");
+    check(feed(other_filter, game_report).empty(), "a process whose id only starts the same is another process");
+}
+
+void test_desktop_graphics()
+{
+    std::printf("test_desktop_graphics\n");
+    using unravel::preferred_renderer;
+    using unravel::renderer_platform;
+    using renderers = std::vector<preferred_renderer>;
+    unravel::desktop_graphics_apis all;
+    check(deployment::get_desktop_renderers(all, renderer_platform::windows) ==
+              renderers{preferred_renderer::direct3d12, preferred_renderer::direct3d11, preferred_renderer::vulkan, preferred_renderer::opengl},
+          "a Windows build's graphics APIs, in the order its game tries them");
+    check(deployment::get_desktop_renderers(all, renderer_platform::linux) == renderers{preferred_renderer::vulkan, preferred_renderer::opengl},
+          "a Linux build ships none of the APIs Linux does not have");
+    check(!deployment::is_desktop_graphics_restricted(all, renderer_platform::windows) &&
+              !deployment::is_desktop_graphics_restricted(all, renderer_platform::linux),
+          "a profile with every API on restricts nothing");
+    unravel::desktop_graphics_apis without_opengl;
+    without_opengl.opengl = false;
+    check(deployment::is_desktop_graphics_restricted(without_opengl, renderer_platform::windows) &&
+              deployment::get_desktop_renderers(without_opengl, renderer_platform::linux) == renderers{preferred_renderer::vulkan},
+          "an API switched off is left out");
+    unravel::desktop_graphics_apis only_direct3d;
+    only_direct3d.vulkan = false;
+    only_direct3d.opengl = false;
+    check(deployment::get_desktop_renderers(only_direct3d, renderer_platform::linux).empty(),
+          "a profile with only APIs the platform lacks ships none, which the deploy refuses");
+    unravel::desktop_graphics_apis without_direct3d11;
+    without_direct3d11.direct3d11 = false;
+    check(!deployment::is_desktop_graphics_restricted(without_direct3d11, renderer_platform::linux),
+          "an API the platform lacks restricts nothing by being off");
+    // What the game does with the list a restricted build ships.
+    const renderers shipped{preferred_renderer::direct3d12, preferred_renderer::vulkan};
+    check(unravel::get_renderer_candidates(preferred_renderer::auto_detect, {}) == renderers{preferred_renderer::auto_detect} &&
+              unravel::get_renderer_candidates(preferred_renderer::vulkan, {}) == renderers{preferred_renderer::vulkan},
+          "a build that ships every API starts the preferred one, or the platform's choice");
+    check(unravel::get_renderer_candidates(preferred_renderer::auto_detect, shipped) == shipped,
+          "a build that ships some tries them in its order");
+    check(unravel::get_renderer_candidates(preferred_renderer::vulkan, shipped) == renderers{preferred_renderer::vulkan, preferred_renderer::direct3d12},
+          "the preferred one first when the build ships it");
+    check(unravel::get_renderer_candidates(preferred_renderer::opengl, shipped) == shipped,
+          "and never an API it has no shaders for");
+    // The shipped settings name the APIs of a restricted desktop build only.
+    unravel::settings base;
+    unravel::settings_profile profile;
+    profile.name = "Desktop";
+    profile.platform = unravel::target_platform::desktop;
+    check(deployment::resolve_settings(base, profile).build.renderers.empty(), "an unrestricted build names no API in its settings");
+    profile.desktop.graphics.opengl = false;
+    const auto resolved = deployment::resolve_settings(base, profile);
+    check(resolved.build.renderers == deployment::get_desktop_renderers(profile.desktop.graphics, unravel::get_current_renderer_platform()) &&
+              !resolved.build.renderers.empty(),
+          "a restricted one names the ones it ships, in order");
+    profile.platform = unravel::target_platform::android;
+    check(deployment::resolve_settings(base, profile).build.renderers.empty(), "an Android build names none: it has one API");
+    unravel::deploy_settings params;
+    params.deploy_target = unravel::deploy_platform::desktop;
+    check(deployment::get_shader_variants(params).empty(), "a desktop deploy that leaves no API out ships every renderer's shaders");
+    const auto shipped_apis = deployment::get_desktop_renderers(params.desktop.graphics, unravel::get_current_renderer_platform());
+    if(shipped_apis.size() > 1)
+    {
+        // Leave the platform's last API out: the others' shader variants are what ships.
+        const auto left_out = shipped_apis.back();
+        params.desktop.graphics.opengl = left_out != preferred_renderer::opengl;
+        params.desktop.graphics.vulkan = left_out != preferred_renderer::vulkan;
+        const auto fewer = deployment::get_shader_variants(params);
+        const auto left_out_extension = gfx::get_renderer_filename_extension(unravel::preferred_renderer_to_gfx_type(left_out));
+        check(!fewer.empty() && !fewer.contains(left_out_extension),
+              "a desktop deploy that leaves an API out ships the shader variants of the others");
+    }
+    check(deployment::get_desktop_renderers(all, renderer_platform::macos) == renderers{preferred_renderer::metal, preferred_renderer::vulkan},
+          "a macOS build's graphics APIs, Metal first");
+    unravel::desktop_graphics_apis without_vulkan;
+    without_vulkan.vulkan = false;
+    check(deployment::get_desktop_renderers(without_vulkan, renderer_platform::macos) == renderers{preferred_renderer::metal} &&
+              deployment::is_desktop_graphics_restricted(without_vulkan, renderer_platform::macos),
+          "a macOS build can ship Metal alone");
+}
+
+void test_extra_files(const fs::path& root)
+{
+    std::printf("test_extra_files\n");
+    const auto folder = root / "extra";
+    const auto build = root / "build";
+    const auto record = root / "cache" / deployment::EXTRA_FILES_RECORD_NAME;
+    write_text(build / "game.exe", "the game");
+    write_text(build / "index.html", "the player's page");
+    check(deployment::list_extra_files({}).empty() && deployment::list_extra_files(folder).empty(),
+          "no folder and a folder that is not there list no extra file");
+    check(deployment::deploy_extra_files({}, build, record).empty() && read_text(build / "game.exe") == "the game",
+          "a deploy without extra files copies none and leaves the build alone");
+    write_text(folder / "steam_api64.dll", "library");
+    write_text(folder / "index.html", "the project's page");
+    write_text(folder / "docs" / "manual" / "readme.txt", "manual");
+    using names = std::vector<std::string>;
+    const names expected{"docs/manual/readme.txt", "index.html", "steam_api64.dll"};
+    check(deployment::list_extra_files(folder) == expected, "extra files are listed with their folders, in name order");
+    check(deployment::deploy_extra_files(folder, build, record) == expected, "a deploy copies them and names them");
+    check(read_text(build / "steam_api64.dll") == "library" && read_text(build / "docs/manual/readme.txt") == "manual",
+          "each at the place it has in the folder");
+    check(read_text(build / "index.html") == "the project's page", "an extra file named like a file of the build replaces it");
+    check(read_text(build / "game.exe") == "the game", "the build's other files stay");
+    fs::error_code ec;
+    fs::remove(folder / "steam_api64.dll", ec);
+    fs::remove_all(folder / "docs", ec);
+    write_text(folder / "index.html", "the project's new page");
+    deployment::remove_stale_extra_files(folder, build, record);
+    check(!is_present(build / "steam_api64.dll") && !is_present(build / "docs"),
+          "the next deploy first removes what an earlier one copied that the folder no longer has, with the folders it "
+          "leaves empty");
+    check(read_text(build / "index.html") == "the project's page" && read_text(build / "game.exe") == "the game",
+          "and leaves the extra files the folder still has and the build's own files");
+    check(deployment::deploy_extra_files(folder, build, record) == names{"index.html"}, "then copies what the folder holds now");
+    check(read_text(build / "index.html") == "the project's new page", "a changed extra file is copied again");
+    // The project takes its own page out of the folder: the next deploy removes it before its steps write the
+    // build's page, so that page is the one that ships.
+    fs::remove(folder / "index.html", ec);
+    deployment::remove_stale_extra_files(folder, build, record);
+    check(!is_present(build / "index.html"), "an extra file that had replaced a file of the build goes before the build is written");
+    write_text(build / "index.html", "the player's page");
+    check(deployment::deploy_extra_files(folder, build, record).empty() && read_text(build / "index.html") == "the player's page",
+          "and the file the build's step then writes stays");
+    deployment::remove_stale_extra_files(folder, build, record);
+    check(read_text(build / "index.html") == "the player's page", "also through the deploys that follow");
+    write_text(folder / "notes.txt", "notes");
+    deployment::deploy_extra_files(folder, build, record);
+    deployment::remove_stale_extra_files({}, build, record);
+    check(!is_present(build / "notes.txt") && deployment::deploy_extra_files({}, build, record).empty(),
+          "a profile that no longer names a folder gets its earlier extra files removed");
+    // The web: the player's precompressed copies of a page file the project replaced.
+    write_text(build / "main.js", "replaced");
+    write_text(build / "main.js.br", "packed player code");
+    write_text(build / "main.js.gz", "packed player code");
+    write_text(build / "graphics.js.br", "another file's copy");
+    deployment::remove_precompressed_copies(build, {"main.js", "styles/site.css"});
+    check(!is_present(build / "main.js.br") && !is_present(build / "main.js.gz") && is_present(build / "graphics.js.br") &&
+              is_present(build / "main.js"),
+          "the precompressed copies of a replaced file go, the file and other files' copies stay");
+}
+
+void test_post_command(const fs::path& root)
+{
+    std::printf("test_post_command\n");
+    const deployment::post_command_context context{root / "build folder", "Desktop", "desktop", "1.2"};
+    const auto environment = deployment::make_post_command_environment(context);
+    check(environment.size() == 4 && environment[1] == "UNRAVEL_DEPLOY_PROFILE=Desktop" && environment[2] == "UNRAVEL_DEPLOY_PLATFORM=desktop" &&
+              environment[3] == "UNRAVEL_DEPLOY_VERSION=1.2" && environment[0].rfind("UNRAVEL_DEPLOY_FOLDER=", 0) == 0,
+          "the command is told the build's folder, profile, platform and version");
+    // The command runs as the user wrote it: quotes, a redirection, and a name with a space in it.
+    fs::error_code ec;
+    fs::create_directories(context.folder, ec);
+    const auto script = root / deployment::get_post_command_script_name();
+#ifdef _WIN32
+    const std::string command = "echo %UNRAVEL_DEPLOY_PROFILE% \"quoted text\"> \"made by command.txt\"";
+    const std::string failing = "exit /b 7";
+#else
+    const std::string command = "echo $UNRAVEL_DEPLOY_PROFILE \"quoted text\"> \"made by command.txt\"";
+    const std::string failing = "exit 7";
+#endif
+    write_text(script, deployment::make_post_command_script(command));
+    const auto result = subprocess::call(deployment::make_post_command_arguments(script), environment);
+    const auto written = read_text(context.folder / "made by command.txt");
+    check(result.started && result.retcode == 0, "a post-deploy command runs through the system's command interpreter: " + result.out_output);
+    check(written.find("Desktop") != std::string::npos && written.find("quoted text") != std::string::npos,
+          "in the build's folder, with its environment, and its quotes as written");
+    write_text(script, deployment::make_post_command_script(failing));
+    check(subprocess::call(deployment::make_post_command_arguments(script), environment).retcode == 7,
+          "a command that fails ends the script with its exit code");
+}
+
+void test_android_additions()
+{
+    std::printf("test_android_additions\n");
+    const std::vector<std::string> permissions{"android.permission.INTERNET", "android.permission.CAMERA"};
+    const std::string lines = "    <uses-permission android:name=\"android.permission.INTERNET\" />\n"
+                              "    <uses-permission android:name=\"android.permission.CAMERA\" />\n";
+    check(deployment::make_android_build_manifest("", permissions) == deployment::make_android_permissions_manifest(permissions),
+          "a project without a manifest of its own gets the permissions alone");
+    const std::string head = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\n"
+                             "    xmlns:tools=\"http://schemas.android.com/tools\" android:note=\"a > inside a value\">";
+    const std::string body = "\n    <application>\n        <meta-data android:name=\"com.vendor.KEY\" android:value=\"42\" />\n    </application>\n</manifest>\n";
+    check(deployment::make_android_build_manifest(head + body, permissions) == head + "\n" + lines + body,
+          "the permissions go right after the opening tag of the project's manifest, whose own text stays as written");
+    check(deployment::make_android_build_manifest("<manifest xmlns:android=\"x\" />\n", permissions) ==
+              "<manifest xmlns:android=\"x\" >\n" + lines + "</manifest>\n",
+          "an empty manifest element is opened to take them");
+    check(deployment::make_android_build_manifest("<application />", permissions).empty() &&
+              deployment::make_android_build_manifest("<manifest xmlns:android=\"x\"", permissions).empty(),
+          "text without a whole manifest tag gives no manifest");
+    deployment::android_toolchain tools;
+    tools.java = "/jdk/bin/java";
+    deployment::android_package_params params;
+    params.project_dir = "/tmp/project";
+    const auto without_additions = deployment::make_gradle_arguments(tools, params);
+    check(std::none_of(without_additions.begin(),
+                       without_additions.end(),
+                       [](const std::string& argument)
+                       {
+                           return argument.starts_with("-Punravel.additions=");
+                       }),
+          "a build without an additions folder passes none");
+    params.additions = "/project/android";
+    check(contains_argument(deployment::make_gradle_arguments(tools, params), "-Punravel.additions=/project/android"),
+          "a build with one passes it to Gradle");
 }
 
 void test_android_permissions()
@@ -2186,6 +2679,15 @@ void test_keep_and_remove_release(const fs::path& root)
           "a build without debug files is kept without them");
     write_text(symbols / "game.exe", "game");
     write_text(symbols / "unravel-player.pdb", "symbols");
+    check(!deployment::are_debug_files_of_build(symbols, build), "debug files with no file of the build are not known to be its own");
+    write_text(build / "game.exe", "another game");
+    check(!deployment::are_debug_files_of_build(symbols, build), "nor are the ones kept with another executable");
+    check(deployment::keep_release(project, build, symbols, "0.95").is_ok() &&
+              !fs::exists(deployment::get_release_symbols_folder(project, "0.95")),
+          "and a release is kept without them");
+    check(deployment::remove_release(project, "0.95").is_ok(), "that release is removed");
+    write_text(build / "game.exe", "game");
+    check(deployment::are_debug_files_of_build(symbols, build), "debug files kept with the build's executable are its own");
     check(deployment::keep_release(project, build, symbols, "1.0").is_ok(), "a full packed build is kept");
     check(deployment::is_kept_release(project, "1.0"), "the release is kept");
     check(deployment::list_releases(project) == std::vector<std::string>{"0.9", "1.0"}, "it is listed");
@@ -2228,8 +2730,9 @@ void test_debug_files(const fs::path& root)
     check(read_text(folder / "game.exe") == "game 1" && read_text(folder / "unravel-player.pdb") == "symbols 1",
           "the executable and the symbols are copied");
     check(!fs::exists(folder / "old-game.exe"), "an earlier build's files are removed");
-    write_text(root / "build" / "game.exe", "game 2");
-    check(deployment::keep_debug_files(files, folder).is_ok() && read_text(folder / "game.exe") == "game 2",
+    // Another size: a copy is skipped by size and write time, and two writes within one clock tick share a time.
+    write_text(root / "build" / "game.exe", "game two");
+    check(deployment::keep_debug_files(files, folder).is_ok() && read_text(folder / "game.exe") == "game two",
           "a changed executable is copied again");
     check(!deployment::keep_debug_files({root / "missing.pdb"}, folder).is_ok(), "a missing file fails");
 }
@@ -2412,6 +2915,21 @@ void test_folders(const fs::path& root)
           "a deploy that started marks the folder as its own, and its build as unfinished");
     check(deployment::write_build_stamp(started_build, {"Desktop", "v1", true}) && deployment::is_finished_build(started_build),
           "a deploy that finished marks its build as finished");
+    check(deployment::get_other_platform_problem(started_build, unravel::deploy_platform::web).empty(),
+          "a stamp that names no platform refuses none");
+    check(deployment::write_build_stamp(started_build, {"Desktop", "v1", true, unravel::get_platform_name(unravel::deploy_platform::desktop)}) &&
+              deployment::read_build_stamp(started_build).platform == "desktop",
+          "a deploy's stamp names the platform it built for");
+    check(deployment::get_other_platform_problem(started_build, unravel::deploy_platform::desktop).empty() &&
+              !deployment::get_other_platform_problem(started_build, unravel::deploy_platform::web).empty(),
+          "and the folder takes builds for that platform only");
+    check(deployment::get_other_platform_problem(root / "no_such_folder", unravel::deploy_platform::web).empty(),
+          "a folder without a stamp takes any");
+    check(!deployment::get_executable_name_problem(root / deployment::DATA_FOLDER).empty(),
+          "an executable named like the data folder cannot be written beside it");
+    check(deployment::get_executable_name_problem(root / "data.exe").empty() &&
+              deployment::get_executable_name_problem(root / "Game").empty(),
+          "any other name can");
     const auto read_only = root / "no_such_folder" / "build";
     check(!deployment::write_build_stamp(read_only, {"Desktop", "v1", true}), "a stamp that cannot be written is reported");
     const auto android = root / "android";
@@ -2526,12 +3044,21 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_android_template(temp / "android");
         test_player_version(temp / "player");
         test_web_template(temp / "web_template");
+        test_web_chunk_cuts();
         test_web_site(temp / "web_site");
+        test_web_trim(temp / "web_trim");
+        test_web_chunks(temp / "web_chunks");
         test_web_addresses();
         test_web_tunnel();
         test_write_text(temp / "write_text");
         test_text_helpers();
         test_gradle_arguments();
+        test_desktop_graphics();
+        test_extra_files(temp / "extra_files");
+        test_post_command(temp / "post_command");
+        test_android_additions();
+        test_android_java(temp / "android_java");
+        test_android_device_answers();
         test_android_permissions();
         test_android_icon(temp / "icon");
         test_windows_version_numbers();

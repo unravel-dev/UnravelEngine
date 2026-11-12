@@ -5,6 +5,7 @@
 #include <engine/threading/threader.h>
 #include <filesystem/filesystem.h>
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -34,11 +35,33 @@ using deploy_jobs = std::vector<deploy_job>;
  */
 auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy_jobs;
 
-/// Whether a deploy started here is still running: the project must not close or change under it.
+/// Whether a deploy started here, or work held as one (hold_running_deploy), is still running: the project must
+/// not close or change under it.
 auto is_deploy_running() -> bool;
 
+/**
+ * @brief Counts work that reads a build outside deploy_project (its upload to a store) as a running deploy, from
+ * its construction until release() or its destruction: the project does not close or change under that work, and
+ * cancel_deploy reaches it.
+ */
+class running_deploy_hold
+{
+public:
+    running_deploy_hold();
+    ~running_deploy_hold();
+    running_deploy_hold(const running_deploy_hold&) = delete;
+    auto operator=(const running_deploy_hold&) -> running_deploy_hold& = delete;
+
+    /// Ends the hold; calling it again does nothing.
+    void release();
+
+private:
+    std::atomic<bool> is_held_{true};
+};
+
 /// Stops the running deploy: steps that have not started are skipped, the cooks stop between two assets and the
-/// Android package build is ended. The folder keeps an unfinished build. Nothing without a running deploy.
+/// programs it runs (the Android package build, a store upload) are ended. A deploy's folder keeps an unfinished
+/// build. Nothing without a running deploy.
 void cancel_deploy();
 
 /// Why a finished step failed; empty while it runs and once it succeeded.

@@ -247,7 +247,7 @@ auto android_permissions_to_json(const android_permissions& permissions) -> std:
 auto android_settings_to_json(const android_deploy_settings& android, const std::string& device) -> std::string
 {
     return fmt::format(
-        R"({{"application_id":{},"permissions":{},"version_code":{},"orientation":{},"texture_compression":{},"icon":{},"icon_background":{},"release":{},"keystore":{},"key_alias":{},"device":{}}})",
+        R"({{"application_id":{},"permissions":{},"version_code":{},"orientation":{},"texture_compression":{},"icon":{},"icon_background":{},"release":{},"keystore":{},"key_alias":{},"additions":{},"device":{}}})",
         android.application_id.empty() ? "null" : make_json_string(android.application_id),
         android_permissions_to_json(android.permissions),
         android.version_code,
@@ -258,6 +258,7 @@ auto android_settings_to_json(const android_deploy_settings& android, const std:
         bool_to_json(android.release),
         android.keystore.empty() ? "null" : make_json_string(fs::to_utf8_string(android.keystore)),
         android.key_alias.empty() ? "null" : make_json_string(android.key_alias),
+        android.additions.empty() ? "null" : make_json_string(fs::to_utf8_string(android.additions)),
         device.empty() ? "null" : make_json_string(device));
 }
 
@@ -388,6 +389,31 @@ auto read_steam_name(const simdjson::dom::object& args, const char* key, std::st
 
 /// The desktop settings deploy_set_settings takes, read over the profile's: desktop_icon and steam_*. `is_given`
 /// says whether the arguments had any.
+/// desktop_graphics: the graphics APIs a desktop build ships, as booleans by name. A partial object changes only
+/// what it names; `is_given` says whether the arguments had one.
+auto read_desktop_graphics(const simdjson::dom::object& args, desktop_graphics_apis& graphics, bool& is_given, std::string& error)
+    -> bool
+{
+    simdjson::dom::element value;
+    is_given = args["desktop_graphics"].get(value) == simdjson::SUCCESS;
+    if(!is_given)
+    {
+        return true;
+    }
+    simdjson::dom::object chosen;
+    if(value.get(chosen) != simdjson::SUCCESS)
+    {
+        error = "desktop_graphics is an object of booleans: direct3d12, direct3d11, metal, vulkan, opengl.";
+        return false;
+    }
+    read_bool(chosen, "direct3d12", graphics.direct3d12);
+    read_bool(chosen, "direct3d11", graphics.direct3d11);
+    read_bool(chosen, "metal", graphics.metal);
+    read_bool(chosen, "vulkan", graphics.vulkan);
+    read_bool(chosen, "opengl", graphics.opengl);
+    return true;
+}
+
 auto read_desktop_settings(rtti::context& ctx,
                            const simdjson::dom::object& args,
                            desktop_deploy_settings& desktop,
@@ -403,7 +429,9 @@ auto read_desktop_settings(rtti::context& ctx,
                                            return args[key].get(value) == simdjson::SUCCESS;
                                        });
     bool has_icon = false;
-    if(!read_desktop_icon(ctx, args, desktop, has_icon, error) ||
+    bool has_graphics = false;
+    if(!read_desktop_graphics(args, desktop.graphics, has_graphics, error) ||
+       !read_desktop_icon(ctx, args, desktop, has_icon, error) ||
        !read_steam_id(args, "steam_app_id", desktop.steam.app_id, error) ||
        !read_steam_id(args, "steam_depot_id", desktop.steam.depot_id, error) ||
        !read_steam_name(args, "steam_account", desktop.steam.account, error) ||
@@ -411,7 +439,7 @@ auto read_desktop_settings(rtti::context& ctx,
     {
         return false;
     }
-    is_given = has_icon || has_steam;
+    is_given = has_icon || has_steam || has_graphics;
     return true;
 }
 
@@ -452,8 +480,14 @@ auto web_settings_to_json(const web_deploy_settings& web) -> std::string
 auto desktop_settings_to_json(const desktop_deploy_settings& desktop) -> std::string
 {
     const auto& steam = desktop.steam;
-    return fmt::format(R"({{"icon":{},"steam":{{"app_id":{},"depot_id":{},"account":{},"branch":{}}}}})",
+    const auto& graphics = desktop.graphics;
+    return fmt::format(R"({{"icon":{},"graphics":{{"direct3d12":{},"direct3d11":{},"metal":{},"vulkan":{},"opengl":{}}},"steam":{{"app_id":{},"depot_id":{},"account":{},"branch":{}}}}})",
                        asset_handle_key_json(desktop.icon),
+                       bool_to_json(graphics.direct3d12),
+                       bool_to_json(graphics.direct3d11),
+                       bool_to_json(graphics.metal),
+                       bool_to_json(graphics.vulkan),
+                       bool_to_json(graphics.opengl),
                        steam.app_id,
                        steam.depot_id,
                        steam.account.empty() ? "null" : make_json_string(steam.account),
@@ -508,7 +542,8 @@ auto read_android_settings(rtti::context& ctx, const simdjson::dom::object& args
                                                    "android_icon_background",
                                                    "android_release",
                                                    "android_keystore",
-                                                   "android_key_alias"};
+                                                   "android_key_alias",
+                                                   "android_additions"};
     is_given = std::any_of(std::begin(ANDROID_KEYS),
                            std::end(ANDROID_KEYS),
                            [&args](const char* key)
@@ -537,6 +572,11 @@ auto read_android_settings(rtti::context& ctx, const simdjson::dom::object& args
         android.keystore = fs::from_utf8_string(keystore);
     }
     read_string(args, "android_key_alias", android.key_alias);
+    std::string additions;
+    if(read_string(args, "android_additions", additions))
+    {
+        android.additions = fs::from_utf8_string(additions);
+    }
     return true;
 }
 
@@ -630,7 +670,7 @@ auto refuse_platform_argument(const simdjson::dom::object& args, std::string& er
 auto deploy_settings_to_json(const deploy_settings& params) -> std::string
 {
     return fmt::format(
-        R"({{"profile":{},"platform":{},"location":{},"output":{},"deploy_dependencies":{},"run_after_deploy":{},"run_arguments":{},"cook_assets":{},"include_debug_symbols":{},"pack_assets":{},"patch_release":{},"only_used_assets":{},"scenes":{},"include":{},"exclude":{},"android":{},"desktop":{},"web":{}}})",
+        R"({{"profile":{},"platform":{},"location":{},"output":{},"deploy_dependencies":{},"run_after_deploy":{},"run_arguments":{},"extra_files":{},"post_command":{},"cook_assets":{},"include_debug_symbols":{},"trim_framework":{},"kept_assemblies":{},"pack_assets":{},"patch_release":{},"only_used_assets":{},"scenes":{},"include":{},"exclude":{},"android":{},"desktop":{},"web":{}}})",
         make_json_string(params.profile),
         make_json_string(get_platform_name(params.deploy_target)),
         params.deploy_location.empty() ? "null" : make_json_string(fs::to_utf8_string(params.deploy_location)),
@@ -638,8 +678,12 @@ auto deploy_settings_to_json(const deploy_settings& params) -> std::string
         bool_to_json(params.deploy_dependencies),
         bool_to_json(params.deploy_and_run),
         make_json_string(params.deploy_run_arguments),
+        params.deploy_extra_files.empty() ? "null" : make_json_string(fs::to_utf8_string(params.deploy_extra_files)),
+        params.deploy_post_command.empty() ? "null" : make_json_string(params.deploy_post_command),
         bool_to_json(params.deploy_cooked_assets),
         bool_to_json(params.deploy_debug_symbols),
+        bool_to_json(params.deploy_trim_framework),
+        make_json_string(params.deploy_kept_assemblies),
         bool_to_json(params.deploy_packed_assets),
         params.deploy_patch_release.empty() ? "null" : make_json_string(params.deploy_patch_release),
         bool_to_json(params.deploy_only_used_assets),
@@ -920,7 +964,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "build a second set for browsers whose GPU does not read the first (astc default; the same format ships "
              "one set). Omitted fields keep their value.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The profile this call writes (its overrides, patch_release, desktop_icon, steam_*, android_*, web_*, revert); default the deploy profile. Does not change the deploy profile"},"deploy_profile":{"type":"string","description":"Select the profile deploys build, as the Deploy window's profile picker does"},"scope":{"type":"string","enum":["shared","profile"],"description":"Where the settings other than location and the profile's own go; default shared"},"revert":{"type":"array","items":{"type":"string"},"description":"Settings, named as this tool's arguments (e.g. pack_assets), the profile stops overriding"},"android_texture_compression":{"type":"string","enum":["astc","etc2","bc"]},"web_graphics":{"type":"string","enum":["webgpu","webgpu_then_webgl2","webgl2"],"description":"Web profiles: the graphics APIs the game renders with; webgpu_then_webgl2 also cooks the WebGL 2 shaders"},"web_fallback_notice":{"type":"string","enum":["tell","ask","silent"],"description":"Web profiles: what the page tells the player when WebGL 2 stands in for WebGPU"},"web_help_link":{"type":"string","description":"Web profiles: a page on turning WebGPU on that the notices link to; empty for the page's own advice"},"web_run_graphics":{"type":"string","enum":["automatic","webgpu","webgl2"],"description":"Web profiles: the API Deploy and Run and the public link start a webgpu_then_webgl2 build with"},"web_texture_compression":{"type":"string","enum":["astc","etc2","bc"],"description":"Web profiles: the formats the project's textures are cooked to"},"web_phone_texture_compression":{"type":"string","enum":["astc","etc2","bc"],"description":"Web profiles: a second texture set for browsers whose GPU does not read web_texture_compression's; the same format ships one set"},"android_application_id":{"type":"string","description":"e.g. com.company.game; empty: com.<company>.<product>, made from the product settings and following them"},"android_permissions":{"type":"object","properties":{"internet":{"type":"boolean"},"network_state":{"type":"boolean"},"vibrate":{"type":"boolean"},"microphone":{"type":"boolean"},"camera":{"type":"boolean"},"location":{"type":"boolean"},"notifications":{"type":"boolean"},"other":{"type":"array","items":{"type":"string"},"description":"Further permissions by name; a name without a dot gets android.permission. in front"}},"description":"The permissions the manifest asks for; a partial object changes only what it names. Defaults: internet and vibrate on"},"android_version_code":{"type":"integer","minimum":1},"android_orientation":{"type":"string","enum":["landscape","portrait","automatic"]},"android_icon":{"type":["string","null"],"description":"Key or uid of a texture the launcher icon is made from, square at best; null or empty for the engine's logo"},"android_icon_background":{"type":"array","items":{"type":"number"},"description":"[r,g,b] from 0 to 1: the opaque color behind the icon's image; default white"},"desktop_icon":{"type":["string","null"],"description":"Desktop profiles: key or uid of a texture the executable's icon is made from (Windows), square at best; null or empty for the engine's logo"},"steam_app_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the game's Steamworks app id; 0: not uploaded"},"steam_depot_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the depot of the operating system the profile builds for"},"steam_account":{"type":"string","description":"Desktop profiles: the Steam account that uploads, logged in once in a terminal with steamcmd +login <account>"},"steam_branch":{"type":"string","description":"Desktop profiles: the branch the uploaded build is set live on, such as beta; empty for none"},"android_release":{"type":"boolean","description":"A release package signed with android_keystore (passwords from UNRAVEL_KEYSTORE_PASSWORD / UNRAVEL_KEY_PASSWORD); default false, a debug package"},"android_keystore":{"type":"string"},"android_key_alias":{"type":"string"},"android_device":{"type":"string","description":"adb serial of the device run_after_deploy installs on"},"location":{"type":"string","description":"Destination folder: absolute, or relative to the project folder such as .deploy"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"run_arguments":{"type":"string","description":"Command line options run_after_deploy starts the game with, separated by spaces, e.g. --gfx-stats (graphics statistics overlay) or --novsync"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"Desktop profiles: a kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
+             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The profile this call writes (its overrides, patch_release, desktop_icon, steam_*, android_*, web_*, revert); default the deploy profile. Does not change the deploy profile"},"deploy_profile":{"type":"string","description":"Select the profile deploys build, as the Deploy window's profile picker does"},"scope":{"type":"string","enum":["shared","profile"],"description":"Where the settings other than location and the profile's own go; default shared"},"revert":{"type":"array","items":{"type":"string"},"description":"Settings, named as this tool's arguments (e.g. pack_assets), the profile stops overriding"},"android_texture_compression":{"type":"string","enum":["astc","etc2","bc"]},"web_graphics":{"type":"string","enum":["webgpu","webgpu_then_webgl2","webgl2"],"description":"Web profiles: the graphics APIs the game renders with; webgpu_then_webgl2 also cooks the WebGL 2 shaders"},"web_fallback_notice":{"type":"string","enum":["tell","ask","silent"],"description":"Web profiles: what the page tells the player when WebGL 2 stands in for WebGPU"},"web_help_link":{"type":"string","description":"Web profiles: a page on turning WebGPU on that the notices link to; empty for the page's own advice"},"web_run_graphics":{"type":"string","enum":["automatic","webgpu","webgl2"],"description":"Web profiles: the API Deploy and Run and the public link start a webgpu_then_webgl2 build with"},"web_texture_compression":{"type":"string","enum":["astc","etc2","bc"],"description":"Web profiles: the formats the project's textures are cooked to"},"web_phone_texture_compression":{"type":"string","enum":["astc","etc2","bc"],"description":"Web profiles: a second texture set for browsers whose GPU does not read web_texture_compression's; the same format ships one set"},"android_application_id":{"type":"string","description":"e.g. com.company.game; empty: com.<company>.<product>, made from the product settings and following them"},"android_permissions":{"type":"object","properties":{"internet":{"type":"boolean"},"network_state":{"type":"boolean"},"vibrate":{"type":"boolean"},"microphone":{"type":"boolean"},"camera":{"type":"boolean"},"location":{"type":"boolean"},"notifications":{"type":"boolean"},"other":{"type":"array","items":{"type":"string"},"description":"Further permissions by name; a name without a dot gets android.permission. in front"}},"description":"The permissions the manifest asks for; a partial object changes only what it names. Defaults: internet and vibrate on"},"android_version_code":{"type":"integer","minimum":1},"android_orientation":{"type":"string","enum":["landscape","portrait","automatic"]},"android_icon":{"type":["string","null"],"description":"Key or uid of a texture the launcher icon is made from, square at best; null or empty for the engine's logo"},"android_icon_background":{"type":"array","items":{"type":"number"},"description":"[r,g,b] from 0 to 1: the opaque color behind the icon's image; default white"},"desktop_icon":{"type":["string","null"],"description":"Desktop profiles: key or uid of a texture the executable's icon is made from (Windows), square at best; null or empty for the engine's logo"},"desktop_graphics":{"type":"object","properties":{"direct3d12":{"type":"boolean"},"direct3d11":{"type":"boolean"},"metal":{"type":"boolean"},"vulkan":{"type":"boolean"},"opengl":{"type":"boolean"}},"description":"Desktop profiles: the graphics APIs the build ships shaders for (Windows: direct3d12, direct3d11, vulkan, opengl; Linux: vulkan, opengl; macOS: metal, vulkan); a partial object changes only what it names. All true (the default) ships every API of the platform; with some false the build is smaller and the game starts only the others, the first that starts on the player's computer"},"steam_app_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the game's Steamworks app id; 0: not uploaded"},"steam_depot_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the depot of the operating system the profile builds for"},"steam_account":{"type":"string","description":"Desktop profiles: the Steam account that uploads, logged in once in a terminal with steamcmd +login <account>"},"steam_branch":{"type":"string","description":"Desktop profiles: the branch the uploaded build is set live on, such as beta; empty for none"},"android_release":{"type":"boolean","description":"A release package signed with android_keystore (passwords from UNRAVEL_KEYSTORE_PASSWORD / UNRAVEL_KEY_PASSWORD); default false, a debug package"},"android_keystore":{"type":"string"},"android_key_alias":{"type":"string"},"android_additions":{"type":"string","description":"Android profiles: a folder with parts the package takes as they are (AndroidManifest.xml merged into the game's, java, res, libs, jniLibs/arm64-v8a, dependencies.txt with one Maven library per line); relative to the project folder; empty for none"},"android_device":{"type":"string","description":"adb serial of the device run_after_deploy installs on"},"location":{"type":"string","description":"Destination folder: absolute, or relative to the project folder such as .deploy"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"run_arguments":{"type":"string","description":"Command line options run_after_deploy starts the game with, separated by spaces, e.g. --gfx-stats (graphics statistics overlay) or --novsync"},"extra_files":{"type":"string","description":"A folder whose files ship with the build as they are, at the same places under the build's top (a library beside the executable; on the web an index.html replaces the loading page); relative to the project folder; empty for none"},"post_command":{"type":"string","description":"A command run through the system's command interpreter in the build's folder once the build is whole (on Android before the install); it reads UNRAVEL_DEPLOY_FOLDER, UNRAVEL_DEPLOY_PROFILE, UNRAVEL_DEPLOY_PLATFORM and UNRAVEL_DEPLOY_VERSION, and a failing command fails the deploy; empty for none"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"trim_framework":{"type":"boolean","description":"Leave out the .NET framework libraries that neither the script libraries nor the script bridge reference, which makes the build smaller; a library scripts load by a name built at run time must be in kept_assemblies; default false"},"kept_assemblies":{"type":"string","description":"Framework libraries a trimmed build keeps whatever references them, by name, separated by spaces or commas, e.g. System.Data.Common"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"Desktop profiles: a kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -971,8 +1015,16 @@ void register_deploy_tools(mcp_tool_registry& registry)
              read_bool(args, "deploy_dependencies", params.deploy_dependencies);
              read_bool(args, "run_after_deploy", params.deploy_and_run);
              read_string(args, "run_arguments", params.deploy_run_arguments);
+             std::string extra_files;
+             if(read_string(args, "extra_files", extra_files))
+             {
+                 params.deploy_extra_files = fs::from_utf8_string(extra_files);
+             }
+             read_string(args, "post_command", params.deploy_post_command);
              read_bool(args, "cook_assets", params.deploy_cooked_assets);
              read_bool(args, "include_debug_symbols", params.deploy_debug_symbols);
+             read_bool(args, "trim_framework", params.deploy_trim_framework);
+             read_string(args, "kept_assemblies", params.deploy_kept_assemblies);
              read_bool(args, "pack_assets", params.deploy_packed_assets);
              read_bool(args, "only_used_assets", params.deploy_only_used_assets);
              auto android = found->android;

@@ -29,14 +29,9 @@ auto to_pointers(const std::vector<std::string>& strings) -> std::vector<const c
 }
 
 /// Starts `args_array` with this process's environment plus `changes`; 0 on success.
-auto create(const std::vector<std::string>& args_array, const std::vector<std::string>& changes, subprocess_s& process)
+auto start_process(const std::vector<std::string>& args_array, const std::vector<std::string>& changes, subprocess_s& process)
     -> int
 {
-    std::memset(&process, 0, sizeof(process));
-    if(args_array.empty())
-    {
-        return -1;
-    }
     const auto arguments = to_pointers(args_array);
     if(changes.empty())
     {
@@ -46,6 +41,34 @@ auto create(const std::vector<std::string>& args_array, const std::vector<std::s
     const auto merged = merge_environment(changes);
     const auto environment = to_pointers(merged);
     return subprocess_create_ex(arguments.data(), CREATE_OPTIONS, environment.data(), &process);
+}
+
+/// Nothing here writes to a process: with its input closed, a tool that asks a question reads the end of input
+/// and goes on or fails, where it would wait for an answer for ever.
+void close_input(subprocess_s& process)
+{
+    if(process.stdin_file != nullptr)
+    {
+        fclose(process.stdin_file);
+        process.stdin_file = nullptr;
+    }
+}
+
+/// Starts `args_array` with this process's environment plus `changes` and no input; 0 on success.
+auto create(const std::vector<std::string>& args_array, const std::vector<std::string>& changes, subprocess_s& process)
+    -> int
+{
+    std::memset(&process, 0, sizeof(process));
+    if(args_array.empty())
+    {
+        return -1;
+    }
+    const int result = start_process(args_array, changes, process);
+    if(result == 0)
+    {
+        close_input(process);
+    }
+    return result;
 }
 
 /// Splits output into lines for a callback.

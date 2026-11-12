@@ -597,6 +597,35 @@ auto renderer::start_backend(bgfx::Init& init_data) -> bool
     }
 }
 
+auto renderer::start_shipped_backend(bgfx::Init& init_data) -> bool
+{
+    auto& ctx = engine::context();
+    const auto shipped = ctx.has<boot_config>() ? ctx.get<boot_config>().shipped_renderers : std::vector<preferred_renderer>{};
+    if(shipped.empty())
+    {
+        return start_backend(init_data);
+    }
+    // The backend's own choice of another API would start one the build has no shaders for.
+    init_data.fallback = false;
+    std::string tried;
+    for(const auto candidate : get_renderer_candidates(ctx.get<boot_config>().renderer, shipped))
+    {
+        init_data.type = preferred_renderer_to_gfx_type(candidate);
+        if(start_backend(init_data))
+        {
+            return true;
+        }
+        const std::string name(preferred_renderer_pretty_name(candidate));
+        APPLOG_WARNING("{} did not start on this computer.", name);
+        tried += (tried.empty() ? "" : ", ") + name;
+    }
+    ctx.get_cached<loading_screen>().fail(
+        fmt::format("The game needs one of these graphics APIs, and none of them started on this computer: {}. Updating "
+                    "the graphics driver usually helps.",
+                    tried));
+    return false;
+}
+
 void renderer::invalidate_cached_shadow_maps(rtti::context& /*ctx*/)
 {
     shadow::invalidate_cached_maps();
@@ -653,7 +682,7 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     reset_flags_ = init_data.reset;
     apply_device_caps_mask_option(parser);
 
-    if(!start_backend(init_data))
+    if(!start_shipped_backend(init_data))
     {
         APPLOG_ERROR("Could not initialize rendering backend!");
 #if UNRAVEL_PLATFORM_ANDROID

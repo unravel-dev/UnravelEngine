@@ -29,7 +29,7 @@ val dotnetRuntimeDir: File = pathProperty("unravel.dotnet")
 val dotnetRuntimeVersion = requireProperty("unravel.dotnetVersion")
 val dotnetTargetFramework = "net" + dotnetRuntimeVersion.substringBeforeLast('.')
 
-// unravel.content: the deploy folder whose data/ the APK carries.
+// unravel.content: the folder whose files the APK carries: the game's data/, and the profile's extra files.
 val contentDir: File = pathProperty("unravel.content")
 
 // The game's identity on the device. unravel.orientation is an android:screenOrientation value.
@@ -45,6 +45,17 @@ val iconResourceDir: File = pathProperty("unravel.icon")
 // unravel.permissions: a manifest holding only the game's uses-permission elements, which the deploy writes
 // from the profile. Each build type's manifest is merged over the main one, so the permissions join it.
 val permissionsManifest: File = pathProperty("unravel.permissions")
+
+// unravel.additions: a folder of the project with parts the package takes as they are, when the profile names one:
+// java/ (Java sources), res/ (resources), libs/ (.jar and .aar libraries), jniLibs/<abi>/ (native libraries) and
+// dependencies.txt (libraries Gradle downloads, one Maven coordinate per line; a line that starts with # is a
+// comment). Its AndroidManifest.xml reaches this build inside unravel.permissions, where the deploy merged the
+// permissions into it.
+val additionsDir: File? = providers.gradleProperty("unravel.additions").orNull?.let { file(it) }
+
+// unravel.trimmedFramework: a file naming, one a line, the files of the runtime's managed framework the
+// package leaves out: the assemblies nothing in the game references, when the deploy trims the framework.
+val trimmedFrameworkList: File = pathProperty("unravel.trimmedFramework")
 
 // unravel.keystore and unravel.keyAlias sign release builds; the passwords come from the
 // UNRAVEL_KEYSTORE_PASSWORD and UNRAVEL_KEY_PASSWORD environment variables, never from files. Debug
@@ -88,13 +99,14 @@ val stagePlayerLibrary = tasks.register<StagePlayerLibrary>("stagePlayerLibrary"
 }
 
 /**
- * Stages the APK's assets: a deploy folder's data (packs, mounted in place on the device, and the
- * loose files the player extracts on its first start) and the .NET runtime's managed framework, a
- * loose folder of the bundled dotnet root (data/engine/dotnet). Writes bundle_files.txt (the build id
- * on the first line, then the loose files), which game/game/bundled_files.h reads.
+ * Stages the APK's assets: the content folder's files (packs, mounted in place on the device, and the
+ * loose files the player extracts on its first start: the rest of the game's data and the profile's
+ * extra files) and the .NET runtime's managed framework, a loose folder of the bundled dotnet root
+ * (data/engine/dotnet). Writes bundle_files.txt (the build id on the first line, then the loose
+ * files), which game/game/bundled_files.h reads.
  */
 abstract class StagePlayerContent : DefaultTask() {
-    /** The deploy folder, the one holding data/. */
+    /** The content folder: data/ and whatever else ships beside it. */
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val deployDir: DirectoryProperty
@@ -103,6 +115,11 @@ abstract class StagePlayerContent : DefaultTask() {
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val runtimeManagedDir: DirectoryProperty
+
+    /** Names, one a line, the framework's files the package leaves out; a file without names leaves none out. */
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val trimmedFramework: RegularFileProperty
 
     @get:Input
     abstract val runtimeVersion: Property<String>
@@ -116,22 +133,22 @@ abstract class StagePlayerContent : DefaultTask() {
         output.deleteRecursively()
         output.mkdirs()
         val deploy = deployDir.get().asFile
-        val deployFiles = deploy.resolve("data").walkTopDown()
+        val deployFiles = deploy.walkTopDown()
             .filter { it.isFile }
             .map { it.relativeTo(deploy).invariantSeparatorsPath to it }
             .filter { (name, _) -> !isLeftOut(name) }
         val frameworkFolder = "data/engine/dotnet/shared/Microsoft.NETCore.App/" + runtimeVersion.get()
+        val trimmed = trimmedFramework.get().asFile.readLines().filter { it.isNotBlank() }.toSet()
         val runtimeFiles = runtimeManagedDir.get().asFile.listFiles().orEmpty().asSequence()
-            .filter { it.isFile }
+            .filter { it.isFile && it.name !in trimmed }
             .map { frameworkFolder + "/" + it.name to it }
         val digest = MessageDigest.getInstance("SHA-256")
         val looseFiles = mutableListOf<String>()
         (deployFiles + runtimeFiles)
             .sortedBy { (name, _) -> name }
             .forEach { (name, file) ->
-                file.copyTo(output.resolve(name))
                 digest.update(name.toByteArray())
-                digest.update(file.readBytes())
+                copyAndDigest(file, output.resolve(name), digest)
                 if (!name.endsWith(".pak")) {
                     looseFiles += name
                 }
@@ -141,14 +158,38 @@ abstract class StagePlayerContent : DefaultTask() {
         output.resolve("bundle_files.txt").writeText(list.joinToString("\n", postfix = "\n"))
     }
 
-    // The desktop .NET runtime a deploy bundles does not run on Android, and debug symbols do not ship.
-    private fun isLeftOut(name: String): Boolean =
-        name.startsWith("data/engine/dotnet/") || name.endsWith(".pdb")
+    // Copies a file block by block and adds its bytes to the digest on the way: a pack of any size passes through
+    // a megabyte of memory.
+    private fun copyAndDigest(source: File, destination: File, digest: MessageDigest) {
+        destination.parentFile.mkdirs()
+        val block = ByteArray(COPY_BLOCK_SIZE)
+        source.inputStream().use { input ->
+            destination.outputStream().use { output ->
+                while (true) {
+                    val read = input.read(block)
+                    if (read < 0) {
+                        break
+                    }
+                    output.write(block, 0, read)
+                    digest.update(block, 0, read)
+                }
+            }
+        }
+    }
+
+    // The desktop .NET runtime a deploy bundles does not run on Android. Debug symbols ship when the deploy put
+    // them there, which its Ship Debug Symbols decides.
+    private fun isLeftOut(name: String): Boolean = name.startsWith("data/engine/dotnet/")
+
+    private companion object {
+        const val COPY_BLOCK_SIZE = 1 shl 20
+    }
 }
 
 val stagePlayerContent = tasks.register<StagePlayerContent>("stagePlayerContent") {
     deployDir.set(contentDir)
     runtimeManagedDir.set(dotnetRuntimeDir.resolve("lib/" + dotnetTargetFramework))
+    trimmedFramework.set(trimmedFrameworkList)
     runtimeVersion.set(dotnetRuntimeVersion)
 }
 
@@ -205,6 +246,11 @@ android {
         getByName("main") {
             java.directories.add(sdlJavaDir.path)
             res.directories.add(iconResourceDir.path)
+            if (additionsDir != null) {
+                java.directories.add(additionsDir.resolve("java").path)
+                res.directories.add(additionsDir.resolve("res").path)
+                jniLibs.directories.add(additionsDir.resolve("jniLibs").path)
+            }
         }
         getByName("debug") {
             manifest.srcFile(permissionsManifest)
@@ -234,6 +280,14 @@ android {
 // or https:// request ends the game.
 dependencies {
     implementation(fileTree(dotnetRuntimeDir.resolve("native")) { include("*.jar") })
+    // The project's own libraries: the files in its additions folder, and the ones its list has Gradle download.
+    if (additionsDir != null) {
+        implementation(fileTree(additionsDir.resolve("libs")) { include("*.jar", "*.aar") })
+        val listed = additionsDir.resolve("dependencies.txt")
+        if (listed.isFile) {
+            listed.readLines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }.forEach { implementation(it) }
+        }
+    }
 }
 
 androidComponents {

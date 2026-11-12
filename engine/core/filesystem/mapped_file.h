@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace fs
 {
@@ -21,6 +22,34 @@ struct file_region
 };
 
 /**
+ * @brief Names the bytes at `data` as the content of `file` for every mapped_file opened from now on: it maps
+ * these bytes and reads no file. For a host that already holds a file in memory, as the browser page does, which
+ * downloads a pack straight into the player's memory, where a file system copy would hold it a second time. The
+ * bytes stay the caller's and must outlive every mapping of them.
+ */
+void add_memory_file(const path& file, const std::uint8_t* data, std::uint64_t size);
+
+/// Whether add_memory_file named bytes for `file`.
+auto has_memory_file(const path& file) -> bool;
+
+/// A file a host holds in memory, as it names it to the program it starts: where its bytes are in the program's
+/// address space.
+struct host_memory_file
+{
+    /// The file's name as the host gives it, '/' separated.
+    std::string name;
+    std::uint64_t address{};
+    std::uint64_t size{};
+};
+
+/// Reads a host's list of memory files: "name:address:size" items separated by '|', the numbers decimal. An item
+/// that does not read as one, or names no bytes, is left out.
+auto parse_host_memory_files(const std::string& list) -> std::vector<host_memory_file>;
+
+/// Forgets the bytes add_memory_file named for `file`; mappings of them stay as they are.
+void remove_memory_file(const path& file);
+
+/**
  * @brief A whole file mapped read-only into memory, unmapped and closed on destruction.
  *
  * On Windows the file stays open with read sharing only, so it cannot be replaced or deleted while
@@ -34,7 +63,8 @@ public:
     auto operator=(const mapped_file&) -> mapped_file& = delete;
     ~mapped_file();
 
-    /// Maps `file`; false with `err` set when it cannot be opened, is empty or cannot be mapped.
+    /// Maps `file`, or the bytes add_memory_file named for it; false with `err` set when it cannot be opened, is
+    /// empty or cannot be mapped.
     auto open(const path& file, std::string& err) -> bool;
 
     /// Maps `region` and takes over its descriptor, closed on destruction (also after a failure);
@@ -53,6 +83,10 @@ public:
 
 private:
     auto map(const path& file, std::string& err) -> bool;
+    /// Takes the bytes add_memory_file named for `file`; false when it named none.
+    auto map_memory_file(const path& file) -> bool;
+    /// Unmaps the file and closes it.
+    void unmap();
 
     /// The platform's file handle (a HANDLE on Windows, a descriptor elsewhere).
     std::intptr_t file_{-1};
@@ -63,6 +97,8 @@ private:
     /// The bytes between the start of the mapping and data_: a region is mapped from the page boundary
     /// below its offset.
     std::uint64_t page_offset_{};
+    /// The bytes are a memory file's: its owner frees them.
+    bool is_memory_file_{};
 };
 
 } // namespace fs

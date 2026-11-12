@@ -145,6 +145,10 @@ protected:
      *        again when the window lost its surface during the start (Android).
      */
     auto start_backend(bgfx::Init& init_data) -> bool;
+    /// Starts the backend on a graphics API the build ships shaders for (boot_config::shipped_renderers): the
+    /// first of get_renderer_candidates that starts, never another one, since the build could not draw with it.
+    /// A build that ships every API starts as start_backend does.
+    auto start_shipped_backend(bgfx::Init& init_data) -> bool;
 
     void on_os_event(rtti::context& ctx, os::event& e);
     /// Follows the fingers on the screen: the fourth one down switches the statistics overlay, once per touch.

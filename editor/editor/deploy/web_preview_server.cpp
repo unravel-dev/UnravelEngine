@@ -7,6 +7,7 @@
 
 #include <deploy/web.h>
 #include <editor/system/local_http.h>
+#include <filesystem/shared_file.h>
 #include <logging/logging.h>
 #include <string_utils/utils.h>
 
@@ -14,6 +15,7 @@
 #include <array>
 #include <cctype>
 #include <cstdlib>
+#include <memory>
 #include <string>
 
 namespace unravel::deployment
@@ -27,6 +29,8 @@ constexpr int PREFERRED_PORT = 8742;
 constexpr const char* INDEX_FILE = "index.html";
 constexpr const char* DEFAULT_CONTENT_TYPE = "application/octet-stream";
 constexpr const char* QUALITY_PARAMETER = "q=";
+/// How much of a file is read and sent at a time.
+constexpr std::size_t SEND_BLOCK_SIZE = 64 * 1024;
 
 struct content_type_entry
 {
@@ -154,7 +158,35 @@ auto is_current_copy(const fs::path& compressed, const fs::path& file) -> bool
     return ec || copy_time >= file_time;
 }
 
-/// Sends @p file as it is, or its current compressed copy the browser accepts; the server streams it from the disk.
+/**
+ * @brief Makes @p file the response's body, streamed from the disk as @p content_type. The file stays open while it
+ * is sent, in a way that lets a deploy replace or remove it meanwhile: a browser still downloading a build's file
+ * does not fail the next deploy into the site. False when the file cannot be opened.
+ */
+auto send_file(const fs::path& file, const char* content_type, httplib::Response& response) -> bool
+{
+    auto source = std::make_shared<fs::shared_read_file>();
+    if(!source->open(file))
+    {
+        return false;
+    }
+    if(source->size() == 0)
+    {
+        response.set_content(std::string(), content_type);
+        return true;
+    }
+    response.set_content_provider(static_cast<std::size_t>(source->size()),
+                                  content_type,
+                                  [source](std::size_t offset, std::size_t length, httplib::DataSink& sink)
+                                  {
+                                      std::array<char, SEND_BLOCK_SIZE> block;
+                                      const auto read = source->read(offset, block.data(), std::min(length, block.size()));
+                                      return read > 0 && sink.write(block.data(), read);
+                                  });
+    return true;
+}
+
+/// Sends @p file as it is, or its current compressed copy the browser accepts.
 void serve_file(const fs::path& file, const httplib::Request& request, httplib::Response& response)
 {
     response.set_header("Cache-Control", "no-cache");
@@ -163,19 +195,17 @@ void serve_file(const fs::path& file, const httplib::Request& request, httplib::
     {
         auto compressed = file;
         compressed += variant.extension;
-        if(accepts_encoding(request, variant.encoding) && is_file(compressed) && is_current_copy(compressed, file))
+        if(accepts_encoding(request, variant.encoding) && is_file(compressed) && is_current_copy(compressed, file) &&
+           send_file(compressed, get_content_type(file), response))
         {
             response.set_header("Content-Encoding", variant.encoding);
-            response.set_file_content(fs::to_utf8_string(compressed), get_content_type(file));
             return;
         }
     }
-    if(!is_file(file))
+    if(!is_file(file) || !send_file(file, get_content_type(file), response))
     {
         response.status = httplib::StatusCode::NotFound_404;
-        return;
     }
-    response.set_file_content(fs::to_utf8_string(file), get_content_type(file));
 }
 } // namespace
 

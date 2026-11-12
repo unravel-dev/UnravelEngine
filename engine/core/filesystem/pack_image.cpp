@@ -66,6 +66,7 @@ auto parse_pack(pack_image& image, std::string& err) -> bool
     image.write_settings = footer.write_settings;
     image.toc_hash = footer.toc_hash;
     image.base_hash = footer.base_hash;
+    image.toc_offset = footer.toc_offset;
     return parse_table_of_contents(image, footer, err);
 }
 } // namespace

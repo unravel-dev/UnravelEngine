@@ -1,5 +1,6 @@
 #pragma once
 
+#include "assembly_references.h"
 #include "deploy_settings.h"
 
 #include <filesystem/filesystem.h>
@@ -7,6 +8,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -45,6 +47,8 @@ struct android_template
     auto get_sdl_java_dir() const -> fs::path;
     /// The .NET runtime: native/ and lib/<framework>/.
     auto get_dotnet_dir() const -> fs::path;
+    /// The runtime's managed framework (lib/<framework>): the assemblies a package carries beside the game's data.
+    auto get_framework_dir() const -> fs::path;
 };
 
 /// A template found, or why there is none.
@@ -122,20 +126,32 @@ struct android_permission_entry
 /// The named permissions of android_permissions, in the order the settings list them.
 auto get_android_permission_entries() -> const std::vector<android_permission_entry>&;
 
-/// The manifest name of a permission the settings name freely: as written when it holds a '.', with
-/// "android.permission." in front otherwise.
-auto get_android_permission_name(const std::string& name) -> std::string;
-
 /// Why `name` is no valid permission name, as a sentence; empty when it is one. Valid: parts separated
 /// by '.', each starting with a letter or '_' and holding only letters, digits and '_'.
 auto check_android_permission_name(const std::string& name) -> std::string;
 
-/// The manifest names `permissions` asks for: the named ones, then the others, each once.
+/// The manifest names `permissions` asks for: the named ones, then the others (get_android_permission_name), each
+/// once.
 auto get_android_permission_names(const android_permissions& permissions) -> std::vector<std::string>;
 
 /// A manifest that holds only the uses-permission elements of `names`, which Gradle merges over the
 /// player's manifest.
 auto make_android_permissions_manifest(const std::vector<std::string>& names) -> std::string;
+
+/// The manifest in a profile's additions folder (android_deploy_settings::additions), which the build merges into
+/// the game's: elements of the application, features, queries, whatever a library asks a game to declare. The
+/// folder's other parts are read by the Gradle project (game/android/app/build.gradle.kts): java/ (Java sources),
+/// res/ (resources), libs/ (.jar and .aar libraries), jniLibs/<abi>/ (native libraries) and dependencies.txt
+/// (libraries Gradle downloads, one Maven coordinate per line).
+constexpr const char* ANDROID_ADDITIONS_MANIFEST = "AndroidManifest.xml";
+
+/**
+ * @brief The manifest Gradle merges over the player's: the permissions `names` inside the project's own manifest
+ * `additions_manifest`, right after its opening manifest tag, so all the project wrote stays as it wrote it. With
+ * an empty `additions_manifest` (the project has none) it is make_android_permissions_manifest.
+ * @return Empty when `additions_manifest` has no manifest element to take the permissions.
+ */
+auto make_android_build_manifest(const std::string& additions_manifest, const std::vector<std::string>& names) -> std::string;
 
 /// A device adb lists.
 struct android_device
@@ -224,6 +240,52 @@ struct logcat_line
 /// markers).
 auto parse_logcat_line(const std::string& text, logcat_line& line) -> bool;
 
+/// The id of the game's process in what `pidof` printed through adb, which ended with `exit_code`: the first id.
+/// Empty when the game does not run, and when adb failed and printed an error where the id would be.
+auto parse_android_process_id(const std::string& output, int exit_code) -> std::string;
+
+/// A line of a crash report in a device's log: as the log printed it, and its message alone.
+struct android_crash_line
+{
+    std::string text;
+    std::string message;
+};
+
+/**
+ * @brief Picks one process's crash reports out of a device log's crash report lines, which report every process
+ * that crashes on the device.
+ *
+ * A report starts with a line of asterisks and names its process a few lines later ("pid: 123, tid: ..."). Until
+ * then its lines are held; they are released when the process is this one, and dropped when it is another.
+ */
+class android_crash_report_filter
+{
+public:
+    explicit android_crash_report_filter(std::string process);
+
+    /// Takes the next crash report line and returns the lines it releases, in order: none while the report's
+    /// process is unknown or another one, the report so far when it names this process, then each line of it.
+    auto add(android_crash_line line) -> std::vector<android_crash_line>;
+
+private:
+    enum class owner
+    {
+        unknown,
+        this_process,
+        other_process,
+    };
+
+    std::string process_;
+    owner owner_{owner::unknown};
+    std::vector<android_crash_line> held_;
+};
+
+/// The largest version code Google Play takes.
+constexpr std::uint32_t MAX_ANDROID_VERSION_CODE = 2100000000;
+
+/// Why `version_code` cannot name an Android release, as a sentence; empty when it can.
+auto check_android_version_code(std::uint32_t version_code) -> std::string;
+
 /// The prefixes of the device lines in the editor's log: the game's own lines, and the device system's
 /// lines of the game's process, which the Console hides until asked to show them.
 constexpr const char* DEVICE_LOG_PREFIX = "[Device] ";
@@ -249,12 +311,29 @@ struct android_toolchain_search
 {
     /// ANDROID_HOME, ANDROID_SDK_ROOT, then the folder Android Studio installs the SDK to.
     std::vector<fs::path> sdk_candidates;
-    /// JAVA_HOME, then the JDK bundled with Android Studio.
+    /// JAVA_HOME, then the JDK bundled with Android Studio, then the JDKs a Linux distribution installed.
     std::vector<fs::path> jdk_candidates;
 };
 
 /// The places of this machine: environment variables first, then Android Studio's default folders.
 auto get_android_toolchain_search() -> android_toolchain_search;
+
+/// The oldest Java that builds a package: what the template's Gradle and Android Gradle plugin run on.
+constexpr int MIN_ANDROID_JAVA_VERSION = 17;
+
+/// The major version in what `java -version` prints ("openjdk version \"21.0.3\" 2024-04-16" is 21, and
+/// "java version \"1.8.0_281\"" is 8); 0 when it names none.
+auto parse_java_version(const std::string& report) -> int;
+
+/// The major version a JDK's release file gives (its JAVA_VERSION line); 0 for text without one.
+auto parse_jdk_release_version(const std::string& release) -> int;
+
+/// The major version of the java executable at a path; 0 when it does not run or names none.
+using java_version_probe = std::function<int(const fs::path& java)>;
+
+/// The version of the JDK `java` belongs to, read from the JDK's release file, or asked of `java` itself when the
+/// JDK has none: the probe a deploy searches the tools with.
+auto get_java_version(const fs::path& java) -> int;
 
 /// The Android tools a deploy runs.
 struct android_toolchain
@@ -273,8 +352,24 @@ struct android_toolchain
     }
 };
 
-/// The first SDK with platform-tools and the first JDK among the candidates.
-auto find_android_toolchain(const android_toolchain_search& search) -> android_toolchain;
+/**
+ * @brief The first SDK with platform-tools among the candidates, and the first JDK whose Java is at least
+ * MIN_ANDROID_JAVA_VERSION: an older one in JAVA_HOME gives way to the one Android Studio bundles. When every
+ * Java found is older, the error names the first and its version, since Gradle would fail on it only after the
+ * whole deploy cooked.
+ */
+auto find_android_toolchain(const android_toolchain_search& search, const java_version_probe& get_version) -> android_toolchain;
+
+/// The name of the Gradle distribution a wrapper's properties ask for, "gradle-9.8.1-bin" for a distributionUrl
+/// that ends in gradle-9.8.1-bin.zip; empty when the text names none.
+auto get_gradle_distribution_name(const std::string& wrapper_properties) -> std::string;
+
+/// Whether Gradle's folder `gradle_home` (GRADLE_USER_HOME, else .gradle in the user's folder) holds the
+/// distribution `name`: without it the first build downloads Gradle and everything it builds with.
+auto has_gradle_distribution(const fs::path& gradle_home, const std::string& name) -> bool;
+
+/// Gradle's folder on this computer.
+auto get_gradle_home() -> fs::path;
 
 /// What a deploy packages and how.
 struct android_package_params
@@ -296,8 +391,15 @@ struct android_package_params
     fs::path icon_dir;
     /// The manifest names of the permissions the game asks for.
     std::vector<std::string> permissions;
-    /// The file the permissions manifest (make_android_permissions_manifest) is written to, which Gradle merges.
+    /// The file the build's manifest (make_android_build_manifest) is written to, which Gradle merges.
     fs::path permissions_manifest;
+    /// The project's additions folder, whose Java sources, resources and libraries the package takes; empty: none.
+    fs::path additions;
+    /// How the package trims the runtime's managed framework (assembly_references.h).
+    framework_trim trim;
+    /// The file the names of the framework files the package leaves out are written to, one a line, which Gradle
+    /// reads; empty of names when the framework ships whole.
+    fs::path trimmed_framework_list;
     /// A release build, signed with `keystore`; otherwise a debug build, signed with the SDK's debug keystore.
     bool is_release{};
     fs::path keystore;

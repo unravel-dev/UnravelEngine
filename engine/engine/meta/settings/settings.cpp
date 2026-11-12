@@ -1459,12 +1459,31 @@ SAVE_INLINE(settings::build_settings)
 {
     try_save(ar, ser20::make_nvp("profile", obj.profile));
     try_save(ar, ser20::make_nvp("platform", obj.platform));
+    // By name, as --renderer takes them: the file stays readable, and a build's list means the same to every
+    // engine version.
+    std::vector<std::string> renderers;
+    for(const auto renderer : obj.renderers)
+    {
+        renderers.emplace_back(preferred_renderer_to_string(renderer));
+    }
+    try_save(ar, ser20::make_nvp("renderers", renderers));
 }
 
 LOAD_INLINE(settings::build_settings)
 {
     try_load(ar, ser20::make_nvp("profile", obj.profile));
     try_load(ar, ser20::make_nvp("platform", obj.platform));
+    std::vector<std::string> renderers;
+    try_load(ar, ser20::make_nvp("renderers", renderers));
+    obj.renderers.clear();
+    for(const auto& name : renderers)
+    {
+        const auto renderer = preferred_renderer_from_string(name);
+        if(renderer != preferred_renderer::auto_detect)
+        {
+            obj.renderers.push_back(renderer);
+        }
+    }
 }
 
 REFLECT_INLINE(settings::resolution_settings::resolution)
@@ -1735,19 +1754,21 @@ auto load_from_file_bin(const std::string& absolute_path, settings& obj) -> bool
 /**
  * @brief Load-only view of the cold-boot sections of a settings document.
  *
- * Deliberately a separate type from @ref settings: loading it visits the "graphics" and
- * "physics" nodes and nothing else, so it can never reach an asset handle.
+ * Deliberately a separate type from @ref settings: loading it visits the "graphics", "physics" and
+ * "build" nodes and nothing else, so it can never reach an asset handle.
  */
 struct settings_boot_sections
 {
     settings::graphics_settings graphics{};
     settings::physics_settings physics{};
+    settings::build_settings build{};
 };
 
 LOAD_INLINE(settings_boot_sections)
 {
     try_load(ar, ser20::make_nvp("graphics", obj.graphics));
     try_load(ar, ser20::make_nvp("physics", obj.physics));
+    try_load(ar, ser20::make_nvp("build", obj.build));
 }
 
 auto load_boot_sections_from_file(const std::string& absolute_path, settings& obj) -> bool
@@ -1765,6 +1786,7 @@ auto load_boot_sections_from_file(const std::string& absolute_path, settings& ob
     }
     obj.graphics = sections.graphics;
     obj.physics = sections.physics;
+    obj.build = sections.build;
     return true;
 }
 

@@ -132,6 +132,8 @@ private:
     auto draw_android_device_picker(rtti::context& ctx) -> bool;
     /// Run Last Build, Follow Log, Clear Data and Uninstall for the game on the chosen device.
     void draw_android_device_actions(rtti::context& ctx);
+    /// How much of this computer's disk the profile's Android build folder takes, with a button that clears it.
+    void draw_android_build_folder(rtti::context& ctx);
     /// The game on the device was signed with another key: Uninstall and Install, after a confirmation.
     void draw_install_conflict();
     void draw_status(rtti::context& ctx);

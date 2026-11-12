@@ -126,6 +126,13 @@ auto from_utf8_string(const std::string& text) -> path;
  */
 auto make_extended_length_path(const path& _path) -> path;
 
+/**
+ * @brief The bytes of every file under `folder`, however deep: walked through make_extended_length_path, so the
+ * files of a tree whose paths pass 260 characters count too. `ec` holds the first failure; what could be read is
+ * still summed.
+ */
+auto get_folder_size(const path& folder, error_code& ec) -> std::uintmax_t;
+
 //-----------------------------------------------------------------------------
 //  Name : has_known_protocol()
 /// <summary>

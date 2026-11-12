@@ -1,6 +1,7 @@
 #include "web.h"
 #include "deploy_settings.h"
 #include "files.h"
+#include "folders.h"
 
 #include <engine/assets/impl/asset_extensions.h>
 #include <filesystem/file_fingerprint.h>
@@ -11,6 +12,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <set>
 #include <stdexcept>
 #include <vector>
 
@@ -26,6 +28,8 @@ constexpr const char* PAGE_FILE = "index.html";
 constexpr const char* RUNTIME_LOADER_FILE = "_framework/dotnet.js";
 /// The .NET runtime's folder in the site.
 constexpr const char* RUNTIME_FOLDER = "_framework";
+/// The letters of a page build's name: enough of a fingerprint to tell every build's page code from another's.
+constexpr std::size_t PAGE_BUILD_LENGTH = 16;
 /// The precompressed copies a web server may send instead of a file: not downloaded besides it.
 constexpr std::array<const char*, 2> PRECOMPRESSED_EXTENSIONS = {".br", ".gz"};
 constexpr player_wording WEB_PLAYER_WORDING{"The browser player beside this editor", "Rebuild the editor."};
@@ -41,24 +45,59 @@ constexpr unsigned char URL_LOW_NIBBLE_MASK = 0xF;
 constexpr const char* QUICK_TUNNEL_DOMAIN = ".trycloudflare.com";
 constexpr const char* HTTPS_SCHEME = "https://";
 
-/// A file of a web build's data, as the page fetches it.
+auto is_precompressed(const fs::path& file) -> bool
+{
+    const auto extension = file.extension().string();
+    return std::any_of(PRECOMPRESSED_EXTENSIONS.begin(),
+                       PRECOMPRESSED_EXTENSIONS.end(),
+                       [&extension](const char* precompressed)
+                       {
+                           return extension == precompressed;
+                       });
+}
+
+/// The name of the file a server sends `file` for: its own, or for a precompressed copy the file's it is a copy of.
+auto get_served_name(const fs::path& file) -> std::string
+{
+    return fs::to_utf8_string(is_precompressed(file) ? file.stem() : file.filename());
+}
+
+/// The first file of the runtime folder `source` that `site_runtime` lacks, by name; precompressed copies and the
+/// files `trimmed` names do not count. Empty when it has them all.
+auto find_missing_runtime_file(const fs::path& source, const fs::path& site_runtime, const std::set<std::string>& trimmed) -> std::string
+{
+    fs::error_code ec;
+    for(fs::directory_iterator it(source, ec), end; !ec && it != end; it.increment(ec))
+    {
+        const auto name = fs::to_utf8_string(it->path().filename());
+        const bool is_downloaded = it->is_regular_file(ec) && !is_precompressed(it->path()) && !trimmed.contains(name);
+        if(is_downloaded && !is_present(site_runtime / it->path().filename()))
+        {
+            return name;
+        }
+    }
+    return {};
+}
+
+/// A file of a web build's data, where the deploy's data steps wrote it.
 struct data_file
 {
     fs::path file;
-    /// The page's path of the file: '/' separated, relative to the site, UTF-8.
-    std::string site_path;
+    /// The file's path in the player's file system: '/' separated, relative to the application's folder, UTF-8.
+    std::string path;
 };
 
-auto list_data_files(const fs::path& site) -> std::vector<data_file>
+/// The files under `data_root`/data, in path order.
+auto list_data_files(const fs::path& data_root) -> std::vector<data_file>
 {
     std::vector<data_file> files;
-    const auto data = site / DATA_FOLDER;
+    const auto data = data_root / DATA_FOLDER;
     fs::error_code ec;
     for(fs::recursive_directory_iterator it(data, ec), end; !ec && it != end; it.increment(ec))
     {
         if(it->is_regular_file(ec))
         {
-            files.push_back({it->path(), fs::to_utf8_string(it->path().lexically_relative(site))});
+            files.push_back({it->path(), fs::to_utf8_string(it->path().lexically_relative(data_root))});
         }
     }
     if(ec)
@@ -69,8 +108,73 @@ auto list_data_files(const fs::path& site) -> std::vector<data_file>
               files.end(),
               [](const data_file& lhs, const data_file& rhs)
               {
-                  return lhs.site_path < rhs.site_path;
+                  return lhs.path < rhs.path;
               });
+    return files;
+}
+
+/// Whether the engine maps `file`: a pack.
+auto is_mapped_file(const fs::path& file) -> bool
+{
+    return file.extension() == fs::path(ex::get_pack_file_name()).extension();
+}
+
+/// Cuts every file under `data_root`/data into chunks in `chunks_folder`; the files in path order.
+auto write_data_chunks(const fs::path& data_root, const fs::path& chunks_folder) -> std::vector<web_data_file>
+{
+    std::vector<web_data_file> files;
+    for(const auto& data : list_data_files(data_root))
+    {
+        web_data_file file;
+        file.path = data.path;
+        file.chunks = write_web_chunks(data.file, chunks_folder);
+        file.is_mapped = is_mapped_file(data.file);
+        for(const auto& chunk : file.chunks)
+        {
+            file.size += chunk.size;
+        }
+        files.push_back(std::move(file));
+    }
+    return files;
+}
+
+/// Removes the chunks in `chunks_folder` that none of `files` has: what earlier builds were cut into.
+void remove_stale_chunks(const fs::path& chunks_folder, const std::vector<web_data_file>& files)
+{
+    std::set<std::string> listed;
+    for(const auto& file : files)
+    {
+        for(const auto& chunk : file.chunks)
+        {
+            listed.insert(chunk.name);
+        }
+    }
+    prune_folder_or_throw(chunks_folder,
+                          [&listed](const fs::path& name)
+                          {
+                              return listed.contains(name.generic_string());
+                          });
+}
+
+/// The page's own files in `site`, and the runtime's loader, in name order: what get_web_page_build fingerprints.
+auto list_page_code_files(const fs::path& site) -> std::vector<fs::path>
+{
+    std::vector<fs::path> files;
+    fs::error_code ec;
+    for(fs::directory_iterator it(site, ec), end; !ec && it != end; it.increment(ec))
+    {
+        const auto name = it->path().filename();
+        if(it->is_regular_file(ec) && name != WEB_DATA_MANIFEST_NAME && name != BUILD_STAMP_NAME && !is_precompressed(it->path()))
+        {
+            files.push_back(it->path());
+        }
+    }
+    if(ec)
+    {
+        throw std::runtime_error(fmt::format("Listing {} failed: {}", site.generic_string(), ec.message()));
+    }
+    std::sort(files.begin(), files.end());
+    files.push_back(site / RUNTIME_LOADER_FILE);
     return files;
 }
 
@@ -93,17 +197,6 @@ auto read_size(const fs::path& file) -> std::uintmax_t
         throw std::runtime_error(fmt::format("{} could not be read for the web build's data manifest.", file.generic_string()));
     }
     return size;
-}
-
-auto is_precompressed(const fs::path& file) -> bool
-{
-    const auto extension = file.extension().string();
-    return std::any_of(PRECOMPRESSED_EXTENSIONS.begin(),
-                       PRECOMPRESSED_EXTENSIONS.end(),
-                       [&extension](const char* precompressed)
-                       {
-                           return extension == precompressed;
-                       });
 }
 
 /// The bytes of the runtime's files in `site`, without their precompressed copies; 0 without a runtime.
@@ -172,6 +265,28 @@ auto make_set_tag_json(const fs::path& file, const web_page_info& page) -> std::
         return ", \"shader_set\": " + string_utils::make_json_string(set);
     }
     return {};
+}
+
+/// A file's chunks as the manifest lists them: [name, size, check] each.
+auto make_chunks_json(const std::vector<web_chunk>& chunks) -> std::string
+{
+    std::string listed;
+    for(const auto& chunk : chunks)
+    {
+        listed += fmt::format("{}[{}, {}, {}]", listed.empty() ? "" : ", ", string_utils::make_json_string(chunk.name), chunk.size, chunk.check);
+    }
+    return "[" + listed + "]";
+}
+
+/// One data file's line of the manifest.
+auto make_file_json(const web_data_file& file, const web_page_info& page) -> std::string
+{
+    return fmt::format("{{\"path\": {}, \"size\": {}{}{}, \"chunks\": {}}}",
+                       string_utils::make_json_string(file.path),
+                       file.size,
+                       file.is_mapped ? ", \"mapped\": true" : "",
+                       make_set_tag_json(fs::from_utf8_string(file.path), page),
+                       make_chunks_json(file.chunks));
 }
 
 auto get_fallback_notice_name(web_fallback_notice notice) -> const char*
@@ -271,38 +386,58 @@ auto get_web_run_graphics(const web_deploy_settings& web) -> std::string
     }
 }
 
-auto make_web_data_manifest(const fs::path& site, const web_page_info& page) -> std::string
+auto make_web_data_manifest(const web_manifest& manifest) -> std::string
 {
+    const auto& page = manifest.page;
     std::string files_json;
-    for(const auto& data : list_data_files(site))
+    for(const auto& file : manifest.files)
     {
-        files_json += fmt::format("{}{{\"path\": {}, \"hash\": {}, \"size\": {}{}}}",
-                                  files_json.empty() ? "\n    " : ",\n    ",
-                                  string_utils::make_json_string(data.site_path),
-                                  string_utils::make_json_string(read_fingerprint(data.file)),
-                                  read_size(data.file),
-                                  make_set_tag_json(data.file, page));
+        files_json += (files_json.empty() ? "\n    " : ",\n    ") + make_file_json(file, page);
     }
-    return fmt::format("{{\n  \"title\": {},\n  \"user_folder\": {},\n  \"runtime_size\": {},\n{}{}{}  \"files\": [{}\n  ]\n}}\n",
+    return fmt::format("{{\n  \"format\": {},\n  \"build\": {},\n  \"title\": {},\n  \"user_folder\": {},\n  \"runtime_size\": {},\n"
+                       "{}{}{}  \"chunks\": {},\n  \"files\": [{}\n  ]\n}}\n",
+                       WEB_MANIFEST_FORMAT,
+                       string_utils::make_json_string(manifest.build),
                        string_utils::make_json_string(page.title),
                        string_utils::make_json_string(page.user_folder),
-                       get_runtime_size(site),
+                       manifest.runtime_size,
                        make_graphics_json(page.graphics),
                        make_sets_json("texture_sets", page.texture_sets),
-                       make_sets_json("shader_sets", page.shader_sets),
+                       make_sets_json("shader_sets", page.shader_sets) + make_sets_json("trimmed", page.trimmed_runtime_files),
+                       string_utils::make_json_string(WEB_CHUNKS_FOLDER),
                        files_json);
 }
 
-void copy_web_player(const web_template& player, const fs::path& site)
+auto get_web_page_build(const fs::path& site) -> std::string
+{
+    std::string text;
+    for(const auto& file : list_page_code_files(site))
+    {
+        text += fs::to_utf8_string(file.filename()) + ":" + read_fingerprint(file) + "\n";
+    }
+    return fs::hash_bytes_fingerprint(text.data(), text.size()).substr(0, PAGE_BUILD_LENGTH);
+}
+
+auto find_web_trimmed_files(const web_template& player, framework_trim trim) -> std::set<std::string>
+{
+    trim.kept.insert(trim.kept.end(), WEB_PLAYER_ASSEMBLIES.begin(), WEB_PLAYER_ASSEMBLIES.end());
+    return find_trimmed_files(player.get_site_dir() / RUNTIME_FOLDER, trim);
+}
+
+void copy_web_player(const web_template& player, const fs::path& site, const std::set<std::string>& trimmed)
 {
     const auto source = player.get_site_dir();
+    const fs::mirror_filter is_shipped = [&trimmed](const fs::path& file)
+    {
+        return !trimmed.contains(get_served_name(file));
+    };
     fs::error_code ec;
     for(fs::directory_iterator it(source, ec), end; !ec && it != end; it.increment(ec))
     {
         const auto destination = site / it->path().filename();
         if(it->is_directory(ec))
         {
-            mirror_or_throw(it->path(), destination);
+            mirror_or_throw(it->path(), destination, is_shipped);
         }
         else
         {
@@ -315,9 +450,67 @@ void copy_web_player(const web_template& player, const fs::path& site)
     }
 }
 
-void write_web_data_manifest(const fs::path& site, const web_page_info& page)
+void remove_precompressed_copies(const fs::path& site, const std::vector<std::string>& names)
 {
-    write_text_or_throw(site / WEB_DATA_MANIFEST_NAME, make_web_data_manifest(site, page));
+    for(const auto& name : names)
+    {
+        for(const auto* extension : PRECOMPRESSED_EXTENSIONS)
+        {
+            auto copy = site / fs::from_utf8_string(name);
+            copy += extension;
+            remove_file_or_throw(copy);
+        }
+    }
+}
+
+auto get_web_player_problem(const web_template& player,
+                            const fs::path& site,
+                            const std::vector<std::string>& replaced,
+                            const std::set<std::string>& trimmed) -> std::string
+{
+    const auto source = player.get_site_dir();
+    for(const auto* name : {PAGE_FILE, RUNTIME_LOADER_FILE})
+    {
+        fs::error_code ec;
+        const bool is_projects_own = std::find(replaced.begin(), replaced.end(), name) != replaced.end();
+        if(!is_projects_own && !fs::have_same_content(source / name, site / name, ec))
+        {
+            return fmt::format("The browser player in {} is not this editor's: its {} differs. Deploy with the "
+                               "dependencies, which copies the player.",
+                               site.generic_string(),
+                               name);
+        }
+    }
+    const auto missing = find_missing_runtime_file(source / RUNTIME_FOLDER, site / RUNTIME_FOLDER, trimmed);
+    if(!missing.empty())
+    {
+        return fmt::format("The browser player in {} lacks {}, which this build's page downloads. Deploy with the "
+                           "dependencies, which copies the player.",
+                           site.generic_string(),
+                           missing);
+    }
+    return {};
+}
+
+void remove_legacy_web_data(const fs::path& site)
+{
+    prune_folder_or_throw(site,
+                          [](const fs::path& name)
+                          {
+                              return name != DATA_FOLDER;
+                          });
+}
+
+void write_web_data(const fs::path& data_root, const fs::path& site, const web_page_info& page)
+{
+    const auto chunks_folder = site / WEB_CHUNKS_FOLDER;
+    web_manifest manifest;
+    manifest.page = page;
+    manifest.files = write_data_chunks(data_root, chunks_folder);
+    remove_stale_chunks(chunks_folder, manifest.files);
+    manifest.build = get_web_page_build(site);
+    manifest.runtime_size = get_runtime_size(site);
+    write_text_or_throw(site / WEB_DATA_MANIFEST_NAME, make_web_data_manifest(manifest));
 }
 
 auto encode_url_part(const std::string& text) -> std::string

@@ -1,6 +1,8 @@
 #include "deploy_steam.h"
+#include "deploy_pipeline.h"
 #include "deploy_preflight.h"
 
+#include <deploy/cancellation.h>
 #include <deploy/files.h>
 #include <deploy/folders.h>
 #include <deploy/steam.h>
@@ -9,6 +11,8 @@
 #include <logging/logging.h>
 #include <string_utils/utils.h>
 #include <subprocess/subprocess.hpp>
+
+#include <hpp/finally.hpp>
 
 #include <functional>
 #include <memory>
@@ -81,21 +85,25 @@ void run_upload(const steam_upload_plan& plan)
                 plan.build.depot_id,
                 plan.account);
     const auto arguments = make_steamcmd_arguments(plan.steamcmd, plan.account, plan.script);
-    const auto result = subprocess::call(arguments,
-                                         {},
-                                         [](const std::string& line)
-                                         {
-                                             if(!line.empty())
-                                             {
-                                                 APPLOG_TRACE("[steamcmd] {}", line);
-                                             }
-                                         });
+    const auto result = subprocess::call(
+        arguments,
+        {},
+        [](const std::string& line)
+        {
+            if(!line.empty())
+            {
+                APPLOG_TRACE("[steamcmd] {}", line);
+            }
+        },
+        &is_deploy_cancelled);
     if(!result.started)
     {
         throw std::runtime_error(fmt::format("steamcmd did not start ({}). Install it, then set its path in Editor "
                                              "Settings > External Tools, or put it on PATH.",
                                              arguments.front()));
     }
+    // Steam commits a build when its upload finished: an ended steamcmd leaves none.
+    throw_if_deploy_cancelled();
     // steamcmd's exit code does not say whether the build was committed; its report of the build does.
     const auto build_id = find_steam_build_id(result.out_output);
     if(build_id.empty())
@@ -151,10 +159,18 @@ auto upload_to_steam(rtti::context& ctx, const deploy_settings& params) -> deplo
     plan->steamcmd = ctx.get_cached<project_manager>().get_editor_settings().external_tools.steamcmd_executable;
     plan->script = folder / ("app_build_" + std::to_string(steam.app_id) + ".vdf");
     auto& th = ctx.get_cached<threader>();
+    reset_deploy_cancel();
+    // steamcmd reads the profile's folder until the upload ended: held as a running deploy, the project neither
+    // closes nor changes under it, and Cancel reaches it.
     auto job = th.pool
                    ->schedule(STEP_STEAM_UPLOAD,
-                              [plan]()
+                              [plan, hold = std::make_shared<running_deploy_hold>()]()
                               {
+                                  const auto release = hpp::finally(
+                                      [&hold]()
+                                      {
+                                          hold->release();
+                                      });
                                   run_upload(*plan);
                               })
                    .share();

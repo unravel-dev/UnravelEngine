@@ -127,6 +127,21 @@
       font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--loader-faint);
     }
 
+    /* Over the canvas when the running game stopped: it would keep the last frame as if the game had frozen. */
+    .stopped {
+      position: fixed; inset: 0; z-index: 3;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 24px; box-sizing: border-box; text-align: center;
+      background: rgba(10, 12, 16, 0.86);
+      color: var(--loader-text); font-family: var(--loader-font);
+    }
+    .stopped[hidden] { display: none; }
+    .stopped-title { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
+    .stopped-text {
+      margin: 0 0 20px; max-width: 440px;
+      font-size: 13px; line-height: 1.5; color: var(--loader-muted); user-select: text;
+    }
+
     /* Above the canvas once the game runs. */
     .notice {
       position: fixed; left: 50%; top: max(16px, env(safe-area-inset-top)); z-index: 1;
@@ -155,7 +170,25 @@
       .loader-sheen { display: none; }
     }
   </style>
-  <script type="module" src="./main.js"></script>
+  <script type="module">
+    // The build's list of files is always asked of the host, and names the build. The page's code is loaded under
+    // that name, so the code a browser or a host kept of an older build never runs beside this build's files.
+    try {
+      const answer = await fetch('data_manifest.json', { cache: 'no-cache' });
+      if (!answer.ok) {
+        throw new Error(`data_manifest.json could not be downloaded (${answer.status}).`);
+      }
+      const manifest = await answer.json();
+      const { run } = await import(`./main.js?build=${encodeURIComponent(manifest.build ?? '')}`);
+      await run(manifest);
+    } catch (e) {
+      document.getElementById('loader').classList.add('has-error');
+      document.getElementById('loader-error-text').textContent = e.message;
+      document.getElementById('loader-error').hidden = false;
+      document.getElementById('loader-retry').addEventListener('click', () => location.reload());
+      console.error(e);
+    }
+  </script>
 </head>
 <body>
   <canvas id="canvas"></canvas>
@@ -186,6 +219,11 @@
       </div>
     </div>
     <p class="loader-credit">Made with Unravel Engine</p>
+  </div>
+  <div id="stopped" class="stopped" role="alert" hidden>
+    <p id="stopped-title" class="stopped-title"></p>
+    <p id="stopped-text" class="stopped-text"></p>
+    <div><button id="stopped-reload" class="loader-button" type="button">Reload</button></div>
   </div>
 </body>
 </html>

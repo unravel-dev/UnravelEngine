@@ -6,6 +6,7 @@
 
 #include <engine/assets/impl/asset_extensions.h>
 #include <hpp/string_view.hpp>
+#include <logging/logging.h>
 #include <string_utils/utils.h>
 
 #include <algorithm>
@@ -26,6 +27,7 @@ constexpr const char* SCRIPT_BUILD_FOLDER = "temp";
 constexpr const char* STAMP_STATE_KEY = "state";
 constexpr const char* STAMP_PROFILE_KEY = "profile";
 constexpr const char* STAMP_ENGINE_VERSION_KEY = "engine_version";
+constexpr const char* STAMP_PLATFORM_KEY = "platform";
 constexpr const char* STAMP_FINISHED = "finished";
 constexpr const char* STAMP_UNFINISHED = "unfinished";
 
@@ -39,13 +41,38 @@ auto write_build_stamp(const fs::path& folder, const build_stamp& stamp) -> bool
 {
     const auto text = make_stamp_line(STAMP_STATE_KEY, stamp.is_finished ? STAMP_FINISHED : STAMP_UNFINISHED) +
                       make_stamp_line(STAMP_PROFILE_KEY, stamp.profile) +
-                      make_stamp_line(STAMP_ENGINE_VERSION_KEY, stamp.engine_version);
+                      make_stamp_line(STAMP_ENGINE_VERSION_KEY, stamp.engine_version) +
+                      make_stamp_line(STAMP_PLATFORM_KEY, stamp.platform);
     return write_file(folder / BUILD_STAMP_NAME, text.data(), text.size());
+}
+
+auto read_build_stamp(const fs::path& folder) -> build_stamp
+{
+    auto values = read_stamp(folder / BUILD_STAMP_NAME);
+    build_stamp stamp;
+    stamp.profile = values[STAMP_PROFILE_KEY];
+    stamp.engine_version = values[STAMP_ENGINE_VERSION_KEY];
+    stamp.is_finished = values[STAMP_STATE_KEY] == STAMP_FINISHED;
+    stamp.platform = values[STAMP_PLATFORM_KEY];
+    return stamp;
 }
 
 auto is_finished_build(const fs::path& folder) -> bool
 {
-    return read_stamp(folder / BUILD_STAMP_NAME)[STAMP_STATE_KEY] == STAMP_FINISHED;
+    return read_build_stamp(folder).is_finished;
+}
+
+auto get_other_platform_problem(const fs::path& folder, deploy_platform platform) -> std::string
+{
+    const auto built_for = read_build_stamp(folder).platform;
+    if(built_for.empty() || built_for == get_platform_name(platform))
+    {
+        return {};
+    }
+    return fmt::format("The {} folder in the deploy folder holds a build for {}, whose files would ship with this one. "
+                       "Empty it, or choose another deploy folder.",
+                       folder.filename().generic_string(),
+                       built_for);
 }
 
 auto is_previous_deploy(const fs::path& folder) -> bool
@@ -134,6 +161,18 @@ auto get_managed_project_folder(const fs::path& path, const fs::path& project_ro
 auto is_same_folder_name(const std::string& lhs, const std::string& rhs) -> bool
 {
     return fs::make_path_key(lhs) == fs::make_path_key(rhs);
+}
+
+auto get_executable_name_problem(const fs::path& executable) -> std::string
+{
+    const auto name = executable.filename().generic_string();
+    if(!is_same_folder_name(name, DATA_FOLDER))
+    {
+        return {};
+    }
+    return fmt::format("The game's executable would be named {}, as the folder its data goes to. Rename the project to "
+                       "deploy it.",
+                       name);
 }
 
 auto read_whole_file(const fs::path& file, std::string& out) -> bool

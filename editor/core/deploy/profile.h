@@ -237,7 +237,16 @@ auto is_overridable_settings_path(hpp::string_view path) -> bool;
 /// all profiles share (each builds into a folder of its own in it).
 auto is_overridable_deploy_path(hpp::string_view path) -> bool;
 
-/// The project settings a profile runs with: the base with the profile's overrides, and its build section.
+/// The graphics APIs of `apis` that `platform` has, in the order a game tries them: Direct3D 12, Direct3D 11,
+/// Metal, Vulkan, OpenGL.
+auto get_desktop_renderers(const desktop_graphics_apis& apis, renderer_platform platform) -> std::vector<preferred_renderer>;
+
+/// Whether `apis` leaves out a graphics API `platform` has: the build then ships only the others, and its game
+/// starts none but them.
+auto is_desktop_graphics_restricted(const desktop_graphics_apis& apis, renderer_platform platform) -> bool;
+
+/// The project settings a profile runs with: the base with the profile's overrides, and its build section, which
+/// names the graphics APIs of a desktop build that ships only some.
 auto resolve_settings(const settings& base, const settings_profile& profile) -> settings;
 /// The deploy settings a profile deploys with: the shared ones with the profile's overrides, and the
 /// profile's own fields. The device fields are left empty.

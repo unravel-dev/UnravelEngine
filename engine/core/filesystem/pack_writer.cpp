@@ -1,5 +1,6 @@
 #include "pack.h"
 #include "pack_image.h"
+#include "shared_file.h"
 
 #include <algorithm>
 #include <fstream>
@@ -371,7 +372,7 @@ auto write_pack(const path& pack_file,
         remove(temp, ec);
         return false;
     }
-    rename(temp, pack_file, ec);
+    rename_over(temp, pack_file, ec);
     if(ec)
     {
         err = "cannot move " + temp.generic_string() + " into place: " + ec.message();

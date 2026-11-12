@@ -32,6 +32,22 @@ auto get_android_content_dir(const std::string& profile) -> fs::path;
 /// profile is renamed or deleted: a later deploy builds it anew. A folder in use is left for a later attempt.
 void remove_android_build_dir(const std::string& profile);
 
+/// How much of this computer's disk a profile's Android build folder takes.
+struct android_build_usage
+{
+    std::uintmax_t bytes{};
+    /// False until the folder was measured.
+    bool is_known{};
+};
+
+/// The size of the build folder of `profile`. It is measured in the background the first time it is asked for and
+/// after every Android build and clear, so the answer is the last measure's, or unknown before the first.
+auto get_android_build_usage(rtti::context& ctx, const std::string& profile) -> android_build_usage;
+
+/// Deletes the build folder of `profile` in the background: the next deploy of the profile builds it anew, which
+/// takes longer than one that finds it. Not while a deploy runs.
+void clear_android_build_dir(rtti::context& ctx, const std::string& profile);
+
 /// The application id made from the profile's product settings: com.<company>.<product>.
 auto get_generated_android_application_id(rtti::context& ctx, const std::string& profile) -> std::string;
 
