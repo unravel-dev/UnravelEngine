@@ -74,6 +74,14 @@ env:
   NINJA_VERSION: '1.13.2'
   # Windows clang (official LLVM build); each Linux target names its clang in the targets below.
   LLVM_VERSION: '21.1.8'
+  # The SHA-256 of each file downloaded for the three versions above, checked before the file is unpacked or
+  # run; they change with the versions. CMake's are in the cmake-<version>-SHA-256.txt of its release; Ninja's and
+  # LLVM's are the digests their GitHub release pages show for the files.
+  CMAKE_LINUX_SHA256: '0dc2e9a6860f06bf10bd8fadc03e35d9eeb4df46e33763a7e480e987758f385c'
+  CMAKE_WINDOWS_SHA256: '0c4baa40f28b3f8225eb3fdf6946c987b4fe901403b4eaf2fbbd9378100aaa0c'
+  NINJA_LINUX_SHA256: '5749cbc4e668273514150a80e387a957f933c6ed3f5f11e03fb30955e2bbead6'
+  NINJA_WINDOWS_SHA256: '07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65'
+  LLVM_WINDOWS_SHA256: '7a5386c26497db1691f320121e5b113364dd0274b98e55f15f4dbc00c0450113'
   # Windows .NET; on Linux install_dotnet.sh picks the SDK.
   DOTNET_VERSION: '10.0.x'
   # The .NET SDK the browser player builds with (game/web/UnravelWebPlayer.csproj): its wasm-tools workload
@@ -101,7 +109,7 @@ jobs:
       players_matrix: ${{ steps.targets.outputs.players_matrix }}
       has_players: ${{ steps.targets.outputs.has_players }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           filter: blob:none
@@ -199,20 +207,23 @@ jobs:
     steps:
       - name: Allow long paths in git
         run: git config --system core.longpaths true
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve.outputs.sha }}
           fetch-depth: 0 # the template's engine version comes from git describe
           submodules: recursive
           persist-credentials: false
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
       - uses: ./.github/actions/windows-build-tools
         with:
           llvm-version: ${{ env.LLVM_VERSION }}
+          llvm-sha256: ${{ env.LLVM_WINDOWS_SHA256 }}
           cmake-version: ${{ env.CMAKE_VERSION }}
+          cmake-sha256: ${{ env.CMAKE_WINDOWS_SHA256 }}
           ninja-version: ${{ env.NINJA_VERSION }}
+          ninja-sha256: ${{ env.NINJA_WINDOWS_SHA256 }}
           android-ndk: ${{ matrix.target == 'android_player' }}
       - uses: ./.github/actions/web-player-dotnet
         if: matrix.target == 'web_player'
@@ -232,7 +243,7 @@ jobs:
         run: |
           call "%RUNNER_TEMP%\build_env.cmd" || exit /b 1
           cmake --build %BUILD_DIR% --target %TARGET% || exit /b 1
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}
           path: ${{ env.BUILD_DIR }}/bin/players/${{ matrix.folder }}
@@ -252,26 +263,29 @@ jobs:
     steps:
       - name: Allow long paths in git
         run: git config --system core.longpaths true
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve.outputs.sha }}
           fetch-depth: 0 # the package version comes from git describe
           submodules: recursive
           persist-credentials: false
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
       - uses: ./.github/actions/windows-build-tools
         with:
           llvm-version: ${{ env.LLVM_VERSION }}
+          llvm-sha256: ${{ env.LLVM_WINDOWS_SHA256 }}
           cmake-version: ${{ env.CMAKE_VERSION }}
+          cmake-sha256: ${{ env.CMAKE_WINDOWS_SHA256 }}
           ninja-version: ${{ env.NINJA_VERSION }}
+          ninja-sha256: ${{ env.NINJA_WINDOWS_SHA256 }}
           android-ndk: ${{ !inputs.share_android_player }}
       - uses: ./.github/actions/web-player-dotnet
         if: ${{ !inputs.share_web_player }}
         with:
           sdk-version: ${{ env.WEB_DOTNET_SDK_VERSION }}
-      # The presets use single-configuration Ninja without a build type, so Release is set here. A player built
+      # Release is named here, as the build folder is, so a package does not follow the preset's own. A player built
       # here is ON, which fails the configure rather than package an editor that cannot deploy to that platform;
       # a shared one is OFF and comes from the players job.
       - name: Configure
@@ -286,12 +300,12 @@ jobs:
         run: |
           call "%RUNNER_TEMP%\build_env.cmd" || exit /b 1
           cmake --build %BUILD_DIR% --parallel %BUILD_JOBS% || exit /b 1
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: inputs.share_android_player
         with:
           name: android-player
           path: ${{ env.BUILD_DIR }}/bin/players/android-arm64
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: inputs.share_web_player
         with:
           name: web-player
@@ -300,7 +314,13 @@ jobs:
         run: |
           call "%RUNNER_TEMP%\build_env.cmd" || exit /b 1
           cmake --build %BUILD_DIR% --target package || exit /b 1
-      - uses: actions/upload-artifact@v7
+      # The job fails here, before the package can reach the release, when the package lacks what the editor or a
+      # deploy needs, or its players are of another engine version than its editor (cmake/check_package.cmake).
+      - name: Check the package
+        run: |
+          call "%RUNNER_TEMP%\build_env.cmd" || exit /b 1
+          cmake "-DPACKAGE_ARCHIVE=%BUILD_DIR%/UnravelEngine-*.zip" -DPLATFORM=windows "-DWORK_DIR=%RUNNER_TEMP%\package_check" -P cmake/check_package.cmake || exit /b 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package-windows
           path: ${{ env.BUILD_DIR }}/UnravelEngine-*.zip
@@ -394,12 +414,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           bash "${RUNNER_TEMP}/download_release_asset.sh" Kitware/CMake "v${CMAKE_VERSION}" "cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" /tmp/cmake.tar.gz
+          echo "${CMAKE_LINUX_SHA256}  /tmp/cmake.tar.gz" | sha256sum -c -
           tar -xzf /tmp/cmake.tar.gz --strip-components=1 -C /usr/local
           bash "${RUNNER_TEMP}/download_release_asset.sh" ninja-build/ninja "v${NINJA_VERSION}" ninja-linux.zip /tmp/ninja.zip
+          echo "${NINJA_LINUX_SHA256}  /tmp/ninja.zip" | sha256sum -c -
           unzip -o /tmp/ninja.zip -d /usr/local/bin
           cmake --version
           ninja --version
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve.outputs.sha }}
           fetch-depth: 0 # the package version comes from git describe
@@ -448,7 +470,7 @@ jobs:
             echo "WEB_PYTHON=/opt/python-standalone/bin/python3"
             echo "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
           } >> "$GITHUB_ENV"
-      # The presets use single-configuration Ninja without a build type, so Release is set here. A player built
+      # Release is named here, as the build folder is, so a package does not follow the preset's own. A player built
       # here is ON, which fails the configure rather than package an editor that cannot deploy to that platform;
       # a shared one is OFF and comes from the players job. clang -v names the GCC installation it compiles
       # against.
@@ -458,19 +480,23 @@ jobs:
           cmake --preset "linux-clang-${CLANG_VERSION}" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release -DUNRAVEL_ANDROID_PLAYER="$ANDROID_PLAYER" -DUNRAVEL_WEB_PLAYER="$WEB_PLAYER" -DUNRAVEL_WEB_DOTNET="${WEB_DOTNET:-}" ${WEB_PYTHON:+"-DUNRAVEL_WEB_PYTHON=$WEB_PYTHON"}
       - name: Build
         run: cmake --build "$BUILD_DIR" --parallel "$BUILD_JOBS"
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: matrix.android_player == 'shared'
         with:
           name: android-player
           path: ${{ env.BUILD_DIR }}/bin/players/android-arm64
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: matrix.web_player == 'shared'
         with:
           name: web-player
           path: ${{ env.BUILD_DIR }}/bin/players/web
       - name: Package
         run: cmake --build "$BUILD_DIR" --target package
-      - uses: actions/upload-artifact@v7
+      # The job fails here, before the package can reach the release, when the package lacks what the editor or a
+      # deploy needs, or its players are of another engine version than its editor (cmake/check_package.cmake).
+      - name: Check the package
+        run: cmake "-DPACKAGE_ARCHIVE=${BUILD_DIR}/UnravelEngine-*.zip" -DPLATFORM=linux "-DWORK_DIR=${RUNNER_TEMP}/package_check" -P cmake/check_package.cmake
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package-${{ matrix.name }}
           path: ${{ env.BUILD_DIR }}/UnravelEngine-*.zip
@@ -480,15 +506,22 @@ jobs:
   publish:
     name: Publish
     needs: [resolve, players, windows, linux]
-    # A platform left unticked is skipped and does not stop the upload; a failed build does.
-    if: ${{ !cancelled() && inputs.publish && !contains(needs.*.result, 'failure') }}
+    # The release gets packages only when every job before this one ended well. A ticked platform must have
+    # succeeded; a job may be skipped only because nothing asked for it (a platform left unticked, no shared
+    # player). A job that failed, was cancelled or ran out of time stops the upload.
+    if: >-
+      ${{ !cancelled() && inputs.publish
+      && needs.resolve.result == 'success'
+      && (needs.players.result == 'success' || (needs.players.result == 'skipped' && needs.resolve.outputs.has_players != 'true'))
+      && (needs.windows.result == 'success' || (needs.windows.result == 'skipped' && !inputs.build_windows))
+      && (needs.linux.result == 'success' || (needs.linux.result == 'skipped' && needs.resolve.outputs.has_linux != 'true')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     concurrency:
       group: release-${{ needs.resolve.outputs.release_tag }}
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: package-*
           path: packages
@@ -520,14 +553,33 @@ jobs:
             echo "Created release ${RELEASE_TAG} as a draft." >> "$GITHUB_STEP_SUMMARY"
           fi
           gh release upload "$RELEASE_TAG" "${packages[@]}" --clobber
-          # An older build of a platform has the same name after its version, e.g. -Windows-AMD64.zip.
+          # Only the builds older than this one are removed. A build of a platform has the same name after its
+          # version, e.g. -Windows-AMD64.zip. Versions order by their numbers, then by the commits since the tag:
+          # 1.2.0-320 is newer than 1.2.0-319, and both are newer than 1.2.0.
           if [ "$REPLACE_PREVIOUS_BUILDS" = "true" ]; then
+            # Succeeds when version $1 is older than version $2, each as <major>.<minor>.<patch>[-<commits>].
+            is_older_version() {
+              local -a older newer
+              local part
+              IFS='.-' read -r -a older <<< "$1"
+              IFS='.-' read -r -a newer <<< "$2"
+              for part in 0 1 2 3; do
+                if (( 10#${older[part]:-0} < 10#${newer[part]:-0} )); then return 0; fi
+                if (( 10#${older[part]:-0} > 10#${newer[part]:-0} )); then return 1; fi
+              done
+              return 1
+            }
+            # What an asset holds between UnravelEngine- and its platform: the version, which the commit may
+            # follow (-g1a2b3c4d).
+            version_pattern='^([0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?)(-g[0-9a-f]+)?$'
             assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
             for package in "${packages[@]}"; do
               name="$(basename "$package")"
               platform="${name#"$prefix"}"
               while IFS= read -r asset; do
-                if [[ -n "$asset" && "$asset" != "$name" && "$asset" == UnravelEngine-[0-9]*"-${platform}" ]]; then
+                version="${asset#UnravelEngine-}"
+                version="${version%"-${platform}"}"
+                if [[ "$asset" == "UnravelEngine-${version}-${platform}" && "$version" =~ $version_pattern ]] && is_older_version "${BASH_REMATCH[1]}" "$PACKAGE_VERSION"; then
                   gh release delete-asset "$RELEASE_TAG" "$asset" --yes
                   echo "Removed ${asset}." >> "$GITHUB_STEP_SUMMARY"
                 fi

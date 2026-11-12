@@ -89,7 +89,7 @@ Emscripten. The editor also builds from source on macOS, but there is no macOS p
 | Deploy | Output | Needs on this computer |
 |---|---|---|
 | Desktop | The player with the game's data beside it | Nothing more |
-| Android | An `.apk` for arm64 phones with Android 10 or newer (Vulkan) | The Android SDK platform tools and a JDK, see [Android](#android) |
+| Android | An `.apk` for arm64 phones with Android 10 or newer (Vulkan) | The Android SDK platform tools and a JDK 17 or newer, see [Android](#android) |
 | Web | A folder for any static web host (WebGPU, optionally WebGL 2) | Nothing more; `cloudflared` for a public test link, see [Browser](#browser) |
 | Steam | A desktop build uploaded to a Steamworks depot | SteamCMD, see [Steam](#steam) |
 
@@ -155,19 +155,28 @@ for `sudo` itself.
 
 **macOS**
 
-CI builds the editor with Xcode 16 and the `macos-*` presets; there is no macOS package.
+CI builds the editor with Xcode 16 and the `macos-arm64` preset; there is no macOS package.
 
 **Output and tests**
 
 The editor, the player and their data end up in `build/Release/bin`. `build/Release/bin/unravel-tests`
 runs every test suite, and `--suite <text>` only the suites whose names contain the text.
-[CMakePresets.json](CMakePresets.json) holds the compiler presets the CI uses (for example
-`cmake --preset linux-gcc-13`); they build into `develop/build/<preset>`.
+`cmake -DRUNTIME_DIR=build/Release/bin -P cmake/check_package.cmake` checks that the folder holds what
+the editor and its deploys need; the release workflow runs the same check on every package.
+
+[CMakePresets.json](CMakePresets.json) holds the compiler presets the CI uses. A preset is a Release
+build (`cmake --preset linux-gcc-13`, then `cmake --build --preset linux-gcc-13-release`) and its
+`-debug` twin a Debug build (`cmake --preset linux-gcc-13-debug`, then
+`cmake --build --preset linux-gcc-13-debug`); each builds into its own `develop/build/<preset>`. The
+windows, linux and macos workflows build the Release presets and run `unravel-tests`; they run only
+by hand (Actions > Run workflow).
 
 ## Android
 
 The editor deploys games to Android 10 or newer on arm64 devices, rendering with Vulkan. It needs
-the Android SDK platform tools and a JDK. A source build also needs Android NDK
+the Android SDK platform tools and a JDK 17 or newer (the Deploy window names an older Java it
+finds instead). The first Android deploy on a computer downloads Gradle and the Android build tools,
+which takes a few minutes and an internet connection. A source build also needs Android NDK
 `30.0.16248370` and the .NET 10 SDK to build the Android player next to the editor: configure
 reports `Android player: on` when it finds them. The player builds only in single-configuration
 build trees (such as Ninja) and needs Ninja installed.
@@ -318,7 +327,7 @@ Please keep pull requests focused and follow the style of the surrounding code.
 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) holds the licenses of everything a game ships with. The engine
 compiles it in and leaves out the libraries a build does not link. Scripts read it from
 `Application.thirdPartyNotices`, and Deploy writes no file of it, so a game shows it on a credits or licenses screen.
-Add new dependencies to it.
+Add new dependencies to it. The editor packages carry it beside [LICENSE.txt](LICENSE.txt).
 
 The engine links no library under the LGPL: audiopp builds without OpenAL Soft (`deps/audiopp/CMakeLists.txt`) and
 cpptrace without libdwarf (`deps/3rdparty/cpptrace/CMakeLists.txt`), so the notices carry no LGPL text. A build that

@@ -7,11 +7,20 @@ inputs:
   llvm-version:
     description: The official LLVM build to install.
     required: true
+  llvm-sha256:
+    description: The SHA-256 of that build's Windows installer (LLVM-<version>-win64.exe).
+    required: true
   cmake-version:
     description: The CMake release to install.
     required: true
+  cmake-sha256:
+    description: The SHA-256 of that release's Windows archive (cmake-<version>-windows-x86_64.zip).
+    required: true
   ninja-version:
     description: The Ninja release to install.
+    required: true
+  ninja-sha256:
+    description: The SHA-256 of that release's Windows archive (ninja-win.zip).
     required: true
   android-ndk:
     description: Whether to install the NDK of cmake/android_player.cmake into the runner's Android SDK.
@@ -24,8 +33,11 @@ runs:
       shell: pwsh
       env:
         LLVM_VERSION: ${{ inputs.llvm-version }}
+        LLVM_SHA256: ${{ inputs.llvm-sha256 }}
         CMAKE_VERSION: ${{ inputs.cmake-version }}
+        CMAKE_SHA256: ${{ inputs.cmake-sha256 }}
         NINJA_VERSION: ${{ inputs.ninja-version }}
+        NINJA_SHA256: ${{ inputs.ninja-sha256 }}
         GH_TOKEN: ${{ github.token }}
       run: |
         $ErrorActionPreference = 'Stop'
@@ -48,17 +60,26 @@ runs:
             curl.exe --fail --silent --show-error --location --retry 7 @authorization --header 'Accept: application/octet-stream' --output $file $asset_url
             if ($LASTEXITCODE -ne 0) { throw "Downloading $asset of $repository $tag failed." }
         }
+        # A download is unpacked or run only when it is the file the caller's SHA-256 names; a download without
+        # one stops here too.
+        function Assert-Sha256([string] $file, [string] $expected) {
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash
+            if ($actual -ne $expected) { throw "$file has the SHA-256 $actual, not the expected '$expected'." }
+        }
         # LLVM in a folder of its own: the runner's preinstalled LLVM is another version.
         $llvm = Join-Path $tools 'llvm'
         Save-ReleaseAsset 'llvm/llvm-project' "llvmorg-$env:LLVM_VERSION" "LLVM-$env:LLVM_VERSION-win64.exe" "$tools\llvm-setup.exe"
+        Assert-Sha256 "$tools\llvm-setup.exe" $env:LLVM_SHA256
         Start-Process -FilePath "$tools\llvm-setup.exe" -ArgumentList '/S', "/D=$llvm" -Wait
         $clang_version = & "$llvm\bin\clang++.exe" --version | Select-Object -First 1
         if ($clang_version -notmatch [regex]::Escape($env:LLVM_VERSION)) { throw "Expected clang $env:LLVM_VERSION, found: $clang_version" }
         Save-ReleaseAsset 'Kitware/CMake' "v$env:CMAKE_VERSION" "cmake-$env:CMAKE_VERSION-windows-x86_64.zip" "$tools\cmake.zip"
+        Assert-Sha256 "$tools\cmake.zip" $env:CMAKE_SHA256
         Expand-Archive -Path "$tools\cmake.zip" -DestinationPath $tools
         $cmake = Join-Path $tools "cmake-$env:CMAKE_VERSION-windows-x86_64\bin"
         $ninja = Join-Path $tools 'ninja'
         Save-ReleaseAsset 'ninja-build/ninja' "v$env:NINJA_VERSION" 'ninja-win.zip' "$tools\ninja.zip"
+        Assert-Sha256 "$tools\ninja.zip" $env:NINJA_SHA256
         Expand-Archive -Path "$tools\ninja.zip" -DestinationPath $ninja
         $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
         $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath

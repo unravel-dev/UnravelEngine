@@ -24,6 +24,7 @@ target_link_libraries(${target_name} PUBLIC
 
 set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "unravel-editor")
 unravel_set_default_thread_stack(${target_name})
+unravel_add_windows_manifest(${target_name})
 add_definitions(-DEDITOR_NAME="unravel-editor")
 add_definitions(-DPLAYER_NAME="unravel-player")
 

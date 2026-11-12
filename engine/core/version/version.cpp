@@ -42,6 +42,9 @@ auto strip_optional_v(std::string_view s) -> std::string_view
     return s;
 }
 
+// What git describe --dirty puts after the version of sources with uncommitted changes.
+constexpr std::string_view DIRTY_MARKER = "-dirty";
+
 // Values over this cap are treated as malformed - protects against numeric
 // overflow on very long digit runs without constraining realistic versions.
 constexpr long long k_int_parse_cap = 1'000'000'000LL;
@@ -132,6 +135,11 @@ auto parse(std::string_view text) -> std::optional<engine_version>
     v.original = std::string(trim(text));
 
     std::string_view s = trim(strip_optional_v(text));
+    // A build from sources with uncommitted changes is the version of its commit: the marker is no part of it.
+    if(s.ends_with(DIRTY_MARKER))
+    {
+        s.remove_suffix(DIRTY_MARKER.size());
+    }
     std::size_t pos = 0;
 
     if(!parse_int_token(s, pos, v.major))

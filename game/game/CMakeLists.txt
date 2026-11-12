@@ -26,6 +26,7 @@ else()
     set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "unravel-player")
 endif()
 unravel_set_default_thread_stack(${target_name})
+unravel_add_windows_manifest(${target_name})
 add_definitions(-DPLAYER_NAME="unravel-player")
 
 # The deploy refuses a player of another engine version than the editor's, which may not read the data the editor

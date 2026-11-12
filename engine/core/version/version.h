@@ -10,7 +10,8 @@ namespace version
 
 /// Structured representation of the engine version string scheme used across
 /// the project: "major.minor.patch[-commit_count[-sha]]" (e.g. "1.0.0-66-gc83fa23").
-/// Parsing tolerates an optional leading "v"/"V".
+/// Parsing tolerates an optional leading "v"/"V", and the "-dirty" git describe ends the version of changed
+/// sources with: such a build is the version of its commit.
 ///
 /// Equality and ordering compare only (major, minor, patch, commit_count).
 /// The SHA is metadata and is intentionally *not* part of the ordering.

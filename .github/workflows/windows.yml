@@ -3,7 +3,14 @@ name: windows
 #on: [push, pull_request]
 on:
   workflow_dispatch:
-  
+
+permissions:
+  contents: read
+
+env:
+  # Unity builds at -O2 take about 3 GB per compiler; more parallel jobs run the runners out of memory.
+  BUILD_JOBS: '3'
+
 jobs:
   build:
     runs-on: ${{matrix.config.os}}
@@ -12,9 +19,9 @@ jobs:
       matrix:
         config:
         # https://github.com/actions/virtual-environments/tree/main/images/win
-        #- { os: "windows-2019", cc: "msvc2019", arch: "x86" }
+        # Every leg builds x64, in the MSVC environment Setup MSVC opens for its arch: the engine has no
+        # 32-bit build.
         #- { os: "windows-2019", cc: "msvc2019", arch: "x64" }
-        - { os: "windows-2022", cc: "msvc2022", arch: "x86" }
         - { os: "windows-2022", cc: "msvc2022", arch: "x64" }
         #- { os: "windows-2022", cc: "mingw",    arch: "x64" }
         - { os: "windows-2022", cc: "clang-msvc-gnu", arch: "x64" }
@@ -24,32 +31,38 @@ jobs:
     - name: Setup
       run: choco install ninja
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         submodules: recursive
+        fetch-depth: 0 # the engine version comes from git describe
     - name: Setup MSVC
       if: matrix.config.cc != 'mingw'
-      uses: ilammy/msvc-dev-cmd@v1
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      with:
+        arch: ${{ matrix.config.arch }}
     - name: Setup MinGW
       if: matrix.config.cc == 'mingw'
-      uses: egor-tensin/setup-mingw@v2
+      uses: egor-tensin/setup-mingw@84c781b557efd538dec66bde06988d81cd3138cf # v2.2.0
       with:
         version: 12.2.0
     - name: Install LLVM
       if: matrix.config.cc == 'clang-msvc-gnu'
       run: choco install llvm -y
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
       with:
         dotnet-version: '9.0.x'
     # - name: Setup Mono
     #   run: |
     #     choco install mono
+    # The preset is a Release build. The player templates are left to the release workflow: their sub-builds
+    # would take most of the run.
     - name: Build
       run: |
-        cmake --preset windows-${{matrix.config.arch}}-${{matrix.config.cc}}
-        cmake --build --preset windows-${{matrix.config.arch}}-${{matrix.config.cc}}-release
+        cmake --preset windows-${{matrix.config.arch}}-${{matrix.config.cc}} -DUNRAVEL_ANDROID_PLAYER=OFF -DUNRAVEL_WEB_PLAYER=OFF
+        cmake --build --preset windows-${{matrix.config.arch}}-${{matrix.config.cc}}-release --parallel $env:BUILD_JOBS
+    # Every suite of the test runner. None needs a graphics device (a suite that needs a renderer starts bgfx's
+    # Noop one), and the tools some suites run (shaderc, texturec, the script bridge, the player) are built
+    # above. The runner ends with a non-zero exit code when a check fails, which fails the job.
     - name: Test
-      run: |
-        dir
-        ctest --preset windows-${{matrix.config.arch}}-${{matrix.config.cc}}-release --rerun-failed --output-on-failure
+      run: ./develop/build/windows-${{matrix.config.arch}}-${{matrix.config.cc}}/bin/unravel-tests.exe

@@ -53,14 +53,23 @@ include(GetGitRevisionDescription)
 # Include the module for checking compiler flags
 include(CheckCXXCompilerFlag)
 
-git_describe(GIT_VERSION --tags --abbrev=8)
+# The engine version is what git describe prints: the last tag, the commits since it and the commit, then -dirty
+# when tracked files differ from that commit. The player stamps carry it, so the editor refuses a player built from
+# another state of the sources.
+git_describe(GIT_VERSION --tags --abbrev=8 --dirty)
+if(NOT GIT_VERSION MATCHES "^v[0-9]+\\.[0-9]+\\.[0-9]+")
+    message(WARNING "The engine version could not be read: git describe --tags answered \"${GIT_VERSION}\". "
+                    "The binaries, the player stamps and the package are named after that answer. Sources without "
+                    "their git history have no version; a shallow clone gets its tags with "
+                    "git fetch --tags --unshallow.")
+endif()
 
 #parse the version information into pieces.
 string(REGEX REPLACE "^v([0-9]+)\\..*" "\\1" GIT_VERSION_MAJOR "${GIT_VERSION}")
 string(REGEX REPLACE "^v[0-9]+\\.([0-9]+).*" "\\1" GIT_VERSION_MINOR "${GIT_VERSION}")
 string(REGEX REPLACE "^v[0-9]+\\.[0-9]+\\.([0-9]+).*" "\\1" GIT_VERSION_PATCH "${GIT_VERSION}")
 string(REGEX REPLACE "^v[0-9]+\\.[0-9]+\\.[0-9]+(.*)" "\\1" GIT_VERSION_SHA1 "${GIT_VERSION}")
-string(REGEX REPLACE "-g[0-9a-f]+$" "" GIT_VERSION_NO_SHA "${GIT_VERSION}")
+string(REGEX REPLACE "-g[0-9a-f]+((-dirty)?)$" "\\1" GIT_VERSION_NO_SHA "${GIT_VERSION}")
 set(VERSION_SHORT "${GIT_VERSION_MAJOR}.${GIT_VERSION_MINOR}.${GIT_VERSION_PATCH}${GIT_VERSION_SHA1}")
 string(REGEX REPLACE "^v" "" VERSION_SHORT_NO_SHA "${GIT_VERSION_NO_SHA}")
 
@@ -138,6 +147,17 @@ function(unravel_set_default_thread_stack target)
     target_link_options(${target} PRIVATE "LINKER:--stack,${UNRAVEL_DEFAULT_THREAD_STACK_SIZE}")
   else()
     target_link_options(${target} PRIVATE "LINKER:/STACK:${UNRAVEL_DEFAULT_THREAD_STACK_SIZE}")
+  endif()
+endfunction()
+
+# The Windows settings of every executable the build ships, merged into its manifest by the linker. The process's
+# code page is UTF-8, so a narrow path or command line holds any name: a game installed under a folder outside the
+# system's code page finds its data, and a tool reads the path the editor passed it. Paths may also pass 260
+# characters where the system allows them.
+set(UNRAVEL_WINDOWS_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/rc/UnravelEngine.manifest")
+function(unravel_add_windows_manifest target)
+  if(WIN32 AND NOT MINGW)
+    target_sources(${target} PRIVATE "${UNRAVEL_WINDOWS_MANIFEST}")
   endif()
 endfunction()
 
@@ -394,6 +414,11 @@ _get_all_cmake_targets(all_targets ${CMAKE_CURRENT_LIST_DIR})
 # Collect all executable targets defined in your project.
 #get_property(all_targets GLOBAL PROPERTY TARGETS)
 
+# The executables a package ships: the editor, the player its desktop deploys copy, and the tools the editor
+# compiles shaders and textures with. The others the build puts beside them stay out: the test runner, and the
+# tools, samples and viewers of dependencies.
+set(UNRAVEL_PACKAGED_EXECUTABLES editor game shaderc texturec)
+
 set(exec_targets "")
 set(unshipped_exec_files "")
 foreach(target ${all_targets})
@@ -404,11 +429,10 @@ foreach(target ${all_targets})
   # EXCLUDE_FROM_ALL executables (the gi_tests / animation_tests / ik_tests harnesses,
   # dependency samples) are not part of the default build, so they must not be packaged:
   # install(PROGRAMS $<TARGET_FILE:...>) fails CPack when the binary was never produced.
-  # Remember their file names too - EXCLUDE_FROM_ALL only shapes the build graph, and the
-  # runtime tree install below is a plain filesystem sweep that would otherwise pick up a
-  # locally built harness sitting next to the editor.
+  # Remember the file names of every unshipped executable - the runtime tree install below
+  # is a plain filesystem sweep that would otherwise pick up what sits next to the editor.
   get_target_property(exclude_from_all ${target} EXCLUDE_FROM_ALL)
-  if(exclude_from_all)
+  if(exclude_from_all OR NOT target IN_LIST UNRAVEL_PACKAGED_EXECUTABLES)
     get_target_filename(${target} target_filename)
     list(APPEND unshipped_exec_files "${target_filename}")
     continue()
@@ -418,24 +442,33 @@ endforeach()
 list(REMOVE_DUPLICATES unshipped_exec_files)
 
 # Turn each unshipped executable into install(DIRECTORY) exclusions: the binary itself plus
-# the debug/link sidecars MSVC drops beside it under the same stem.
+# the debug/link sidecars MSVC drops beside it under the same stem. A pattern names its file by
+# the runtime tree's whole path (after the root, which a pattern cannot start with), so it
+# excludes that file alone: a data folder may hold a file or a folder of the same name.
+# Multi-config generators put the binaries in a folder per configuration.
+string(REGEX REPLACE "^[^/]*/" "" runtime_tree_pattern "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(is_multi_config)
+  string(APPEND runtime_tree_pattern "/*")
+endif()
 set(unshipped_exec_patterns "")
 foreach(unshipped_file ${unshipped_exec_files})
   get_filename_component(unshipped_stem "${unshipped_file}" NAME_WE)
   list(APPEND unshipped_exec_patterns
-       PATTERN "${unshipped_file}" EXCLUDE
-       PATTERN "${unshipped_stem}.pdb" EXCLUDE
-       PATTERN "${unshipped_stem}.ilk" EXCLUDE
+       PATTERN "${runtime_tree_pattern}/${unshipped_file}" EXCLUDE
+       PATTERN "${runtime_tree_pattern}/${unshipped_stem}.pdb" EXCLUDE
+       PATTERN "${runtime_tree_pattern}/${unshipped_stem}.ilk" EXCLUDE
        )
 endforeach()
 
-# Runtime tree (data, clrpp, default-build tools). Test binaries stay out even
-# if someone built them locally next to the editor.
+# Runtime tree (data, clrpp, player templates, runtime libraries). The unshipped executables and
+# the folder the test runner writes its data into stay out even when they are next to the editor.
 install(DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/
         COMPONENT UnravelEngine
         DESTINATION .
         FILES_MATCHING PATTERN "*"
         ${unshipped_exec_patterns}
+        PATTERN "${runtime_tree_pattern}/data/tests" EXCLUDE
         )
 
 # Install each shipped executable using its generator expression for its file path.
@@ -446,12 +479,27 @@ foreach(exec ${exec_targets})
           )
 endforeach()
 
+# The licence, and the third-party notices with this build's engine version where the text names it, which the
+# engine fills into the copy it compiles in the same way (engine/engine/third_party_notices.cpp).
+file(READ "${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.txt" package_notices)
+string(REPLACE "@ENGINE_VERSION@" "${GIT_VERSION}" package_notices "${package_notices}")
+file(WRITE "${PROJECT_BINARY_DIR}/THIRD_PARTY_NOTICES.txt" "${package_notices}")
+install(FILES "${PROJECT_SOURCE_DIR}/LICENSE.txt" "${PROJECT_BINARY_DIR}/THIRD_PARTY_NOTICES.txt"
+        COMPONENT UnravelEngine
+        DESTINATION .
+        )
+
 
 # Basic settings
 
 set(CPACK_PACKAGE_NAME "UnravelEngine")
 set(CPACK_PACKAGE_VERSION "${VERSION_SHORT_NO_SHA}")
 set(CPACK_COMPONENTS_ALL UnravelEngine)
+# An archive holds the UnravelEngine component alone, in one folder named after the package. The install rules of
+# dependencies (their static libraries, headers and tools) belong to other components, which no archive takes.
+set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
+set(CPACK_COMPONENTS_GROUPING ALL_COMPONENTS_IN_ONE)
+set(CPACK_COMPONENT_INCLUDE_TOPLEVEL_DIRECTORY ON)
 
 
 # 3) Override the *file* name for all generators (NSIS, ZIP, DEB, RPM, etc):
@@ -512,11 +560,12 @@ if(APPLE)
     set(CPACK_GENERATOR "DragNDrop")
 endif()
 
-# For Linux DEB or RPM:
+# Linux ships an archive that unpacks into the editor's folder, as on Windows, so it names no install prefix:
+# CPACK_PACKAGING_INSTALL_PREFIX would nest that prefix inside the archive. A package that installs into the
+# system (DEB, RPM) names its prefix for its own generator (CPACK_PROJECT_CONFIG_FILE).
 if(UNIX AND NOT APPLE)
     #set(CPACK_GENERATOR "ZIP;DEB;")
     set(CPACK_GENERATOR "ZIP")
-    set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/unravel-engine")
 endif()
 # Include CPack
 include(CPack)

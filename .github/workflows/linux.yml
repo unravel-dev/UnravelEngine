@@ -4,6 +4,12 @@ name: linux
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+env:
+  # Unity builds at -O2 take about 3 GB per compiler; more parallel jobs run the runners out of memory.
+  BUILD_JOBS: '3'
 
 jobs:
   build:
@@ -57,17 +63,22 @@ jobs:
           exit 1
         fi
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
       with:
         dotnet-version: '9.0.x'
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         submodules: recursive
+        fetch-depth: 0 # the engine version comes from git describe
+    # The preset is a Release build. The player templates are left to the release workflow: their sub-builds
+    # would take most of the run.
     - name: Build
       run: |
-        cmake --preset linux-${{matrix.config.cc}}
-        cmake --build --preset linux-${{matrix.config.cc}}-release
+        cmake --preset linux-${{matrix.config.cc}} -DUNRAVEL_ANDROID_PLAYER=OFF -DUNRAVEL_WEB_PLAYER=OFF
+        cmake --build --preset linux-${{matrix.config.cc}}-release --parallel "$BUILD_JOBS"
+    # Every suite of the test runner. None needs a graphics device (a suite that needs a renderer starts bgfx's
+    # Noop one), and the tools some suites run (shaderc, texturec, the script bridge, the player) are built
+    # above. The runner ends with a non-zero exit code when a check fails, which fails the job.
     - name: Test
-      run: |
-        ctest --preset linux-${{matrix.config.cc}}-release --rerun-failed --output-on-failure
+      run: develop/build/linux-${{matrix.config.cc}}/bin/unravel-tests

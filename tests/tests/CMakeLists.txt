@@ -33,6 +33,7 @@ target_compile_definitions(${target_name} PRIVATE
 )
 
 set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "unravel-tests")
+unravel_add_windows_manifest(${target_name})
 
 set_target_properties(${target_name} PROPERTIES
     CXX_STANDARD 20

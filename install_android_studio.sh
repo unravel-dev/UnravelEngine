@@ -37,11 +37,17 @@ fi
 
 "$ANDROID_CLI" --no-metrics --sdk="$SDK_DIR" sdk install platform-tools "ndk/${NDK_VERSION}"
 
-if ! grep -q "ANDROID_HOME=" "$HOME/.profile"; then
-    cat >> "$HOME/.profile" <<EOF
-export ANDROID_HOME="$SDK_DIR"
-export JAVA_HOME="$JDK_DIR"
-export PATH="\$ANDROID_HOME/platform-tools:\$PATH"
-EOF
-fi
+# Adds a line to ~/.profile unless the profile already holds the text that marks it. Each variable is checked on
+# its own: a profile that sets ANDROID_HOME may still lack JAVA_HOME.
+add_profile_line() {
+    local marker="$1"
+    local line="$2"
+    if ! grep -qF "$marker" "$HOME/.profile" 2>/dev/null; then
+        echo "$line" >> "$HOME/.profile"
+    fi
+}
+
+add_profile_line 'ANDROID_HOME=' "export ANDROID_HOME=\"$SDK_DIR\""
+add_profile_line 'JAVA_HOME=' "export JAVA_HOME=\"$JDK_DIR\""
+add_profile_line 'ANDROID_HOME/platform-tools' 'export PATH="$ANDROID_HOME/platform-tools:$PATH"'
 echo "Done. Log out and back in so the editor sees ANDROID_HOME / JAVA_HOME, then run: adb devices"

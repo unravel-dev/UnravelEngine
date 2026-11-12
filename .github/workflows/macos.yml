@@ -3,7 +3,14 @@ name: macos
 #on: [push, pull_request]
 on:
   workflow_dispatch:
-  
+
+permissions:
+  contents: read
+
+env:
+  # Unity builds at -O2 take about 3 GB per compiler; more parallel jobs run the runners out of memory.
+  BUILD_JOBS: '3'
+
 jobs:
   build:
     runs-on: ${{matrix.config.os}}
@@ -15,8 +22,9 @@ jobs:
         # - { os: "macos-12", xcode: "14.0", arch: "x64" }
         # - { os: "macos-12", xcode: "14.1", arch: "x64" }
         # - { os: "macos-12", xcode: "14.2", arch: "x64" }
-        - { os: "macos-14", xcode: "16.2", arch: "x64" }
-        - { os: "macos-15", xcode: "16.3", arch: "x64" }
+        # The macos-14 and macos-15 runners are Apple silicon, and the build takes the runner's architecture.
+        - { os: "macos-14", xcode: "16.2", arch: "arm64" }
+        - { os: "macos-15", xcode: "16.3", arch: "arm64" }
     #name: "xcode-${{matrix.config.xcode}}"
     steps:
     - name: Setup
@@ -24,9 +32,10 @@ jobs:
         brew update
         brew install cmake ninja
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         submodules: recursive
+        fetch-depth: 0 # the engine version comes from git describe
     #- name: Remove collisions
     #  run: |
     #    sudo rm -rf /Library/Frameworks/Mono.framework
@@ -36,16 +45,20 @@ jobs:
       run: |
         sudo xcode-select --switch "/Applications/Xcode_${{matrix.config.xcode}}.app"
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
       with:
         dotnet-version: '9.0.x'
     # - name: Setup Mono
     #   run: |
     #     brew install mono --force
+    # The preset is a Release build. The player templates are left to the release workflow: their sub-builds
+    # would take most of the run.
     - name: Build
       run: |
-        cmake --preset macos-${{matrix.config.arch}}
-        cmake --build --preset macos-${{matrix.config.arch}}-release
+        cmake --preset macos-${{matrix.config.arch}} -DUNRAVEL_ANDROID_PLAYER=OFF -DUNRAVEL_WEB_PLAYER=OFF
+        cmake --build --preset macos-${{matrix.config.arch}}-release --parallel "$BUILD_JOBS"
+    # Every suite of the test runner. None needs a graphics device (a suite that needs a renderer starts bgfx's
+    # Noop one), and the tools some suites run (shaderc, texturec, the script bridge, the player) are built
+    # above. The runner ends with a non-zero exit code when a check fails, which fails the job.
     - name: Test
-      run: |
-        ctest --preset macos-${{matrix.config.arch}}-release --rerun-failed --output-on-failure
+      run: develop/build/macos-${{matrix.config.arch}}/bin/unravel-tests

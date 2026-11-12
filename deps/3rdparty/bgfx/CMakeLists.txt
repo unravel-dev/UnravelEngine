@@ -142,3 +142,10 @@ set_target_properties(bimg PROPERTIES
 )
 
 
+
+# The tools get their files as paths on the command line: the build's Windows settings let them read any name.
+foreach(bgfx_tool shaderc texturec geometryc)
+    if(TARGET ${bgfx_tool})
+        unravel_add_windows_manifest(${bgfx_tool})
+    endif()
+endforeach()
