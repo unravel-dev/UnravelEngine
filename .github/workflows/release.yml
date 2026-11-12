@@ -86,7 +86,7 @@ env:
   DOTNET_VERSION: '10.0.x'
   # The .NET SDK the browser player builds with (game/web/UnravelWebPlayer.csproj): its wasm-tools workload
   # brings the Emscripten the player compiles with.
-  WEB_DOTNET_SDK_VERSION: '11.0.100-rc.3.26522.148'
+  WEB_DOTNET_SDK_VERSION: '11.0.100'
   # The Python that Emscripten runs on where the release's own is older than it needs (3.10; Ubuntu 20.04 has
   # 3.8): a prebuilt CPython of python-build-standalone, checked against the SHA-256 its release publishes.
   PYTHON_STANDALONE_RELEASE: '20261026'

@@ -181,6 +181,25 @@ JS_ENGINES = [NODE_JS]
     endif()
 endfunction()
 
+# Makes the sub-build in `build_dir` start over when another Emscripten configured it than the one of
+# `toolchain_file`. CMake keeps the toolchain file a tree was first configured with, whatever a later configure names,
+# so the tree would go on compiling with the earlier Emscripten. Emscripten in turn empties a cache another one
+# filled the first time it runs, the fetched ports with it, so `em_cache` goes too and the ports are fetched into a
+# new one.
+function(unravel_restart_web_build_on_emscripten_change build_dir em_cache toolchain_file)
+    set(cache_file "${build_dir}/CMakeCache.txt")
+    if(NOT EXISTS "${cache_file}")
+        return()
+    endif()
+    file(STRINGS "${cache_file}" configured_toolchain REGEX "^CMAKE_TOOLCHAIN_FILE:")
+    string(REGEX REPLACE "^[^=]*=" "" configured_toolchain "${configured_toolchain}")
+    if(configured_toolchain STREQUAL toolchain_file)
+        return()
+    endif()
+    message(STATUS "Web player: its build starts over, another Emscripten configured it (${configured_toolchain}).")
+    file(REMOVE_RECURSE "${cache_file}" "${build_dir}/CMakeFiles" "${em_cache}")
+endfunction()
+
 if(NOT UNRAVEL_WEB_PLAYER STREQUAL "OFF")
     unravel_check_web_player_tools()
     if(web_player_reason)
@@ -199,6 +218,8 @@ if(NOT UNRAVEL_WEB_PLAYER STREQUAL "OFF")
         set(web_build_dir "${PROJECT_BINARY_DIR}/web")
         set(web_em_config "${web_build_dir}/emscripten_config.py")
         set(web_em_cache "${web_build_dir}/em_cache")
+        set(web_toolchain_file "${web_emscripten}/cmake/Modules/Platform/Emscripten.cmake")
+        unravel_restart_web_build_on_emscripten_change("${web_build_dir}" "${web_em_cache}" "${web_toolchain_file}")
         file(MAKE_DIRECTORY "${web_em_cache}")
         unravel_write_emscripten_config("${web_em_config}" "${web_em_cache}")
         # bgfx links Dawn's WebGPU port (--use-port=emdawnwebgpu), which Emscripten would download in one attempt.
@@ -211,7 +232,7 @@ if(NOT UNRAVEL_WEB_PLAYER STREQUAL "OFF")
             CMAKE_GENERATOR Ninja
             CMAKE_COMMAND ${web_env} "${CMAKE_COMMAND}"
             CMAKE_ARGS
-                "-DCMAKE_TOOLCHAIN_FILE=${web_emscripten}/cmake/Modules/Platform/Emscripten.cmake"
+                "-DCMAKE_TOOLCHAIN_FILE=${web_toolchain_file}"
                 "-DCMAKE_MAKE_PROGRAM=${web_ninja}"
                 # The browser player is always a release build: it is downloaded, and runs interpreted scripts.
                 "-DCMAKE_BUILD_TYPE=Release"

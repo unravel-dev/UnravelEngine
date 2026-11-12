@@ -34,6 +34,9 @@ set(stamp "engine_version=${ENGINE_VERSION}\n")
 set(inputs_file "${WORK_DIR}/inputs.txt")
 set(link_inputs_file "${WEB_BUILD}/web_link_inputs.txt")
 set(link_inputs_project "${WORK_DIR}/link_inputs.props")
+# The .NET the work folder's files are made with: its SDK and packs by their versioned folders.
+set(dotnet_file "${WORK_DIR}/dotnet.txt")
+set(dotnet_description "${DOTNET}\n${CSC}\n${REFERENCE_DIR}\n${RUNTIME_LIB}\n")
 
 # The objects and static libraries the relink links. A library the game links that this build did not make is an
 # error: the relink would fail on its symbols.
@@ -64,13 +67,29 @@ endfunction()
 function(describe_inputs out_var link_inputs)
     file(GLOB_RECURSE scripts "${SCRIPTS_DIR}/*.cs")
     file(GLOB_RECURSE player_files "${PLAYER_DIR}/*.cs" "${PLAYER_DIR}/*.csproj" "${PLAYER_DIR}/wwwroot/*")
-    set(description "${stamp}${DOTNET}\n${CSC}\n${REFERENCE_DIR}\n${RUNTIME_LIB}\n${EM_CACHE}\n")
+    set(description "${stamp}${dotnet_description}${EM_CACHE}\n")
     foreach(file IN LISTS scripts link_inputs player_files BRIDGE CMAKE_CURRENT_LIST_FILE)
         file(SIZE "${file}" size)
         file(TIMESTAMP "${file}" time "%Y%m%d%H%M%S" UTC)
         string(APPEND description "${file} ${size} ${time}\n")
     endforeach()
     set(${out_var} "${description}" PARENT_SCOPE)
+endfunction()
+
+# Makes the work folder, empty when another .NET made the files in it. MSBuild keeps a file it made while that file
+# is newer than what it was made of, and a pack's files carry the dates of the pack's own build: the framework
+# assemblies wrapped for the browser from one .NET's packs would otherwise ship with the runtime of the next one.
+function(prepare_work_folder)
+    set(previous_description "")
+    if(EXISTS "${dotnet_file}")
+        file(READ "${dotnet_file}" previous_description)
+    endif()
+    if(previous_description STREQUAL dotnet_description)
+        return()
+    endif()
+    file(REMOVE_RECURSE "${WORK_DIR}")
+    file(MAKE_DIRECTORY "${WORK_DIR}")
+    file(WRITE "${dotnet_file}" "${dotnet_description}")
 endfunction()
 
 function(run_step name)
@@ -111,7 +130,7 @@ if(inputs STREQUAL previous_inputs AND previous_stamp STREQUAL stamp)
     return()
 endif()
 
-file(MAKE_DIRECTORY "${WORK_DIR}")
+prepare_work_folder()
 write_link_inputs_project("${link_inputs}")
 set(scripts_assembly "${WORK_DIR}/scripts/engine-script.dll")
 file(MAKE_DIRECTORY "${WORK_DIR}/scripts")
