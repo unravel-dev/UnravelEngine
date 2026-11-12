@@ -22,7 +22,7 @@ description: >-
 | List preset names | `scene_list_presets` |
 | Entity spawn / transforms / scripts | see `unravel-entities` |
 
-All mutating tools refuse play mode. Scene/project switches use `force:true` by default (discard unsaved) - no ImGui save/create modals.
+Mutating tools refuse play mode, except `scene_set_transforms_batch`, `scene_set_component_properties_batch` and `scene_set_active_batch`, which change the running game until play stops. Scene/project switches use `force:true` by default (discard unsaved) - no ImGui save/create modals.
 
 ## Project tools
 
@@ -83,6 +83,6 @@ Open/new/save require an open project. Paths may be absolute; keys are normalize
 ## Rules of thumb
 
 1. Prefer `project_list_recent` -> `project_open` with `recent_index` over guessing paths.
-2. After open, use `scene_get_info` / `scene_get_hierarchy_batch` before spawning content.
+2. After open, use `scene_get_info` / `scene_get_hierarchy` before spawning content.
 3. Do not call UI `editor_actions::new_scene` / `open_scene` from automation - they show ImGui modals.
 4. Asset work under `app:/` needs an open project; `engine:/` / `editor:/` do not.

@@ -799,17 +799,6 @@ auto make_material_view(material& mat) -> entt::meta_any
     return object;
 }
 
-/// An editable copy of what a slot draws with: the shared material with the instance's overrides.
-auto make_instance_values(const material_instance& instance, const material& shared) -> material::sptr
-{
-    auto values = shared.clone();
-    for(const auto& entry : instance.get_overrides())
-    {
-        set_material_value(*values, entry.property, entry.value);
-    }
-    return values;
-}
-
 auto get_property_id(const std::string& name) -> entt::id_type
 {
     return entt::hashed_string{name.c_str()}.value();
@@ -895,6 +884,7 @@ auto make_row_proxy(const meta_any_proxy& slot_proxy, const entt::meta_data& row
 auto apply_row_change(rtti::context& ctx,
                       material_instance& instance,
                       entt::meta_any& view,
+                      const material& values,
                       const meta_any_proxy& slot_proxy,
                       const hpp::optional<entt::id_type>& reverted,
                       const entt::meta_custom& custom) -> inspect_result
@@ -908,16 +898,11 @@ auto apply_row_change(rtti::context& ctx,
     }
     else
     {
-        for_each_material_property(view.type(),
-                                   [&](entt::id_type property, const entt::meta_data& prop)
-                                   {
-                                       auto edited = prop.get(view);
-                                       if(!(instance.get_value(property) == edited))
-                                       {
-                                           instance.set_override(property, edited);
-                                           row = prop;
-                                       }
-                                   });
+        const auto changes = override_changed_values(instance, values);
+        if(!changes.overridden.empty())
+        {
+            row = view.type().data(changes.overridden.back());
+        }
     }
     inspect_result result{};
     result.changed = true;
@@ -1037,7 +1022,7 @@ auto inspector_material_instance::inspect(rtti::context& ctx,
     }
     if(reverted || view_result.changed)
     {
-        result |= apply_row_change(ctx, data, view, var_proxy, reverted, custom);
+        result |= apply_row_change(ctx, data, view, *values, var_proxy, reverted, custom);
     }
     result.edit_finished |= view_result.edit_finished;
     if(data.has_overrides() && !is_searching)

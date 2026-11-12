@@ -1,5 +1,6 @@
 #include "animation_preview.h"
 
+#include <engine/animation/animation_controller_instance.h>
 #include <engine/animation/ecs/components/animation_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/events.h>
@@ -94,6 +95,17 @@ void animation_entity_preview::stop_all()
     }
 }
 
+auto animation_entity_preview::is_previewing(entt::handle entity) -> bool
+{
+    const auto& previews = get_previews();
+    return entity && std::any_of(previews.begin(),
+                                 previews.end(),
+                                 [&](const animation_entity_preview* preview)
+                                 {
+                                     return preview->is_active() && preview->get_entity() == entity;
+                                 });
+}
+
 auto animation_entity_preview::start(rtti::context& ctx, entt::handle entity) -> animation_component*
 {
     stop();
@@ -137,6 +149,21 @@ void animation_entity_preview::stop()
     }
     snapshot_.restore();
     entity_ = {};
+}
+
+auto animation_entity_preview::start_playing(rtti::context& ctx, entt::handle entity) -> bool
+{
+    auto* animation = start(ctx, entity);
+    if(animation == nullptr)
+    {
+        return false;
+    }
+    if(auto* instance = animation->get_controller_instance())
+    {
+        instance->reset();
+    }
+    animation->get_player().play();
+    return true;
 }
 
 void animation_entity_preview::keep_alive()

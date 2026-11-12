@@ -21,41 +21,40 @@
 #include <map>
 #include <set>
 #include <tuple>
+#include <unordered_map>
 
 namespace unravel::mcp
 {
 namespace
 {
 
-auto resolve_addable_component(const std::string& name) -> entt::meta_type
+/// The parents a reparent batch gives its entities.
+using planned_parents_t = std::unordered_map<entt::entity, entt::handle>;
+
+/// The parent `entity` has once the batch applies: the batch's own when it reparents it, else its current one.
+auto get_planned_parent(entt::handle entity, const planned_parents_t& planned) -> entt::handle
 {
-    entt::meta_type found{};
-    hpp::for_each_tuple_type<all_addable_components>(
-        [&](auto index)
-        {
-            using ctype = std::tuple_element_t<decltype(index)::value, all_addable_components>;
-            auto type = entt::resolve<ctype>();
-            auto pretty = std::string(entt::get_pretty_name(type));
-            auto raw = std::string(entt::get_name(type));
-            if(pretty == name || raw == name)
-            {
-                found = type;
-            }
-        });
-    return found;
+    const auto found = planned.find(entity.entity());
+    if(found != planned.end())
+    {
+        return found->second;
+    }
+    return entity.all_of<transform_component>() ? entity.get<transform_component>().get_parent() : entt::handle{};
 }
 
-/// True when `node` is `root` or lies under it - a parent that would make a cycle.
-auto is_in_subtree(entt::handle root, entt::handle node) -> bool
+/// True when `node` is `root` or lies under it once the batch applies - a parent that would make a cycle.
+auto is_in_planned_subtree(entt::handle root, entt::handle node, const planned_parents_t& planned) -> bool
 {
-    for(auto current = node; current; current = current.get<transform_component>().get_parent())
+    const size_t max_depth = planned.size() + root.registry()->storage<entt::entity>().size();
+    size_t depth = 0;
+    for(auto current = node; current && depth <= max_depth; current = get_planned_parent(current, planned), ++depth)
     {
         if(current == root)
         {
             return true;
         }
     }
-    return false;
+    return depth > max_depth;
 }
 
 /// Whether a part item adds or removes.
@@ -112,7 +111,8 @@ auto read_script_part(rtti::context& ctx,
 /// Reads a component part: an addable component, absent to add and present to remove.
 auto read_component_part(const std::string& name, part_change change, entity_part& part, std::string& error) -> bool
 {
-    part.component = resolve_addable_component(name);
+    // The names scene_list_components lists; Script parts are read by read_script_part.
+    part.component = name == "Script" ? entt::meta_type{} : component_meta_type(name);
     if(!part.component)
     {
         error = "Unknown component " + name + " (scene_list_components lists the ones you can add and remove)";
@@ -201,7 +201,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
              "Reparent many entities in one undoable action. Each item: entity_id, optional parent_id "
              "(omit/empty to detach). Keeps WORLD pose.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"parent_id":{"type":"string"}},"required":["entity_id"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"parent_id":{"type":"string","description":"Omit or empty to detach"}},"required":["entity_id"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
@@ -223,6 +223,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      entt::handle new_parent{};
                  };
                  std::vector<entry_t> entries;
+                 planned_parents_t planned;
                  for(auto el : items_arr)
                  {
                      simdjson::dom::object obj;
@@ -251,18 +252,22 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                          {
                              return {.text = "Parent not found: " + parent_id, .is_error = true};
                          }
-                         if(is_in_subtree(entity, e.new_parent))
-                         {
-                             return {.text = parent_id + " is " + entity_id + " or one of its children; nothing was "
-                                                         "reparented",
-                                     .is_error = true};
-                         }
+                     }
+                     if(!planned.emplace(entity.entity(), e.new_parent).second)
+                     {
+                         return {.text = entity_id + " is listed twice; nothing was reparented", .is_error = true};
                      }
                      entries.push_back(e);
                  }
-                 if(entries.empty())
+                 // Checked against the hierarchy the whole batch leaves, so two items cannot close a loop between them.
+                 for(const auto& e : entries)
                  {
-                     return {.text = "items array is empty", .is_error = true};
+                     if(e.new_parent && is_in_planned_subtree(e.entity, e.new_parent, planned))
+                     {
+                         return {.text = entity_id_string(e.new_parent) + " would end up under " +
+                                         entity_id_string(e.entity) + " (a loop); nothing was reparented",
+                                 .is_error = true};
+                     }
                  }
                  auto batch = std::make_shared<composite_action_t>();
                  for(const auto& e : entries)
@@ -277,10 +282,57 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
          .idempotent = true});
 
     registry.add(
+        {.name = "scene_set_tags_batch",
+         .description = "Set entity tags - what Scene.FindEntitiesByTag and Entity.tag read in scripts, and what "
+                        "scene_find_entities {tag} finds - on many entities in one undoable action. An empty tag "
+                        "clears it.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"tag":{"type":"string"}},"required":["entity_id","tag"]}}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+             {
+                 scene* scn = nullptr;
+                 std::string error;
+                 simdjson::dom::array items_arr;
+                 if(!require_edit_scene(ctx, scn, error) || !read_required_array(args, "items", items_arr, error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 auto batch = std::make_shared<composite_action_t>();
+                 for(auto el : items_arr)
+                 {
+                     simdjson::dom::object obj;
+                     std::string entity_id;
+                     std::string tag;
+                     if(!read_object(el, obj, error) || !read_string(obj, "entity_id", entity_id) ||
+                        !read_string(obj, "tag", tag))
+                     {
+                         return {.text = "Each item needs entity_id and tag", .is_error = true};
+                     }
+                     auto entity = find_entity(*scn, entity_id);
+                     if(!entity)
+                     {
+                         return {.text = "Entity not found: " + entity_id, .is_error = true};
+                     }
+                     if(!entity.all_of<tag_component>())
+                     {
+                         return {.text = entity_id + " has no tag to set (no tag component)", .is_error = true};
+                     }
+                     batch->add_sub_action(
+                         std::make_shared<entity_set_tag_action_t>(entity, entity.get<tag_component>().tag, tag));
+                 }
+                 const auto count = batch->sub_actions.size();
+                 ctx.get_cached<editing_manager>().do_action("MCP Batch Set Tags", batch);
+                 return {.text = fmt::format(R"({{"ok":true,"count":{}}})", count), .is_error = false};
+             },
+         .mutates_scene = true,
+         .idempotent = true});
+
+    registry.add(
         {.name = "scene_set_names_batch",
          .description = "Set display names on many entities in one undoable action.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"name":{"type":"string"}},"required":["entity_id","name"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"name":{"type":"string"}},"required":["entity_id","name"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
@@ -316,9 +368,13 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                          return {.text = "Item missing entity_id or name", .is_error = true};
                      }
                      auto entity = find_entity(*scn, entity_id);
-                     if(!entity || !entity.all_of<tag_component>())
+                     if(!entity)
                      {
                          return {.text = "Entity not found: " + entity_id, .is_error = true};
+                     }
+                     if(!entity.all_of<tag_component>())
+                     {
+                         return {.text = entity_id + " has no name to set (no tag component)", .is_error = true};
                      }
                      entries.push_back({entity, entity.get<tag_component>().name, name});
                  }
@@ -345,7 +401,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
              "its own default materials. A skinned mesh is reported, since playing its clips needs an Animation "
              "component.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"asset":{"type":"string","description":"Mesh asset key or uid"}},"required":["entity_id","asset"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"asset":{"type":"string","description":"Mesh asset key or uid"}},"required":["entity_id","asset"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
@@ -364,10 +420,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  struct entry_t
                  {
                      entt::handle entity{};
-                     model old_model;
                      model new_model;
-                     /// Shared by the do and undo lambdas, which each hold a copy of the entries.
-                     std::shared_ptr<prefab_override_record> overrides = std::make_shared<prefab_override_record>();
                  };
                  std::vector<entry_t> entries;
                  for(auto el : items_arr)
@@ -395,41 +448,20 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      const auto mesh_asset = find_existing_asset<mesh>(ctx, to_asset_key(asset_key), error);
                      if(!mesh_asset)
                      {
-                         return {.text = error + " (assets_find_batch type mesh)", .is_error = true};
+                         return {.text = error + " (assets_find type mesh)", .is_error = true};
                      }
-                     entries.push_back(
-                         {entity, model_comp->get_model(), defaults::make_model_from_mesh(ctx, mesh_asset.id())});
+                     entries.push_back({entity, defaults::make_model_from_mesh(ctx, mesh_asset.id())});
                  }
-                 if(entries.empty())
+                 // Undone from the component's saved state, by entity id, as the Inspector's edits are.
+                 const auto type = entt::resolve<model_component>();
+                 auto edits = std::make_shared<composite_action_t>();
+                 for(const auto& e : entries)
                  {
-                     return {.text = "items array is empty", .is_error = true};
+                     const auto state_before = prefab_override_context::save_component_state(e.entity, type);
+                     e.entity.get<model_component>().set_model(e.new_model);
+                     edits->add_sub_action(std::make_shared<entity_component_state_action_t>(e.entity, type, state_before));
                  }
-                 ctx.get_cached<editing_manager>().do_action(
-                     "MCP Batch Set Models",
-                     [entries]()
-                     {
-                         const auto type = entt::resolve<model_component>();
-                         for(const auto& e : entries)
-                         {
-                             if(auto* comp = e.entity ? e.entity.try_get<model_component>() : nullptr)
-                             {
-                                 const auto state = prefab_override_context::save_component_state(e.entity, type);
-                                 comp->set_model(e.new_model);
-                                 *e.overrides = prefab_override_context::mark_changed_properties(e.entity, type, state);
-                             }
-                         }
-                     },
-                     [entries]()
-                     {
-                         for(auto it = entries.rbegin(); it != entries.rend(); ++it)
-                         {
-                             if(auto* comp = it->entity ? it->entity.try_get<model_component>() : nullptr)
-                             {
-                                 comp->set_model(it->old_model);
-                                 prefab_override_context::restore_overrides(*it->overrides);
-                             }
-                         }
-                     });
+                 ctx.get_cached<editing_manager>().do_action("MCP Batch Set Models", edits);
 
                  std::vector<std::string> skinned_without_animation;
                  for(const auto& e : entries)
@@ -455,7 +487,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
              "(the project's layer.layers setting) or indices, or \"everything\" / \"nothing\". Physics queries "
              "and rendering filter on them; scene_get_entities_batch detail summary reports them.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"layers":{"anyOf":[{"type":"array","items":{"anyOf":[{"type":"string"},{"type":"integer","minimum":0,"maximum":31}]}},{"type":"string","enum":["everything","nothing"]}],"description":"Layer names or indices, or \"everything\" / \"nothing\""}},"required":["entity_id","layers"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"layers":{"anyOf":[{"type":"array","items":{"anyOf":[{"type":"string"},{"type":"integer","minimum":0,"maximum":31}]}},{"type":"string","enum":["everything","nothing"]}],"description":"Layer names or indices, or \"everything\" / \"nothing\""}},"required":["entity_id","layers"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
@@ -485,7 +517,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      auto* current = entity ? entity.try_get<layer_component>() : nullptr;
                      if(current == nullptr)
                      {
-                         return {.text = "Entity not found: " + entity_id, .is_error = true};
+                         return {.text = entity ? entity_id + " has no layers to set (no layer component)"
+                                                : "Entity not found: " + entity_id,
+                                 .is_error = true};
                      }
                      layer_mask mask{};
                      if(!parse_layer_mask(ctx, layers_el, mask, error))
@@ -510,15 +544,17 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
         {.name = "scene_set_active_batch",
          .description =
              "Activate or deactivate entities in one undo step; the children of an inactive entity are inactive "
-             "too.",
+             "too." +
+             std::string(k_play_edit_note),
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"active":{"type":"boolean"}},"required":["entity_id","active"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"active":{"type":"boolean"}},"required":["entity_id","active"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
                  scene* scn = nullptr;
                  std::string error;
-                 if(!require_edit_scene(ctx, scn, error))
+                 bool is_temporary = false;
+                 if(!require_live_scene(ctx, scn, is_temporary, error))
                  {
                      return {.text = error, .is_error = true};
                  }
@@ -548,7 +584,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                          return {.text = "Item missing entity_id or active", .is_error = true};
                      }
                      auto entity = find_entity(*scn, entity_id);
-                     if(!entity || !entity.all_of<transform_component>())
+                     if(!entity)
                      {
                          return {.text = "Entity not found: " + entity_id, .is_error = true};
                      }
@@ -565,7 +601,8 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                          std::make_shared<entity_set_active_action_t>(e.entity, e.old_active, e.new_active));
                  }
                  ctx.get_cached<editing_manager>().do_action("MCP Batch Set Active", batch);
-                 return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
+                 return {.text = fmt::format(R"({{"ok":true,"count":{}{}}})", entries.size(), temporary_field(is_temporary)),
+                         .is_error = false};
              },
          .mutates_scene = true,
          .idempotent = true});
@@ -578,7 +615,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
              "first: an unknown name, a component the entity already has or a duplicate item adds nothing. "
              "Configure them with scene_set_component_properties_batch.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string","description":"component Script: C# type"}},"required":["entity_id","component"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string","description":"component Script: C# type"}},"required":["entity_id","component"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -614,7 +651,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
              "Prefab cannot be removed. Every item is checked first. On a prefab instance each removal is "
              "recorded as an override.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string","description":"component Script: C# type"},"script_index":{"type":"integer","minimum":0,"description":"component Script: which of the entity's scripts of that type, from 0"}},"required":["entity_id","component"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string","description":"component Script: C# type"},"script_index":{"type":"integer","minimum":0,"description":"component Script: which of the entity's scripts of that type, from 0"}},"required":["entity_id","component"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -648,6 +685,43 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  }
              }
              ctx.get_cached<editing_manager>().do_action("MCP Remove Components", batch);
+             return {.text = fmt::format(R"({{"ok":true,"count":{}}})", parts.size()), .is_error = false};
+         },
+         .mutates_scene = true});
+
+    registry.add(
+        {.name = "scene_reset_components_batch",
+         .description =
+             "Put components back to their defaults in one undo step, as the Inspector's Reset does. Each item: "
+             "entity_id, component (a name from scene_list_components, or Script with type_name and "
+             "script_index; a script's fields go back to the values its class gives them). Every item is checked "
+             "first. On a prefab instance each property the reset changes becomes an override.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string","description":"component Script: C# type"},"script_index":{"type":"integer","minimum":0,"description":"component Script: which of the entity's scripts of that type, from 0"}},"required":["entity_id","component"]}}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             std::vector<entity_part> parts;
+             std::string error;
+             // A reset needs what a removal needs: the component or script on the entity.
+             if(!read_part_items(ctx, args, part_change::remove, parts, error))
+             {
+                 return {.text = error + "; nothing was reset", .is_error = true};
+             }
+             auto batch = std::make_shared<composite_action_t>();
+             for(const auto& part : parts)
+             {
+                 if(part.component)
+                 {
+                     batch->add_sub_action(std::make_shared<entity_reset_component_action_t>(part.entity, part.component));
+                     continue;
+                 }
+                 const auto& scripts = part.entity.get<script_component>().get_script_components();
+                 batch->add_sub_action(
+                     std::make_shared<entity_reset_script_component_action_t>(part.entity,
+                                                                              scripts[part.script_position].slot));
+             }
+             ctx.get_cached<editing_manager>().do_action("MCP Reset Components", batch);
              return {.text = fmt::format(R"({{"ok":true,"count":{}}})", parts.size()), .is_error = false};
          },
          .mutates_scene = true});

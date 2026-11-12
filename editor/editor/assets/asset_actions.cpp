@@ -252,6 +252,26 @@ auto create_script_from_template(const fs::path& template_path, const fs::path& 
     return write_text_file(dst, content, error);
 }
 
+auto create_new_script(const fs::path& directory, const std::string& stem, std::string* error) -> fs::path
+{
+    const auto extension = ex::get_format<script>();
+    fs::error_code ec;
+    auto path = directory / (stem + extension);
+    for(int number = 1; fs::exists(path, ec); ++number)
+    {
+        path = directory / (stem + std::to_string(number) + extension);
+    }
+    // The template lives outside the compiled scripts tree (.cs.in), so it never ends up in the engine assembly. It
+    // is instantiated with the file stem as the class name: the file is valid, collision-free C# from the moment it
+    // exists, since a recompile can start before anyone renames it.
+    const auto template_path = fs::resolve_protocol("engine:/data/templates/TemplateComponent" + extension + ".in");
+    if(!create_script_from_template(template_path, path, error))
+    {
+        return {};
+    }
+    return path;
+}
+
 auto get_free_copy_path(const fs::path& directory, const std::string& stem, const std::string& extension) -> fs::path
 {
     int index = 0;
@@ -426,10 +446,11 @@ auto move_to_trash(const std::vector<fs::path>& paths, std::string& batch, std::
 
 auto restore_from_trash(const std::string& batch, std::vector<fs::path>& restored, std::string* error) -> bool
 {
+    // Only a batch the trash lists: a name such as "." or a drive ("C:") would reach outside it.
+    const auto batches = list_trash_batches();
     const auto batch_root = get_trash_directory() / batch;
     fs::error_code ec;
-    if(batch.empty() || batch.find_first_of("/\\") != std::string::npos || batch.find("..") != std::string::npos ||
-       !fs::is_directory(batch_root, ec))
+    if(std::find(batches.begin(), batches.end(), batch) == batches.end() || !fs::is_directory(batch_root, ec))
     {
         return report_error(error, "No trash batch " + batch);
     }

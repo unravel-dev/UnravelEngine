@@ -351,6 +351,11 @@ public:
     {
         return temporal_probe_pass_;
     }
+    /// Stops the temporal probe's measurement (temporal_probe_pass::cancel).
+    void cancel_temporal_probe()
+    {
+        temporal_probe_pass_.cancel();
+    }
 
     /**
      * @brief Draws the world-space UI documents and texts over the finished scene.

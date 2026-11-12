@@ -1,6 +1,8 @@
 #include "mcp_asset_wait.h"
 #include "mcp_asset_lookup.h"
 
+#include <editor/system/mcp_manager.h>
+
 #include <engine/animation/animation.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_reader.h>
@@ -10,7 +12,11 @@
 #include <engine/animation/animation_controller.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
+#include <engine/rendering/font.h>
+#include <engine/scripting/script.h>
+#include <engine/ui/style_sheet.h>
 #include <engine/ui/ui_tree.h>
+#include <graphics/shader.h>
 #include <graphics/texture.h>
 
 #include <filesystem/filesystem.h>
@@ -42,7 +48,8 @@ auto source_exists(const std::string& key) -> bool
 /// and leaves the asset empty. An empty asset is not the answer either while time remains: the compiled-asset watcher
 /// reloads it once the compiler writes it, so only an asset still empty at the deadline failed.
 template<typename T>
-auto poll_handle_state(asset_manager& am,
+auto poll_handle_state(const mcp_manager& mcp,
+                       asset_manager& am,
                        const std::string& key,
                        std::chrono::milliseconds timeout,
                        const std::shared_ptr<void>& previous) -> asset_readiness
@@ -73,7 +80,10 @@ auto poll_handle_state(asset_manager& am,
             }
             return source_exists(key) ? asset_readiness::loading : asset_readiness::missing;
         }
-        tpp::this_thread::sleep_for(k_poll_interval);
+        if(!mcp.sleep_unless_stopping(k_poll_interval))
+        {
+            return asset_readiness::loading;
+        }
     }
 }
 
@@ -82,17 +92,22 @@ struct asset_type_list
 {
 };
 
-/// The asset types with a loadable handle, in the order extensions are matched.
+/// Every asset type the asset manager keeps (asset_manager.cpp adds one storage each), in the order extensions are
+/// matched. A reimport of any of them is waited for by its compiled file and its loaded asset.
 using loadable_asset_types = asset_type_list<material,
                                              mesh,
                                              prefab,
                                              scene_prefab,
                                              gfx::texture,
+                                             gfx::shader,
                                              audio_clip,
                                              animation_clip,
                                              animation_controller,
                                              physics_material,
-                                             ui_tree>;
+                                             font,
+                                             script,
+                                             ui_tree,
+                                             style_sheet>;
 
 /// Calls @p visit with the asset type that owns extension @p ext; false when no type does.
 template<typename Visitor, typename T, typename... Rest>
@@ -124,13 +139,14 @@ auto wait_asset_state(rtti::context& ctx,
                       const std::shared_ptr<void>& previous) -> asset_readiness
 {
     auto& am = ctx.get_cached<asset_manager>();
+    const auto& mcp = ctx.get_cached<mcp_manager>();
     const auto ext = fs::path(key).extension().generic_string();
     asset_readiness state{};
     if(visit_asset_type(ext,
                         loadable_asset_types{},
                         [&]<typename T>()
                         {
-                            state = poll_handle_state<T>(am, key, timeout, previous);
+                            state = poll_handle_state<T>(mcp, am, key, timeout, previous);
                         }))
     {
         return state;
@@ -148,7 +164,10 @@ auto wait_asset_state(rtti::context& ctx,
         {
             return source_exists(key) ? asset_readiness::loading : asset_readiness::missing;
         }
-        tpp::this_thread::sleep_for(k_poll_interval);
+        if(!mcp.sleep_unless_stopping(k_poll_interval))
+        {
+            return asset_readiness::loading;
+        }
     }
 }
 

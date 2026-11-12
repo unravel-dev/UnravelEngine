@@ -29,9 +29,13 @@ order: 70
 
 ## Play mode testing (physics, animation, particles, scripts)
 
-Mutating tools refuse play mode, so choreograph (the Scene panel still renders
+Most scene-editing tools refuse play mode, so choreograph (the Scene panel still renders
 during play - viewport_set_camera {target} and viewport_capture_scene film a
-paused moment from any angle):
+paused moment from any angle). scene_set_transforms_batch,
+scene_set_component_properties_batch and scene_set_active_batch do work while
+playing: they change the running game (temporary: true in the result) and the
+change is gone when play stops - to nudge an object mid-test or tune a value
+live, not to build the scene.
 
 1. Move the game's Main Camera entity (scene_set_transforms_batch, WORLD pose)
    to frame the target - BEFORE entering play.
@@ -44,19 +48,22 @@ paused moment from any angle):
    {"panel":"game",...} keeps the game at one size (0 x 0 to undo).
 4. play_set_active {"active":false} - edit state is restored, including
    everything physics moved.
-5. editor_get_status answers "am I in play?" when unsure; play_set_paused +
+5. play_set_time_scale {"time_scale":0.25} slows game time (up to 10 speeds it
+   up; 0 stops it while frames go on); play stopping puts it back to 1.
+   editor_set_frame_pacing sets vsync and the frame cap for the session.
+6. editor_get_status answers "am I in play?" when unsure; play_set_paused +
    play_skip_frame give deterministic frame stepping: each step runs scripts,
    physics and animation once over 1/60 s, so a capture after every step
    films script-driven motion frame by frame. play_skip_frame {"count":30}
    steps 30 frames in one call and returns once they ran.
-6. scripts_invoke calls a public method of a running script with arguments
+7. scripts_invoke calls a public method of a running script with arguments
    (a spell's TryCast at [x,y,z], a door's Open()) - repeatable where clicks
    and key presses depend on timing and screen position. Paused, then
    play_skip_frame, it freezes the result at an exact frame.
-7. particles_control_batch plays, stops or emits an emitter (edit or play
+8. particles_control_batch plays, stops or emits an emitter (edit or play
    mode) and reports num_particles and simulated: an emitter showing nothing
    with simulated false is frozen by renderer-based culling (no camera saw it).
-8. Animation: animation_set_parameters {"entity_id", "triggers":["Attack"]} fires
+9. Animation: animation_set_parameters {"entity_id", "triggers":["Attack"]} fires
    a controller move without input timing; paused, a capture after every
    play_skip_frame {"count":4} makes a frame strip of the move. Root motion
    is proven by the entity's position before and after; a bone that drifts
@@ -103,13 +110,22 @@ jump, a trigger, a menu button.
    it (clear:true) as soon as the test is done; it also clears itself when play
    ends. A virtual pointer also suspends a script's cursor lock; input_get_state
    reports the lock under cursor (lock_state, lock_active, hidden).
-6. editor_ui_click {x, y} clicks the EDITOR's own interface (client pixels of
+6. Touch: input_send_touch {x, y} puts a finger down at game pixels and lifts
+   it after `frames` frames; to_x / to_y drag it there over those frames (a
+   swipe, or an on-screen stick). finger 0-9 tells fingers apart; state down /
+   move / up hold a finger across calls. The game reads it as a touch screen.
+7. Gamepad: input_send_gamepad {"buttons":["South"],"axes":[{"axis":"Left X",
+   "value":1}],"frames":30} drives the game's virtual gamepad, which actions
+   bound to gamepad buttons and axes answer to as to a connected pad. Names are
+   the ones input_list_actions shows; state down holds until an up or
+   release_all, and play ending lets go.
+8. editor_ui_click {x, y} clicks the EDITOR's own interface (client pixels of
    the editor window, edit or play mode) - a panel control no tool covers, such
    as a node of the Animation Controller window. button, double, a drag with
    to_x / to_y and wheel are supported; the pointer is released afterwards.
    Prefer a dedicated tool whenever one exists.
 
-Prove it with numbers, not only pixels: scene_find_entities_batch then
+Prove it with numbers, not only pixels: scene_find_entities then
 scene_get_bounds_batch (both allowed in play mode) before and after gives a
 measurable delta. A displacement that matches speed x frames x frame time is
 proof; a screenshot that "looks moved" is not.
@@ -130,7 +146,7 @@ silently reads zero.
   per view (scene_view, game) models, lights, shadow casters and particles
   drawn. The first check for "is this scene too heavy"; with vsync on the
   times include waiting for the display.
-- profiler_get_passes returns per-render-pass CPU/GPU milliseconds. Pass
+- profiler_get_gpu_passes returns per-render-pass CPU/GPU milliseconds. Pass
   enable:true once to switch the GPU profiler on; one frame is noisy, so
   sample several times and average. Use a prefix filter to watch one pass.
 

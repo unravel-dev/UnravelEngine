@@ -15,6 +15,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <tuple>
 
 namespace unravel::deployment
 {
@@ -236,6 +237,22 @@ public:
         }
     }
 
+    /// Records every reference reached from here on into @p references, an asset reached before included.
+    void record_references(std::vector<content_reference>& references)
+    {
+        references_ = &references;
+    }
+
+    /// Reads every asset's references, reached or not.
+    void scan_all()
+    {
+        for(std::size_t i = 0; i < content_.entries.size(); ++i)
+        {
+            scan(i);
+        }
+        queue_.clear();
+    }
+
 private:
     void index_database()
     {
@@ -317,6 +334,10 @@ private:
     void reach_index(std::size_t index, content_reason use, const std::string& used_by)
     {
         auto& entry = content_.entries[index];
+        if(references_ != nullptr && !used_by.empty() && used_by != entry.key)
+        {
+            references_->push_back({used_by, entry.key});
+        }
         if(entry.is_used)
         {
             return;
@@ -454,6 +475,7 @@ private:
     std::multimap<hpp::uuid, std::string> generated_by_source_;
     std::vector<std::string> script_keys_;
     std::deque<std::size_t> queue_;
+    std::vector<content_reference>* references_{};
 };
 
 /// The length of the longest rule in `rules` that covers `key`; 0 when none does.
@@ -607,6 +629,31 @@ auto detect_content(const content_source& source, const deploy_settings& params,
 auto list_content(const content_source& source) -> content
 {
     return make_content(source);
+}
+
+auto find_content_references(const content_source& source) -> std::vector<content_reference>
+{
+    content result;
+    std::vector<content_reference> references;
+    content_walker walker(source, result);
+    walker.record_references(references);
+    walker.reach_settings();
+    walker.reach_script_paths();
+    walker.scan_all();
+    std::sort(references.begin(),
+              references.end(),
+              [](const content_reference& lhs, const content_reference& rhs)
+              {
+                  return std::tie(lhs.from, lhs.to) < std::tie(rhs.from, rhs.to);
+              });
+    references.erase(std::unique(references.begin(),
+                                 references.end(),
+                                 [](const content_reference& lhs, const content_reference& rhs)
+                                 {
+                                     return lhs.from == rhs.from && lhs.to == rhs.to;
+                                 }),
+                     references.end());
+    return references;
 }
 
 auto find_rule(const deploy_settings& params, const std::string& key) -> content_rule

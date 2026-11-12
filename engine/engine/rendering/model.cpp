@@ -420,7 +420,7 @@ auto model::get_material_instance(uint32_t index) -> material_instance&
 {
     if(index >= material_instances_.size())
     {
-        material_instances_.resize(index + 1);
+        material_instances_.resize(static_cast<size_t>(index) + 1);
     }
     return material_instances_[index];
 }

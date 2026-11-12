@@ -48,6 +48,7 @@ auto reflected_rows() -> const std::vector<reflected_row>&
         {"graphics", "render_scale"},
         {"graphics", "limits"},
         {"graphics", "particles"},
+        {"graphics", "eviction"},
         {"physics", "backend", true},
         {"physics", "fixed_timestep"},
         {"physics", "max_fixed_steps"},
@@ -58,9 +59,11 @@ auto reflected_rows() -> const std::vector<reflected_row>&
         {"splash", "show_made_with"},
         {"splash", "fade_in_sec"},
         {"splash", "fade_out_sec"},
+        {"splash", "logos"},
         {"assets", "texture"},
         {"assets", "audio"},
         {"resolution", "orientation"},
+        {"resolution", "resolutions"},
         {"global_illumination", "global_illumination_quality"},
         {"global_illumination", "reflection_quality"},
         {"global_illumination", "surface_cache_atlas_size"},
@@ -334,6 +337,25 @@ auto collect_groups(const simdjson::dom::object& args) -> std::vector<std::strin
     return groups;
 }
 
+/// The asked-for groups the settings do not have, as an error naming the ones they do; empty when all are known.
+auto find_unknown_groups(const std::vector<std::string>& groups, const settings& current) -> std::string
+{
+    const auto known = group_order(custom_rows(current));
+    std::vector<std::string> unknown;
+    for(const auto& group : groups)
+    {
+        if(std::find(known.begin(), known.end(), group) == known.end())
+        {
+            unknown.push_back(group);
+        }
+    }
+    if(unknown.empty())
+    {
+        return {};
+    }
+    return fmt::format("No settings group {}; the groups are {}", fmt::join(unknown, ", "), fmt::join(known, ", "));
+}
+
 auto wants_group(const std::vector<std::string>& groups, hpp::string_view group) -> bool
 {
     return groups.empty() || std::find(groups.begin(), groups.end(), group) != groups.end();
@@ -383,6 +405,10 @@ void register_settings_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
              const auto groups = collect_groups(args);
+             if(const auto unknown = find_unknown_groups(groups, pm->get_settings()); !unknown.empty())
+             {
+                 return {.text = unknown, .is_error = true};
+             }
              std::string json = "[";
              bool first = true;
              auto add_row = [&](hpp::string_view group, hpp::string_view name, bool cold, const std::string& fields)
@@ -451,6 +477,10 @@ void register_settings_tools(mcp_tool_registry& registry)
              auto current = profile.empty() ? pm->get_settings() : pm->get_profile_settings(profile);
              auto settings_object = entt::forward_as_meta(current);
              const auto groups = collect_groups(args);
+             if(const auto unknown = find_unknown_groups(groups, current); !unknown.empty())
+             {
+                 return {.text = unknown, .is_error = true};
+             }
              const auto custom = custom_rows(current);
 
              std::string json = "{";
@@ -510,7 +540,7 @@ void register_settings_tools(mcp_tool_registry& registry)
              "(\"graphics.limits\":{\"bloom\":false}): an object sets only the fields it names. All-or-nothing: "
              "nothing is written when any entry is rejected. Cold settings are stored but need an editor restart to "
              "take effect. With profile, the values become overrides of that profile (overridden lists them; "
-             "settings_revert removes them), and settings every profile shares (per_profile false) are refused. "
+             "settings_profiles_revert removes them), and settings every profile shares (per_profile false) are refused. "
              "Without profile, shadowed lists the paths the editor's preview profile overrides: the editor shows the "
              "profile's values for them until it previews the project settings again.",
          .input_schema_json =
@@ -701,7 +731,7 @@ void register_settings_tools(mcp_tool_registry& registry)
          .idempotent = true});
 
     registry.add(
-        {.name = "settings_revert",
+        {.name = "settings_profiles_revert",
          .description = "Stop a settings profile overriding project settings: each dotted path (a property such as "
                         "\"graphics.particles\" or \"assets.texture\", or deeper) goes back to the project's value, with "
                         "everything inside it. A path inside an overridden list reverts the whole list. reverted lists the paths "
@@ -760,7 +790,8 @@ void register_settings_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = true,
          .effect = tool_effect::destructive,
-         .idempotent = true});
+         .idempotent = true,
+         .former_names = {"settings_revert"}});
 }
 
 } // namespace unravel::mcp

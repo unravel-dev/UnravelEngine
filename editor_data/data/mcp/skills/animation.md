@@ -22,18 +22,18 @@ names ("Animation", "Two Bone IK").
 
 ## 1. Import
 
-- assets_import_files brings in a model (FBX, glTF) and animation files.
+- assets_import_batch brings in a model (FBX, glTF) and animation files.
   Every animation becomes its own clip "<file>_<animation>.anim" next to the
   model. Files with clips only (no mesh) import too.
-- assets_find_batch {"type":"animation_clip","prefix":"<folder key>"} lists
+- assets_find {"type":"animation_clip","prefix":"<folder key>"} lists
   the clips.
-- A clip's import settings (assets_get_import_settings /
-  assets_set_import_settings on the .anim key) hold root_motion, events and
+- A clip's import settings (assets_get_import_settings_batch /
+  assets_set_import_settings_batch on the .anim key) hold root_motion, events and
   curves. Setting them reimports the clip; pass wait_ms so the call returns
   once it is ready.
 
 ```json
-{"name":"assets_set_import_settings","arguments":{"wait_ms":60000,"items":[
+{"name":"assets_set_import_settings_batch","arguments":{"wait_ms":60000,"items":[
  {"key":"app:/data/Characters/Hero/Hero_Walk.anim","settings":{
   "root_motion":{"keep_in_place":true},
   "events":[{"name":"Footstep","position":0.44,"string_parameter":"right"},
@@ -55,7 +55,7 @@ names ("Animation", "Two Bone IK").
 
 scene_create_batch {"kind":"mesh","asset":"<model key>"} creates the model
 with its bones as child entities; a skinned model gets an Animation component
-then (scene_add_components_batch adds one otherwise). scene_get_hierarchy_batch
+then (scene_add_components_batch adds one otherwise). scene_get_hierarchy
 {"parent_id":<character>,"max_depth":30} lists the bone entities - IK targets,
 foot bones and attached props need their ids.
 
@@ -123,7 +123,7 @@ Three fixes, smallest first:
 - A role on the wrong bone (the clips animate a hand below the wrist that was
   found): set it in the model FILE's import settings; it holds for the model
   and every clip of the file, and the file is imported again.
-  assets_set_import_settings {"items":[{"key":"<model key>","settings":
+  assets_set_import_settings_batch {"items":[{"key":"<model key>","settings":
   {"rig":{"humanoid_overrides":[{"role":"left_hand","bone":"hand.l"}]}}}],
   "wait_ms":120000}. An empty bone takes the role away.
 - Skeletons resting in other poses: Animation retarget_pose "t_pose"
@@ -212,6 +212,13 @@ to crossfade straight to a state; animation_get_state reports each layer's
 state, normalized time, transition and the blended curves - the proof a
 trigger took.
 
+Without play, animation_preview animates the entity as the Animation window's
+previews do: {"entity_id"} plays its controller from the start
+(animation_set_parameters and animation_get_state work on it), and
+{"entity_id","clip","progress":0.5} holds one clip at a point for
+viewport_capture_scene. {"stop":true}, an edit, a save or entering play puts
+the entity's own pose back; the pose is never saved.
+
 ## 6. IK and spring bones
 
 Rig modifiers run after the pose, before skinning. Add each to the bone entity
@@ -233,6 +240,13 @@ it solves (Foot IK goes on the character):
   reaches).
 - Modifiers are non-destructive: scene_get_entities_batch reads the ANIMATED
   bone pose, not the solved one. Verify IK with captures only.
+- rig_setup runs the Inspector's helpers: foot_ik_auto_setup assigns the feet
+  and hips found by humanoid role (on the entity with Foot IK);
+  create_target / create_pole make the target (at the bone, or in front of the
+  eyes for Look At IK) or the pole (in front of the knee or elbow) and assign
+  it, under the character so it does not move with the limb - modifier picks
+  two_bone, chain or look_at when a bone has several. reset_spring_bones
+  restarts a spring chain from its pose.
 
 ## 7. Verify on screen
 
@@ -245,7 +259,8 @@ Reads alone do not prove animation. The reliable recipe:
    viewport_capture_game) between steps for a frame strip.
 4. animation_get_state for the state and weights; scene_get_bounds_batch or
    transforms for the entity's travel (root motion).
-5. Stop play before editing: mutating tools refuse play mode.
+5. Stop play before editing: the tools that edit the scene and its assets refuse play mode
+   (transforms, component properties and active change the running game only, until play stops).
 
 Check against the world: feet on the floor standing, crouching and landing;
 hips at the character's height; a turn ends facing where it should; hands

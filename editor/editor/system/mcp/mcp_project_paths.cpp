@@ -131,6 +131,16 @@ auto to_project_data_key(rtti::context& ctx, const std::string& input, std::stri
         error = outside_project_error(input);
         return false;
     }
+    // Characters no file name holds on every platform; on Windows a ':' would write an alternate stream instead.
+    constexpr const char* k_reserved_characters = "<>:\"|?*";
+    for(const auto& segment : segments)
+    {
+        if(segment.find_first_of(k_reserved_characters) != std::string::npos)
+        {
+            error = "'" + input + "' has a character file names cannot hold (one of " + k_reserved_characters + ")";
+            return false;
+        }
+    }
     std::string normalized = k_app_prefix;
     for(size_t i = 0; i < segments.size(); ++i)
     {
@@ -163,6 +173,8 @@ auto to_project_data_file_key(rtti::context& ctx,
     const auto extension = to_lower_extension(key);
     if(std::find(extensions.begin(), extensions.end(), extension) != extensions.end())
     {
+        // Written in lower case: the engine reads its formats by their exact extension.
+        key = fs::path(key).replace_extension(extension).generic_string();
         return true;
     }
     // A dot inside a name ("Crate.v2") is not an extension; another asset type's one is a mistake.

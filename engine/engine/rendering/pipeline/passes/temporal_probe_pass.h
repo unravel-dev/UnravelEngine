@@ -100,6 +100,12 @@ public:
         const camera* cam = nullptr;
     };
 
+    temporal_probe_pass() = default;
+    temporal_probe_pass(const temporal_probe_pass&) = delete;
+    auto operator=(const temporal_probe_pass&) -> temporal_probe_pass& = delete;
+    /// A readback still in flight keeps its CPU buffers: bgfx writes them once its frame retires.
+    ~temporal_probe_pass();
+
     auto init(rtti::context& ctx) -> bool;
 
     /// Arms a measurement of @p frames frames starting with the next run; a running one restarts. @p is_lowpass
@@ -112,6 +118,10 @@ public:
                  bool is_lowpass = false,
                  bool keeps_images = false,
                  std::vector<uint32_t> marks = {});
+
+    /// Stops a measurement that is armed or accumulating; a readback in flight lands and is dropped. The last
+    /// result is cleared.
+    void cancel();
 
     /// Frames folded in so far by the current or last measurement.
     auto get_frames_done() const -> uint32_t;

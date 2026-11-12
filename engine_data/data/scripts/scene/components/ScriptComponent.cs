@@ -571,6 +571,14 @@ namespace Unravel.Core
                 UIDataModels.AppendJsonValue(json, result, InvokeResultDepth, InvokeResultItems);
                 return json.Append('}').ToString();
             }
+            foreach (MethodInfo method in GetType().GetMethods(BindingFlags.Public | BindingFlags.Static))
+            {
+                if (method.Name == name)
+                {
+                    return MakeInvokeError($"{GetType().FullName}.{name} is static; this calls methods of the running " +
+                                           "script instance");
+                }
+            }
             return MakeInvokeError($"{GetType().FullName} has no public method {name} taking {values.Length} " +
                                    "argument(s) of types they convert to");
         }

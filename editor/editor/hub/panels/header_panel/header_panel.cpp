@@ -15,6 +15,7 @@
 #include <editor/imgui/integration/imgui_style.h>
 #include <editor/assets/asset_watcher.h>
 
+#include <engine/input/input.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/defaults/defaults.h>
 #include <engine/ecs/ecs.h>
@@ -73,23 +74,12 @@ constexpr float HEADER_MCP_HEIGHT_SHARE = 0.8f;
 constexpr float HEADER_MCP_ROUNDING = 0.3f;
 constexpr ImU32 HEADER_MCP_HOVERED_COLOR = IM_COL32(255, 255, 255, 26);
 
-/// Switching the mode recompiles and reloads every script, so only a real change goes through.
-void set_script_debug_mode(bool is_debug_mode)
-{
-    if(script_system::get_script_debug_mode() == is_debug_mode)
-    {
-        return;
-    }
-    script_system::set_script_debug_mode(is_debug_mode);
-    script_system::set_needs_recompile("app", true);
-}
-
 void draw_script_mode_items()
 {
     const bool is_debug_mode = script_system::get_script_debug_mode();
     if(ImGui::MenuItem(ICON_MDI_BUG_CHECK " Debug", nullptr, is_debug_mode))
     {
-        set_script_debug_mode(true);
+        editor_actions::set_script_debug_mode(true);
     }
     ImGui::SetItemTooltipEx("%s",
                             "Debug mode enables C# debugging\n"
@@ -98,7 +88,7 @@ void draw_script_mode_items()
                             "and reload all scripts.");
     if(ImGui::MenuItem(ICON_MDI_BUG " Release", nullptr, !is_debug_mode))
     {
-        set_script_debug_mode(false);
+        editor_actions::set_script_debug_mode(false);
     }
     ImGui::SetItemTooltipEx("%s",
                             "Release mode disables C# debugging\n"
@@ -633,7 +623,10 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
 
     // A focused Animation Controller window undoes, redoes and saves its own controller.
     const bool edits_controller = parent_->get_animation_panel().is_focused();
-    if(!ImGui::IsAnyItemActive())
+    // While the game plays with the keyboard (its panel focused), its keys are the game's: Ctrl+Z is not an undo.
+    const bool game_has_keyboard =
+        editor_actions::get_play_state(ctx).is_active && ctx.get_cached<input_system>().manager.is_input_allowed();
+    if(!ImGui::IsAnyItemActive() && !game_has_keyboard)
     {
         if(ImGui::IsCombinationKeyPressed(shortcuts::new_scene))
         {

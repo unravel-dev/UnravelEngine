@@ -59,6 +59,8 @@ public:
     auto start_steam_upload(rtti::context& ctx, const deploy_settings& params) -> bool;
     /// The steps of the running deploy, or of the last one until the window is closed.
     auto get_jobs() const -> const deployment::deploy_jobs&;
+    /// The output folder of the deploy, upload or run the window tracks now or tracked last; empty before any.
+    auto get_deployed_location() const -> const fs::path&;
     auto is_deploying() const -> bool;
     /// Share of the deploy steps that are done, 0 to 1; 1 while nothing deploys.
     auto get_progress() const -> float;

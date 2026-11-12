@@ -41,7 +41,7 @@ and the C# that drives them. Check exact signatures with scripting-api before wr
 
 ## Spawning and destroying
 
-- Build the thing once, save it with prefabs_create_from_entities_batch, then
+- Build the thing once, save it with prefab_create_from_entities_batch, then
   Scene.Instantiate("app:/data/Prefabs/Coin.pfb", position) at runtime.
 - Scene.DestroyEntity(entity) removes it (an optional delay in seconds).
 

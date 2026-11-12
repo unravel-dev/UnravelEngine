@@ -31,7 +31,7 @@ engine:/data/scripts/samples/SampleHudController.cs.
 
 ## Skinning with sprites
 
-- Pack the art into one atlas texture (import it with assets_import_files) and name its
+- Pack the art into one atlas texture (import it with assets_import_batch) and name its
   rectangles in a style sheet the documents link:
   @spritesheet ui { src: app:/data/UI/atlas.png; panel: 0px 0px 100px 100px;
   panel-inner: 10px 10px 80px 80px; }
@@ -43,7 +43,7 @@ engine:/data/scripts/samples/SampleHudController.cs.
   checkbox (frame + tick) showed no tick; one sprite per state (box, box with tick) did.
 - Textures compile block-compressed: put sprites on 4 px boundaries with 4 px gaps, and
   store pixel art at a whole multiple (4x) so it stays crisp - or turn compression off
-  for the atlas: assets_set_import_settings {"items":[{"key":"app:/data/UI/atlas.png",
+  for the atlas: assets_set_import_settings_batch {"items":[{"key":"app:/data/UI/atlas.png",
   "settings":{"quality":{"compression":"none"}}}]} (see the assets skill).
 - Fonts: @font-face { font-family: "Name"; src: "app:/data/Fonts/File.ttf"; }. Prefer static
   TTFs; variable fonts can render squished on Windows.

@@ -164,6 +164,8 @@ constexpr int k_invalid_request = -32600;
 constexpr int k_method_not_found = -32601;
 constexpr int k_invalid_params = -32602;
 constexpr int k_internal_error = -32603;
+/// MCP's code for a resources/read of a resource the server does not have.
+constexpr int k_resource_not_found = -32002;
 /// How long a main-thread tool waits for the main thread to pick it up; once picked up it runs to the end.
 constexpr auto k_main_thread_tool_timeout = std::chrono::milliseconds(15000);
 } // namespace
@@ -306,6 +308,8 @@ void mcp_manager::stop()
         return;
     }
 
+    // Waiting tool calls see the flag and end, so the join below does not wait out their timeouts.
+    stopping_.store(true);
     running_.store(false);
     if(server_)
     {
@@ -316,6 +320,7 @@ void mcp_manager::stop()
         server_thread_.join();
     }
     server_.reset();
+    stopping_.store(false);
     log_activity("lifecycle", "Server stopped");
     APPLOG_INFO("MCP server stopped");
 }
@@ -323,6 +328,39 @@ void mcp_manager::stop()
 auto mcp_manager::is_running() const -> bool
 {
     return running_.load();
+}
+
+auto mcp_manager::is_stopping() const -> bool
+{
+    return stopping_.load();
+}
+
+auto mcp_manager::sleep_unless_stopping(std::chrono::milliseconds interval) const -> bool
+{
+    if(is_stopping())
+    {
+        return false;
+    }
+    std::this_thread::sleep_for(interval);
+    return !is_stopping();
+}
+
+auto mcp_manager::post_on_main(std::function<void()> fn, std::chrono::milliseconds timeout) -> bool
+{
+    tpp::this_thread::register_this_thread();
+    auto future = tpp::async_on_process(tpp::main_thread::get_id(),
+                                        [fn = std::move(fn)]()
+                                        {
+                                            try
+                                            {
+                                                fn();
+                                            }
+                                            catch(const std::exception& ex)
+                                            {
+                                                APPLOG_ERROR("MCP main-thread cleanup failed: {}", ex.what());
+                                            }
+                                        });
+    return wait_while_running(future, timeout);
 }
 
 auto mcp_manager::is_enabled() const -> bool
@@ -460,145 +498,201 @@ auto mcp_manager::dispatch_json_rpc(const std::string& body) -> std::string
 {
     mcp::json_rpc_request request;
     std::string parse_error;
-    if(!mcp::parse_json_rpc_request(body, request, parse_error))
+    const auto parse_result = mcp::parse_json_rpc_request(body, request, parse_error);
+    if(parse_result != mcp::json_rpc_parse_error::none)
     {
         error_count_.fetch_add(1);
-        log_activity("rpc", "Parse error: " + parse_error, true);
-        return mcp::make_json_rpc_error(std::nullopt, k_parse_error, parse_error);
+        log_activity("rpc", "Refused: " + parse_error, true);
+        return mcp::make_json_rpc_error(std::nullopt,
+                                        parse_result == mcp::json_rpc_parse_error::not_json ? k_parse_error
+                                                                                            : k_invalid_request,
+                                        parse_error);
     }
-
-    hpp::optional<std::string> id = request.has_id ? request.id_json : std::nullopt;
-
+    // A message without an id is a notification: JSON-RPC answers none, and a request sent that way is not run.
+    if(!request.has_id)
+    {
+        const bool is_notification = request.method.rfind("notifications/", 0) == 0;
+        if(!is_notification)
+        {
+            error_count_.fetch_add(1);
+        }
+        log_activity("rpc",
+                     is_notification ? request.method : request.method + " ignored: a request needs an id",
+                     !is_notification);
+        return {};
+    }
+    const hpp::optional<std::string> id = request.id_json;
     if(request.method == "initialize")
     {
         log_activity("rpc", "initialize");
         const auto protocol_version = negotiate_protocol_version(request.params_json);
         const auto result = fmt::format(
-            R"({{"protocolVersion":{},"capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"unravel-editor","version":{}}},"instructions":{}}})",
+            R"({{"protocolVersion":{},"capabilities":{{"tools":{{}},"resources":{{}}}},"serverInfo":{{"name":"unravel-editor","version":{}}},"instructions":{}}})",
             mcp::make_json_string(std::string(protocol_version.data(), protocol_version.size())),
             mcp::make_json_string(version::get_full()),
             mcp::make_json_string(mcp::get_server_instructions()));
         return mcp::make_json_rpc_result(id, result);
     }
-
-    // Notifications (no id) get no response body; the transport answers 202.
-    if(!request.has_id && request.method.rfind("notifications/", 0) == 0)
-    {
-        log_activity("rpc", request.method);
-        return {};
-    }
-
     if(request.method == "ping")
     {
         return mcp::make_json_rpc_result(id, "{}");
     }
-
     if(request.method == "tools/list")
     {
         log_activity("rpc", fmt::format("tools/list ({} tools)", registry_.visible_tool_count()));
         return mcp::make_json_rpc_result(id, fmt::format(R"({{"tools":{}}})", registry_.list_tools_json()));
     }
-
     if(request.method == "tools/call")
     {
-        if(!ctx_)
-        {
-            error_count_.fetch_add(1);
-            log_activity("tool", "tools/call failed: no context", true);
-            return mcp::make_json_rpc_error(id, k_internal_error, "MCP manager has no context");
-        }
-
-        simdjson::dom::parser parser;
-        simdjson::dom::element params_root;
-        if(parser.parse(request.params_json).get(params_root))
-        {
-            error_count_.fetch_add(1);
-            log_activity("tool", "tools/call invalid params", true);
-            return mcp::make_json_rpc_error(id, k_invalid_params, "Invalid tools/call params");
-        }
-
-        simdjson::dom::object params;
-        if(params_root.get(params))
-        {
-            error_count_.fetch_add(1);
-            log_activity("tool", "tools/call params must be an object", true);
-            return mcp::make_json_rpc_error(id, k_invalid_params, "tools/call params must be an object");
-        }
-
-        hpp::string_view tool_name_view;
-        if(params["name"].get(tool_name_view))
-        {
-            error_count_.fetch_add(1);
-            log_activity("tool", "tools/call missing name", true);
-            return mcp::make_json_rpc_error(id, k_invalid_params, "tools/call missing name");
-        }
-        const std::string tool_name(tool_name_view);
-
-        const auto* tool = registry_.find(tool_name);
-        if(!tool)
-        {
-            error_count_.fetch_add(1);
-            log_activity("tool", "Unknown tool: " + tool_name, true);
-            return mcp::make_json_rpc_error(id, k_method_not_found, unknown_tool_message(tool_name));
-        }
-
-        if(!registry_.is_available(*tool))
-        {
-            error_count_.fetch_add(1);
-            log_activity("tool", "Tool outside the active profile: " + tool_name, true);
-            return mcp::make_json_rpc_error(
-                id,
-                k_method_not_found,
-                fmt::format("Tool '{}' is developer-only and this editor runs the '{}' MCP profile. "
-                            "Restart the editor with --mcp-profile=developer to expose it.",
-                            tool_name,
-                            mcp::to_string(registry_.get_profile())));
-        }
-
-        std::string args_json = "{}";
-        simdjson::dom::element args_el;
-        if(!params["arguments"].get(args_el))
-        {
-            args_json = std::string(simdjson::minify(args_el));
-        }
-
-        if(tool->requires_main_thread)
-        {
-            // On-process: a tool that changes the scene (opens it, destroys entities) must not run from a wait of
-            // the main thread, such as a render pass blocked on an asset, which would free what that pass uses.
-            std::string failure;
-            auto response = invoke_on_main(
-                [this, &tool_name, &args_json, &id]() -> std::string
-                {
-                    return execute_tool_call(tool_name, args_json, id);
-                },
-                k_main_thread_tool_timeout,
-                &failure);
-            return response ? *response : mcp::make_json_rpc_error(id, k_internal_error, failure);
-        }
-
-        // Action+wait tools: run on HTTP worker so waiting does not stall the frame loop.
-        return execute_tool_call(tool_name, args_json, id);
+        return dispatch_tool_call(request, id);
     }
-
+    if(request.method == "resources/list")
+    {
+        log_activity("rpc", "resources/list");
+        return mcp::make_json_rpc_result(id, fmt::format(R"({{"resources":{}}})", mcp::list_skill_resources_json()));
+    }
+    if(request.method == "resources/templates/list")
+    {
+        return mcp::make_json_rpc_result(id, R"({"resourceTemplates":[]})");
+    }
+    if(request.method == "resources/read")
+    {
+        return read_resource(request, id);
+    }
     error_count_.fetch_add(1);
     log_activity("rpc", "Method not found: " + request.method, true);
     return mcp::make_json_rpc_error(id, k_method_not_found, "Method not found: " + request.method);
 }
 
-auto mcp_manager::execute_tool_call(const std::string& tool_name,
-                                    const std::string& args_json,
-                                    const hpp::optional<std::string>& id) -> std::string
+auto mcp_manager::read_resource(const mcp::json_rpc_request& request, const hpp::optional<std::string>& id)
+    -> std::string
 {
-    const auto* tool = registry_.find(tool_name);
-    if(!tool || !ctx_)
+    simdjson::dom::parser parser;
+    simdjson::dom::element params;
+    hpp::string_view uri;
+    if(parser.parse(request.params_json).get(params) || params["uri"].get(uri))
     {
         error_count_.fetch_add(1);
-        return mcp::make_json_rpc_error(id, k_method_not_found, "Unknown tool: " + tool_name);
+        log_activity("rpc", "resources/read without a uri", true);
+        return mcp::make_json_rpc_error(id, k_invalid_params, "resources/read needs params.uri");
     }
+    std::string contents;
+    std::string error;
+    if(!mcp::read_skill_resource_json(uri, contents, error))
+    {
+        error_count_.fetch_add(1);
+        log_activity("rpc", "resources/read: " + error, true);
+        return mcp::make_json_rpc_error(id, k_resource_not_found, error);
+    }
+    log_activity("rpc", "resources/read " + std::string(uri));
+    return mcp::make_json_rpc_result(id, fmt::format(R"({{"contents":{}}})", contents));
+}
+
+auto mcp_manager::dispatch_tool_call(const mcp::json_rpc_request& request, const hpp::optional<std::string>& id)
+    -> std::string
+{
+    const auto refuse = [&](int code, const std::string& message)
+    {
+        error_count_.fetch_add(1);
+        log_activity("tool", message, true);
+        return mcp::make_json_rpc_error(id, code, message);
+    };
+    if(!ctx_)
+    {
+        return refuse(k_internal_error, "MCP manager has no context");
+    }
+    simdjson::dom::parser parser;
+    simdjson::dom::element params_root;
+    simdjson::dom::object params;
+    if(parser.parse(request.params_json).get(params_root) || params_root.get(params))
+    {
+        return refuse(k_invalid_params, "tools/call params must be an object");
+    }
+    hpp::string_view tool_name_view;
+    if(params["name"].get(tool_name_view))
+    {
+        return refuse(k_invalid_params, "tools/call missing name");
+    }
+    const std::string tool_name(tool_name_view);
+    const auto* tool = registry_.find(tool_name);
+    if(!tool)
+    {
+        return refuse(k_invalid_params, unknown_tool_message(tool_name));
+    }
+    if(!registry_.is_available(*tool))
+    {
+        return refuse(k_invalid_params,
+                      fmt::format("Tool '{}' is developer-only and this editor runs the '{}' MCP profile. "
+                                  "Restart the editor with --mcp-profile=developer to expose it.",
+                                  tool->name,
+                                  mcp::to_string(registry_.get_profile())));
+    }
+    simdjson::dom::parser empty_parser;
+    simdjson::dom::element args_root;
+    if(params["arguments"].get(args_root) && empty_parser.parse(std::string("{}")).get(args_root))
+    {
+        return refuse(k_internal_error, "Could not read the call's arguments");
+    }
+    if(args_root.type() != simdjson::dom::element_type::OBJECT)
+    {
+        return refuse(k_invalid_params, "tools/call arguments must be an object");
+    }
+    auto check = mcp::check_arguments(*tool, args_root);
+    if(tool_name != tool->name)
+    {
+        check.warnings.insert(check.warnings.begin(),
+                              fmt::format("{} is now called {}; the old name keeps working", tool_name, tool->name));
+    }
+    std::string refusal;
+    if(tool->writes_project_files && !mcp::require_not_deploying(*ctx_, refusal))
+    {
+        auto result = make_failed_call(tool->name, refusal);
+        result.warnings = std::move(check.warnings);
+        return mcp::make_json_rpc_result(id, mcp::make_tool_result(result));
+    }
+    if(!check.errors.empty())
+    {
+        auto message = fmt::format("The arguments do not match the input schema of {}; nothing was done:", tool->name);
+        for(const auto& error : check.errors)
+        {
+            message += "\n- " + error;
+        }
+        auto result = make_failed_call(tool->name, message);
+        result.warnings = std::move(check.warnings);
+        return mcp::make_json_rpc_result(id, mcp::make_tool_result(result));
+    }
+    if(!tool->requires_main_thread)
+    {
+        // Action+wait tools: run on the HTTP worker so waiting does not stall the frame loop.
+        return mcp::make_json_rpc_result(id,
+                                         mcp::make_tool_result(execute_tool_call(*tool, check.normalized_json, check.warnings)));
+    }
+    // On-process: a tool that changes the scene (opens it, destroys entities) must not run from a wait of
+    // the main thread, such as a render pass blocked on an asset, which would free what that pass uses.
+    std::string failure;
+    auto result = invoke_on_main(
+        [&]() -> mcp::tool_result
+        {
+            return execute_tool_call(*tool, check.normalized_json, check.warnings);
+        },
+        k_main_thread_tool_timeout,
+        &failure);
+    return mcp::make_json_rpc_result(id, mcp::make_tool_result(result ? *result : make_failed_call(tool->name, failure)));
+}
+
+auto mcp_manager::make_failed_call(const std::string& tool_name, const std::string& message) -> mcp::tool_result
+{
+    error_count_.fetch_add(1);
+    log_activity("tool", fmt::format("{} -> error: {}", tool_name, message), true);
+    return {.text = message, .is_error = true};
+}
+
+auto mcp_manager::execute_tool_call(const mcp::mcp_tool& tool, const std::string& args_json, std::vector<std::string> warnings)
+    -> mcp::tool_result
+{
     {
         std::lock_guard<std::mutex> lock(last_tool_mutex_);
-        last_tool_name_ = tool_name;
+        last_tool_name_ = tool.name;
     }
     // Counted for as long as the call runs, whichever way it returns.
     struct active_call_scope
@@ -616,17 +710,13 @@ auto mcp_manager::execute_tool_call(const std::string& tool_name,
         auto operator=(const active_call_scope&) -> active_call_scope& = delete;
     };
     const active_call_scope active_call(active_call_count_);
-
     simdjson::dom::parser args_parser;
     simdjson::dom::element args_root;
     simdjson::dom::object args;
     if(args_parser.parse(args_json).get(args_root) || args_root.get(args))
     {
-        error_count_.fetch_add(1);
-        log_activity("tool", "Invalid arguments for " + tool_name, true);
-        return mcp::make_json_rpc_error(id, k_invalid_params, "Invalid tool arguments");
+        return make_failed_call(tool.name, "Invalid tool arguments");
     }
-
     tool_call_count_.fetch_add(1);
     // Editor actions are undoable only inside an undo scope, which the panels open around their own
     // edits. A tool call runs outside any panel - or, by chance, nested inside one that is waiting
@@ -651,28 +741,46 @@ auto mcp_manager::execute_tool_call(const std::string& tool_name,
         undo_scope(const undo_scope&) = delete;
         auto operator=(const undo_scope&) -> undo_scope& = delete;
     };
-    const bool opens_undo_scope = tool->mutates_scene && tool->requires_main_thread && ctx_->has<editing_manager>();
+    const bool opens_undo_scope = tool.mutates_scene && tool.requires_main_thread && ctx_->has<editing_manager>();
     const undo_scope scope(opens_undo_scope ? &ctx_->get_cached<editing_manager>() : nullptr);
     if(opens_undo_scope)
     {
         // One call is one undo step, never merged into the previous call's.
         ctx_->get_cached<editing_manager>().break_undo_merge();
     }
-    auto result = tool->handler(*ctx_, args);
-    auto unknown_arguments = mcp::find_unknown_arguments(*tool, args_root);
-    result.warnings.insert(result.warnings.begin(), unknown_arguments.begin(), unknown_arguments.end());
+    mcp::tool_result result;
+    try
+    {
+        result = tool.handler(*ctx_, args);
+    }
+    catch(const std::exception& ex)
+    {
+        result = {.text = fmt::format("{} failed: {}. What it changed before failing stays changed; read the state "
+                                      "before calling again.",
+                                      tool.name,
+                                      ex.what()),
+                  .is_error = true};
+    }
+    catch(...)
+    {
+        result = {.text = fmt::format("{} failed with an unknown error. What it changed before failing stays "
+                                      "changed; read the state before calling again.",
+                                      tool.name),
+                  .is_error = true};
+    }
+    result.warnings.insert(result.warnings.begin(), warnings.begin(), warnings.end());
     if(result.is_error)
     {
         error_count_.fetch_add(1);
-        log_activity("tool", fmt::format("{} -> error: {}", tool_name, result.text), true);
+        log_activity("tool", fmt::format("{} -> error: {}", tool.name, result.text), true);
     }
     else
     {
         const auto preview = result.text.size() > 120 ? result.text.substr(0, 117) + "..." : result.text;
         const auto image_note = result.image_base64.empty() ? "" : " [image]";
-        log_activity("tool", fmt::format("{} -> {}{}", tool_name, preview, image_note));
+        log_activity("tool", fmt::format("{} -> {}{}", tool.name, preview, image_note));
     }
-    return mcp::make_json_rpc_result(id, mcp::make_tool_result(result));
+    return result;
 }
 
 } // namespace unravel

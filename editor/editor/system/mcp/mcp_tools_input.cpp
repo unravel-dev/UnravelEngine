@@ -4,6 +4,7 @@
 
 #include <editor/editing/editor_actions.h>
 #include <editor/system/mcp_manager.h>
+#include <engine/events.h>
 #include <engine/input/input.h>
 #include <engine/rendering/renderer.h>
 
@@ -16,6 +17,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -34,6 +36,10 @@ constexpr auto k_frame_budget = std::chrono::milliseconds(100);
 constexpr uint64_t k_focus_frames = 4;
 /// Longest hold one call can ask for.
 constexpr int64_t k_max_hold_frames = 600;
+/// The touch device input_send_touch's fingers come from, apart from a real screen's.
+constexpr uint64_t k_mcp_touch_device = 0x4D4350;
+/// Fingers input_send_touch tells apart.
+constexpr int64_t k_max_finger_index = 9;
 
 void push_mouse_button_event(uint32_t window_id, os::mouse::button button, bool down, input::coord position)
 {
@@ -68,24 +74,6 @@ auto virtual_pointer(rtti::context& ctx) -> input::coord
     return position != nullptr && *position ? **position : input::coord{};
 }
 
-auto parse_mouse_button(hpp::string_view name, os::mouse::button& out) -> bool
-{
-    constexpr std::pair<const char*, os::mouse::button> buttons[] = {{"left", os::mouse::button::left},
-                                                                     {"right", os::mouse::button::right},
-                                                                     {"middle", os::mouse::button::middle},
-                                                                     {"x1", os::mouse::button::x1},
-                                                                     {"x2", os::mouse::button::x2}};
-    for(const auto& [button_name, button] : buttons)
-    {
-        if(name == button_name)
-        {
-            out = button;
-            return true;
-        }
-    }
-    return false;
-}
-
 /// One key of a call, with the modifiers held around it.
 struct key_request
 {
@@ -95,7 +83,7 @@ struct key_request
     bool shift{false};
 };
 
-/// Modifier keys a key sequence holds down.
+/// Modifier keys a key sequence holds down, left and right apart: letting go of one leaves the other held.
 struct held_modifiers
 {
     bool ctrl{};
@@ -105,19 +93,26 @@ struct held_modifiers
     /// Records `code` going down or up when it is a modifier.
     void track(os::key::code code, bool down)
     {
-        if(code == os::key::code::lctrl || code == os::key::code::rctrl)
+        constexpr std::array<std::pair<os::key::code, size_t>, 6> sides{{{os::key::code::lctrl, 0},
+                                                                         {os::key::code::rctrl, 1},
+                                                                         {os::key::code::lshift, 2},
+                                                                         {os::key::code::rshift, 3},
+                                                                         {os::key::code::lalt, 4},
+                                                                         {os::key::code::ralt, 5}}};
+        for(const auto& [side_code, index] : sides)
         {
-            ctrl = down;
+            if(code == side_code)
+            {
+                is_down[index] = down;
+            }
         }
-        else if(code == os::key::code::lshift || code == os::key::code::rshift)
-        {
-            shift = down;
-        }
-        else if(code == os::key::code::lalt || code == os::key::code::ralt)
-        {
-            alt = down;
-        }
+        ctrl = is_down[0] || is_down[1];
+        shift = is_down[2] || is_down[3];
+        alt = is_down[4] || is_down[5];
     }
+
+private:
+    std::array<bool, 6> is_down{};
 };
 
 /// One key event, flagged with the modifiers held: the UI reads Ctrl / Shift / Alt from the flags
@@ -229,6 +224,18 @@ auto read_key_request(const simdjson::dom::element& item, key_request& request, 
         read_bool(object, "shift", request.shift);
     }
     std::string key_name(name);
+    // "ctrl + s" reads as "ctrl+s": spaces around a plus join a modifier to its key.
+    for(auto plus = key_name.find('+'); plus != std::string::npos; plus = key_name.find('+', plus + 1))
+    {
+        while(plus > 0 && key_name[plus - 1] == ' ')
+        {
+            key_name.erase(--plus, 1);
+        }
+        while(plus + 1 < key_name.size() && key_name[plus + 1] == ' ')
+        {
+            key_name.erase(plus + 1, 1);
+        }
+    }
     while(take_modifier_prefix(key_name, request))
     {
     }
@@ -315,6 +322,71 @@ auto input_state_json(rtti::context& ctx) -> std::string
         bool_to_json(cursor.is_hidden()));
 }
 
+/// Keys and buttons MCP holds down (state down) until a later up. The end of play and clear release them: the game's
+/// input forgets them on its own, but the editor UI keeps a synthesized press held until it sees the release.
+struct held_input
+{
+    std::mutex mutex;
+    uint32_t window_id{};
+    std::vector<os::key::code> keys;
+    std::vector<os::mouse::button> buttons;
+    bool watches_play_end{};
+};
+
+auto get_held_input() -> held_input&
+{
+    static held_input held;
+    return held;
+}
+
+/// Lets go of every held key and button. Main thread.
+void release_held_input()
+{
+    auto& held = get_held_input();
+    std::lock_guard<std::mutex> lock(held.mutex);
+    push_key_sequence(held.window_id, held.keys, false);
+    for(const auto button : held.buttons)
+    {
+        push_mouse_button_event(held.window_id, button, false, {});
+    }
+    held.keys.clear();
+    held.buttons.clear();
+}
+
+/// Records keys and buttons going down (state down) or up, so release_held_input knows them. Main thread.
+void track_held_input(rtti::context& ctx,
+                      uint32_t window_id,
+                      const std::vector<os::key::code>& keys,
+                      const std::vector<os::mouse::button>& buttons,
+                      bool down)
+{
+    auto& held = get_held_input();
+    std::lock_guard<std::mutex> lock(held.mutex);
+    held.window_id = window_id;
+    const auto update = [down](auto& list, const auto& items)
+    {
+        for(const auto& item : items)
+        {
+            list.erase(std::remove(list.begin(), list.end(), item), list.end());
+            if(down)
+            {
+                list.push_back(item);
+            }
+        }
+    };
+    update(held.keys, keys);
+    update(held.buttons, buttons);
+    if(down && !held.watches_play_end)
+    {
+        held.watches_play_end = true;
+        ctx.get_cached<events>().on_play_end.connect(
+            [](rtti::context&)
+            {
+                release_held_input();
+            });
+    }
+}
+
 /// Moves the virtual pointer for input_send_mouse: game pixels by default, or screen pixels.
 auto move_pointer(rtti::context& ctx, uint32_t window_id, const simdjson::dom::object& args, std::string& error) -> bool
 {
@@ -373,10 +445,8 @@ void push_text_input_event(uint32_t window_id, const std::string& text)
 
 auto get_input_manager(rtti::context& ctx) -> input::os_input_manager*
 {
-    if(!ctx.has<input_system>())
-    {
-        return nullptr;
-    }
+    // The editor adds its input system before the MCP server starts. get_cached keeps the reference after the first
+    // call, so worker threads do not read the context's map while the main thread changes it.
     return &ctx.get_cached<input_system>().manager;
 }
 
@@ -389,9 +459,10 @@ auto wait_input_frames(rtti::context& ctx, uint64_t frames) -> bool
     }
     const auto target = manager->get_input_frame() + frames;
     const auto deadline = std::chrono::steady_clock::now() + k_frame_wait_timeout + k_frame_budget * frames;
+    const auto& mcp = ctx.get_cached<mcp_manager>();
     while(manager->get_input_frame() < target)
     {
-        if(std::chrono::steady_clock::now() > deadline)
+        if(std::chrono::steady_clock::now() > deadline || mcp.is_stopping())
         {
             return false;
         }
@@ -430,8 +501,17 @@ auto prepare_game_input(mcp_manager& mcp,
         error = error.empty() ? failure : error;
         return false;
     }
-    auto* manager = get_input_manager(ctx);
-    for(uint64_t frame = 0; focus_game_panel && !manager->is_input_allowed() && frame < k_focus_frames; ++frame)
+    // Read on the main thread, which sets it each frame.
+    const auto is_input_allowed = [&mcp, &ctx]()
+    {
+        const auto allowed = mcp.invoke_on_main(
+            [&ctx]()
+            {
+                return get_input_manager(ctx)->is_input_allowed();
+            });
+        return allowed && *allowed;
+    };
+    for(uint64_t frame = 0; focus_game_panel && !is_input_allowed() && frame < k_focus_frames; ++frame)
     {
         if(!wait_input_frames(ctx, 1))
         {
@@ -439,7 +519,7 @@ auto prepare_game_input(mcp_manager& mcp,
             return false;
         }
     }
-    if(focus_game_panel && !manager->is_input_allowed())
+    if(focus_game_panel && !is_input_allowed())
     {
         error = "The Game panel did not take input focus (is play mode running and the panel visible?)";
         return false;
@@ -456,6 +536,17 @@ auto push_on_main(mcp_manager& mcp, const std::function<void()>& push) -> bool
             return true;
         });
     return pushed.has_value();
+}
+
+auto release_on_main(mcp_manager& mcp, std::function<void()> push) -> bool
+{
+    return mcp.post_on_main(std::move(push));
+}
+
+auto lock_input_sequence() -> std::unique_lock<std::mutex>
+{
+    static std::mutex sequence_mutex;
+    return std::unique_lock<std::mutex>(sequence_mutex);
 }
 
 auto move_game_pointer(rtti::context& ctx, uint32_t window_id, input::coord game_position, std::string& error)
@@ -489,25 +580,31 @@ auto click_mouse_button(mcp_manager& mcp,
                         uint64_t frames,
                         std::string& error) -> bool
 {
-    const auto push_button = [&](bool down)
-    {
-        return push_on_main(mcp,
-                            [&]
-                            {
-                                push_mouse_button_event(window_id, button, down, virtual_pointer(ctx));
-                            });
-    };
-    if(!push_button(true))
+    const bool pressed = push_on_main(mcp,
+                                      [&]
+                                      {
+                                          push_mouse_button_event(window_id, button, true, virtual_pointer(ctx));
+                                      });
+    if(!pressed)
     {
         error = "Timed out reaching the editor main thread; nothing was pressed";
         return false;
     }
     const bool held = wait_input_frames(ctx, frames);
-    // Released whatever happened above, so a stalled editor does not keep the button held.
-    const bool released = push_button(false) && wait_input_frames(ctx, 1);
-    if(!held || !released)
+    // Released whatever happened above, and never dropped, so a stalled editor does not keep the button held.
+    const bool released = release_on_main(mcp,
+                                          [context = &ctx, window_id, button]()
+                                          {
+                                              push_mouse_button_event(window_id, button, false, virtual_pointer(*context));
+                                          });
+    if(!released)
     {
-        error = "The editor stopped advancing frames during the click";
+        error = "The editor's main thread is busy: the release is queued and lets go of the button once it is free";
+        return false;
+    }
+    if(!held || !wait_input_frames(ctx, 1))
+    {
+        error = "The editor stopped advancing frames during the click; the button was released";
         return false;
     }
     return true;
@@ -588,15 +685,12 @@ auto run_ui_gesture(mcp_manager& mcp,
         return click_mouse_button(mcp, ctx, window_id, button, 1, error) &&
                (!is_double || click_mouse_button(mcp, ctx, window_id, button, 1, error));
     }
-    const auto push_button = [&](bool down)
-    {
-        return push_on_main(mcp,
-                            [&]
-                            {
-                                push_mouse_button_event(window_id, button, down, virtual_pointer(ctx));
-                            });
-    };
-    bool moved = push_button(true) && wait_input_frames(ctx, 1);
+    bool moved = push_on_main(mcp,
+                              [&]
+                              {
+                                  push_mouse_button_event(window_id, button, true, virtual_pointer(ctx));
+                              }) &&
+                 wait_input_frames(ctx, 1);
     for(int step = 1; moved && step <= k_ui_drag_steps; ++step)
     {
         const float t = float(step) / float(k_ui_drag_steps);
@@ -609,15 +703,138 @@ auto run_ui_gesture(mcp_manager& mcp,
                              }) &&
                 wait_input_frames(ctx, 1);
     }
-    // Released whatever happened above, so no button stays held.
-    const bool released = push_button(false) && wait_input_frames(ctx, 1);
-    if(!moved || !released)
+    // Released whatever happened above, and never dropped, so no button stays held.
+    const bool released = release_on_main(mcp,
+                                          [context = &ctx, window_id, button]()
+                                          {
+                                              push_mouse_button_event(window_id, button, false, virtual_pointer(*context));
+                                          });
+    if(!released)
     {
-        error = "The editor stopped advancing frames during the drag";
+        error = "The editor's main thread is busy: the release is queued and lets go of the button once it is free";
+        return false;
+    }
+    if(!moved || !wait_input_frames(ctx, 1))
+    {
+        error = "The editor stopped advancing frames during the drag; the button was released";
         return false;
     }
     return true;
 }
+/// The buttons and axes one input_send_gamepad call names.
+struct gamepad_request
+{
+    std::vector<input::gamepad_button> buttons;
+    std::vector<std::pair<input::gamepad_axis, float>> axes;
+};
+
+/// Reads buttons and axes by the names the action maps show; false with @p error on an unknown name or none.
+auto read_gamepad_request(const simdjson::dom::object& args, gamepad_request& out, std::string& error) -> bool
+{
+    simdjson::dom::array buttons;
+    if(args["buttons"].get(buttons) == simdjson::SUCCESS)
+    {
+        for(auto element : buttons)
+        {
+            hpp::string_view name;
+            const auto found = element.get(name) == simdjson::SUCCESS
+                                   ? gamepad_button_table().find(normalize_input_name(name))
+                                   : gamepad_button_table().end();
+            if(found == gamepad_button_table().end())
+            {
+                error = fmt::format("Unknown gamepad button {} (South, East, West, North, DPad Up, Left Shoulder, "
+                                    "Start, ... as input_list_actions shows them)",
+                                    simdjson::minify(element));
+                return false;
+            }
+            out.buttons.push_back(found->second);
+        }
+    }
+    simdjson::dom::array axes;
+    if(args["axes"].get(axes) == simdjson::SUCCESS)
+    {
+        for(auto element : axes)
+        {
+            simdjson::dom::object axis;
+            hpp::string_view name;
+            if(element.get(axis) != simdjson::SUCCESS || axis["axis"].get(name) != simdjson::SUCCESS)
+            {
+                error = "Each axis is {axis, value}";
+                return false;
+            }
+            const auto found = gamepad_axis_table().find(normalize_input_name(name));
+            if(found == gamepad_axis_table().end())
+            {
+                error = "Unknown gamepad axis " + std::string(name) +
+                        " (Left X, Left Y, Right X, Right Y, Left Trigger, Right Trigger)";
+                return false;
+            }
+            // A missing value centers the axis: up needs none.
+            double value = 0.0;
+            (void)axis["value"].get(value);
+            out.axes.emplace_back(found->second, static_cast<float>(std::clamp(value, -1.0, 1.0)));
+        }
+    }
+    if(out.buttons.empty() && out.axes.empty())
+    {
+        error = "Pass buttons, axes or release_all";
+        return false;
+    }
+    return true;
+}
+
+/// Holds the request's buttons and axes (down) or lets them go and centers the axes. Main thread.
+void apply_gamepad_request(rtti::context& ctx, const gamepad_request& request, bool down)
+{
+    auto* manager = get_input_manager(ctx);
+    if(manager == nullptr)
+    {
+        return;
+    }
+    auto& gamepad = manager->get_virtual_gamepad();
+    for(const auto button : request.buttons)
+    {
+        gamepad.set_button(button, down);
+    }
+    for(const auto& [axis, value] : request.axes)
+    {
+        gamepad.set_axis(axis, down ? value : 0.0f);
+    }
+}
+
+/// Queues a finger event at @p game_position (pixels of the game's render target); false with @p error when the
+/// point lies outside the Game panel. Main thread.
+auto push_finger_event(rtti::context& ctx,
+                       uint32_t window_id,
+                       os::events type,
+                       uint64_t finger,
+                       input::coord game_position,
+                       std::string& error) -> bool
+{
+    auto* manager = get_input_manager(ctx);
+    if(manager == nullptr)
+    {
+        error = "input_system unavailable";
+        return false;
+    }
+    if(type != os::events::finger_up && !manager->is_inside_work_zone(game_position))
+    {
+        error = fmt::format("Game point [{}, {}] is outside the Game panel's view", game_position.x, game_position.y);
+        return false;
+    }
+    const auto normalized = manager->unmap_finger_position(game_position);
+    os::event event{};
+    event.type = type;
+    event.finger.touch_id = k_mcp_touch_device;
+    event.finger.finger_id = finger;
+    event.finger.window_id = window_id;
+    event.finger.x = normalized[0];
+    event.finger.y = normalized[1];
+    event.finger.pressure = type == os::events::finger_up ? 0.0f : 1.0f;
+    os::push_event(event);
+    return true;
+}
+
 } // namespace
 
 void register_input_tools(mcp_tool_registry& registry)
@@ -648,13 +865,17 @@ void register_input_tools(mcp_tool_registry& registry)
              "walks a character for 60 frames); down holds them until a later up. Key names are the platform's, "
              "ignoring case, spaces and dashes (\"w\", \"space\", \"left shift\", \"f1\"); \"ctrl+s\" or {key, "
              "ctrl, shift, alt} adds modifiers. text types characters into the focused text field. Focuses the "
-             "Game panel first (unless focus_game_panel is false) and waits until it accepts input.",
+             "Game panel first (unless focus_game_panel is false) and waits until it accepts input; with "
+             "focus_game_panel false the keys reach whatever has focus, the editor's shortcuts included. Keys held "
+             "with state down are released when play ends or by input_send_mouse clear. Input tools run one call at "
+             "a time.",
          .input_schema_json =
              R"json({"type":"object","properties":{"keys":{"type":"array","items":{"anyOf":[{"type":"string"},{"type":"object","properties":{"key":{"type":"string"},"alt":{"type":"boolean"},"ctrl":{"type":"boolean"},"shift":{"type":"boolean"}},"required":["key"]}]},"description":"Key names, or objects with modifiers"},"text":{"type":"string","description":"Characters to type (UTF-8), sent after the keys go down"},"state":{"type":"string","enum":["press","down","up"],"description":"Default press"},"frames":{"type":"integer","minimum":1,"maximum":600,"description":"state press: frames to hold; default 1"},"focus_game_panel":{"type":"boolean","description":"Default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
+             const auto sequence = lock_input_sequence();
              std::string text;
              read_string(args, "text", text);
              std::vector<key_request> keys;
@@ -669,6 +890,10 @@ void register_input_tools(mcp_tool_registry& registry)
              if(state != "down" && state != "up" && state != "press")
              {
                  return {.text = "state must be press, down or up", .is_error = true};
+             }
+             if(state == "up" && !text.empty())
+             {
+                 return {.text = "text is typed as keys go down; state up only lets go of keys", .is_error = true};
              }
              uint32_t window_id = 0;
              if(!prepare_game_input(mcp, ctx, read_focus_choice(args), window_id, error))
@@ -685,6 +910,10 @@ void register_input_tools(mcp_tool_registry& registry)
                                                   {
                                                       push_text_input_event(window_id, text);
                                                   }
+                                                  if(state != "press")
+                                                  {
+                                                      track_held_input(ctx, window_id, codes, {}, goes_down);
+                                                  }
                                               });
              if(!pushed)
              {
@@ -697,12 +926,18 @@ void register_input_tools(mcp_tool_registry& registry)
              // A tap has to span a frame boundary, or the key is released before anything reads it.
              const auto frames = read_hold_frames(args);
              const bool held = wait_input_frames(ctx, frames);
-             const bool released = push_on_main(mcp,
-                                                [&]
-                                                {
-                                                    push_key_sequence(window_id, codes, false);
-                                                });
-             if(!held || !released)
+             const bool released = release_on_main(mcp,
+                                                   [window_id, codes]()
+                                                   {
+                                                       push_key_sequence(window_id, codes, false);
+                                                   });
+             if(!released)
+             {
+                 return {.text = "The editor's main thread is busy: the release is queued and lets go of the keys once "
+                                 "it is free",
+                         .is_error = true};
+             }
+             if(!held)
              {
                  return {.text = "The editor stopped advancing frames; the keys were released", .is_error = true};
              }
@@ -717,29 +952,34 @@ void register_input_tools(mcp_tool_registry& registry)
              "Synthesize mouse input for the game through a virtual pointer that replaces the real cursor until "
              "clear:true (the user's mouse does not reach the editor meanwhile). x, y move it - space game "
              "(default: pixels of the game's render target, what Input.mousePosition reads) or screen (desktop "
-             "pixels) - and must lie inside the Game panel. button with state click (default) presses for "
+             "pixels) - and must lie inside the Game panel. button (x1 / x2 are the side buttons action maps call "
+             "Button 4 / Button 5) with state click (default) presses for "
              "`frames` frames, then releases; down / up hold and release. wheel scrolls (positive away from the "
              "viewer). Move, button and wheel combine, in that order. Play mode only; the pointer clears itself "
-             "when play ends.",
+             "and held keys and buttons are released when play ends. Input tools run one call at a time.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"space":{"type":"string","enum":["game","screen"],"description":"Default game"},"button":{"type":"string","enum":["left","right","middle","x1","x2"]},"state":{"type":"string","enum":["click","down","up"],"description":"Default click"},"frames":{"type":"integer","minimum":1,"maximum":600,"description":"state click: frames to hold; default 1"},"wheel":{"type":"number"},"clear":{"type":"boolean","description":"Release the virtual pointer"},"focus_game_panel":{"type":"boolean","description":"Default true"}}})json",
+             R"json({"type":"object","properties":{"x":{"type":"number","minimum":-100000,"maximum":100000},"y":{"type":"number","minimum":-100000,"maximum":100000},"space":{"type":"string","enum":["game","screen"],"description":"Default game"},"button":{"type":"string","enum":["left","right","middle","x1","x2"]},"state":{"type":"string","enum":["click","down","up"],"description":"Default click"},"frames":{"type":"integer","minimum":1,"maximum":600,"description":"state click: frames to hold; default 1"},"wheel":{"type":"number"},"clear":{"type":"boolean","description":"Hand the pointer back to the mouse and release every key and button held with state down"},"focus_game_panel":{"type":"boolean","description":"Default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
+             const auto sequence = lock_input_sequence();
              bool clear = false;
              read_bool(args, "clear", clear);
              if(clear)
              {
-                 push_on_main(mcp,
-                              [&]
-                              {
-                                  if(auto* manager = get_input_manager(ctx))
-                                  {
-                                      manager->set_virtual_mouse_position({});
-                                  }
-                              });
-                 return {.text = R"({"ok":true,"cleared":true})"};
+                 // Never dropped: the user's mouse comes back and nothing MCP held stays down.
+                 const bool cleared = release_on_main(mcp,
+                                                      [context = &ctx]()
+                                                      {
+                                                          release_held_input();
+                                                          if(auto* manager = get_input_manager(*context))
+                                                          {
+                                                              manager->set_virtual_mouse_position({});
+                                                          }
+                                                      });
+                 return {.text = cleared ? R"({"ok":true,"cleared":true})"
+                                         : R"({"ok":true,"cleared":false,"queued":true})"};
              }
              std::string button_name;
              const bool has_button = read_string(args, "button", button_name);
@@ -786,9 +1026,19 @@ void register_input_tools(mcp_tool_registry& registry)
                          return false;
                      }
                      auto* manager = get_input_manager(ctx);
-                     if((has_button || has_wheel) && !manager->get_virtual_mouse_position())
+                     const auto& pointer = manager->get_virtual_mouse_position();
+                     if((has_button || has_wheel) && !pointer)
                      {
                          error = "No virtual pointer: pass x and y first";
+                         return false;
+                     }
+                     // The pointer is kept in screen pixels: a Game panel moved or resized since may have left it on
+                     // the editor, where a press would land.
+                     if(!has_move && (has_button || has_wheel) &&
+                        !manager->is_inside_work_zone(manager->remap_to_work_zone(*pointer)))
+                     {
+                         error = "The pointer is outside the Game panel now (the panel moved or was resized); pass x "
+                                 "and y again";
                          return false;
                      }
                      return true;
@@ -811,6 +1061,7 @@ void register_input_tools(mcp_tool_registry& registry)
                                                   if(has_button && state != "click")
                                                   {
                                                       push_mouse_button_event(window_id, button, state == "down", virtual_pointer(ctx));
+                                                      track_held_input(ctx, window_id, {}, {button}, state == "down");
                                                   }
                                                   if(has_wheel)
                                                   {
@@ -836,19 +1087,234 @@ void register_input_tools(mcp_tool_registry& registry)
          .requires_main_thread = false});
 
     registry.add(
-        {.name = "editor_ui_click",
+        {.name = "input_send_gamepad",
          .description =
-             "Click the editor's own UI - a panel tab, an inspector button, a timeline - at a point of the editor "
-             "main window's client area (physical pixels, what a capture of the window shows), to verify editor "
-             "tools. A virtual pointer stands in for the user's mouse during the call and is released at its end. "
-             "button (default left); double:true double-clicks; to_x/to_y drag from x,y to there instead of "
-             "clicking; wheel scrolls the panel under x,y instead (positive scrolls up). Edit and play mode.",
+             "Drive the game's virtual gamepad in play mode - the pad on-screen controls drive, which actions mapped "
+             "to gamepad buttons and axes answer to as they do to a connected pad. buttons by the names "
+             "input_list_actions shows (\"South\", \"DPad Up\", \"Left Shoulder\"); axes as {axis, value}: "
+             "\"Left X\" from -1 (left) to 1 (right), \"Left Y\" from -1 (up) to 1 (down), triggers from 0 to 1. "
+             "state press (default) holds them for `frames` frames, then lets go and centers them; down holds them "
+             "until a later up (axes an up names are centered) or play ends. release_all lets go of everything. "
+             "Input tools run one call at a time.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right","middle"]},"double":{"type":"boolean"},"to_x":{"type":"number"},"to_y":{"type":"number"},"wheel":{"type":"number"}},"required":["x","y"]})json",
+             R"json({"type":"object","properties":{"buttons":{"type":"array","items":{"type":"string"}},"axes":{"type":"array","items":{"type":"object","properties":{"axis":{"type":"string"},"value":{"type":"number","minimum":-1,"maximum":1}},"required":["axis"]}},"state":{"type":"string","enum":["press","down","up"],"description":"Default press"},"frames":{"type":"integer","minimum":1,"maximum":600,"description":"state press: frames to hold; default 1"},"release_all":{"type":"boolean","description":"Let go of every button and center every axis"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
+             const auto sequence = lock_input_sequence();
+             bool release_all = false;
+             read_bool(args, "release_all", release_all);
+             gamepad_request request;
+             std::string error;
+             if(!release_all && !read_gamepad_request(args, request, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::string state = "press";
+             read_string(args, "state", state);
+             if(state != "down" && state != "up" && state != "press")
+             {
+                 return {.text = "state must be press, down or up", .is_error = true};
+             }
+             const auto playing = mcp.invoke_on_main(
+                 [&]() -> bool
+                 {
+                     return editor_actions::get_play_state(ctx).is_active;
+                 });
+             if(!playing || !*playing)
+             {
+                 return {.text = "Play mode only: the running game reads the virtual gamepad (play_set_active)",
+                         .is_error = true};
+             }
+             if(release_all)
+             {
+                 const bool released = release_on_main(mcp,
+                                                       [context = &ctx]()
+                                                       {
+                                                           if(auto* manager = get_input_manager(*context))
+                                                           {
+                                                               manager->get_virtual_gamepad().release_all();
+                                                           }
+                                                       });
+                 return {.text = released ? R"({"ok":true,"released":true})"
+                                          : R"({"ok":true,"released":false,"queued":true})"};
+             }
+             const bool goes_down = state != "up";
+             const bool pushed = push_on_main(mcp,
+                                              [&]
+                                              {
+                                                  apply_gamepad_request(ctx, request, goes_down);
+                                              });
+             if(!pushed)
+             {
+                 return {.text = "Timed out reaching the editor main thread; nothing was sent", .is_error = true};
+             }
+             if(state != "press")
+             {
+                 return {.text = fmt::format(R"({{"ok":true,"state":{},"buttons":{},"axes":{}}})",
+                                             make_json_string(state),
+                                             request.buttons.size(),
+                                             request.axes.size())};
+             }
+             const auto frames = read_hold_frames(args);
+             const bool held = wait_input_frames(ctx, frames);
+             const bool released = release_on_main(mcp,
+                                                   [context = &ctx, request]()
+                                                   {
+                                                       apply_gamepad_request(*context, request, false);
+                                                   });
+             if(!released)
+             {
+                 return {.text = "The editor's main thread is busy: the release is queued and lets go once it is free",
+                         .is_error = true};
+             }
+             if(!held)
+             {
+                 return {.text = "The editor stopped advancing frames; the gamepad was let go", .is_error = true};
+             }
+             return {.text = fmt::format(R"({{"ok":true,"state":"press","buttons":{},"axes":{},"frames":{}}})",
+                                         request.buttons.size(),
+                                         request.axes.size(),
+                                         frames)};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
+
+    registry.add(
+        {.name = "input_send_touch",
+         .description =
+             "Synthesize touch for the game in play mode: a finger at x, y, in pixels of the game's render target "
+             "(what Input.mousePosition reads), inside the Game panel. state tap (default) puts it down, holds it "
+             "for `frames` frames - moving it to to_x, to_y over them when given, a swipe or the drag of an "
+             "on-screen stick - and lifts it; down puts it down and leaves it, move moves a finger that is down, up "
+             "lifts it. finger (0-9, default 0) tells fingers apart for multi-touch. The game reads them as a touch "
+             "screen's: touches, on-screen controls, and the pointer when touches drive the mouse. Fingers left down "
+             "are lifted when play ends. Focuses the Game panel first (unless focus_game_panel is false). Input "
+             "tools run one call at a time.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"x":{"type":"number","minimum":-100000,"maximum":100000},"y":{"type":"number","minimum":-100000,"maximum":100000},"to_x":{"type":"number","minimum":-100000,"maximum":100000},"to_y":{"type":"number","minimum":-100000,"maximum":100000},"state":{"type":"string","enum":["tap","down","move","up"],"description":"Default tap"},"frames":{"type":"integer","minimum":1,"maximum":600,"description":"state tap: frames the finger stays down; default 1"},"finger":{"type":"integer","minimum":0,"maximum":9,"description":"Default 0"},"focus_game_panel":{"type":"boolean","description":"Default true"}},"required":["x","y"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             const auto sequence = lock_input_sequence();
+             double x = 0.0;
+             double y = 0.0;
+             if(!read_double(args, "x", x) || !read_double(args, "y", y))
+             {
+                 return {.text = "Pass x and y", .is_error = true};
+             }
+             double to_x = 0.0;
+             double to_y = 0.0;
+             const bool has_to_x = read_double(args, "to_x", to_x);
+             const bool has_to_y = read_double(args, "to_y", to_y);
+             if(has_to_x != has_to_y)
+             {
+                 return {.text = "Pass to_x and to_y together", .is_error = true};
+             }
+             std::string state = "tap";
+             read_string(args, "state", state);
+             if(state != "tap" && state != "down" && state != "move" && state != "up")
+             {
+                 return {.text = "state must be tap, down, move or up", .is_error = true};
+             }
+             if(has_to_x && state != "tap")
+             {
+                 return {.text = "to_x and to_y are for state tap; move a finger that is down with state move",
+                         .is_error = true};
+             }
+             const auto finger = static_cast<uint64_t>(std::clamp<int64_t>(read_int64_or(args, "finger", 0), 0, k_max_finger_index));
+             std::string error;
+             const auto playing = mcp.invoke_on_main(
+                 [&]() -> bool
+                 {
+                     return editor_actions::get_play_state(ctx).is_active;
+                 });
+             if(!playing || !*playing)
+             {
+                 return {.text = "Play mode only: touches reach the running game (play_set_active)", .is_error = true};
+             }
+             uint32_t window_id = 0;
+             if(!prepare_game_input(mcp, ctx, read_focus_choice(args), window_id, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             const input::coord start{static_cast<int>(x), static_cast<int>(y)};
+             const input::coord end = has_to_x ? input::coord{static_cast<int>(to_x), static_cast<int>(to_y)} : start;
+             const auto first_event = state == "tap" || state == "down" ? os::events::finger_down
+                                      : state == "move"                 ? os::events::finger_motion
+                                                                        : os::events::finger_up;
+             bool is_pushed = false;
+             const bool reached = push_on_main(mcp,
+                                               [&]
+                                               {
+                                                   is_pushed = push_finger_event(ctx, window_id, first_event, finger, start, error);
+                                               });
+             if(!reached || !is_pushed)
+             {
+                 return {.text = reached ? error : "Timed out reaching the editor main thread; nothing was sent",
+                         .is_error = true};
+             }
+             if(state != "tap")
+             {
+                 return {.text = fmt::format(R"({{"ok":true,"state":{},"finger":{}}})", make_json_string(state), finger)};
+             }
+             const auto frames = read_hold_frames(args);
+             bool held = true;
+             for(uint64_t frame = 1; frame <= frames && held; ++frame)
+             {
+                 held = wait_input_frames(ctx, 1);
+                 if(has_to_x && held)
+                 {
+                     const double share = static_cast<double>(frame) / static_cast<double>(frames);
+                     const input::coord point{static_cast<int>(std::lround(x + (to_x - x) * share)),
+                                              static_cast<int>(std::lround(y + (to_y - y) * share))};
+                     push_on_main(mcp,
+                                  [&]
+                                  {
+                                      std::string ignored;
+                                      push_finger_event(ctx, window_id, os::events::finger_motion, finger, point, ignored);
+                                  });
+                 }
+             }
+             const bool lifted = release_on_main(mcp,
+                                                 [context = &ctx, window_id, finger, end]()
+                                                 {
+                                                     std::string ignored;
+                                                     push_finger_event(*context, window_id, os::events::finger_up, finger, end, ignored);
+                                                 });
+             if(!lifted)
+             {
+                 return {.text = "The editor's main thread is busy: the lift is queued and runs once it is free",
+                         .is_error = true};
+             }
+             if(!held)
+             {
+                 return {.text = "The editor stopped advancing frames; the finger was lifted", .is_error = true};
+             }
+             return {.text = fmt::format(R"({{"ok":true,"state":"tap","finger":{},"frames":{}}})", finger, frames)};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
+
+    registry.add(
+        {.name = "editor_ui_click",
+         .description =
+             "Click the editor's own UI - a panel tab, an inspector button, a timeline - at a point of the editor "
+             "main window's client area (in the pixels the platform reports the window's size in: physical on "
+             "Windows, logical on HiDPI macOS and Wayland), to verify editor "
+             "tools. A virtual pointer stands in for the user's mouse during the call; at its end the pointer is as "
+             "it was (the user's mouse, or the game pointer input_send_mouse placed). "
+             "button (default left); double:true double-clicks; to_x/to_y drag from x,y to there instead of "
+             "clicking; wheel scrolls the panel under x,y instead (positive scrolls up). Edit and play mode.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"x":{"type":"number","minimum":0,"maximum":100000},"y":{"type":"number","minimum":0,"maximum":100000},"button":{"type":"string","enum":["left","right","middle"]},"double":{"type":"boolean"},"to_x":{"type":"number","minimum":0,"maximum":100000},"to_y":{"type":"number","minimum":0,"maximum":100000},"wheel":{"type":"number"}},"required":["x","y"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             const auto sequence = lock_input_sequence();
              double x = 0.0;
              double y = 0.0;
              if(args["x"].get(x) != simdjson::SUCCESS || args["y"].get(y) != simdjson::SUCCESS)
@@ -866,26 +1332,35 @@ void register_input_tools(mcp_tool_registry& registry)
              read_bool(args, "double", is_double);
              double to_x = 0.0;
              double to_y = 0.0;
-             const bool is_drag =
-                 args["to_x"].get(to_x) == simdjson::SUCCESS && args["to_y"].get(to_y) == simdjson::SUCCESS;
+             const bool has_to_x = args["to_x"].get(to_x) == simdjson::SUCCESS;
+             const bool has_to_y = args["to_y"].get(to_y) == simdjson::SUCCESS;
+             const bool is_drag = has_to_x && has_to_y;
+             double wheel = 0.0;
+             const bool is_wheel = args["wheel"].get(wheel) == simdjson::SUCCESS;
+             if(has_to_x != has_to_y)
+             {
+                 return {.text = "A drag needs both to_x and to_y", .is_error = true};
+             }
+             if(is_wheel && (is_drag || is_double))
+             {
+                 return {.text = "wheel scrolls instead of clicking: leave out double, to_x and to_y", .is_error = true};
+             }
              std::string error;
              uint32_t window_id = 0;
              input::coord start{};
              input::coord end{};
+             // The pointer a game input call left: given back at the end instead of the user's mouse.
+             hpp::optional<input::coord> previous_pointer;
              const auto placed = mcp.invoke_on_main(
                  [&]() -> bool
                  {
-                     if(get_input_manager(ctx) == nullptr)
-                     {
-                         error = "input_system unavailable";
-                         return false;
-                     }
                      if(!get_main_window_id(ctx, window_id, error) ||
                         !client_to_screen(ctx, {int(x), int(y)}, start, error) ||
                         (is_drag && !client_to_screen(ctx, {int(to_x), int(to_y)}, end, error)))
                      {
                          return false;
                      }
+                     previous_pointer = get_input_manager(ctx)->get_virtual_mouse_position();
                      set_ui_pointer(ctx, window_id, start);
                      return true;
                  });
@@ -893,19 +1368,15 @@ void register_input_tools(mcp_tool_registry& registry)
              {
                  return {.text = error.empty() ? "Timed out reaching the editor main thread" : error, .is_error = true};
              }
-             double wheel = 0.0;
-             const bool is_wheel = args["wheel"].get(wheel) == simdjson::SUCCESS;
              const bool done = is_wheel ? scroll_ui(mcp, ctx, window_id, float(wheel), error)
                                         : run_ui_gesture(mcp, ctx, window_id, button, is_double, is_drag, start, end, error);
-             // The user's mouse comes back whatever happened; the next frame polls it again.
-             const bool released = push_on_main(mcp,
-                                                [&]
-                                                {
-                                                    if(auto* manager = get_input_manager(ctx))
-                                                    {
-                                                        manager->set_virtual_mouse_position({});
-                                                    }
-                                                });
+             // The pointer goes back as it was whatever happened, never dropped: the user's mouse, or the game pointer
+             // input_send_mouse placed.
+             const bool released = release_on_main(mcp,
+                                                   [context = &ctx, previous_pointer]()
+                                                   {
+                                                       get_input_manager(*context)->set_virtual_mouse_position(previous_pointer);
+                                                   });
              wait_input_frames(ctx, 1);
              if(!done)
              {
@@ -913,8 +1384,8 @@ void register_input_tools(mcp_tool_registry& registry)
              }
              if(!released)
              {
-                 return {.text = "The gesture ran, but the pointer was not handed back to the mouse (the editor main "
-                                 "thread did not answer); the next editor_ui_click restores it",
+                 return {.text = "The gesture ran; the editor's main thread is busy, so the pointer goes back to the "
+                                 "mouse once it is free",
                          .is_error = true};
              }
              return {.text = fmt::format(R"({{"ok":true,"screen":[{},{}]}})", start.x, start.y)};

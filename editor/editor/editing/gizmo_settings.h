@@ -117,4 +117,48 @@ struct gizmo_setup
     auto operator==(const gizmo_setup&) const -> bool = default;
 };
 
+/// Sets @p field of @p saved to its value in @p after when one edit changed it from @p before.
+template<typename Owner, typename Field>
+void carry_change(Owner& saved, const Owner& before, const Owner& after, Field Owner::*field)
+{
+    if(!(before.*field == after.*field))
+    {
+        saved.*field = after.*field;
+    }
+}
+
+/**
+ * @brief @p saved with what one edit changed between @p before and @p after, field by field. The project keeps the
+ *        user's own choices: a change a tool made for a capture is in @p before and @p after alike, so it stays out.
+ */
+inline auto merge_gizmo_change(gizmo_setup saved, const gizmo_setup& before, const gizmo_setup& after) -> gizmo_setup
+{
+    carry_change(saved, before, after, &gizmo_setup::show_gizmos);
+    carry_change(saved.billboards, before.billboards, after.billboards, &billboard_gizmos::opacity);
+    carry_change(saved.billboards, before.billboards, after.billboards, &billboard_gizmos::size);
+    carry_change(saved.billboards, before.billboards, after.billboards, &billboard_gizmos::depth_aware);
+    carry_change(saved.billboards, before.billboards, after.billboards, &billboard_gizmos::show_camera);
+    carry_change(saved.billboards, before.billboards, after.billboards, &billboard_gizmos::show_light);
+    carry_change(saved.billboards, before.billboards, after.billboards, &billboard_gizmos::show_reflection_probe);
+    carry_change(saved.billboards, before.billboards, after.billboards, &billboard_gizmos::show_audio_source);
+    carry_change(saved.billboards, before.billboards, after.billboards, &billboard_gizmos::show_particle_emitter);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_selection_outline);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_selection_wireframe);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::selection_wireframe_color);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::selection_wireframe_thickness);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_camera);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_light);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_reflection_probe);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_volume);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_model_bounds);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_model_submesh_bounds);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_text);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_particle_emitter);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_component_gizmos);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_particle_emitter_bounds);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_particle_emitter_shape);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_particle_emitter_direction);
+    return saved;
+}
+
 } // namespace unravel

@@ -142,55 +142,35 @@ auto make_tool_result(const tool_result& result) -> std::string
     return fmt::format(R"({{"content":{},"isError":{}}})", content, result.is_error ? "true" : "false");
 }
 
-auto parse_json_rpc_request(const std::string& body, json_rpc_request& out, std::string& error) -> bool
+auto parse_json_rpc_request(const std::string& body, json_rpc_request& out, std::string& error) -> json_rpc_parse_error
 {
     simdjson::dom::parser parser;
     simdjson::dom::element root;
-    auto parse_error = parser.parse(body).get(root);
-    if(parse_error)
+    if(parser.parse(body).get(root))
     {
         error = "Invalid JSON body";
-        return false;
+        return json_rpc_parse_error::not_json;
     }
-
     simdjson::dom::object obj;
     if(root.get(obj))
     {
-        error = "JSON-RPC request must be an object";
-        return false;
+        error = root.type() == simdjson::dom::element_type::ARRAY ? "Batch requests are not supported; send one request per call"
+                                                                  : "JSON-RPC request must be an object";
+        return json_rpc_parse_error::not_a_request;
     }
-
     hpp::string_view method;
     if(obj["method"].get(method))
     {
         error = "Missing JSON-RPC method";
-        return false;
+        return json_rpc_parse_error::not_a_request;
     }
     out.method.assign(method);
-
     simdjson::dom::element params_el;
-    if(!obj["params"].get(params_el))
-    {
-        out.params_json = std::string(simdjson::minify(params_el));
-    }
-    else
-    {
-        out.params_json = "{}";
-    }
-
+    out.params_json = obj["params"].get(params_el) ? std::string("{}") : std::string(simdjson::minify(params_el));
     simdjson::dom::element id_el;
-    if(!obj["id"].get(id_el))
-    {
-        out.has_id = true;
-        out.id_json = std::string(simdjson::minify(id_el));
-    }
-    else
-    {
-        out.has_id = false;
-        out.id_json.reset();
-    }
-
-    return true;
+    out.has_id = !obj["id"].get(id_el);
+    out.id_json = out.has_id ? hpp::optional<std::string>(std::string(simdjson::minify(id_el))) : std::nullopt;
+    return json_rpc_parse_error::none;
 }
 
 } // namespace unravel::mcp

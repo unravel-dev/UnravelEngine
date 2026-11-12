@@ -5,21 +5,26 @@
 #include "mcp_viewport_utils.h"
 
 #include <editor/hub/hub.h>
+#include <editor/hub/panels/profiler_panel/gpu_frame_stats_widgets.h>
 #include <editor/hub/panels/panel.h>
 #include <editor/hub/panels/viewport_stats_overlay.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/editing/create_scene_modal.h>
 #include <editor/editing/editor_actions.h>
 #include <editor/editing/entity_inspect.h>
+#include <editor/editing/prefab_bake.h>
 #include <editor/system/mcp_manager.h>
 #include <editor/system/project_manager.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/ecs_utils.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/render_feature_support.h>
+#include <engine/rendering/renderer.h>
+#include <engine/scripting/ecs/systems/script_system.h>
 #include <graphics/device_caps.h>
 #include <graphics/graphics.h>
 #include <imgui/imgui_internal.h>
+#include <simulation/simulation.h>
 
 #include <algorithm>
 #include <limits>
@@ -39,6 +44,12 @@ constexpr int64_t k_max_emit_count = 100000;
 constexpr double k_milliseconds_per_second = 1000.0;
 /// Frames an answered dialog gets to close and run its answer before the result is read.
 constexpr int k_answer_frames = 2;
+/// Fastest game time play_set_time_scale sets, as a multiple of real time.
+constexpr double k_max_time_scale = 10.0;
+/// Highest frame cap editor_set_frame_pacing sets; 0 is uncapped.
+constexpr int64_t k_max_frame_cap = 1000;
+/// The project's own assets, what editor_run_command recompiles.
+constexpr const char* k_project_assets_group = "app:/";
 
 /// The newest message box still waiting for an answer: the one on top.
 auto find_waiting_box() -> std::shared_ptr<ImBox::MsgBox>
@@ -289,6 +300,18 @@ const std::array<playback_action, 5> k_playback_actions{{
      &particle_emitter_component::stop_and_reset_child_emitters},
 }};
 
+/// Every action particles_control_batch takes: status, emit and the playback actions, from the table.
+auto particle_action_names() -> std::vector<std::string>
+{
+    std::vector<std::string> names{"status"};
+    for(const auto& playback : k_playback_actions)
+    {
+        names.emplace_back(playback.name);
+    }
+    names.emplace_back("emit");
+    return names;
+}
+
 /// Runs one action: status changes nothing, emit queues a burst of @p count for the next update, and
 /// the playback actions run as the inspector's buttons do, with_children reaching the emitters below.
 auto apply_emitter_action(particle_emitter_component& emitter,
@@ -379,6 +402,114 @@ auto control_emitter_item(scene& scn, const simdjson::dom::element& value, size_
     return json + "}";
 }
 
+/// The time scale and frame pacing the header shows, and the scripts' build mode.
+auto pacing_status_json(rtti::context& ctx) -> std::string
+{
+    const auto& sim = ctx.get_cached<simulation>();
+    return fmt::format(R"({{"time_scale":{},"vsync":{},"max_fps":{},"script_debug_mode":{}}})",
+                       sim.get_time_scale(),
+                       bool_to_json(ctx.get_cached<renderer>().get_vsync()),
+                       sim.get_max_fps(),
+                       bool_to_json(script_system::get_script_debug_mode()));
+}
+
+/// One command of editor_run_command: an item of the editor's Build or Developer menu.
+struct editor_command
+{
+    const char* name;
+    /// Refused while playing, as the menu item is: it rewrites project files the running game was loaded from.
+    bool is_edit_only;
+    /// Runs the command; returns the result's own fields ("probes":3), or nothing.
+    std::string (*run)(rtti::context& ctx);
+};
+
+auto run_validate_prefab_graph(rtti::context& ctx) -> std::string
+{
+    const auto report = validate_prefab_graph(ctx);
+    return fmt::format(R"("valid":{},"asset_count":{},"nesting_count":{},"max_depth":{},"cyclic_ids":{},"problem":{})",
+                       bool_to_json(report.is_valid()),
+                       report.asset_count,
+                       report.nesting_count,
+                       report.max_depth,
+                       strings_to_json_array(report.cyclic_ids),
+                       make_json_string(report.describe_problem()));
+}
+
+auto run_migrate_prefabs(rtti::context& ctx) -> std::string
+{
+    size_t total = 0;
+    const auto written = editor_actions::migrate_prefabs(ctx, &total);
+    return fmt::format(R"("written":{},"total":{})", written, total);
+}
+
+const std::array<editor_command, 10> k_editor_commands{{
+    {"build_reflection_captures",
+     false,
+     [](rtti::context& ctx) -> std::string
+     {
+         return fmt::format(R"("probes":{})", editor_actions::rebuild_reflection_probes(ctx, true));
+     }},
+    {"validate_prefab_graph", false, run_validate_prefab_graph},
+    {"migrate_prefabs", true, run_migrate_prefabs},
+    {"migrate_color_spaces",
+     true,
+     [](rtti::context&) -> std::string
+     {
+         return fmt::format(R"("textures":{})", editor_actions::migrate_texture_color_spaces(k_project_assets_group));
+     }},
+    {"recompile_shaders",
+     false,
+     [](rtti::context&) -> std::string
+     {
+         editor_actions::recompile_shaders(k_project_assets_group);
+         return {};
+     }},
+    {"recompile_meshes",
+     false,
+     [](rtti::context&) -> std::string
+     {
+         editor_actions::recompile_meshes(k_project_assets_group);
+         return {};
+     }},
+    {"recompile_ui",
+     false,
+     [](rtti::context&) -> std::string
+     {
+         editor_actions::recompile_ui(k_project_assets_group);
+         return {};
+     }},
+    {"recompile_scripts",
+     false,
+     [](rtti::context&) -> std::string
+     {
+         editor_actions::recompile_scripts(k_project_assets_group);
+         return {};
+     }},
+    {"recompile_all",
+     false,
+     [](rtti::context&) -> std::string
+     {
+         editor_actions::recompile_all(k_project_assets_group);
+         return {};
+     }},
+    {"regenerate_agent_files",
+     false,
+     [](rtti::context& ctx) -> std::string
+     {
+         return fmt::format(R"("written":{})", bool_to_json(ctx.get_cached<project_manager>().regenerate_agent_files()));
+     }},
+}};
+
+auto editor_command_names() -> std::vector<std::string>
+{
+    std::vector<std::string> names;
+    for(const auto& command : k_editor_commands)
+    {
+        names.emplace_back(command.name);
+    }
+    return names;
+}
+
 auto play_state_to_json(const play_state_info& info) -> std::string
 {
     return fmt::format(
@@ -438,7 +569,8 @@ void register_editor_tools(mcp_tool_registry& registry)
         {.name = "editor_get_status",
          .description =
              "Where the editor is, in one call: the open project, the active scene, prefab mode, play state "
-             "(phase, paused, frames running and simulated), the dialog the editor waits on (modal: title, "
+             "(phase, paused, frames running and simulated), pacing (time scale, vsync, max fps, whether scripts "
+             "build in debug mode), the dialog the editor waits on (modal: title, "
              "message, buttons; answer it with editor_answer_modal), the active MCP profile, and the graphics "
              "device (backend, vendor, the rendering features it does not run with the reason and the fallback).",
          .input_schema_json = empty_object_schema(),
@@ -449,11 +581,12 @@ void register_editor_tools(mcp_tool_registry& registry)
                  const auto prefab_json = ctx.has<editing_manager>()
                                               ? prefab_mode_status_json(ctx.get_cached<editing_manager>())
                                               : std::string(R"({"active":false})");
-                 return {.text = fmt::format(R"({{"project":{},"scene":{},"prefab_mode":{},"play":{},"modal":{},"mcp":{},"graphics":{}}})",
+                 return {.text = fmt::format(R"({{"project":{},"scene":{},"prefab_mode":{},"play":{},"pacing":{},"modal":{},"mcp":{},"graphics":{}}})",
                                              project_info_json(ctx),
                                              active_scene_status_json(ctx),
                                              prefab_json,
                                              play_json,
+                                             pacing_status_json(ctx),
                                              modal_status_json(),
                                              mcp_status_json(ctx),
                                              graphics_status_json()),
@@ -492,14 +625,7 @@ void register_editor_tools(mcp_tool_registry& registry)
              {
                  return {.text = requested ? requested->error : "Timed out on the main thread", .is_error = true};
              }
-             for(int frame = 0; frame < k_answer_frames; ++frame)
-             {
-                 mcp.invoke_on_main(
-                     []()
-                     {
-                         return true;
-                     });
-             }
+             wait_input_frames(ctx, k_answer_frames);
              auto next = mcp.invoke_on_main(
                  []()
                  {
@@ -569,6 +695,121 @@ void register_editor_tools(mcp_tool_registry& registry)
          .idempotent = true});
 
     registry.add(
+        {.name = "play_set_time_scale",
+         .description = "Set how fast game time runs, as the header's time scale does: 1 is real time, 0.5 half "
+                        "speed, 2 twice as fast, 0 stops game time while frames go on. Works in and out of play; "
+                        "play stopping puts it back to 1, and scripts may change it (Time.timeScale). "
+                        "editor_get_status pacing shows it.",
+         .input_schema_json =
+             R"({"type":"object","properties":{"time_scale":{"type":"number","minimum":0,"maximum":10}},"required":["time_scale"]})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+             {
+                 double time_scale = 1.0;
+                 if(!read_double(args, "time_scale", time_scale) || time_scale < 0.0 || time_scale > k_max_time_scale)
+                 {
+                     return {.text = "time_scale must be a number from 0 to 10", .is_error = true};
+                 }
+                 auto& sim = ctx.get_cached<simulation>();
+                 const float previous = sim.get_time_scale();
+                 sim.set_time_scale(static_cast<float>(time_scale));
+                 return {.text = fmt::format(R"({{"ok":true,"time_scale":{},"previous":{}}})",
+                                             sim.get_time_scale(),
+                                             previous),
+                         .is_error = false};
+             },
+         .mutates_scene = false,
+         .idempotent = true});
+
+    registry.add(
+        {.name = "editor_set_frame_pacing",
+         .description = "Set vsync and the frame cap for this editor session, as the header's frame pacing menu "
+                        "does: vsync waits for the display before each frame, max_fps caps the frame rate (0: "
+                        "uncapped). Pass either or both. GPU timings read high with vsync on; visual checks are "
+                        "steadier with it.",
+         .input_schema_json =
+             R"({"type":"object","properties":{"vsync":{"type":"boolean"},"max_fps":{"type":"integer","minimum":0,"maximum":1000,"description":"0: uncapped"}}})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+             {
+                 bool vsync = false;
+                 const bool has_vsync = read_bool(args, "vsync", vsync);
+                 int64_t max_fps = 0;
+                 const bool has_max_fps = args["max_fps"].get(max_fps) == simdjson::SUCCESS;
+                 if(!has_vsync && !has_max_fps)
+                 {
+                     return {.text = "Pass vsync, max_fps or both", .is_error = true};
+                 }
+                 if(has_max_fps && (max_fps < 0 || max_fps > k_max_frame_cap))
+                 {
+                     return {.text = "max_fps must be from 0 (uncapped) to 1000", .is_error = true};
+                 }
+                 if(has_vsync)
+                 {
+                     ctx.get_cached<renderer>().set_vsync(vsync);
+                 }
+                 if(has_max_fps)
+                 {
+                     ctx.get_cached<simulation>().set_max_fps(static_cast<uint32_t>(max_fps));
+                 }
+                 return {.text = fmt::format(R"({{"ok":true,"pacing":{}}})", pacing_status_json(ctx)),
+                         .is_error = false};
+             },
+         .mutates_scene = false,
+         .idempotent = true});
+
+    registry.add(
+        {.name = "editor_run_command",
+         .description =
+             "Run a command of the editor's Build and Developer menus. build_reflection_captures rebakes every "
+             "reflection probe in the loaded scenes (after editing the environment or static geometry). "
+             "validate_prefab_graph checks that the prefabs and scenes can be ordered for a build and names those in "
+             "a nesting cycle; it writes nothing. migrate_prefabs re-saves every prefab and scene in the current "
+             "format. migrate_color_spaces tags the textures materials use with their color space and normal maps "
+             "as normal maps, then recompiles the changed ones. recompile_shaders, recompile_meshes, recompile_ui, "
+             "recompile_scripts and recompile_all compile the project's assets of that kind again in the background "
+             "(assets_wait_ready_batch, scripts_get_compile_status tell when they are done). "
+             "regenerate_agent_files rewrites the project's .agents/UNRAVEL.md and adds a missing AGENTS.md. The "
+             "migrations are refused while playing.",
+         .input_schema_json = R"json({"type":"object","properties":{"command":{"type":"string","enum":)json" +
+                              strings_to_json_array(editor_command_names()) +
+                              R"json(}},"required":["command"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+             {
+                 std::string name;
+                 read_string(args, "command", name);
+                 const auto command = std::find_if(k_editor_commands.begin(),
+                                                   k_editor_commands.end(),
+                                                   [&name](const editor_command& entry)
+                                                   {
+                                                       return name == entry.name;
+                                                   });
+                 if(command == k_editor_commands.end())
+                 {
+                     return {.text = "Unknown command: " + name, .is_error = true};
+                 }
+                 std::string error;
+                 if(command->is_edit_only && !require_not_play_mode(ctx, error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 if(!ctx.get_cached<project_manager>().has_open_project())
+                 {
+                     return {.text = "No project is open (project_open)", .is_error = true};
+                 }
+                 const auto fields = command->run(ctx);
+                 return {.text = fmt::format(R"({{"ok":true,"command":{}{}{}}})",
+                                             make_json_string(name),
+                                             fields.empty() ? "" : ",",
+                                             fields),
+                         .is_error = false};
+             },
+         .mutates_scene = false,
+         .effect = tool_effect::destructive,
+         .writes_project_files = true});
+
+    registry.add(
         {.name = "play_skip_frame",
          .description = "Advance frames while play mode is paused: scripts (Update, LateUpdate), physics, "
                         "animation and particles run once per frame over 1/60 s of game time (scaled by the "
@@ -581,31 +822,48 @@ void register_editor_tools(mcp_tool_registry& registry)
              {
                  auto& mcp = ctx.get_cached<mcp_manager>();
                  const auto count = std::clamp<int64_t>(read_int64_or(args, "count", 1), 1, k_max_skip_frames);
+                 // Counted by the frames the simulation ran, so steps dropped by an unpause or a stop meanwhile show.
+                 struct queued_steps
+                 {
+                     std::string error;
+                     uint64_t simulated_before{};
+                 };
                  auto queued = mcp.invoke_on_main(
-                     [&ctx, count]() -> tool_result
+                     [&ctx, count]() -> queued_steps
                      {
-                         std::string error;
-                         for(int64_t step = 0; step < count; ++step)
+                         queued_steps steps{.simulated_before = editor_actions::get_play_state(ctx).frames_simulated};
+                         for(int64_t step = 0; step < count && steps.error.empty(); ++step)
                          {
-                             if(!editor_actions::skip_play_frame(ctx, &error))
-                             {
-                                 return {.text = error, .is_error = true};
-                             }
+                             editor_actions::skip_play_frame(ctx, &steps.error);
                          }
-                         return {.text = "ok", .is_error = false};
+                         return steps;
                      });
                  if(!queued)
                  {
                      return {.text = "Timed out reaching the editor main thread", .is_error = true};
                  }
-                 if(queued->is_error)
+                 if(!queued->error.empty())
                  {
-                     return *queued;
+                     return {.text = queued->error, .is_error = true};
                  }
                  // The steps run one per frame; one more frame lets the last one finish.
-                 if(!wait_input_frames(ctx, static_cast<uint64_t>(count) + 1))
+                 const bool advanced = wait_input_frames(ctx, static_cast<uint64_t>(count) + 1);
+                 const auto state = mcp.invoke_on_main(
+                     [&ctx]()
+                     {
+                         return editor_actions::get_play_state(ctx);
+                     });
+                 const auto ran = state && state->frames_simulated >= queued->simulated_before
+                                      ? state->frames_simulated - queued->simulated_before
+                                      : 0;
+                 if(!advanced || ran < static_cast<uint64_t>(count))
                  {
-                     return {.text = "The editor did not advance the requested frames", .is_error = true};
+                     return {.text = fmt::format("{} of {} frames ran (play is {}): play was resumed or stopped "
+                                                 "meanwhile, or the editor stopped advancing frames",
+                                                 ran,
+                                                 count,
+                                                 state ? state->phase : std::string("unknown")),
+                             .is_error = true};
                  }
                  return {.text = fmt::format(R"({{"ok":true,"frames":{}}})", count), .is_error = false};
              },
@@ -621,7 +879,9 @@ void register_editor_tools(mcp_tool_registry& registry)
              "paused, simulated (false while culling freezes an emitter no camera sees) and culling_mode, as of "
              "this frame: a burst shows up on the next.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"action":{"type":"string","enum":["status","play","pause","resume","stop","stop_and_reset","emit"]},"count":{"type":"integer","minimum":1,"maximum":100000},"with_children":{"type":"boolean"}},"required":["entity_id"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"action":{"type":"string","enum":)json" +
+                 strings_to_json_array(particle_action_names()) +
+                 R"json(},"count":{"type":"integer","minimum":1,"maximum":100000},"with_children":{"type":"boolean"}},"required":["entity_id"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
@@ -766,7 +1026,7 @@ void register_editor_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "editor_open_deploy",
          .description = "Open the Deploy window, as the header's Deploy button does, for a user who should see it. "
-                        "Deploying itself needs no window: deploy_get_state, deploy_set_settings and project_deploy.",
+                        "Deploying itself needs no window: deploy_get_state, deploy_set_settings and deploy_start.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -782,7 +1042,7 @@ void register_editor_tools(mcp_tool_registry& registry)
          .idempotent = true});
 
     registry.add(
-        {.name = "window_request_focus",
+        {.name = "editor_focus_os_window",
          .description =
              "Raise and focus the editor's OS window, for a user who should see it. Asset changes are picked up "
              "without it.",
@@ -798,7 +1058,8 @@ void register_editor_tools(mcp_tool_registry& registry)
                  return {.text = R"({"ok":true,"requested":true})", .is_error = false};
              },
          .mutates_scene = false,
-         .idempotent = true});
+         .idempotent = true,
+         .former_names = {"window_request_focus"}});
 
     registry.add(
         {.name = "panel_focus",
@@ -835,8 +1096,8 @@ void register_editor_tools(mcp_tool_registry& registry)
              "Read the editor console log. Without after_id: the newest max_count entries (default 50). "
              "With after_id (the next_after_id of an earlier call): the entries logged since, oldest "
              "first, max_count at a time - has_more says another page waits. min_level filters by "
-             "severity (default info), contains by text (case-insensitive). The console keeps the last "
-             "~1000 entries. A game running on an Android device logs its own lines as [Device]; the device "
+             "severity (default info), contains by text (case-insensitive). It reads the last 4096 lines "
+             "logged, whatever the console cleared since (on play, on recompile). A game running on an Android device logs its own lines as [Device]; the device "
              "system's lines of its process ([Device System]) are left out unless include_device_system is true, "
              "as the console hides them by default.",
          .input_schema_json =
@@ -955,11 +1216,12 @@ void register_editor_tools(mcp_tool_registry& registry)
          .effect = tool_effect::read_only});
 
     registry.add(
-        {.name = "profiler_get_passes",
+        {.name = "profiler_get_gpu_passes",
          .description =
              "Per-render-pass CPU/GPU timings of the last frame (bgfx view stats, ms). Optional "
              "prefix filters pass names (e.g. \"Atmospherics\"). One frame is noisy: sample it "
-             "several times and average. Pass enable:true once to switch the GPU profiler on.",
+             "several times and average. enable:true switches the GPU view timing on (the profiler window's View / "
+             "Encoder Timing toggle), false off; it stays as set.",
          .input_schema_json = R"({"type":"object","properties":{"prefix":{"type":"string"},"enable":{"type":"boolean"}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
@@ -970,13 +1232,12 @@ void register_editor_tools(mcp_tool_registry& registry)
                  {
                      prefix = std::string(prefix_view);
                  }
-                 // The GPU view timings only exist while the bgfx profiler is on. Switched through the
-                 // profiler panel's own Enable state, so the panel shows what is really on.
+                 // The GPU view timings only exist while the bgfx profiler is on. Switched as the profiler
+                 // panel's own toggle switches it, so the panel shows what is really on.
                  bool enable = false;
                  if(!args["enable"].get(enable))
                  {
-                     ctx.get_cached<hub>().get_panels().gpu_profiler_enabled() = enable;
-                     bgfx::setDebug(enable ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
+                     set_gpu_view_timing(ctx.get_cached<hub>().get_panels().gpu_profiler_enabled(), enable);
                  }
                  const auto* stats = bgfx::getStats();
                  if(!stats)
@@ -1009,7 +1270,8 @@ void register_editor_tools(mcp_tool_registry& registry)
                  return {.text = json, .is_error = false};
              },
          .mutates_scene = false,
-         .effect = tool_effect::read_only});
+         .idempotent = true,
+         .former_names = {"profiler_get_passes"}});
 }
 
 } // namespace unravel::mcp

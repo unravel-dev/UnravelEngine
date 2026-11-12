@@ -19,6 +19,9 @@ namespace
 
 /// Shipped skill files live in editor data so they can be updated without a rebuild.
 constexpr const char* k_skills_protocol_dir = "editor:/data/mcp/skills";
+/// Where the skills sit among the server's MCP resources.
+constexpr const char* k_skill_resource_prefix = "unravel://skills/";
+constexpr const char* k_skill_mime_type = "text/markdown";
 
 /// One workflow skill loaded from an editor-data .md file (frontmatter + body).
 struct mcp_skill
@@ -43,7 +46,14 @@ const std::string k_server_instructions =
     "2. Components must be added (scene_add_components_batch; a C# script is component Script "
     "with its type_name) before typed property writes "
     "(scene_set_component_properties_batch).\n"
-    "3. Mutating tools refuse play mode; stop play before editing.\n"
+    "3. Tools that edit the scene, prefabs, components, project settings or scripts refuse play mode; stop play "
+    "before editing. scene_set_component_properties_batch, scene_set_transforms_batch and scene_set_active_batch "
+    "change the running game instead (their result says temporary; play stopping drops the change). Reads, "
+    "captures, waits, play controls, input and UI tools, scripts_invoke, animation_set_parameters, asset imports "
+    "and the deploy tools work while playing (input_send_mouse, input_send_touch, input_send_gamepad, "
+    "ui_click_element and scripts_invoke need it).\n"
+    "4. Every call's arguments are checked against its input schema first: a wrong type, an unknown enum value or a "
+    "number out of range refuses the call with the reason, and nothing is done.\n"
     "Before any non-trivial task, call skills_list and fetch the relevant workflow guides with "
     "skills_get - they encode correct tool ordering and engine-specific knowledge.";
 
@@ -222,6 +232,48 @@ auto load_skills(std::string& error) -> std::vector<mcp_skill>
 auto get_server_instructions() -> const std::string&
 {
     return k_server_instructions;
+}
+
+auto list_skill_resources_json() -> std::string
+{
+    std::string error;
+    std::string json = "[";
+    for(const auto& skill : load_skills(error))
+    {
+        json += json.size() == 1 ? "" : ",";
+        json += fmt::format(R"({{"uri":{},"name":{},"title":{},"description":{},"mimeType":{}}})",
+                            make_json_string(k_skill_resource_prefix + skill.name),
+                            make_json_string(skill.name),
+                            make_json_string(skill.title),
+                            make_json_string(skill.description),
+                            make_json_string(k_skill_mime_type));
+    }
+    return json + "]";
+}
+
+auto read_skill_resource_json(hpp::string_view uri, std::string& contents_json, std::string& error) -> bool
+{
+    const hpp::string_view prefix = k_skill_resource_prefix;
+    if(uri.substr(0, prefix.size()) != prefix)
+    {
+        error = "Unknown resource " + std::string(uri) + "; resources/list lists the skills";
+        return false;
+    }
+    const auto name = uri.substr(prefix.size());
+    std::string load_error;
+    for(const auto& skill : load_skills(load_error))
+    {
+        if(skill.name == name)
+        {
+            contents_json = fmt::format(R"([{{"uri":{},"mimeType":{},"text":{}}}])",
+                                        make_json_string(std::string(uri)),
+                                        make_json_string(k_skill_mime_type),
+                                        make_json_string(skill.content));
+            return true;
+        }
+    }
+    error = load_error.empty() ? "No skill named " + std::string(name) + "; resources/list lists them" : load_error;
+    return false;
 }
 
 void register_skill_tools(mcp_tool_registry& registry)

@@ -466,6 +466,56 @@ void test_walk_shipped_settings(walk_project project)
           "the shipped settings' handles are followed instead of the settings file's");
 }
 
+/// Whether the reference list holds from -> to.
+auto has_reference(const std::vector<deployment::content_reference>& references, const std::string& from, const std::string& to)
+    -> bool
+{
+    return std::any_of(references.begin(),
+                       references.end(),
+                       [&](const deployment::content_reference& reference)
+                       {
+                           return reference.from == from && reference.to == to;
+                       });
+}
+
+/// The reference list sees what the walk follows, from every asset, reached by a scene or not.
+void test_content_references(const walk_project& project)
+{
+    std::printf("test_content_references\n");
+    const auto references = deployment::find_content_references(project.source);
+    check(has_reference(references, "app:/data/levels/one.spfb", "app:/data/textures/wall.png"), "a quoted uid is a reference");
+    check(has_reference(references, "app:/data/levels/one.spfb", "app:/data/ui/hud.rhtml"), "a quoted path is a reference");
+    check(has_reference(references, "app:/data/ui/hud.rhtml", "app:/data/ui/hud.rcss"), "a UI document's link is a reference");
+    check(has_reference(references, "app:/data/models/hero.fbx", "app:/data/models/hero_material.mat"),
+          "an import's generated asset is its source's reference");
+    check(has_reference(references, "Project Settings", "app:/data/textures/logo.png"), "the settings' handles are references");
+    check(has_reference(references, "app:/data/scripts/game.cs", "app:/data/music/theme.ogg") == false,
+          "a path a script builds at run time names no asset");
+    check(!has_reference(references, "app:/data/textures/wall.png", "app:/data/textures/secret.png"),
+          "a binary file has no references");
+    const bool is_sorted = std::is_sorted(references.begin(),
+                                          references.end(),
+                                          [](const deployment::content_reference& lhs, const deployment::content_reference& rhs)
+                                          {
+                                              return std::tie(lhs.from, lhs.to) < std::tie(rhs.from, rhs.to);
+                                          });
+    const bool is_unique = std::adjacent_find(references.begin(),
+                                              references.end(),
+                                              [](const deployment::content_reference& lhs,
+                                                 const deployment::content_reference& rhs)
+                                              {
+                                                  return lhs.from == rhs.from && lhs.to == rhs.to;
+                                              }) == references.end();
+    check(is_sorted && is_unique, "the references come sorted, without repeats");
+    const bool has_self = std::any_of(references.begin(),
+                                      references.end(),
+                                      [](const deployment::content_reference& reference)
+                                      {
+                                          return reference.from == reference.to;
+                                      });
+    check(!has_self, "no asset is listed as its own reference");
+}
+
 /// A project whose scene, style sheet and script use engine fonts and built-in shapes, beside engine fonts, UI
 /// files and a shape nothing uses.
 auto make_engine_walk_project(const fs::path& root) -> walk_project
@@ -3061,6 +3111,7 @@ auto run_deploy_library_suite(rtti::context&) -> int
         const auto walked = deployment::detect_content(project.source, params, project.startup_scene);
         test_walk(walked);
         test_walk_shipped_settings(project);
+        test_content_references(project);
         test_walk_engine(temp / "walk_engine");
         test_walk_engine_edges(temp / "walk_engine_edges");
         test_engine_loaded_keys();

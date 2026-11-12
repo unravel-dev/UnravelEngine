@@ -24,6 +24,14 @@ auto make_json_rpc_error(const hpp::optional<std::string>& id_json, int code, co
 auto make_tool_result(const std::string& text, bool is_error = false) -> std::string;
 auto make_tool_result(const tool_result& result) -> std::string;
 
-auto parse_json_rpc_request(const std::string& body, json_rpc_request& out, std::string& error) -> bool;
+/// Why a body is not a request JSON-RPC answers: it is no JSON, or it is JSON but no single request object.
+enum class json_rpc_parse_error : uint8_t
+{
+    none,
+    not_json,
+    not_a_request,
+};
+
+auto parse_json_rpc_request(const std::string& body, json_rpc_request& out, std::string& error) -> json_rpc_parse_error;
 
 } // namespace unravel::mcp

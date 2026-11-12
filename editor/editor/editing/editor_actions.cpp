@@ -720,8 +720,7 @@ auto save_scene_as_impl(rtti::context& ctx, fs::path& path, const std::string& d
     auto& em = ctx.get_cached<editing_manager>();
     if(em.is_prefab_mode())
     {
-        em.save_prefab_changes(ctx);
-        return true;
+        return em.save_prefab_changes(ctx);
     }
 
     auto save_path = fs::resolve_protocol("app:/data/").string();
@@ -994,8 +993,7 @@ auto editor_actions::save_scene(rtti::context& ctx) -> bool
 
     if(em.is_prefab_mode())
     {
-        em.save_prefab_changes(ctx);
-        return true;
+        return em.save_prefab_changes(ctx);
     }
 
     if(!scene.source)
@@ -1497,6 +1495,17 @@ void editor_actions::recompile_ui(const std::string& group)
             }
         });
 }
+auto editor_actions::set_script_debug_mode(bool is_debug_mode) -> bool
+{
+    if(script_system::get_script_debug_mode() == is_debug_mode)
+    {
+        return false;
+    }
+    script_system::set_script_debug_mode(is_debug_mode);
+    script_system::set_needs_recompile("app", true);
+    return true;
+}
+
 void editor_actions::recompile_scripts(const std::string& group)
 {
     auto& ctx = engine::context();

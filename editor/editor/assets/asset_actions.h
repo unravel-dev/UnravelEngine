@@ -103,6 +103,14 @@ auto create_script_from_template(const fs::path& template_path,
                                  const fs::path& dst,
                                  std::string* error = nullptr) -> bool;
 
+/**
+ * @brief Creates a new ScriptComponent source in @p directory from the engine's template: named @p stem, or
+ * @p stem with the first free number after it ("Mover", "Mover1", ...), so the name stays a C# class name and
+ * no file is written over.
+ * @return The file written, or an empty path with @p error set.
+ */
+auto create_new_script(const fs::path& directory, const std::string& stem, std::string* error = nullptr) -> fs::path;
+
 /// The first free path "<stem> (n)<extension>" in @p directory, n counting from 0.
 auto get_free_copy_path(const fs::path& directory, const std::string& stem, const std::string& extension) -> fs::path;
 

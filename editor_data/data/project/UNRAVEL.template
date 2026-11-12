@@ -19,7 +19,8 @@ each time it opens the project, so this project's own rules belong in `AGENTS.md
   relevant guides with `skills_get`, starting with `getting-started`. They match the running
   engine and give the correct tool order.
 - Search the engine's C# API with `scripts_api_search` and `scripts_api_get`.
-- Mutating tools refuse play mode: stop it with `play_set_active` before editing.
+- Mutating tools refuse play mode: stop it with `play_set_active` before editing. Transforms, component
+  properties and active state can be changed while playing; the change is temporary and gone when play stops.
 - Without the tools, scripts and UI files can still be edited as text. Everything under
   Assets below waits for the editor.
 
@@ -51,7 +52,7 @@ each time it opens the project, so this project's own rules belong in `AGENTS.md
 - Do **not** write asset files by hand (scenes, prefabs, materials, `.meta`, compiled
   assets): create and change them through the editor - its MCP tools or the Content
   Browser - which run the real setters and keep ids and sidecars right.
-- Import through the editor (MCP `assets_import_files` or the Content Browser) rather
+- Import through the editor (MCP `assets_import_batch` or the Content Browser) rather
   than hand-copying files into the project without sidecars.
 
 ## Working style

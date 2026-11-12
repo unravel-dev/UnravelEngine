@@ -704,6 +704,11 @@ auto deploy_panel::get_progress() const -> float
     return float(ready) / float(deploy_jobs_.size());
 }
 
+auto deploy_panel::get_deployed_location() const -> const fs::path&
+{
+    return deployed_location_;
+}
+
 auto deploy_panel::is_deploying() const -> bool
 {
     return std::any_of(deploy_jobs_.begin(),
@@ -1539,36 +1544,19 @@ auto deploy_panel::draw_android_device_picker(rtti::context& ctx) -> bool
     auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
     const auto devices = deployment::get_android_devices();
     // The only device ready is the one to use; the choice is not saved, since devices belong to a computer.
-    const auto ready_count = std::count_if(devices.begin(),
-                                           devices.end(),
-                                           [](const deployment::android_device& device)
-                                           {
-                                               return device.is_ready();
-                                           });
     bool is_changed = false;
-    if(params.android_device.empty() && ready_count == 1)
+    if(const auto resolved = deployment::resolve_android_device(devices, params.android_device);
+       resolved != params.android_device)
     {
-        params.android_device = std::find_if(devices.begin(),
-                                             devices.end(),
-                                             [](const deployment::android_device& device)
-                                             {
-                                                 return device.is_ready();
-                                             })
-                                    ->serial;
+        params.android_device = resolved;
         is_changed = true;
     }
     const auto chosen = std::find_if(devices.begin(),
                                      devices.end(),
                                      [&params](const deployment::android_device& device)
                                      {
-                                         return device.is_named(params.android_device);
+                                         return device.serial == params.android_device;
                                      });
-    // A second connection to the phone was folded into this entry: the entry's own serial is used.
-    if(chosen != devices.end() && chosen->serial != params.android_device)
-    {
-        params.android_device = chosen->serial;
-        is_changed = true;
-    }
     entt::meta_any object = entt::forward_as_meta(params);
     property_layout layout(entt::resolve<deploy_settings>().data("android_device"_hs), object);
     // A square button, so the width kept for it beside the list is exactly what it takes.

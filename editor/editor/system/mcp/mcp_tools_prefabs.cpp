@@ -59,7 +59,8 @@ void register_prefab_tools(mcp_tool_registry& registry)
                  return {.text = "Provide key", .is_error = true};
              }
              auto target = resolve_prefab(ctx, key, error);
-             if(!target)
+             // Prefab mode saves back to the file it opened, so only the project's own prefabs open here.
+             if(!target || !require_project_data_asset(target.id(), error))
              {
                  return {.text = error, .is_error = true};
              }
@@ -83,6 +84,12 @@ void register_prefab_tools(mcp_tool_registry& registry)
                              .is_error = true};
                  }
                  em.exit_prefab_mode(ctx, save);
+                 if(em.is_prefab_mode())
+                 {
+                     return {.text = fmt::format("{} was not saved, so it stays open (logs_get_recent says why)",
+                                                 em.edited_prefab.id()),
+                             .is_error = true};
+                 }
              }
 
              em.enter_prefab_mode(ctx, target, false);
@@ -113,13 +120,20 @@ void register_prefab_tools(mcp_tool_registry& registry)
              {
                  return {.text = "No prefab is open (prefab_open first)", .is_error = true};
              }
-             em.save_prefab_changes(ctx);
+             if(!em.save_prefab_changes(ctx))
+             {
+                 return {.text = fmt::format("{} was not saved: its root entity is gone or the file could not be "
+                                             "written (logs_get_recent says which); the edits stay unsaved",
+                                             em.edited_prefab.id()),
+                         .is_error = true};
+             }
              return {.text = fmt::format(R"({{"ok":true,"prefab_mode":{}}})", prefab_mode_status_json(em)),
                      .is_error = false};
          },
          .mutates_scene = false,
          .effect = tool_effect::destructive,
-         .idempotent = true});
+         .idempotent = true,
+         .writes_project_files = true});
 
     registry.add(
         {.name = "prefab_close",
@@ -150,11 +164,20 @@ void register_prefab_tools(mcp_tool_registry& registry)
                                              em.edited_prefab.id()),
                          .is_error = true};
              }
+             const auto prefab_key = em.edited_prefab.id();
              em.exit_prefab_mode(ctx, save);
+             if(em.is_prefab_mode())
+             {
+                 return {.text = fmt::format("{} was not saved, so prefab mode stays open with its edits "
+                                             "(logs_get_recent says why); prefab_close with save false drops them",
+                                             prefab_key),
+                         .is_error = true};
+             }
              return {.text = R"({"ok":true,"was_open":true})", .is_error = false};
          },
          .mutates_scene = false,
-         .effect = tool_effect::destructive});
+         .effect = tool_effect::destructive,
+         .writes_project_files = true});
 }
 
 } // namespace unravel::mcp

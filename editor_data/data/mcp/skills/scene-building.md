@@ -52,7 +52,7 @@ audio_source, particle_emitter, text, ui_document.
 - scene_duplicate_entities_batch clones whole configured hierarchies - build
   one finished pedestal-with-prop or domino, then duplicate and move the
   copies. Far better than re-creating and re-configuring each one.
-- prefabs_create_from_entities_batch saves a hierarchy as a .pfb asset in the
+- prefab_create_from_entities_batch saves a hierarchy as a .pfb asset in the
   data folder (attach:true makes the entity an instance of it) and waits until
   it loads; scene_create_batch kind prefab instantiates it with a pose. Use
   prefabs for anything placed more than a couple of times or shared across
@@ -117,6 +117,10 @@ nothing to measure reports its position as a point).
 - scene_set_layers_batch puts entities on layers (names from the project's
   layer.layers setting); physics queries and rendering filter on them, and
   detail summary reports them.
+- scene_set_tags_batch sets entity tags, what Scene.FindEntitiesByTag and
+  Entity.tag read in scripts; scene_find_entities {"tag"} finds them.
+- scene_reset_components_batch puts components (or a Script's fields) back to
+  their defaults, as the Inspector's Reset does.
 
 ## Housekeeping
 
@@ -129,7 +133,7 @@ nothing to measure reports its position as a point).
 
 - Interleave viewport captures with construction (see verification skill);
   do not build the whole scene blind.
-- Check results with scene_get_bounds_batch / scene_get_hierarchy_batch as you
+- Check results with scene_get_bounds_batch / scene_get_hierarchy as you
   go.
 
 ## Do not

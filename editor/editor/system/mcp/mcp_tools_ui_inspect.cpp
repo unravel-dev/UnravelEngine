@@ -2,6 +2,7 @@
 // read the data models scripts bound. Element geometry and text come from the engine's own UI queries
 // (ui_element_queries.h, which the script API uses too); clicks go through the same virtual pointer
 // and press / release helpers as input_send_mouse.
+#include "mcp_input_names.h"
 #include "mcp_input_utils.h"
 #include "mcp_tools_common.h"
 
@@ -12,6 +13,7 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
+#include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/ui/ui_element_queries.h>
 
 #include <RmlUi/Core/Element.h>
@@ -49,6 +51,8 @@ struct document_view
     entt::handle entity;
     ui_document_component* component{};
     bool is_world_space{false};
+    /// Active and enabled with a context: the pointer reaches it (find_input_document).
+    bool takes_input{false};
     math::transform quad;
     const camera* view_camera{};
 };
@@ -94,8 +98,8 @@ auto to_document_point(const document_view& view, const math::vec2& game_point, 
                                                                              out);
 }
 
-/// The loaded documents of the active scene, or the one on @p entity_id; screen-space ones first,
-/// since they draw over the world.
+/// The loaded documents of the active scene, or the one on @p entity_id, the topmost first - the order and the camera
+/// ui_system hands the pointer to them with.
 auto collect_document_views(rtti::context& ctx, const std::string& entity_id, std::vector<document_view>& out, std::string& error)
     -> bool
 {
@@ -105,7 +109,7 @@ auto collect_document_views(rtti::context& ctx, const std::string& entity_id, st
         return false;
     }
     const camera* view_camera = nullptr;
-    if(auto camera_entity = ctx.get_cached<hub>().get_panels().get_game_panel().get_displayed_camera(ctx))
+    if(auto camera_entity = ui_system::find_pointer_camera(*scn))
     {
         view_camera = &camera_entity.get<camera_component>().get_camera();
     }
@@ -120,6 +124,7 @@ auto collect_document_views(rtti::context& ctx, const std::string& entity_id, st
         view.entity = entity;
         view.component = comp;
         view.is_world_space = comp->render_mode == ui_render_mode::world_space;
+        view.takes_input = find_input_document(*entity.registry(), entity.entity()) != nullptr;
         view.view_camera = view_camera;
         if(view.is_world_space)
         {
@@ -147,17 +152,12 @@ auto collect_document_views(rtti::context& ctx, const std::string& entity_id, st
         }
         return true;
     }
-    scn->registry->view<ui_document_component>().each(
-        [&](entt::entity entity, ui_document_component&)
-        {
-            add(scn->create_handle(entity));
-        });
-    std::stable_sort(out.begin(),
-                     out.end(),
-                     [](const document_view& a, const document_view& b)
-                     {
-                         return !a.is_world_space && b.is_world_space;
-                     });
+    std::vector<entt::entity> documents;
+    get_documents_by_sort_order(*scn->registry, documents);
+    for(auto it = documents.rbegin(); it != documents.rend(); ++it)
+    {
+        add(scn->create_handle(*it));
+    }
     return true;
 }
 
@@ -312,7 +312,22 @@ struct element_hit
 {
     const document_view* view{};
     Rml::Element* element{};
+    /// A point query's hit a click there reaches: the topmost one with content under the point.
+    bool receives_click{false};
 };
+
+/// The element of @p view under a game pixel when the document's content is there (is_ui_content_at): what takes a
+/// press, which passes through empty space to the documents below.
+auto find_content_at(const document_view& view, const math::vec2& game_point) -> Rml::Element*
+{
+    math::vec2 document_point;
+    if(!view.takes_input || !to_document_point(view, game_point, document_point))
+    {
+        return nullptr;
+    }
+    auto* element = get_ui_element_at(*view.component->document, document_point);
+    return element != nullptr && is_ui_content_at(element, {document_point.x, document_point.y}) ? element : nullptr;
+}
 
 auto query_selector(const std::vector<document_view>& views, const std::string& selector, size_t limit, bool& truncated)
     -> std::vector<element_hit>
@@ -336,20 +351,24 @@ auto query_selector(const std::vector<document_view>& views, const std::string& 
     return hits;
 }
 
-/// The topmost element under a game pixel in each document the point falls on.
+/// The element under a game pixel in each document that takes input, the topmost document first; the first with
+/// content there is the one a click reaches.
 auto query_point(const std::vector<document_view>& views, const math::vec2& game_point) -> std::vector<element_hit>
 {
     std::vector<element_hit> hits;
+    bool is_click_taken = false;
     for(const auto& view : views)
     {
         math::vec2 document_point;
-        if(!to_document_point(view, game_point, document_point))
+        if(!view.takes_input || !to_document_point(view, game_point, document_point))
         {
             continue;
         }
         if(auto* element = get_ui_element_at(*view.component->document, document_point))
         {
-            hits.push_back({&view, element});
+            const bool is_content = is_ui_content_at(element, {document_point.x, document_point.y});
+            hits.push_back({&view, element, is_content && !is_click_taken});
+            is_click_taken = is_click_taken || is_content;
         }
     }
     return hits;
@@ -418,9 +437,22 @@ auto find_click_target(rtti::context& ctx, const simdjson::dom::object& args, cl
         error = "The element's document is behind the camera: " + element_path(element);
         return false;
     }
-    // Another element drawn over the centre takes the click instead: say which.
-    if(auto* top = get_ui_element_at(*hit.view->component->document, center); top != nullptr && top != &element &&
-                                                                             !element.Contains(top))
+    // Another element drawn over the centre takes the click instead: one in a document above (views are topmost
+    // first), or a later one in its own document. Say which.
+    for(const auto& view : views)
+    {
+        if(&view == hit.view)
+        {
+            break;
+        }
+        if(auto* above = find_content_at(view, game_center))
+        {
+            out.covered_by = view.component->asset.id() + ": " + element_path(*above);
+            break;
+        }
+    }
+    if(auto* top = get_ui_element_at(*hit.view->component->document, center);
+       out.covered_by.empty() && top != nullptr && top != &element && !element.Contains(top))
     {
         out.covered_by = element_path(*top);
     }
@@ -436,12 +468,13 @@ void register_ui_inspect_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "ui_query_elements",
          .description =
-             "Find elements of the UI documents on screen by RCSS selector (\"#start\", \"button\"), or the "
-             "topmost element under a point [x, y] in game pixels - the one a click there reaches. Without "
-             "entity_id every document of the active scene is searched. Each element reports its path, text, "
-             "visibility, state (hover, focus, checked, disabled, ...), form value, rect_game / center_game in "
-             "the game pixels input_send_mouse uses, and the computed values of the properties you list. Edit and "
-             "play mode.",
+             "Find elements of the UI documents on screen by RCSS selector (\"#start\", \"button\"), or by a point "
+             "[x, y] in game pixels: then the element under it in each document that takes input, the topmost "
+             "document first, and receives_click marks the one a click there reaches (empty space lets a press "
+             "through to the document below). Without entity_id every document of the active scene is searched, the "
+             "topmost first. Each element reports its path, text, visibility, state (hover, focus, checked, "
+             "disabled, ...), form value, rect_game / center_game in the game pixels input_send_mouse uses, and the "
+             "values the style sheets give the properties you list. Edit and play mode.",
          .input_schema_json =
              R"json({"type":"object","properties":{"selector":{"type":"string"},"point":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"Game pixels"},"entity_id":{"type":"string","description":"An entity with a UI Document; default all"},"properties":{"type":"array","items":{"type":"string"},"description":"RCSS properties to read, e.g. decorator, display, image-color"},"limit":{"type":"integer","minimum":1,"maximum":200,"description":"Default 25"}}})json",
          .handler =
@@ -456,7 +489,7 @@ void register_ui_inspect_tools(mcp_tool_registry& registry)
              const bool has_point = read_point(args, point);
              if(selector.empty() == !has_point)
              {
-                 return {.text = "Pass selector or point [x, y] (game pixels), not both", .is_error = true};
+                 return {.text = "Pass one of selector or point [x, y] (game pixels)", .is_error = true};
              }
              std::vector<std::string> properties;
              if(!read_string_array(args, "properties", properties, error, false))
@@ -475,7 +508,12 @@ void register_ui_inspect_tools(mcp_tool_registry& registry)
              std::string elements = "[";
              for(size_t i = 0; i < hits.size(); ++i)
              {
-                 elements += (i > 0 ? "," : "") + element_json(*hits[i].view, *hits[i].element, properties);
+                 auto json = element_json(*hits[i].view, *hits[i].element, properties);
+                 if(has_point)
+                 {
+                     json.insert(json.size() - 1, R"(,"receives_click":)" + std::string(bool_to_json(hits[i].receives_click)));
+                 }
+                 elements += (i > 0 ? "," : "") + json;
              }
              elements += "]";
              return {.text = fmt::format(R"({{"elements":{},"count":{},"documents":{},"truncated":{}}})",
@@ -501,43 +539,28 @@ void register_ui_inspect_tools(mcp_tool_registry& registry)
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
+             const auto sequence = lock_input_sequence();
              std::string button_name = "left";
              read_string(args, "button", button_name);
-             if(button_name != "left" && button_name != "right" && button_name != "middle")
+             os::mouse::button button{};
+             if(!parse_mouse_button(button_name, button))
              {
                  return {.text = "button must be left, right or middle", .is_error = true};
              }
-             const auto button = button_name == "right"    ? os::mouse::button::right
-                                 : button_name == "middle" ? os::mouse::button::middle
-                                                           : os::mouse::button::left;
              std::string text;
              read_string(args, "text", text);
-             // Filled on the main thread; invoke_on_main returns once it ran.
-             click_target target;
-             auto found = mcp.invoke_on_main(
-                 [&ctx, &args, &target]() -> tool_result
+             const auto playing = mcp.invoke_on_main(
+                 [&ctx]() -> bool
                  {
-                     if(!editor_actions::get_play_state(ctx).is_active)
-                     {
-                         return {.text = "Play mode only: clicks go through the virtual pointer, which only "
-                                         "exists while the game plays",
-                                 .is_error = true};
-                     }
-                     std::string error;
-                     if(!find_click_target(ctx, args, target, error))
-                     {
-                         return {.text = error, .is_error = true};
-                     }
-                     return {.text = "ok"};
+                     return editor_actions::get_play_state(ctx).is_active;
                  });
-             if(!found)
+             if(!playing || !*playing)
              {
-                 return {.text = "Timed out reaching the editor main thread", .is_error = true};
+                 return {.text = "Play mode only: clicks go through the virtual pointer, which only exists while the "
+                                 "game plays",
+                         .is_error = true};
              }
-             if(found->is_error)
-             {
-                 return *found;
-             }
+             // The panel takes focus first: a panel that resizes as it comes forward moves the element.
              bool focus_game_panel = true;
              read_bool(args, "focus_game_panel", focus_game_panel);
              uint32_t window = 0;
@@ -546,10 +569,13 @@ void register_ui_inspect_tools(mcp_tool_registry& registry)
              {
                  return {.text = error, .is_error = true};
              }
+             // Found and pointed at in one main-thread step, so the point is where the element is now.
+             click_target target;
              const auto moved = mcp.invoke_on_main(
                  [&]() -> bool
                  {
-                     return move_game_pointer(ctx, window, target.game_point, error);
+                     return find_click_target(ctx, args, target, error) &&
+                            move_game_pointer(ctx, window, target.game_point, error);
                  });
              if(!moved || !*moved)
              {
@@ -620,6 +646,10 @@ void register_ui_inspect_tools(mcp_tool_registry& registry)
              if(models == "null")
              {
                  return {.text = "Scripting is not loaded", .is_error = true};
+             }
+             if(starts_with(models, R"({"error")"))
+             {
+                 return {.text = models, .is_error = true};
              }
              return {.text = fmt::format(R"({{"entity_id":{},"play_active":{},"result":{}}})",
                                          make_json_string(entity_id),

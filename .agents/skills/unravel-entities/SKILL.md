@@ -49,13 +49,13 @@ Browse lean, then drill in:
 | Tool | Purpose |
 |------|---------|
 | `editor_get_status` | Bootstrap: project + scene + play in one call (prefer over separate info tools) |
-| `scene_get_hierarchy_batch` | Lean tree (`id`/`name`/`children`); optional `parent_id`, `max_depth`, `limit` |
+| `scene_get_hierarchy` | Lean tree (`id`/`name`/`children`); optional `parent_id`, `max_depth`, `limit` |
 | `scene_get_entities_batch` | `detail`: `pose` (default), `summary` (includes component names), `components` (+ typed `component_properties`; optional `components[]` filter) |
 | `scene_get_children_batch` | Immediate children (`id`/`name`) for many entities |
 | `scene_list_component_properties` | Schema for MCP-editable typed keys (optional `component` filter) |
 | `scene_get_component_properties_batch` | Typed get: `{entity_id, component, type_name?, properties?[]}` |
 | `scene_set_component_properties_batch` | Typed set via real setters (one undo). Supported: Light, Skylight, Audio Source, Camera, Volume, Script, Particle Emitter, Physics, Animation, Text, Reflection Probe, Bloom |
-| `scene_find_entities_batch` | Find by `name_contains` / `name_exact` / `component_type` / `type_name` (AND); play-safe |
+| `scene_find_entities` | Find by `name_contains` / `name_exact` / `component_type` / `type_name` (AND); play-safe |
 | `scene_get_transforms_batch` | Many entity poses (`items` with `entity_id`, optional `space`) |
 | `scene_set_transforms_batch` | Many poses in one undoable action |
 | `scene_set_parents_batch` | Reparent / unparent many (keeps world pose) |
@@ -113,7 +113,7 @@ File writes use `asset_writer::atomic_write_file`. Scene saves use `asset_writer
 
 ## Rules of thumb
 
-1. Start with `editor_get_status`, then `scene_get_hierarchy_batch` / `scene_find_entities_batch`.
+1. Start with `editor_get_status`, then `scene_get_hierarchy` / `scene_find_entities`.
 2. Create at world positions; compose hierarchies with `space:"local"`.
 3. Prefer `scene_create_primitives_batch` / `scene_set_transforms_batch` for procedural builds.
 4. Inspect with `detail:"summary"` or typed `scene_get_component_properties_batch`; mutate with `scene_set_component_properties_batch` (not ser20 blobs / not source rewrites for tuning).

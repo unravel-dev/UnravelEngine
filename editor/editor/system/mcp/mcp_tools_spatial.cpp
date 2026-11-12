@@ -31,6 +31,11 @@ auto read_ray(rtti::context& ctx, const simdjson::dom::object& args, scene_ray& 
     simdjson::dom::element screen_value;
     if(!args["screen"].get(screen_value))
     {
+        if(args["origin"].error() == simdjson::SUCCESS || args["direction"].error() == simdjson::SUCCESS)
+        {
+            error = "Pass screen, or origin and direction, not both";
+            return false;
+        }
         math::vec2 pixel{};
         if(!parse_vec2(screen_value, pixel, error))
         {
@@ -82,11 +87,16 @@ auto hit_json(const scene_ray_hit& hit) -> std::string
                        hit.submesh_index);
 }
 
-/// One projected point: Scene view pixel, view depth and whether it is on screen.
+/// One projected point: Scene view pixel, view depth and whether it is on screen. A point at or behind the eye
+/// has no pixel.
 auto projected_point_json(const camera& cam, const math::vec3& point) -> std::string
 {
-    const auto screen = cam.world_to_viewport(point);
     const float depth = cam.world_to_view_depth(point);
+    if(depth <= 0.0f)
+    {
+        return fmt::format(R"({{"screen":null,"depth":{:.6g},"visible":false}})", depth);
+    }
+    const auto screen = cam.world_to_viewport(point);
     const auto& size = cam.get_viewport_size();
     const bool is_visible = depth > 0.0f && screen.x >= 0.0f && screen.y >= 0.0f &&
                             screen.x < static_cast<float>(size.width) && screen.y < static_cast<float>(size.height);
@@ -157,8 +167,8 @@ void register_spatial_tools(mcp_tool_registry& registry)
         {.name = "viewport_world_to_screen",
          .description =
              "Where world points appear in the Scene view: pixel [x,y] (top-left origin, as viewport_capture_scene "
-             "shows it at scale 1), view depth (negative: behind the camera) and visible (in front and inside the "
-             "view). Pairs with scene_raycast {screen} for the other direction.",
+             "shows it at scale 1; null at or behind the eye), view depth (negative: behind the camera) and visible "
+             "(in front and inside the view). Pairs with scene_raycast {screen} for the other direction.",
          .input_schema_json =
              R"json({"type":"object","properties":{"points":{"type":"array","maxItems":256,"items":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}}},"required":["points"]})json",
          .handler =
@@ -180,6 +190,10 @@ void register_spatial_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
              const auto& cam = camera_entity.get<camera_component>().get_camera();
+             if(cam.get_viewport_size().width == 0 || cam.get_viewport_size().height == 0)
+             {
+                 return {.text = "The Scene view has no size yet (show it with panel_focus)", .is_error = true};
+             }
              std::string results;
              for(auto element : points)
              {

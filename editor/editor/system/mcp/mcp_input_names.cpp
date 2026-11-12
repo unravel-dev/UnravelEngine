@@ -2,6 +2,9 @@
 
 #include "mcp_tools_common.h"
 
+#include <engine/input/action_map/to_string.hpp>
+
+#include <array>
 #include <cctype>
 #include <map>
 #include <string>
@@ -91,6 +94,20 @@ auto suggest_key_names(const std::string& normalized) -> std::string
 /// Key names come from the platform layer ("W", "Space", "Left Shift"), and its
 /// from_string is an exact match with no failure value. Comparing on a normalized form
 /// instead lets a caller write "w", "space" or "leftshift" and still land on the right key.
+auto gamepad_button_table() -> const std::map<std::string, input::gamepad_button>&
+{
+    static const auto table =
+        build_input_name_table<input::gamepad_button>(static_cast<uint32_t>(input::gamepad_button::count));
+    return table;
+}
+
+auto gamepad_axis_table() -> const std::map<std::string, input::gamepad_axis>&
+{
+    static const auto table =
+        build_input_name_table<input::gamepad_axis>(static_cast<uint32_t>(input::gamepad_axis::count));
+    return table;
+}
+
 auto normalize_input_name(hpp::string_view name) -> std::string
 {
     std::string out;
@@ -124,6 +141,33 @@ auto parse_key_name(const std::string& name, os::key::code& out, std::string& er
     }
     out = found->second;
     return true;
+}
+
+auto parse_mouse_button(hpp::string_view name, os::mouse::button& out) -> bool
+{
+    // The buttons the platform reports, under the names the engine gives them (input::to_string).
+    constexpr std::array<std::pair<input::mouse_button, os::mouse::button>, 5> buttons{{
+        {input::mouse_button::left_button, os::mouse::button::left},
+        {input::mouse_button::right_button, os::mouse::button::right},
+        {input::mouse_button::middle_button, os::mouse::button::middle},
+        {input::mouse_button::button4, os::mouse::button::x1},
+        {input::mouse_button::button5, os::mouse::button::x2},
+    }};
+    const auto wanted = normalize_input_name(name);
+    for(const auto& [engine_button, platform_button] : buttons)
+    {
+        if(wanted == normalize_input_name(input::to_string(engine_button)))
+        {
+            out = platform_button;
+            return true;
+        }
+    }
+    if(wanted == "x1" || wanted == "x2")
+    {
+        out = wanted == "x1" ? os::mouse::button::x1 : os::mouse::button::x2;
+        return true;
+    }
+    return false;
 }
 
 } // namespace unravel::mcp

@@ -83,20 +83,22 @@ auto apply_material_instance_properties(rtti::context& ctx,
         result.errors.emplace_back("The slot has no shared material to override.");
         return result;
     }
-    auto candidate = shared->clone();
-    auto candidate_object = material_object(*candidate);
-    apply_meta_properties(ctx, candidate_object, properties, result);
+    // Edited as the Inspector edits a slot: on the shared material with the overrides, and what then differs
+    // (setter side effects included) becomes an override.
+    auto values = make_instance_values(instance, *shared);
+    auto values_object = material_object(*values);
+    apply_meta_properties(ctx, values_object, properties, result);
     if(!result.ok)
     {
         return result;
     }
-    for(const auto& name : result.applied)
+    const auto changes = override_changed_values(instance, *values);
+    for(const auto property : changes.refused)
     {
-        const auto property = entt::hashed_string{name.c_str()}.value();
-        if(const auto data = candidate_object.type().data(property))
-        {
-            instance.set_override(property, data.get(candidate_object));
-        }
+        const auto data = values_object.type().data(property);
+        result.ok = false;
+        result.errors.push_back(fmt::format("{}: a material instance cannot override it",
+                                            data ? std::string(entt::get_name(data)) : std::to_string(property)));
     }
     return result;
 }

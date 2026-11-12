@@ -119,6 +119,35 @@ void copy_material_values(const material& source, material& target)
                                });
 }
 
+auto make_instance_values(const material_instance& instance, const material& shared) -> material::sptr
+{
+    auto values = shared.clone();
+    for(const auto& entry : instance.get_overrides())
+    {
+        set_material_value(*values, entry.property, entry.value);
+    }
+    return values;
+}
+
+auto override_changed_values(material_instance& instance, const material& values) -> instance_value_changes
+{
+    instance_value_changes changes;
+    const auto object = make_material_object(values);
+    for_each_material_property(object.type(),
+                               [&](entt::id_type property, const entt::meta_data& data)
+                               {
+                                   auto edited = data.get(object);
+                                   if(are_equal(instance.get_value(property), edited))
+                                   {
+                                       return;
+                                   }
+                                   auto& outcome = instance.set_override(property, edited) ? changes.overridden
+                                                                                           : changes.refused;
+                                   outcome.push_back(property);
+                               });
+    return changes;
+}
+
 material_instance::material_instance(const material_instance& other)
     : shared_(other.shared_)
     , material_type_(other.material_type_)

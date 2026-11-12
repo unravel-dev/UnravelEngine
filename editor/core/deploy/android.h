@@ -192,6 +192,14 @@ struct android_device
     auto get_label() const -> std::string;
 };
 
+/**
+ * @brief The device a deploy or a device command uses, as the Deploy window picks it: the listed device @p requested
+ *        names (by its serial or another name it is known by), as that entry's own serial; with nothing requested,
+ *        the only ready device. @p requested as it is when it names no listed device, empty when nothing was
+ *        requested and not exactly one device is ready.
+ */
+auto resolve_android_device(const std::vector<android_device>& devices, const std::string& requested) -> std::string;
+
 /// The devices in the output of `adb devices -l`.
 auto parse_android_devices(const std::string& adb_output) -> std::vector<android_device>;
 

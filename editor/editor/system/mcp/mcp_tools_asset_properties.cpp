@@ -6,6 +6,8 @@
 #include "mcp_tools_common.h"
 
 #include <editor/assets/asset_actions.h>
+#include <editor/hub/hub.h>
+#include <editor/hub/panels/panel.h>
 #include <editor/system/mcp_manager.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
@@ -14,6 +16,7 @@
 #include <engine/meta/physics/physics_material.hpp>
 #include <engine/physics/physics_material.h>
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_instance.h>
 #include <filesystem/filesystem.h>
 #include <uuid/uuid.h>
 
@@ -58,10 +61,13 @@ struct material_kind
                       bool save,
                       component_apply_result& result)
     {
+        const auto previous = handle.get()->clone();
         result = apply_material_properties(ctx, *handle.get(), properties);
         std::string error;
         if(result.ok && save && !save_material_asset(ctx, handle, error))
         {
+            // Not saved: the shared material goes back to what the file holds, as the other kinds do.
+            copy_material_values(*previous, *handle.get());
             result.ok = false;
             result.errors.push_back(error);
         }
@@ -164,6 +170,18 @@ struct animation_controller_kind
                       bool save,
                       component_apply_result& result)
     {
+        // The Animation window saves what it shows: unsaved edits there would be lost to this write, or write over it.
+        if(ctx.has<hub>())
+        {
+            const auto& panel = ctx.get_cached<hub>().get_panels().get_animation_panel();
+            if(panel.get_controller() == handle && panel.has_unsaved_edits())
+            {
+                result.ok = false;
+                result.errors.push_back("The Animation window has unsaved edits of " + handle.id() +
+                                        "; save them there (or drop them) first");
+                return;
+            }
+        }
         auto candidate = *handle.get();
         auto object = entt::forward_as_meta(candidate);
         apply_meta_properties(ctx, object, properties, result);
@@ -324,7 +342,7 @@ void register_asset_property_tools(mcp_tool_registry& registry)
          .description = "Read the properties of material, physics material and animation controller assets, by key (or a path "
                         "relative to app:/data) or uid.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"assets":{"type":"array","items":{"type":"string"}}},"required":["assets"]})json",
+             R"json({"type":"object","properties":{"assets":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["assets"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -346,8 +364,8 @@ void register_asset_property_tools(mcp_tool_registry& registry)
                                key,
                                [&]<typename Kind>()
                                {
-                                auto handle = find_existing_asset<typename Kind::asset_type>(ctx, key, item_error);
-                                if(handle && handle.get())
+                                auto handle = find_loaded_asset<typename Kind::asset_type>(ctx, key, item_error);
+                                if(handle)
                                 {
                                     item_json = fmt::format(R"({{"ok":true,"asset":{},"uid":{},"type":"{}","properties":{}}})",
                                                             make_json_string(handle.id()),
@@ -381,7 +399,7 @@ void register_asset_property_tools(mcp_tool_registry& registry)
              "one rejected value writes nothing. The assets are shared - every renderer or body using one "
              "changes. Saves each file unless save:false (in memory only).",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"asset":{"type":"string"},"properties":{"type":"object"}},"required":["asset","properties"]}},"save":{"type":"boolean","default":true}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"asset":{"type":"string"},"properties":{"type":"object"}},"required":["asset","properties"]}},"save":{"type":"boolean","default":true}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -410,7 +428,7 @@ void register_asset_property_tools(mcp_tool_registry& registry)
                                item.key,
                                [&]<typename Kind>()
                                {
-                                   auto handle = find_existing_asset<typename Kind::asset_type>(ctx, item.key, lookup_error);
+                                   auto handle = find_loaded_asset<typename Kind::asset_type>(ctx, item.key, lookup_error);
                                    if(!handle || !require_project_data_asset(handle.id(), lookup_error))
                                    {
                                        return;
@@ -433,6 +451,7 @@ void register_asset_property_tools(mcp_tool_registry& registry)
                                                       return !item.error_json.empty();
                                                   });
              std::string results = "[";
+             bool is_all_written = !is_rejected;
              for(const auto& item : items)
              {
                  component_apply_result written;
@@ -444,7 +463,7 @@ void register_asset_property_tools(mcp_tool_registry& registry)
                                    {
                                        std::string ignored;
                                        Kind::write(ctx,
-                                                   find_existing_asset<typename Kind::asset_type>(ctx, item.key, ignored),
+                                                   find_loaded_asset<typename Kind::asset_type>(ctx, item.key, ignored),
                                                    item.properties,
                                                    save,
                                                    written);
@@ -454,6 +473,7 @@ void register_asset_property_tools(mcp_tool_registry& registry)
                  const auto result_json = !item.error_json.empty() ? item.error_json
                                           : is_rejected            ? std::string(R"("not written: another item was rejected")")
                                                                    : component_apply_result_to_json(written);
+                 is_all_written = is_all_written && written.ok;
                  results += fmt::format(R"({}{{"asset":{},"ok":{},"result":{}}})",
                                         results.size() > 1 ? "," : "",
                                         make_json_string(item.key.empty() ? item.reference : item.key),
@@ -463,13 +483,14 @@ void register_asset_property_tools(mcp_tool_registry& registry)
              results += "]";
              return {.text = fmt::format(R"({{"results":{},"written":{},"saved":{}}})",
                                          results,
-                                         bool_to_json(!is_rejected),
-                                         bool_to_json(!is_rejected && save)),
-                     .is_error = is_rejected};
+                                         bool_to_json(is_all_written),
+                                         bool_to_json(is_all_written && save)),
+                     .is_error = !is_all_written};
          },
          .mutates_scene = false,
          .effect = tool_effect::destructive,
-         .idempotent = true});
+         .idempotent = true,
+         .writes_project_files = true});
 
     registry.add(
         {.name = "assets_create_batch",
@@ -480,7 +501,7 @@ void register_asset_property_tools(mcp_tool_registry& registry)
              "state. Assign a material with scene_set_model_materials_batch, a physics material with the Physics "
              "property material.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string","enum":["material","physics_material","animation_controller"]},"path":{"type":"string"},"folder":{"type":"string"},"name":{"type":"string"},"properties":{"type":"object"}},"required":["type"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"type":{"type":"string","enum":["material","physics_material","animation_controller"]},"path":{"type":"string"},"folder":{"type":"string"},"name":{"type":"string"},"properties":{"type":"object"}},"required":["type"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -626,7 +647,8 @@ void register_asset_property_tools(mcp_tool_registry& registry)
                      .is_error = ok_count == 0};
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .writes_project_files = true});
 }
 
 } // namespace unravel::mcp

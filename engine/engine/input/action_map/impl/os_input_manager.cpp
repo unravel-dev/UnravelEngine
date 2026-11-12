@@ -2,6 +2,7 @@
 #include "../bimap.hpp"
 #include "os_key_map.hpp"
 #include <base/platform/config.hpp>
+#include <algorithm>
 #include <cassert>
 #include <logging/logging.h>
 #include <ospp/touch.h>
@@ -524,6 +525,18 @@ auto os_input_manager::map_finger_position(const os::touch_finger_event& finger)
     const zone window = window_input_zone_ ? *window_input_zone_ : get_work_zone();
     return map_window_position({static_cast<int>(finger.x * static_cast<float>(window.w)),
                                 static_cast<int>(finger.y * static_cast<float>(window.h))});
+}
+
+auto os_input_manager::unmap_finger_position(coord work_position) -> std::array<float, 2>
+{
+    const zone window = window_input_zone_ ? *window_input_zone_ : get_work_zone();
+    const coord global = remap_from_work_zone(work_position);
+    const float width = static_cast<float>(std::max(window.w, 1));
+    const float height = static_cast<float>(std::max(window.h, 1));
+    // The pixel's center: map_finger_position truncates, so a finger at its edge could round onto the one before.
+    constexpr float pixel_center = 0.5f;
+    return {(static_cast<float>(global.x - window.x) + pixel_center) / width,
+            (static_cast<float>(global.y - window.y) + pixel_center) / height};
 }
 
 void os_input_manager::on_finger_event(const os::event& e)

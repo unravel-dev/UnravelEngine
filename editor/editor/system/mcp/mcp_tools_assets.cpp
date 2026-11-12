@@ -7,6 +7,7 @@
 #include "mcp_meta_properties.h"
 
 #include <engine/meta/ecs/entity.hpp>
+#include <deploy/content.h>
 #include <editor/assets/asset_actions.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/editor_actions.h>
@@ -176,14 +177,24 @@ auto to_move_destination(rtti::context& ctx,
     }
     const fs::path from_path(from_key);
     fs::error_code ec;
+    const bool is_file = !fs::is_directory(fs::resolve_protocol(from_key), ec);
     const bool is_into_folder = to.back() == '/' || to.back() == '\\' || fs::is_directory(fs::resolve_protocol(key), ec);
     if(is_into_folder)
     {
         key = (fs::path(key) / from_path.filename()).generic_string();
     }
-    else if(fs::path(key).extension().empty() && !fs::is_directory(fs::resolve_protocol(from_key), ec))
+    else if(fs::path(key).extension().empty() && is_file)
     {
         key += from_path.extension().generic_string();
+    }
+    // The extension is the asset's type: a renamed one would be read as another kind of asset, or not at all.
+    if(is_file && fs::path(key).extension() != from_path.extension())
+    {
+        error = fmt::format("{} keeps its extension {}; the destination {} would change it",
+                            from_key,
+                            from_path.extension().generic_string(),
+                            key);
+        return false;
     }
     return true;
 }
@@ -208,7 +219,10 @@ auto wait_for_moves(rtti::context& ctx,
         {
             return is_known;
         }
-        tpp::this_thread::sleep_for(std::chrono::milliseconds(32));
+        if(!ctx.get_cached<mcp_manager>().sleep_unless_stopping(std::chrono::milliseconds(32)))
+        {
+            return is_known;
+        }
     }
 }
 
@@ -324,7 +338,7 @@ auto collect_overwritten_keys(const std::vector<import_files_item>& items) -> st
     return keys;
 }
 
-/// One assets_set_import_settings item. The settings travel as text: the main-thread job parses
+/// One assets_set_import_settings_batch item. The settings travel as text: the main-thread job parses
 /// its own copy, so it never reads the request's document after the request has given up on it.
 struct import_settings_request
 {
@@ -412,7 +426,7 @@ auto loaded_texture_json(rtti::context& ctx, asset_manager& am, const std::strin
     return meta_properties_to_json(ctx, texture_object);
 }
 
-/// One prefabs_create_from_entities_batch item.
+/// One prefab_create_from_entities_batch item.
 struct prefab_save_item
 {
     std::string entity_id;
@@ -460,12 +474,25 @@ auto resolve_prefab_save(rtti::context& ctx,
     return entity;
 }
 
+/// The generated field assets_get_batch adds for an asset an import wrote; empty for any other asset.
+auto generated_status_field(asset_manager& am, const hpp::uuid& uid) -> std::string
+{
+    const auto status = asset_actions::get_generated_status(am, uid);
+    if(!status.is_generated)
+    {
+        return {};
+    }
+    return fmt::format(R"(,"generated":{{"is_edited":{},"source":{}}})",
+                       bool_to_json(status.is_edited),
+                       status.source_key.empty() ? std::string("null") : make_json_string(status.source_key));
+}
+
 } // namespace
 
 void register_asset_tools(mcp_tool_registry& registry)
 {
     registry.add(
-        {.name = "assets_find_batch",
+        {.name = "assets_find",
          .description =
              "Find assets by type (a name from assets_list_types, covering all its formats, or one extension like "
              "\"png\"), key prefix (app:/data/Props/, or relative to app:/data) and/or name_contains, in "
@@ -537,11 +564,12 @@ void register_asset_tools(mcp_tool_registry& registry)
                                          limit)};
          },
          .mutates_scene = false,
-         .effect = tool_effect::read_only});
+         .effect = tool_effect::read_only,
+         .former_names = {"assets_find_batch"}});
 
     registry.add(
         {.name = "assets_list_types",
-         .description = "List the asset type names assets_find_batch filters by, each with the file "
+         .description = "List the asset type names assets_find filters by, each with the file "
                         "extensions the engine reads for it.",
          .input_schema_json = empty_object_schema(),
          .handler =
@@ -654,7 +682,8 @@ void register_asset_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .idempotent = true});
+         .idempotent = true,
+         .writes_project_files = true});
 
     registry.add(
         {.name = "assets_delete_batch",
@@ -675,6 +704,7 @@ void register_asset_tools(mcp_tool_registry& registry)
              {
                  return {.text = error, .is_error = true};
              }
+             // An entry listed twice, or inside a listed folder, goes with it: only the outermost are moved.
              std::vector<fs::path> paths;
              std::vector<std::string> keys;
              for(const auto& reference : references)
@@ -684,20 +714,50 @@ void register_asset_tools(mcp_tool_registry& registry)
                  {
                      return {.text = error, .is_error = true};
                  }
+                 const auto path = fs::absolute(fs::resolve_protocol(key)).lexically_normal();
+                 const auto holds = [](const fs::path& outer, const fs::path& inner)
+                 {
+                     return outer == inner || fs::is_any_parent_path(outer, inner);
+                 };
+                 if(std::any_of(paths.begin(), paths.end(), [&](const fs::path& listed) { return holds(listed, path); }))
+                 {
+                     continue;
+                 }
+                 for(size_t i = paths.size(); i-- > 0;)
+                 {
+                     if(holds(path, paths[i]))
+                     {
+                         paths.erase(paths.begin() + static_cast<std::ptrdiff_t>(i));
+                         keys.erase(keys.begin() + static_cast<std::ptrdiff_t>(i));
+                     }
+                 }
                  keys.push_back(key);
-                 paths.push_back(fs::absolute(fs::resolve_protocol(key)));
+                 paths.push_back(path);
              }
              std::string batch;
              const bool is_deleted = asset_actions::move_to_trash(paths, batch, &error);
+             // The move stops at the first entry it cannot move: what left the data folder is what was deleted.
+             std::vector<std::string> moved;
+             auto& em = ctx.get_cached<editing_manager>();
+             for(size_t i = 0; i < paths.size(); ++i)
+             {
+                 fs::error_code ec;
+                 if(!fs::exists(paths[i], ec))
+                 {
+                     moved.push_back(keys[i]);
+                     em.unselect(paths[i]);
+                 }
+             }
              return {.text = fmt::format(R"({{"ok":{},"trash":{},"deleted":{}{}}})",
                                          bool_to_json(is_deleted),
-                                         make_json_string(batch),
-                                         strings_to_json_array(keys),
+                                         moved.empty() ? std::string("null") : make_json_string(batch),
+                                         strings_to_json_array(moved),
                                          is_deleted ? "" : R"(,"error":)" + make_json_string(error)),
                      .is_error = !is_deleted};
          },
          .mutates_scene = false,
-         .effect = tool_effect::destructive});
+         .effect = tool_effect::destructive,
+         .writes_project_files = true});
 
     registry.add(
         {.name = "assets_restore_deleted",
@@ -734,7 +794,8 @@ void register_asset_tools(mcp_tool_registry& registry)
                                          is_restored ? "" : R"(,"error":)" + make_json_string(error)),
                      .is_error = !is_restored};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .writes_project_files = true});
 
     registry.add(
         {.name = "assets_move_batch",
@@ -745,7 +806,7 @@ void register_asset_tools(mcp_tool_registry& registry)
              "extension. A C# script whose class has the file's name is renamed along. Waits up to wait_ms "
              "(default 5000) for each moved asset to load under its new key.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"from":{"type":"string"},"to":{"type":"string"}},"required":["from","to"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"from":{"type":"string"},"to":{"type":"string"}},"required":["from","to"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -844,7 +905,8 @@ void register_asset_tools(mcp_tool_registry& registry)
                      .is_error = ok_count == 0};
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .writes_project_files = true});
 
     registry.add(
         {.name = "assets_duplicate_batch",
@@ -920,10 +982,11 @@ void register_asset_tools(mcp_tool_registry& registry)
                      .is_error = ok_count == 0};
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .writes_project_files = true});
 
     registry.add(
-        {.name = "assets_import_files",
+        {.name = "assets_import_batch",
          .description =
              "Import absolute paths of files or directories outside the project into folder (an app:/data/... key "
              "or a path relative to app:/data). Directories copy recursively: pass one directory per multi-file "
@@ -932,7 +995,7 @@ void register_asset_tools(mcp_tool_registry& registry)
              "once its reload has replaced the old one. Files no asset type reads (a .bin, a .txt) are copied and "
              "listed with asset:false.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"folder":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":60000}},"required":["paths","folder"]})json",
+             R"json({"type":"object","properties":{"paths":{"type":"array","minItems":1,"items":{"type":"string"}},"folder":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":60000}},"required":["paths","folder"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -959,17 +1022,19 @@ void register_asset_tools(mcp_tool_registry& registry)
                  return {.text = error.empty() ? "Missing folder" : error, .is_error = true};
              }
              fs::error_code ec;
-             const auto project_root = fs::absolute(fs::resolve_protocol("app:/"));
+             // Compared as real paths ("..", links and letter case resolved): a source inside the project is already
+             // there, and one that holds the project would be copied into itself.
+             const auto project_root = fs::weakly_canonical(fs::absolute(fs::resolve_protocol("app:/")), ec);
              for(const auto& path : paths)
              {
-                 const auto absolute_source = fs::absolute(fs::path(path));
+                 const auto absolute_source = fs::weakly_canonical(fs::absolute(fs::path(path)), ec);
                  if(fs::is_any_parent_path(project_root, absolute_source) ||
+                    fs::is_any_parent_path(absolute_source, project_root) ||
                     fs::equivalent(project_root, absolute_source, ec))
                  {
-                     return {.text =
-                                 "paths must be outside the project folder; download/stage "
-                                 "elsewhere then import (rejected: " +
-                                 absolute_source.generic_string() + ")",
+                     return {.text = "paths must be outside the project folder and must not hold it; stage the files "
+                                     "elsewhere, then import (rejected: " +
+                                     absolute_source.generic_string() + ")",
                              .is_error = true};
                  }
              }
@@ -1018,38 +1083,55 @@ void register_asset_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .effect = tool_effect::destructive});
+         .effect = tool_effect::destructive,
+         .writes_project_files = true,
+         .former_names = {"assets_import_files"}});
 
     registry.add(
         {.name = "assets_get_mesh_info",
          .description =
-             "A mesh asset's local bounds (min, max, center, extents) by key: its pivot and units, to place it on "
-             "a floor and pick its scale before creating it.",
-         .input_schema_json = R"json({"type":"object","properties":{"key":{"type":"string"}},"required":["key"]})json",
+             "A mesh asset by key or uid: its local bounds (min, max, center, extents: its pivot and units, to place "
+             "it on a floor and pick its scale), vertex and triangle counts, triangles per LOD, material slots (the "
+             "indices scene_set_model_materials_batch takes) with their default materials, submeshes, and the bones "
+             "of a skinned mesh (which needs an Animation component to play clips).",
+         .input_schema_json = R"json({"type":"object","properties":{"key":{"type":"string","description":"Mesh asset key or uid"}},"required":["key"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              std::string key;
-             if(!read_string(args, "key", key) || key.empty())
-             {
-                 return {.text = "Missing key", .is_error = true};
-             }
+             read_string(args, "key", key);
              std::string error;
-             auto handle = find_existing_asset<mesh>(ctx, to_asset_key(key), error);
+             auto handle = find_loaded_asset<mesh>(ctx, to_asset_key(key), error);
              if(!handle)
              {
                  return {.text = error, .is_error = true};
              }
-             auto mesh_ptr = handle.get(true);
-             if(!mesh_ptr)
+             const auto& data = *handle.get();
+             std::vector<std::string> lod_faces;
+             for(uint32_t lod = 0; lod < data.get_lod_count(); ++lod)
              {
-                 return {.text = "Mesh failed to load: " + key, .is_error = true};
+                 lod_faces.push_back(std::to_string(data.get_lod_face_count(lod)));
              }
-             const auto& bounds = mesh_ptr->get_bounds();
-             return {.text = fmt::format(R"({{"key":{},"uid":{},"bounds":{}}})",
+             auto& am = ctx.get_cached<asset_manager>();
+             std::vector<std::string> default_materials;
+             for(const auto& uid : data.get_default_material_uids())
+             {
+                 const auto location = am.get_metadata(uid).location;
+                 default_materials.push_back(location.empty() ? hpp::to_string(uid) : location);
+             }
+             return {.text = fmt::format(R"({{"key":{},"uid":{},"bounds":{},"vertices":{},"triangles":{},"lod_triangles":[{}],)"
+                                         R"("material_slots":{},"default_materials":{},"submeshes":{},"skinned_submeshes":{},"bones":{}}})",
                                          make_json_string(handle.id()),
                                          make_json_string(hpp::to_string(handle.uid())),
-                                         bbox_to_json(bounds)),
+                                         bbox_to_json(data.get_bounds()),
+                                         data.get_vertex_count(),
+                                         data.get_face_count(),
+                                         fmt::join(lod_faces, ","),
+                                         data.get_data_groups_count(),
+                                         strings_to_json_array(default_materials),
+                                         data.get_submeshes_count(),
+                                         data.get_skinned_submeshes_count(),
+                                         data.get_skin_bind_data().get_bones().size()),
                      .is_error = false};
          },
          .mutates_scene = false,
@@ -1059,9 +1141,11 @@ void register_asset_tools(mcp_tool_registry& registry)
         {.name = "assets_get_batch",
          .description =
              "Look assets up by key or uid: each reports its uid, location (key) and type - to turn a uid from a "
-             "property into a key, or to check that a key exists.",
+             "property into a key, or to check that a key exists. An asset an import wrote, such as a model's "
+             "default material, also reports generated: its source and whether it was edited since (then "
+             "reimports keep it as it is; assets_reset_to_imported_batch discards the edits).",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string"},"uid":{"type":"string"}}}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"key":{"type":"string"},"uid":{"type":"string"}}}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -1096,7 +1180,7 @@ void register_asset_tools(mcp_tool_registry& registry)
                  asset_database::meta meta{};
                  if(!key.empty())
                  {
-                     meta = am.get_metadata_for_key(key);
+                     meta = am.get_metadata_for_key(to_asset_key(key));
                  }
                  else if(!uid_str.empty())
                  {
@@ -1123,10 +1207,11 @@ void register_asset_tools(mcp_tool_registry& registry)
                  }
                  ++ok_count;
                  results += fmt::format(
-                     R"({{"ok":true,"uid":{},"location":{},"type":{}}})",
+                     R"({{"ok":true,"uid":{},"location":{},"type":{}{}}})",
                      make_json_string(hpp::to_string(meta.meta.uid)),
                      make_json_string(meta.location.empty() ? key : meta.location),
-                     make_json_string(meta.meta.type));
+                     make_json_string(meta.meta.type),
+                     generated_status_field(am, meta.meta.uid));
              }
              results += "]";
              return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{}}})", results, ok_count, requested),
@@ -1136,13 +1221,161 @@ void register_asset_tools(mcp_tool_registry& registry)
          .effect = tool_effect::read_only});
 
     registry.add(
+        {.name = "assets_get_references_batch",
+         .description =
+             "What assets use and what uses them, as deploys follow references: asset ids and app:/ or engine:/ "
+             "paths in text asset files (scenes, prefabs, materials, UI documents, animation controllers), the "
+             "files UI documents and style sheets link, the assets an import writes beside its source, the project "
+             "settings' handles (used_by \"Project Settings\") and the paths scripts name (used_by a script key). "
+             "Reads the saved files of every asset, so save first; a large project takes a moment. Before deleting "
+             "or moving an asset, used_by tells what would lose it.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"assets":{"type":"array","minItems":1,"maxItems":200,"items":{"type":"string"},"description":"Asset keys or uids"}},"required":["assets"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             simdjson::dom::array assets;
+             std::string error;
+             if(!read_required_array(args, "assets", assets, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::vector<std::string> requested;
+             for(auto el : assets)
+             {
+                 hpp::string_view key;
+                 if(el.get(key))
+                 {
+                     return {.text = "assets must be a list of keys or uids", .is_error = true};
+                 }
+                 requested.emplace_back(key);
+             }
+             struct references_request
+             {
+                 deployment::content_source source;
+                 /// Each requested asset's key; empty when it names no asset.
+                 std::vector<std::string> keys;
+             };
+             auto request = ctx.get_cached<mcp_manager>().invoke_on_main(
+                 [&ctx, &error, &requested]() -> hpp::optional<references_request>
+                 {
+                     auto* pm = get_open_project(ctx, error);
+                     if(pm == nullptr)
+                     {
+                         return hpp::nullopt;
+                     }
+                     auto& am = ctx.get_cached<asset_manager>();
+                     references_request result{deployment::make_project_content_source(am, pm->get_settings()), {}};
+                     for(const auto& item : requested)
+                     {
+                         const auto uid = hpp::uuid::from_string(item);
+                         const auto meta = uid ? am.get_metadata(*uid) : am.get_metadata_for_key(to_asset_key(item));
+                         result.keys.push_back(meta.location);
+                     }
+                     return result;
+                 });
+             if(!request || !*request)
+             {
+                 return {.text = error.empty() ? "Timed out reading the project on the main thread" : error, .is_error = true};
+             }
+             const auto references = deployment::find_content_references((*request)->source);
+             std::string results = "[";
+             size_t found_count = 0;
+             for(size_t i = 0; i < requested.size(); ++i)
+             {
+                 results += i == 0 ? "" : ",";
+                 const auto& key = (*request)->keys[i];
+                 if(key.empty())
+                 {
+                     results += fmt::format(R"({{"asset":{},"ok":false,"error":"No asset has this key or uid"}})",
+                                            make_json_string(requested[i]));
+                     continue;
+                 }
+                 ++found_count;
+                 std::vector<std::string> uses;
+                 std::vector<std::string> used_by;
+                 for(const auto& reference : references)
+                 {
+                     if(deployment::is_same_key(reference.from, key))
+                     {
+                         uses.push_back(reference.to);
+                     }
+                     if(deployment::is_same_key(reference.to, key))
+                     {
+                         used_by.push_back(reference.from);
+                     }
+                 }
+                 results += fmt::format(R"({{"asset":{},"ok":true,"uses":{},"used_by":{}}})",
+                                        make_json_string(key),
+                                        strings_to_json_array(uses),
+                                        strings_to_json_array(used_by));
+             }
+             results += "]";
+             return {.text = fmt::format(R"({{"results":{},"found":{},"requested":{}}})", results, found_count, requested.size()),
+                     .is_error = found_count == 0};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false,
+         .effect = tool_effect::read_only});
+
+    registry.add(
+        {.name = "assets_reset_to_imported_batch",
+         .description =
+             "Bring assets an import wrote, such as a model's default materials, back to what the import writes: "
+             "their edits are discarded, the next reimport may overwrite them again, and their source is "
+             "reimported now (assets_wait_ready_batch waits for it). Only for assets assets_get_batch reports as "
+             "generated; the Inspector's Reset to Imported does the same.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"assets":{"type":"array","minItems":1,"items":{"type":"string"},"description":"Asset keys"}},"required":["assets"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             simdjson::dom::array assets;
+             std::string error;
+             if(!read_required_array(args, "assets", assets, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::string results = "[";
+             size_t reset_count = 0;
+             size_t requested = 0;
+             for(auto el : assets)
+             {
+                 hpp::string_view requested_key;
+                 if(el.get(requested_key))
+                 {
+                     return {.text = "assets must be a list of keys", .is_error = true};
+                 }
+                 results += requested == 0 ? "" : ",";
+                 ++requested;
+                 const auto key = to_asset_key(std::string(requested_key));
+                 std::string item_error;
+                 if(!asset_actions::reset_to_imported(ctx, key, &item_error))
+                 {
+                     results += fmt::format(R"({{"asset":{},"ok":false,"error":{}}})",
+                                            make_json_string(key),
+                                            make_json_string(item_error));
+                     continue;
+                 }
+                 ++reset_count;
+                 results += fmt::format(R"({{"asset":{},"ok":true}})", make_json_string(key));
+             }
+             results += "]";
+             return {.text = fmt::format(R"({{"results":{},"reset":{},"requested":{}}})", results, reset_count, requested),
+                     .is_error = reset_count == 0};
+         },
+         .mutates_scene = false,
+         .effect = tool_effect::destructive,
+         .writes_project_files = true});
+
+    registry.add(
         {.name = "assets_reimport_batch",
          .description =
              "Reimport many assets by key and wait until each has reloaded (wait_ms, a shared deadline, "
              "default 15000; 0 returns at once). Each reimported key reports a state: ready, loading (still "
              "compiling or loading at the deadline) or failed (see logs_get_recent).",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -1236,10 +1469,11 @@ void register_asset_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .idempotent = true});
+         .idempotent = true,
+         .writes_project_files = true});
 
     registry.add(
-        {.name = "assets_get_import_settings",
+        {.name = "assets_get_import_settings_batch",
          .description =
              "Read assets' import settings by key - what the .meta beside each asset stores (textures: type, "
              "colorspace, generate_mipmaps, quality.max_size, quality.compression, and platforms.desktop / "
@@ -1248,7 +1482,7 @@ void register_asset_tools(mcp_tool_registry& registry)
              "(settings_get group assets), or the deployed profile's override of them. A loaded texture also "
              "reports its compiled format, size and mips; 'schemas' describes each importer type once.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"keys":{"type":"array","items":{"type":"string"}}},"required":["keys"]})json",
+             R"json({"type":"object","properties":{"keys":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["keys"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -1268,7 +1502,7 @@ void register_asset_tools(mcp_tool_registry& registry)
              size_t ok_count = 0;
              for(size_t i = 0; i < keys.size(); ++i)
              {
-                 const auto& key = keys[i];
+                 const auto key = to_asset_key(keys[i]);
                  results += i > 0 ? "," : "";
                  const auto meta = am.get_metadata_for_key(key);
                  if(!meta.meta.importer)
@@ -1309,17 +1543,18 @@ void register_asset_tools(mcp_tool_registry& registry)
                      .is_error = ok_count == 0};
          },
          .mutates_scene = false,
-         .effect = tool_effect::read_only});
+         .effect = tool_effect::read_only,
+         .former_names = {"assets_get_import_settings"}});
 
     registry.add(
-        {.name = "assets_set_import_settings",
+        {.name = "assets_set_import_settings_batch",
          .description =
              "Change import settings and wait until each asset is imported again with them (wait_ms, one "
              "deadline, default 15000; 0 returns at once). Each item: key and settings, a partial object in the "
-             "shape assets_get_import_settings returns ({\"quality\":{\"compression\":\"none\"}}, "
+             "shape assets_get_import_settings_batch returns ({\"quality\":{\"compression\":\"none\"}}, "
              "{\"colorspace\":\"srgb\"}). Writes the .meta file; all-or-nothing per item.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string"},"settings":{"type":"object"}},"required":["key","settings"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":60000}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"key":{"type":"string"},"settings":{"type":"object"}},"required":["key","settings"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":60000}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -1411,16 +1646,19 @@ void register_asset_tools(mcp_tool_registry& registry)
          .mutates_scene = false,
          .requires_main_thread = false,
          .effect = tool_effect::destructive,
-         .idempotent = true});
+         .idempotent = true,
+         .writes_project_files = true,
+         .former_names = {"assets_set_import_settings"}});
 
     registry.add(
         {.name = "assets_recompile_textures",
          .description =
-             "Import every project texture whose key starts with prefix (default app:/data) again - after "
-             "changing the settings assets.texture, the defaults of textures left on 'project_default'. wait_ms "
-             "(default 0) waits for each to reload; waiting loads every matching texture first.",
+             "Import every project texture in the folder prefix (default app:/data, the whole project; a texture's "
+             "own key works too) again - after changing the settings assets.texture, the defaults of textures left on "
+             "'project_default'. wait_ms (default 0) waits for each to reload; waiting loads every matching texture "
+             "first.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"prefix":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":60000}}})json",
+             R"json({"type":"object","properties":{"prefix":{"type":"string","description":"A folder (key or path relative to app:/data) or one texture's key"},"wait_ms":{"type":"integer","minimum":0,"maximum":60000}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -1438,10 +1676,13 @@ void register_asset_tools(mcp_tool_registry& registry)
                  [&ctx, prefix]() -> std::vector<std::string>
                  {
                      std::vector<std::string> texture_keys;
+                     // The folder's own entries, not those of a sibling whose name starts the same ("Props" and
+                     // "PropsOld").
+                     const auto folder = prefix + "/";
                      for(const auto& handle : ctx.get_cached<asset_manager>().get_assets<gfx::texture>(prefix))
                      {
                          // The list starts with the empty handle ("None") pickers offer.
-                         if(handle)
+                         if(handle && (handle.id() == prefix || handle.id().rfind(folder, 0) == 0))
                          {
                              texture_keys.push_back(handle.id());
                          }
@@ -1484,17 +1725,18 @@ void register_asset_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .idempotent = true});
+         .idempotent = true,
+         .writes_project_files = true});
 
     registry.add(
         {.name = "assets_wait_ready_batch",
          .description =
              "Wait until assets are loaded and usable, starting loads nothing has asked for. Each key reports "
              "ready, loading (still compiling or loading at the deadline), failed (see logs_get_recent) or "
-             "missing (no such file). timeout_ms is one deadline for the whole batch (default 15000); 0 reports "
+             "missing (no such file). wait_ms is one deadline for the whole batch (default 15000); 0 reports "
              "each key's state now.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}},"timeout_ms":{"type":"integer","minimum":0,"maximum":60000}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":60000}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -1504,7 +1746,7 @@ void register_asset_tools(mcp_tool_registry& registry)
              {
                  return {.text = error, .is_error = true};
              }
-             const auto timeout_ms = read_timeout_ms(args, 15000, 60000, "timeout_ms").count();
+             const auto wait_ms = read_timeout_ms(args, 15000, 60000, "wait_ms").count();
              std::vector<std::string> keys;
              keys.reserve(32);
              for(auto el : items_arr)
@@ -1521,7 +1763,7 @@ void register_asset_tools(mcp_tool_registry& registry)
                  }
                  keys.push_back(to_asset_key(key));
              }
-             const auto states = wait_assets_ready(ctx, keys, std::chrono::milliseconds(timeout_ms));
+             const auto states = wait_assets_ready(ctx, keys, std::chrono::milliseconds(wait_ms));
              std::string results = "[";
              size_t ok_count = 0;
              for(size_t i = 0; i < keys.size(); ++i)
@@ -1538,26 +1780,28 @@ void register_asset_tools(mcp_tool_registry& registry)
                                         make_json_string(readiness_to_string(states[i])));
              }
              results += "]";
-             return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{},"timeout_ms":{}}})",
+             return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{},"wait_ms":{}}})",
                                          results,
                                          ok_count,
                                          keys.size(),
-                                         timeout_ms),
+                                         wait_ms),
                      .is_error = ok_count != keys.size()};
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .effect = tool_effect::read_only});
+         .effect = tool_effect::read_only,
+         .former_arguments = {{"timeout_ms", "wait_ms"}}});
 
     registry.add(
-        {.name = "prefabs_create_from_entities_batch",
+        {.name = "prefab_create_from_entities_batch",
          .description =
              "Save entity hierarchies as prefab assets in the project's data folder. Each item: entity_id; path "
              "(.pfb is added) or folder (+ optional name, default the entity's name); attach:true makes the "
-             "entity an instance of the new prefab. A prefab already at the path is overwritten. Waits up to "
+             "entity an instance of the new prefab, as dropping it on the Content Browser does (not an undo step). "
+             "A prefab already at the path is overwritten. Waits up to "
              "wait_ms (default 15000; 0: no wait) for the prefabs to load, each with a state.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"path":{"type":"string"},"folder":{"type":"string"},"name":{"type":"string"},"attach":{"type":"boolean"}},"required":["entity_id"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"path":{"type":"string"},"folder":{"type":"string"},"name":{"type":"string"},"attach":{"type":"boolean"}},"required":["entity_id"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -1696,7 +1940,9 @@ void register_asset_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = true,
          .requires_main_thread = false,
-         .effect = tool_effect::destructive});
+         .effect = tool_effect::destructive,
+         .writes_project_files = true,
+         .former_names = {"prefabs_create_from_entities_batch"}});
 }
 
 } // namespace unravel::mcp

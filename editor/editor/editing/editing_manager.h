@@ -498,7 +498,9 @@ struct editing_manager
     void enter_prefab_mode(rtti::context& ctx, const asset_handle<prefab>& prefab, bool auto_save = false);
     void exit_prefab_mode(rtti::context& ctx, save_option save_changes = save_option::prompt);
     auto is_prefab_mode() const -> bool { return current_mode == editing_mode::prefab; }
-    void save_prefab_changes(rtti::context& ctx);
+    /// Writes the prefab open in prefab mode. False, with an error logged and shown, when its root is gone or the
+    /// file could not be written; the edits then stay unsaved.
+    auto save_prefab_changes(rtti::context& ctx) -> bool;
     
     // Returns the active scene based on the current edit mode
     auto get_active_scene(rtti::context& ctx) -> scene*;
@@ -709,11 +711,15 @@ struct editing_manager
 
     bool waiting_for_compilation_before_play_{};
     bool has_unsaved_changes_{};
+    /// has_unsaved_changes_ when play started: play edits go with the play scene, so play end puts it back.
+    bool has_unsaved_changes_before_play_{};
     bool prefab_has_unsaved_changes_{};
     
 
     // Prompts the user to save changes and returns true if changes should be saved
-    auto prompt_save_changes(rtti::context& ctx, const std::function<void()>& on_save, const std::function<void()>& on_continue) -> bool;
+    /// Asks whether to save the open prefab. on_save returns whether it saved; on a failed save on_continue is not
+    /// called, so the prefab stays open with its edits.
+    auto prompt_save_changes(rtti::context& ctx, const std::function<bool()>& on_save, const std::function<void()>& on_continue) -> bool;
 };
 } // namespace unravel
 

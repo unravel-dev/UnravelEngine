@@ -34,6 +34,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <utility>
 #include <hpp/optional.hpp>
 #include <unordered_map>
 #include <variant>
@@ -79,35 +80,67 @@ auto make_number_codec(const char* schema_type) -> value_codec
             .from_json = [](rtti::context&, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
                 -> bool
             {
-                double number = 0.0;
-                int64_t integer = 0;
-                if(element.get_double().get(number) != simdjson::SUCCESS)
+                if constexpr(std::is_floating_point_v<T>)
                 {
-                    if(element.get_int64().get(integer) != simdjson::SUCCESS)
+                    double number = 0.0;
+                    if(element.get_double().get(number) != simdjson::SUCCESS)
                     {
                         error = "expected a number";
                         return false;
                     }
-                    number = static_cast<double>(integer);
+                    // JSON has no infinity, but a number past the type's range becomes one in the cast.
+                    if(std::abs(number) > static_cast<double>(std::numeric_limits<T>::max()))
+                    {
+                        error = fmt::format("{} is outside the range a {}-bit float holds", number, sizeof(T) * 8);
+                        return false;
+                    }
+                    out = entt::meta_any{static_cast<T>(number)};
+                    return true;
                 }
-                if constexpr(!std::is_floating_point_v<T>)
+                else
                 {
-                    if(number != static_cast<double>(static_cast<int64_t>(number)))
+                    // Integers are read as integers first, so 64-bit values keep every digit.
+                    int64_t signed_value = 0;
+                    uint64_t unsigned_value = 0;
+                    double number = 0.0;
+                    const auto range_error = fmt::format("expected an integer from {} to {}",
+                                                         std::numeric_limits<T>::lowest(),
+                                                         std::numeric_limits<T>::max());
+                    if(element.get_int64().get(signed_value) == simdjson::SUCCESS)
+                    {
+                        if(!std::in_range<T>(signed_value))
+                        {
+                            error = range_error;
+                            return false;
+                        }
+                        out = entt::meta_any{static_cast<T>(signed_value)};
+                        return true;
+                    }
+                    if(element.get_uint64().get(unsigned_value) == simdjson::SUCCESS)
+                    {
+                        if(!std::in_range<T>(unsigned_value))
+                        {
+                            error = range_error;
+                            return false;
+                        }
+                        out = entt::meta_any{static_cast<T>(unsigned_value)};
+                        return true;
+                    }
+                    if(element.get_double().get(number) != simdjson::SUCCESS || std::floor(number) != number)
                     {
                         error = "expected an integer";
                         return false;
                     }
-                    // Out of the type's range a cast would wrap: 300 into a byte stores 44.
-                    const auto lowest = static_cast<double>(std::numeric_limits<T>::lowest());
-                    const auto highest = static_cast<double>(std::numeric_limits<T>::max());
-                    if(number < lowest || number > highest)
+                    // Whole numbers written as doubles: in range of the type only, or the cast would wrap.
+                    if(number < static_cast<double>(std::numeric_limits<T>::lowest()) ||
+                       number >= std::ldexp(1.0, std::numeric_limits<T>::digits))
                     {
-                        error = fmt::format("expected an integer from {} to {}", std::numeric_limits<T>::lowest(), std::numeric_limits<T>::max());
+                        error = range_error;
                         return false;
                     }
+                    out = entt::meta_any{static_cast<T>(number)};
+                    return true;
                 }
-                out = entt::meta_any{static_cast<T>(number)};
-                return true;
             },
             .as_double = [](const entt::meta_any& value) -> double
             {
@@ -1565,7 +1598,8 @@ void apply_meta_properties(rtti::context& ctx,
         // A typo silently ignored reads as success; reject it so the caller sees the name.
         result.ok = false;
         result.errors.push_back("unknown properties: " + fmt::format("{}", fmt::join(result.unknown, ", ")) +
-                                " (see scene_list_components)");
+                                " (scene_list_components, assets_list_properties and settings_list_properties list the "
+                                "names)");
     }
 }
 
@@ -1736,7 +1770,9 @@ void append_meta_schema(const entt::meta_type& type,
                            [&](const entt::meta_data& prop)
                            {
                                const auto name = entt::get_name(prop);
-                               if(name.empty() || (only != nullptr && only->count(name) == 0))
+                               // Listed as count_meta_properties counts: what the bridge can read and write.
+                               if(name.empty() || (only != nullptr && only->count(name) == 0) ||
+                                  hpp::string_view(schema_type_of(prop.type())) == "unsupported")
                                {
                                    return;
                                }

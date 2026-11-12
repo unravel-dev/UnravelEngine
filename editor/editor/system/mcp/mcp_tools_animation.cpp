@@ -1,16 +1,22 @@
 #include "mcp_asset_lookup.h"
 #include "mcp_meta_properties.h"
+#include "mcp_project_paths.h"
 #include "mcp_tools_common.h"
 
+#include <editor/editing/animation_preview.h>
 #include <editor/editing/animation_retarget_check.h>
+#include <editor/editing/rig_setup.h>
 #include <editor/system/mcp_manager.h>
 #include <engine/animation/animation_controller_instance.h>
 #include <engine/animation/animation_humanoid.h>
 #include <engine/animation/ecs/components/animation_component.h>
+#include <engine/animation/ecs/components/ik_components.h>
 #include <engine/animation/ecs/systems/animation_system.h>
 #include <engine/assets/asset_manager.h>
+#include <engine/events.h>
 #include <engine/rendering/ecs/components/model_component.h>
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -173,7 +179,10 @@ auto describe_animation(rtti::context& ctx, const animation_component& animation
         parameters += "]";
 
         std::string controller_layers = "[";
-        for(size_t i = 0; i < instance->get_layer_count(); ++i)
+        // An instance rebuilds on the controller's next revision only while it plays: until then the asset may have
+        // fewer layers than the instance.
+        const size_t layer_count = std::min(instance->get_layer_count(), definition.layers.size());
+        for(size_t i = 0; i < layer_count; ++i)
         {
             const auto status = instance->get_layer_status(i, player);
             const auto& layer_def = definition.layers[i];
@@ -470,6 +479,154 @@ auto describe_retarget_check(rtti::context& ctx,
         strings_to_json_array(check.warnings));
 }
 
+/**
+ * @brief The previews animation_preview runs: the entity's controller playing, or one clip held at a point. A panel
+ *        keeps its preview alive by drawing it; these are kept alive every frame until a call stops them. Whatever
+ *        stops every preview - an edit, a save, play starting, the project closing - stops them too.
+ */
+struct mcp_animation_preview
+{
+    animation_entity_preview controller;
+    animation_clip_preview clip;
+    std::shared_ptr<int> sentinel = std::make_shared<int>(0);
+    bool is_connected{};
+
+    auto is_active() const -> bool
+    {
+        return controller.is_active() || clip.is_active();
+    }
+
+    void stop()
+    {
+        controller.stop();
+        clip.stop();
+    }
+};
+
+/// The one MCP animation preview, connected to the frame on first use. Main thread.
+auto get_animation_preview(rtti::context& ctx) -> mcp_animation_preview&
+{
+    static mcp_animation_preview state;
+    if(!state.is_connected)
+    {
+        state.is_connected = true;
+        ctx.get_cached<events>().on_frame_begin.connect(state.sentinel,
+                                                        [](rtti::context&, const frame_times&)
+                                                        {
+                                                            if(state.controller.is_active())
+                                                            {
+                                                                state.controller.keep_alive();
+                                                            }
+                                                            if(state.clip.is_active())
+                                                            {
+                                                                state.clip.keep_alive();
+                                                            }
+                                                        });
+    }
+    return state;
+}
+
+/// The IK modifiers rig_setup names, in the order it picks one when the call names none.
+constexpr std::array<std::pair<const char*, rig_setup::ik_modifier>, 3> k_ik_modifiers{{
+    {"two_bone", rig_setup::ik_modifier::two_bone},
+    {"chain", rig_setup::ik_modifier::chain},
+    {"look_at", rig_setup::ik_modifier::look_at},
+}};
+
+/// The entity in the modifier's target (or pole) slot; null when empty or the modifier has no such slot.
+auto get_ik_slot(entt::handle owner, rig_setup::ik_modifier modifier, bool is_pole) -> entt::handle
+{
+    switch(modifier)
+    {
+        case rig_setup::ik_modifier::two_bone:
+        {
+            const auto* component = owner.try_get<two_bone_ik_component>();
+            return component == nullptr ? entt::handle{} : is_pole ? component->pole : component->target;
+        }
+        case rig_setup::ik_modifier::chain:
+        {
+            const auto* component = owner.try_get<chain_ik_component>();
+            return component == nullptr ? entt::handle{} : is_pole ? component->pole : component->target;
+        }
+        case rig_setup::ik_modifier::look_at:
+        {
+            const auto* component = owner.try_get<look_at_ik_component>();
+            return component == nullptr || is_pole ? entt::handle{} : component->target;
+        }
+    }
+    return {};
+}
+
+/// The modifier a create_target / create_pole call works on: the named one, else the first the entity has.
+auto read_ik_modifier(const simdjson::dom::object& args, entt::handle owner, rig_setup::ik_modifier& out, std::string& error)
+    -> bool
+{
+    std::string name;
+    const bool is_named = read_string(args, "modifier", name);
+    for(const auto& [modifier_name, modifier] : k_ik_modifiers)
+    {
+        if((is_named ? name == modifier_name : true) && rig_setup::has_ik_modifier(owner, modifier))
+        {
+            out = modifier;
+            return true;
+        }
+    }
+    error = is_named ? entity_id_string(owner) + " has no " + name + " IK"
+                     : entity_id_string(owner) + " has no Two Bone IK, Chain IK or Look At IK";
+    return false;
+}
+
+/// Runs create_target or create_pole on the modifier; the result's text.
+auto create_ik_helper(rtti::context& ctx, const simdjson::dom::object& args, entt::handle owner, bool is_pole) -> tool_result
+{
+    std::string error;
+    rig_setup::ik_modifier modifier{};
+    if(!read_ik_modifier(args, owner, modifier, error))
+    {
+        return {.text = error, .is_error = true};
+    }
+    if(const auto assigned = get_ik_slot(owner, modifier, is_pole))
+    {
+        return {.text = fmt::format("The {} already has {}; clear it first (scene_set_component_properties_batch)",
+                                    is_pole ? "pole slot" : "target slot",
+                                    entity_id_string(assigned)),
+                .is_error = true};
+    }
+    if(is_pole && !rig_setup::can_create_ik_pole(owner, modifier))
+    {
+        return {.text = "No pole for this modifier: look-at IK has none, and a chain needs a middle joint",
+                .is_error = true};
+    }
+    const auto created = is_pole ? rig_setup::create_ik_pole(ctx, owner, modifier)
+                                 : rig_setup::create_ik_target(ctx, owner, modifier);
+    if(!created)
+    {
+        return {.text = "Nothing was created: the entity has no transform or no scene is open", .is_error = true};
+    }
+    return {.text = fmt::format(R"({{"ok":true,"created":{}}})", make_json_string(entity_id_string(created))),
+            .is_error = false};
+}
+
+/// The id of a found bone, or null.
+auto bone_json(entt::handle bone) -> std::string
+{
+    return bone ? make_json_string(entity_id_string(bone)) : std::string("null");
+}
+
+/// Plays the entity's controller in the preview; the result's text.
+auto start_controller_preview(rtti::context& ctx, mcp_animation_preview& state, entt::handle entity) -> tool_result
+{
+    state.clip.stop();
+    if(!state.controller.start_playing(ctx, entity))
+    {
+        return {.text = "The controller preview did not start", .is_error = true};
+    }
+    return {.text = fmt::format(R"({{"ok":true,"mode":"controller","entity_id":{},"state":{}}})",
+                                make_json_string(entity_id_string(entity)),
+                                describe_animation(ctx, entity.get<animation_component>())),
+            .is_error = false};
+}
+
 } // namespace
 
 void register_animation_tools(mcp_tool_registry& registry)
@@ -492,7 +649,7 @@ void register_animation_tools(mcp_tool_registry& registry)
              {
                  return {.text = "asset is required", .is_error = true};
              }
-             auto handle = find_existing_asset<animation_controller>(ctx, reference, error);
+             auto handle = find_existing_asset<animation_controller>(ctx, to_asset_key(reference), error);
              if(!handle)
              {
                  return {.text = error.empty() ? "Animation controller not found: " + reference : error, .is_error = true};
@@ -534,8 +691,8 @@ void register_animation_tools(mcp_tool_registry& registry)
              "running crossfade), blended curve values, and - with a controller - every parameter value and per "
              "layer the current state, its normalized time, the destination and progress of a running transition. "
              "Enum values (blend mode, parameter type, motion) use their reflected names, as "
-             "assets_set_properties_batch does. A controller binds when the entity first plays (play mode or a "
-             "preview); before that it reports bound false. Use it to verify a state machine reacts to parameters.",
+             "assets_set_properties_batch does. A controller binds when the entity first plays (play mode or "
+             "animation_preview); before that it reports bound false. Use it to verify a state machine reacts to parameters.",
          .input_schema_json = R"json({"type":"object","properties":{"entity_id":{"type":"string"}},"required":["entity_id"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
@@ -560,7 +717,7 @@ void register_animation_tools(mcp_tool_registry& registry)
              "Mapping); with clip (an animation clip key), the bones of the skeleton the clip was authored on. Each "
              "role maps to a bone name or null; a clip imported before rest poses were recorded reports none. "
              "overrides lists the roles set by hand: rig.humanoid_overrides in the model file's import settings "
-             "(assets_set_import_settings on the model key, [{\"role\":\"left_hand\",\"bone\":\"hand.l\"}]; an "
+             "(assets_set_import_settings_batch on the model key, [{\"role\":\"left_hand\",\"bone\":\"hand.l\"}]; an "
              "empty bone takes the role away). They hold for the model and for every clip of the file.",
          .input_schema_json =
              R"json({"type":"object","properties":{"entity_id":{"type":"string"},"clip":{"type":"string"}}})json",
@@ -579,7 +736,7 @@ void register_animation_tools(mcp_tool_registry& registry)
              if(!key.empty())
              {
                  std::string error;
-                 const auto handle = find_existing_asset<animation_clip>(ctx, key, error);
+                 const auto handle = find_existing_asset<animation_clip>(ctx, to_asset_key(key), error);
                  auto clip = handle ? handle.get() : nullptr;
                  if(!clip || asset_handle<animation_clip>::is_empty(clip))
                  {
@@ -669,7 +826,7 @@ void register_animation_tools(mcp_tool_registry& registry)
              asset_handle<animation_clip> handle;
              if(read_string(args, "clip", key))
              {
-                 handle = find_existing_asset<animation_clip>(ctx, key, error);
+                 handle = find_existing_asset<animation_clip>(ctx, to_asset_key(key), error);
              }
              else
              {
@@ -697,7 +854,8 @@ void register_animation_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "animation_set_parameters",
          .description =
-             "Drive an entity's animation controller at runtime (play mode, or the controller editor's preview): "
+             "Drive an entity's animation controller at runtime (play mode, or a preview: animation_preview, the "
+             "Animation window's): "
              "values sets parameters by name (numbers for float/int, true/false for bool), triggers sets trigger "
              "parameters, reset_triggers clears them, and state (+ optional layer, duration seconds, "
              "normalized_time 0..1) crossfades a layer straight to a state. A malformed argument fails the call "
@@ -714,6 +872,15 @@ void register_animation_tools(mcp_tool_registry& registry)
              if(animation == nullptr)
              {
                  return {.text = error, .is_error = true};
+             }
+             // In edit mode the controller runs only in a preview; binding it here would leave an instance behind that
+             // the scene never asked for.
+             const bool is_playing = ctx.has<play_mode>() && ctx.get_cached<play_mode>().is_active();
+             if(!is_playing && !animation_entity_preview::is_previewing(entity))
+             {
+                 return {.text = "The controller runs in play mode or in a preview; start one of them first "
+                                 "(play_set_active, or animation_preview without clip)",
+                         .is_error = true};
              }
              auto* instance = animation->get_controller_instance();
              if(instance == nullptr)
@@ -815,6 +982,146 @@ void register_animation_tools(mcp_tool_registry& registry)
                      .is_error = false};
          },
          .effect = tool_effect::changes});
+
+    registry.add(
+        {.name = "animation_preview",
+         .description =
+             "Animate an entity outside play, as the Animation window's previews do. Without clip its controller "
+             "plays from the start as in play: animation_set_parameters drives it and animation_get_state reads it. "
+             "With clip the entity is held at progress of that clip (0 the first frame, 1 the last) and stays there, "
+             "for viewport_capture_scene; call again to move it. One entity is previewed at a time. stop:true puts "
+             "the entity's own pose back; an edit, a save or play starting does that too, and the pose is never "
+             "saved. Needs an Animation component on the entity.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"entity_id":{"type":"string"},"clip":{"type":"string","description":"Animation clip key or uid; omitted: play the controller"},"progress":{"type":"number","minimum":0,"maximum":1,"description":"With clip: point of the clip, 0 to 1; default 0"},"stop":{"type":"boolean","description":"Stop the preview instead"}}})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& state = get_animation_preview(ctx);
+             bool stop = false;
+             read_bool(args, "stop", stop);
+             if(stop)
+             {
+                 const bool was_active = state.is_active();
+                 state.stop();
+                 return {.text = fmt::format(R"({{"ok":true,"stopped":{}}})", bool_to_json(was_active)), .is_error = false};
+             }
+             scene* scn = nullptr;
+             std::string error;
+             std::string entity_id;
+             std::string clip_key;
+             if(!require_edit_scene(ctx, scn, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             if(!read_string(args, "entity_id", entity_id))
+             {
+                 return {.text = "Pass entity_id, or stop:true", .is_error = true};
+             }
+             auto entity = find_entity(*scn, entity_id);
+             if(!entity)
+             {
+                 return {.text = "Entity not found: " + entity_id, .is_error = true};
+             }
+             if(!entity.all_of<animation_component>())
+             {
+                 return {.text = entity_id + " has no Animation component to animate", .is_error = true};
+             }
+             if(!read_string(args, "clip", clip_key))
+             {
+                 return start_controller_preview(ctx, state, entity);
+             }
+             auto clip = find_loaded_asset<animation_clip>(ctx, clip_key, error);
+             if(!clip)
+             {
+                 return {.text = error, .is_error = true};
+             }
+             double progress = 0.0;
+             read_double(args, "progress", progress);
+             const bool is_same = state.clip.is_active() && state.clip.get_entity() == entity &&
+                                  state.clip.get_clip() == clip;
+             if(!is_same)
+             {
+                 state.controller.stop();
+                 if(!state.clip.start(ctx, entity, clip))
+                 {
+                     return {.text = "The clip preview did not start on " + entity_id, .is_error = true};
+                 }
+             }
+             state.clip.set_progress(static_cast<float>(progress));
+             return {.text = fmt::format(R"({{"ok":true,"mode":"clip","entity_id":{},"clip":{},"progress":{},"duration_s":{}}})",
+                                         make_json_string(entity_id),
+                                         make_json_string(clip.id()),
+                                         progress,
+                                         clip.get()->duration.count()),
+                     .is_error = false};
+         },
+         .effect = tool_effect::changes,
+         .idempotent = true});
+
+    registry.add(
+        {.name = "rig_setup",
+         .description =
+             "Run a rig component's setup helper, as its Inspector buttons do. foot_ik_auto_setup finds the feet "
+             "and the hips of the character's skeleton by humanoid role and assigns those it finds to the entity's "
+             "Foot IK. create_target makes an entity at the bone's animated pose (in front of the eyes for look-at "
+             "IK) and assigns it as the modifier's target; create_pole makes one in front of the middle joint, "
+             "along the limb's bend, as its pole. Both go under the character, so they do not move with what they "
+             "drive; modifier picks two_bone, chain or look_at IK when the entity has several. These are one undo "
+             "step each, outside play. reset_spring_bones restarts the entity's spring bone simulation from its "
+             "pose (not undoable).",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"entity_id":{"type":"string"},"action":{"type":"string","enum":["foot_ik_auto_setup","create_target","create_pole","reset_spring_bones"]},"modifier":{"type":"string","enum":["two_bone","chain","look_at"],"description":"create_target / create_pole: the IK modifier; default the first the entity has"}},"required":["entity_id","action"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             std::string action;
+             std::string entity_id;
+             read_string(args, "action", action);
+             read_string(args, "entity_id", entity_id);
+             scene* scn = nullptr;
+             std::string error;
+             const bool is_runtime = action == "reset_spring_bones";
+             if(!(is_runtime ? require_active_scene(ctx, scn, error) : require_edit_scene(ctx, scn, error)))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             auto entity = find_entity(*scn, entity_id);
+             if(!entity)
+             {
+                 return {.text = "Entity not found: " + entity_id, .is_error = true};
+             }
+             if(action == "foot_ik_auto_setup")
+             {
+                 if(!entity.all_of<foot_ik_component>())
+                 {
+                     return {.text = entity_id + " has no Foot IK", .is_error = true};
+                 }
+                 const auto found = rig_setup::auto_setup_foot_ik(ctx, entity);
+                 return {.text = fmt::format(R"({{"ok":true,"left_foot":{},"right_foot":{},"pelvis":{}}})",
+                                             bone_json(found.left_foot),
+                                             bone_json(found.right_foot),
+                                             bone_json(found.pelvis)),
+                         .is_error = false};
+             }
+             if(action == "create_target" || action == "create_pole")
+             {
+                 return create_ik_helper(ctx, args, entity, action == "create_pole");
+             }
+             if(is_runtime)
+             {
+                 auto* springs = entity.try_get<spring_bone_component>();
+                 if(springs == nullptr)
+                 {
+                     return {.text = entity_id + " has no Spring Bone", .is_error = true};
+                 }
+                 springs->reset_simulation();
+                 return {.text = R"({"ok":true,"reset":true})", .is_error = false};
+             }
+             return {.text = "action must be foot_ik_auto_setup, create_target, create_pole or reset_spring_bones",
+                     .is_error = true};
+         },
+         .mutates_scene = true});
 }
 
 } // namespace unravel::mcp

@@ -7,4 +7,8 @@ namespace unravel
 /// Checkbox to toggle @c BGFX_DEBUG_PROFILER, then encoder (CPU submit) and view (CPU submit / GPU execute) bars.
 void draw_gpu_submit_profiler_ui(const bgfx::Stats* stats, bool* enable_profiler);
 
+/// Switches bgfx's per-view and encoder timing on or off and records it in @p enabled, the flag the profiler panel
+/// shows.
+void set_gpu_view_timing(bool& enabled, bool enable);
+
 } // namespace unravel

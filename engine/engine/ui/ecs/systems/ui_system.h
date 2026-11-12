@@ -197,6 +197,8 @@ struct ui_system
      * world-space document through the scene camera onto its quad.
      */
     void visit_pointer_documents(scene& scn, input::coord position, const pointer_visitor& visit);
+    /// The camera a world-space document's pointer goes through: the scene's first active camera, or none.
+    static auto find_pointer_camera(scene& scn) -> entt::handle;
     /**
      * @brief Hands a finger to the documents as an RmlUi touch, which presses, drags scroll containers
      * and releases. A finger that lands on a document's content (is_ui_content_at) is the UI's: the

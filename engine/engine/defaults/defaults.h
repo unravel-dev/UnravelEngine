@@ -13,6 +13,7 @@
 #include <engine/rendering/model.h>
 #include <engine/rendering/reflection_probe.h>
 
+#include <hpp/optional.hpp>
 #include <hpp/string_view.hpp>
 
 namespace unravel
@@ -245,6 +246,9 @@ struct defaults
     /// Stable string for logging / MCP / UI ("low", "medium", "high", "showcase").
     static auto scene_preset_to_string(scene_preset preset) -> const char*;
 
+    /// Every scene preset, cheapest first.
+    static auto get_scene_presets() -> const std::vector<scene_preset>&;
+
     /**
      * @brief Sets which post-process effects of a volume run, and their quality, for a preset.
      *
@@ -341,6 +345,13 @@ struct defaults
      * @return The bounding box of the entity.
      */
     static auto calc_bounds_global(entt::handle entity, int depth = -1) -> math::bbox;
+
+    /**
+     * @brief The bounding box of what the entity and its children down to @p depth draw, without the stand-in
+     *        cube calc_bounds_global gives an entity with nothing to measure.
+     * @return The box, or nullopt when nothing there has bounds (no model, a mesh still loading).
+     */
+    static auto calc_measured_bounds_global(entt::handle entity, int depth = -1) -> hpp::optional<math::bbox>;
 
     /**
      * @brief Calculates the bounding sphere of an entity.

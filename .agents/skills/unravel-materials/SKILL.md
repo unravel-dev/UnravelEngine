@@ -30,10 +30,10 @@ Save parity: inspector `inspector_asset_handle_material` on `edit_finished`.
 | `scene_set_model_materials_batch` | Shared slot assignments (one undo) |
 | `scene_set_model_material_instances_batch` | Override instance values (reports `shares_draw`); no `.mat` |
 | `scene_clear_model_material_instances_batch` | Revert every override -> draws like the shared material |
-| `assets_find_batch` | Find materials (and all other asset types) by `type`/`prefix`/`name_contains` |
-| `window_request_focus` | Focus/raise editor OS window so asset watcher can import new `.mat` files |
+| `assets_find` | Find materials (and all other asset types) by `type`/`prefix`/`name_contains` |
+| `editor_focus_os_window` | Focus/raise editor OS window so asset watcher can import new `.mat` files |
 
-When the editor is unfocused, filesystem watcher events may not run - call `window_request_focus` before `materials_create_batch` / `assets_wait_ready_batch` if creates do not land.
+When the editor is unfocused, filesystem watcher events may not run - call `editor_focus_os_window` before `materials_create_batch` / `assets_wait_ready_batch` if creates do not land.
 
 Single-property edits: one-key `properties` object. Bulk: multiple keys in one call.
 

@@ -1,5 +1,7 @@
 #include "keyboard_action_map.hpp"
 
+#include <algorithm>
+
 namespace input
 {
 //  ----------------------------------------------------------------------------
@@ -188,12 +190,24 @@ void keyboard_action_map::map(const action_id_t& action, key_code key, float ana
 
 void keyboard_action_map::map(const action_id_t& action, key_code key, const std::vector<key_code>& modifiers, float analog_value)
 {
+    // One binding per key and modifier set: mapping it again updates its value instead of adding a second one.
+    auto& entries = entries_by_action_id_[action];
+    const auto existing = std::find_if(entries.begin(),
+                                       entries.end(),
+                                       [&](const key_entry& entry)
+                                       {
+                                           return entry.key == key && entry.modifiers == modifiers;
+                                       });
+    if(existing != entries.end())
+    {
+        existing->analog_value = analog_value;
+        return;
+    }
     key_entry entry = {};
     entry.key = key;
     entry.modifiers = modifiers;
     entry.analog_value = analog_value;
-
-    entries_by_action_id_[action].push_back(entry);
+    entries.push_back(entry);
 }
 
 } // namespace input

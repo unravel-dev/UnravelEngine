@@ -19,6 +19,7 @@
 #include <engine/input/action_map/impl/os_input_manager.hpp>
 #include <engine/input/action_map/impl/os_touches.hpp>
 
+#include <array>
 #include <cstdio>
 #include <string>
 
@@ -173,6 +174,33 @@ void test_the_manager_maps_fingers_to_the_work_zone()
     manager.set_virtual_mouse_position({});
 }
 
+/// unmap_finger_position is map_finger_position backwards: a finger put where it says lands on the asked pixel.
+void test_unmapped_fingers_land_where_asked()
+{
+    input::os_input_manager manager;
+    manager.init();
+    manager.set_window_zone(k_window_zone);
+    manager.set_work_zone(k_work_zone);
+    manager.set_virtual_mouse_position(input::coord{0, 0});
+    manager.before_events_update();
+    const std::array<input::coord, 3> asked{input::coord{100, 100}, input::coord{0, 0}, input::coord{150, 30}};
+    for(size_t i = 0; i < asked.size(); ++i)
+    {
+        const auto normalized = manager.unmap_finger_position(asked[i]);
+        manager.on_os_event(make_finger_event(os::events::finger_down, i + 1, normalized[0], normalized[1]));
+    }
+    const auto& touches = manager.get_touches();
+    check(touches.get_count() == asked.size(), "every unmapped finger lands in the work zone");
+    for(size_t i = 0; i < asked.size() && i < touches.get_count(); ++i)
+    {
+        check(is_at(touches.get(i).position, asked[i].x, asked[i].y),
+              "an unmapped finger lands on the pixel asked for (" + std::to_string(asked[i].x) + ", " +
+                  std::to_string(asked[i].y) + ")");
+    }
+    manager.release_all();
+    manager.set_virtual_mouse_position({});
+}
+
 auto run_input_touch_suite(rtti::context& /*ctx*/) -> int
 {
     g_checks = 0;
@@ -182,6 +210,7 @@ auto run_input_touch_suite(rtti::context& /*ctx*/) -> int
     test_cancels_and_unknown_fingers();
     test_ids_are_stable_and_lowest_free();
     test_the_manager_maps_fingers_to_the_work_zone();
+    test_unmapped_fingers_land_where_asked();
     std::printf("input touch: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }

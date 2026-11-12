@@ -421,18 +421,30 @@ auto calc_orbit_distance(const transform_component& transform, const std::vector
     return depth > CAMERA_ORBIT_MIN_DISTANCE ? depth : CAMERA_ORBIT_DEFAULT_DISTANCE;
 }
 
-auto orbit_camera(entt::handle camera, const math::vec3& pivot) -> bool
+/// Turns the camera as the mouse look does - yaw about the world up, pitch about its right - then puts it back
+/// onto the sphere around the pivot, so the view keeps pointing at it from the same distance (or @p distance).
+void orbit_camera_by(entt::handle camera,
+                     const math::vec3& pivot,
+                     float yaw_degrees,
+                     float pitch_degrees,
+                     hpp::optional<float> distance = std::nullopt)
 {
     auto& transform = camera.get<transform_component>();
-    const float distance = math::length(transform.get_position_global() - pivot);
-    if(!handle_mouse_rotation(camera, CAMERA_ROTATION_SPEED, true))
+    const float current_distance = math::length(transform.get_position_global() - pivot);
+    transform.rotate_by_euler_global({0.0f, yaw_degrees, 0.0f});
+    transform.rotate_by_euler_local({pitch_degrees, 0.0f, 0.0f});
+    const float orbit_distance = math::max(distance.value_or(current_distance), CAMERA_ORBIT_MIN_DISTANCE);
+    transform.set_position_global(pivot - transform.get_z_axis_global() * orbit_distance);
+}
+
+auto orbit_camera(entt::handle camera, const math::vec3& pivot) -> bool
+{
+    const auto delta_move = ImGui::GetIO().MouseDelta;
+    if(delta_move.x == 0.0f && delta_move.y == 0.0f)
     {
         return false;
     }
-    // The same turn as the mouse look, then back onto the sphere around the pivot: the view keeps
-    // pointing at it from the same distance.
-    const float orbit_distance = math::max(distance, CAMERA_ORBIT_MIN_DISTANCE);
-    transform.set_position_global(pivot - transform.get_z_axis_global() * orbit_distance);
+    orbit_camera_by(camera, pivot, delta_move.x * CAMERA_ROTATION_SPEED, delta_move.y * CAMERA_ROTATION_SPEED);
     return true;
 }
 
@@ -2004,6 +2016,15 @@ void scene_panel::stop_camera_motion()
 {
     camera_controller_.stop();
     seq::scope::stop_all("camera_focus");
+}
+
+void scene_panel::orbit_camera_by_degrees(const math::vec3& pivot,float yaw_degrees, float pitch_degrees, hpp::optional<float> distance)
+{
+    auto camera = get_camera();
+    if(camera && camera.all_of<transform_component>())
+    {
+        orbit_camera_by(camera, pivot, yaw_degrees, pitch_degrees, distance);
+    }
 }
 
 auto scene_panel::get_orbit_pivot(const editing_manager& em) -> math::vec3

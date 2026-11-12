@@ -1,14 +1,14 @@
 ---
 name: assets
 title: Assets and materials
-description: Finding assets, importing everything through assets_import_files (files or whole model directories), moving / duplicating / deleting assets safely, import settings (texture compression, color space, mesh options), readiness, and shared material and physics material assets vs per-entity material instances.
+description: Finding assets, importing everything through assets_import_batch (files or whole model directories), moving / duplicating / deleting assets safely, import settings (texture compression, color space, mesh options), readiness, and shared material and physics material assets vs per-entity material instances.
 order: 50
 ---
 # Assets and materials
 
 ## Finding and resolving
 
-- assets_find_batch: search by type (a name from assets_list_types - texture,
+- assets_find: search by type (a name from assets_list_types - texture,
   mesh, material, prefab, scene, audio_clip, animation_clip, ... - which covers
   every format of it, or one extension such as "png"), key prefix ("Models/" or
   "app:/data/Models/"), name_contains and protocol (app | engine | editor |
@@ -18,8 +18,16 @@ order: 50
   local AABB; assets_list_embedded_primitives lists the built-in meshes, which
   are the assets engine:/data/meshes/<name>.emesh.
 - assets_create_folder makes folders in the data folder.
+- assets_get_references_batch: what an asset uses and what uses it (scenes,
+  prefabs, materials, UI documents, the project settings, script paths), read
+  from the saved files as deploys follow them. Check used_by before deleting
+  or replacing an asset.
+- An asset an import wrote beside its source (a model's default materials)
+  reports generated {is_edited, source} in assets_get_batch. Until it is
+  edited every reimport rewrites it; once edited, reimports keep it.
+  assets_reset_to_imported_batch discards the edits and reimports the source.
 
-## Importing: always through assets_import_files
+## Importing: always through assets_import_batch
 
 The single import path for ALL assets. It copies absolute filesystem paths
 (outside the project) into a folder of the data folder, then waits up to
@@ -57,7 +65,7 @@ inside the project).
 
 ## Import settings
 
-- assets_get_import_settings {"keys":[...]} reads what the inspector's Import tab
+- assets_get_import_settings_batch {"keys":[...]} reads what the inspector's Import tab
   edits: textures (type, colorspace, generate_mipmaps, invert_normal_y,
   quality.max_size, quality.compression, and platforms.desktop /
   platforms.android: is_overridden with the quality that platform compiles
@@ -72,7 +80,7 @@ inside the project).
   platform compiles with instead, the editor using desktop's). "schemas" gives the
   enum names and ranges; a loaded texture also reports "texture": its compiled
   format, size and mips - the proof a change took.
-- assets_set_import_settings {"items":[{"key":"UI/atlas.png",
+- assets_set_import_settings_batch {"items":[{"key":"UI/atlas.png",
   "settings":{"quality":{"compression":"none"}}}]} writes the .meta and waits until
   the asset has been imported again. Partial objects merge into the current
   settings; an item with any rejected entry writes nothing.
@@ -95,7 +103,7 @@ inside the project).
 - Tools that create or import assets wait for them and report a state per key;
   assets_wait_ready_batch waits for any keys: ready, loading (still compiling
   at the deadline - wait again), failed (the load produced no asset: read
-  logs_get_recent), or missing (no such file - check the key). timeout_ms 0
+  logs_get_recent), or missing (no such file - check the key). wait_ms 0
   reports the state now. Heavy meshes take extra time for distance-field
   baking.
 
@@ -130,7 +138,7 @@ inside the project).
 ## Do
 
 - Import once, then reuse the imported keys everywhere (find them again with
-  assets_find_batch by prefix).
+  assets_find by prefix).
 - Decide shared vs instance BEFORE editing: recoloring one prop means
   instances; retuning the look of a prop type means the shared asset.
 

@@ -137,6 +137,21 @@ auto detect_content(const content_source& source, const deploy_settings& params,
 /// Every asset that can ship, without the walk: what a deploy needs when only exclude rules apply.
 auto list_content(const content_source& source) -> content;
 
+/// One reference the walk follows: `from` names `to`, or the import of `from` writes `to` beside it.
+struct content_reference
+{
+    /// An asset or script key, or "Project Settings" for the settings' handles.
+    std::string from;
+    std::string to;
+};
+
+/**
+ * @brief Every reference between the assets that can ship, as detect_content follows them, whether or not a scene
+ * reaches the assets: each asset file is read once, with the project settings and the scripts. Sorted by from,
+ * then to, without repeats. Runs on any thread.
+ */
+auto find_content_references(const content_source& source) -> std::vector<content_reference>;
+
 auto find_rule(const deploy_settings& params, const std::string& key) -> content_rule;
 /// Whether a rule names `key` itself.
 auto has_own_rule(const deploy_settings& params, const std::string& key) -> bool;

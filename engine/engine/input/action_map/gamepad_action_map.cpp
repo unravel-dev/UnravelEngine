@@ -1,5 +1,7 @@
 #include "gamepad_action_map.hpp"
 
+#include <algorithm>
+
 namespace input
 {
 //  ----------------------------------------------------------------------------
@@ -244,14 +246,28 @@ void gamepad_action_map::map(const action_id_t& action,
                              float min_analog_value,
                              float max_analog_value)
 {
+    // One binding per axis and range: mapping it again updates its analog values instead of adding a second one.
+    auto& entries = entries_by_action_id_[action];
+    const auto existing = std::find_if(entries.begin(),
+                                       entries.end(),
+                                       [&](const gamepad_entry& entry)
+                                       {
+                                           return entry.type == input_type::axis &&
+                                                  entry.value == static_cast<uint32_t>(axis) && entry.range == range;
+                                       });
+    if(existing != entries.end())
+    {
+        existing->min_analog_value = min_analog_value;
+        existing->max_analog_value = max_analog_value;
+        return;
+    }
     gamepad_entry entry = {};
     entry.type = input_type::axis;
     entry.range = range;
     entry.min_analog_value = min_analog_value;
     entry.max_analog_value = max_analog_value;
     entry.value = static_cast<uint32_t>(axis);
-
-    entries_by_action_id_[action].push_back(entry);
+    entries.push_back(entry);
 }
 
 //  ----------------------------------------------------------------------------
@@ -260,7 +276,11 @@ void gamepad_action_map::map(const action_id_t& action, gamepad_button button)
     gamepad_entry entry = {};
     entry.type = input_type::button;
     entry.value = static_cast<uint32_t>(button);
-
-    entries_by_action_id_[action].push_back(entry);
+    // Mapping a button the action has already keeps one binding.
+    auto& entries = entries_by_action_id_[action];
+    if(std::find(entries.begin(), entries.end(), entry) == entries.end())
+    {
+        entries.push_back(entry);
+    }
 }
 } // namespace input

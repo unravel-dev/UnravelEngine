@@ -495,7 +495,7 @@ void register_prefab_instance_tools(mcp_tool_registry& registry)
              "(entity_id + path from prefab_get_overrides) and those removals (ids) brought back. Entities "
              "added here are kept. One undo step (edit_undo).",
          .input_schema_json =
-             R"json({"type":"object","properties":{"entity_id":{"type":"string","description":"Any entity of the instance"},"overrides":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"path":{"type":"string","description":"path (or label) from prefab_get_overrides"}},"required":["entity_id","path"]}},"restore":{"type":"array","items":{"type":"string"},"description":"Ids of removed entities or nested instances to bring back"},"nested":{"type":"boolean","description":"Without overrides/restore: also revert the nested instances (default true)"}},"required":["entity_id"]})json",
+             R"json({"type":"object","properties":{"entity_id":{"type":"string","description":"Any entity of the instance"},"overrides":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"path":{"type":"string","description":"path (or label) from prefab_get_overrides"}},"required":["entity_id","path"]}},"restore":{"type":"array","minItems":1,"items":{"type":"string"},"description":"Ids of removed entities or nested instances to bring back"},"nested":{"type":"boolean","description":"Without overrides/restore: also revert the nested instances (default true)"}},"required":["entity_id"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -616,7 +616,7 @@ void register_prefab_instance_tools(mcp_tool_registry& registry)
              "following its prefab (the hierarchy's Unlink from Prefab). Instance roots only; an instance "
              "nested in another is unlinked inside that prefab (prefab_open). One undo step.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"},"description":"Instance roots"}},"required":["entity_ids"]})json",
+             R"json({"type":"object","properties":{"entity_ids":{"type":"array","minItems":1,"items":{"type":"string"},"description":"Instance roots"}},"required":["entity_ids"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {

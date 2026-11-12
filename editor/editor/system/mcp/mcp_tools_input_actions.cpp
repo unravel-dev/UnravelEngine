@@ -1,4 +1,5 @@
 #include "mcp_input_names.h"
+#include "mcp_profile_utils.h"
 #include "mcp_tools_common.h"
 
 #include <editor/system/project_manager.h>
@@ -17,43 +18,10 @@ namespace unravel::mcp
 namespace
 {
 
-/// Builds normalized-name -> value over an enum's range, using the input library's own
-/// to_string so the names a caller passes are the names the editor shows.
-template<typename Enum>
-auto build_enum_table(uint32_t count) -> std::map<std::string, Enum>
-{
-    std::map<std::string, Enum> table;
-    for(uint32_t i = 0; i < count; ++i)
-    {
-        const auto value = static_cast<Enum>(i);
-        const auto name = input::to_string(value);
-        if(name.empty() || name == "Unknown")
-        {
-            continue;
-        }
-        table.emplace(normalize_input_name(name), value);
-    }
-    return table;
-}
-
 auto mouse_button_table() -> const std::map<std::string, input::mouse_button>&
 {
     static const auto table =
-        build_enum_table<input::mouse_button>(static_cast<uint32_t>(input::mouse_button::count));
-    return table;
-}
-
-auto gamepad_button_table() -> const std::map<std::string, input::gamepad_button>&
-{
-    static const auto table =
-        build_enum_table<input::gamepad_button>(static_cast<uint32_t>(input::gamepad_button::count));
-    return table;
-}
-
-auto gamepad_axis_table() -> const std::map<std::string, input::gamepad_axis>&
-{
-    static const auto table =
-        build_enum_table<input::gamepad_axis>(static_cast<uint32_t>(input::gamepad_axis::count));
+        build_input_name_table<input::mouse_button>(static_cast<uint32_t>(input::mouse_button::count));
     return table;
 }
 
@@ -61,7 +29,7 @@ auto mouse_axis_table() -> const std::map<std::string, input::mouse_axis>&
 {
     // mouse_axis has no count entry; scroll is its last value.
     static const auto table =
-        build_enum_table<input::mouse_axis>(static_cast<uint32_t>(input::mouse_axis::scroll) + 1);
+        build_input_name_table<input::mouse_axis>(static_cast<uint32_t>(input::mouse_axis::scroll) + 1);
     return table;
 }
 
@@ -278,18 +246,15 @@ void register_input_action_tools(mcp_tool_registry& registry)
              "negative half of an axis pair, as \"a\" does for Horizontal). Mouse: button (left, "
              "right, middle) or axis (x, y, scroll). Gamepad: button (south, east, dpad_up, ...) or "
              "axis (left_x, right_trigger, ...) with optional range and min/max analog values. "
-             "Bindings add up, so an action can have several.",
+             "Bindings add up, so an action can have several; mapping one the action already has updates its analog "
+             "values instead of adding it twice.",
          .input_schema_json =
              R"json({"type":"object","properties":{"action":{"type":"string"},"device":{"type":"string","enum":["keyboard","mouse","gamepad"]},"key":{"type":"string"},"modifiers":{"type":"array","items":{"type":"string"}},"button":{"type":"string"},"axis":{"type":"string"},"range":{"type":"string","enum":["full","positive","negative"]},"analog_value":{"type":"number"},"min_analog_value":{"type":"number"},"max_analog_value":{"type":"number"}},"required":["action","device"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              std::string error;
-             if(!require_not_play_mode(ctx, error))
-             {
-                 return {.text = error, .is_error = true};
-             }
-             auto* pm = get_open_project(ctx, error);
+             auto* pm = get_editable_project(ctx, error);
              if(pm == nullptr)
              {
                  return {.text = error, .is_error = true};
@@ -470,11 +435,7 @@ void register_input_action_tools(mcp_tool_registry& registry)
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              std::string error;
-             if(!require_not_play_mode(ctx, error))
-             {
-                 return {.text = error, .is_error = true};
-             }
-             auto* pm = get_open_project(ctx, error);
+             auto* pm = get_editable_project(ctx, error);
              if(pm == nullptr)
              {
                  return {.text = error, .is_error = true};

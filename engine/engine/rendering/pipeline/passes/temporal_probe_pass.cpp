@@ -89,6 +89,38 @@ void temporal_probe_pass::request(uint32_t frames, bool is_lowpass, bool keeps_i
     discard_pending_readback_ = readback_pending_;
 }
 
+void temporal_probe_pass::cancel()
+{
+    armed_ = false;
+    marks_pending_.clear();
+    result_ = {};
+    discard_pending_readback_ = readback_pending_;
+}
+
+temporal_probe_pass::~temporal_probe_pass()
+{
+    if(!readback_pending_)
+    {
+        return;
+    }
+    // bgfx writes the read textures into these buffers on the render thread when their frame retires, which may
+    // be after this pass is gone (its pipeline destroyed mid-readback). The buffers are left to it for good: a
+    // measurement's few megabytes, on that rare path only, instead of a write into freed memory.
+    struct buffers_in_flight
+    {
+        std::vector<float> data;
+        std::vector<float> luma;
+        std::vector<std::vector<uint8_t>> mark_colors;
+        std::vector<std::vector<float>> mark_ages;
+    };
+    auto* in_flight = new buffers_in_flight{std::move(readback_data_), std::move(readback_luma_data_), {}, {}};
+    for(auto& mark : readback_marks_)
+    {
+        in_flight->mark_colors.push_back(std::move(mark.color_data));
+        in_flight->mark_ages.push_back(std::move(mark.age_data));
+    }
+}
+
 auto temporal_probe_pass::get_frames_done() const -> uint32_t
 {
     return frames_done_;

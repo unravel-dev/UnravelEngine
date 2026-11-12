@@ -51,6 +51,11 @@ public:
     /// ahead without a selection in front of the camera.
     auto get_orbit_pivot(const editing_manager& em) -> math::vec3;
 
+    /// Orbits the panel camera around @p pivot as an Alt-drag does: @p yaw_degrees turns about the world up (positive
+    /// turns right), @p pitch_degrees about the camera's right (positive tilts the view down), and the camera stays
+    /// on the sphere around the pivot - at @p distance from it when given.
+    void orbit_camera_by_degrees(const math::vec3& pivot, float yaw_degrees, float pitch_degrees, hpp::optional<float> distance);
+
     auto get_auto_save_prefab() const -> bool;
 
     /// Debug visualization mode the panel drives into the scene camera's pipeline every frame

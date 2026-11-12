@@ -71,13 +71,35 @@ struct mcp_tool
     /// A second call with the same arguments changes nothing more (idempotentHint). Read-only
     /// tools are idempotent without saying so.
     bool idempotent{false};
+    /// Reaches past this computer: publishes or uploads (openWorldHint).
+    bool open_world{false};
+    /// Writes the project's asset files: refused while a deploy runs, which reads them until it finishes.
+    bool writes_project_files{false};
+    /// Names the tool had before a rename. A call by one of them still works and its result names
+    /// the current tool; tools/list shows only the current name.
+    std::vector<std::string> former_names;
+    /// Arguments renamed since: {path as it was, current name}. The path names the argument the way the
+    /// warnings do, items in arrays as [] ("items[].index"). A call that still uses the old name is
+    /// read as if it used the new one, with a warning; the schema shows only the new name.
+    std::vector<std::pair<std::string, std::string>> former_arguments;
+};
+
+/// A call's arguments checked against the tool's input schema.
+struct argument_check
+{
+    /// What refuses the call: a wrong type, a value outside the enum or the range, a missing required one.
+    std::vector<std::string> errors;
+    /// Arguments the schema does not declare; the call goes on and ignores them.
+    std::vector<std::string> warnings;
+    /// The arguments to hand the handler: as sent, with numbers written as integers where they are whole.
+    std::string normalized_json;
 };
 
 class mcp_tool_registry
 {
 public:
     void add(mcp_tool tool);
-    /// Looks up by name regardless of profile, so callers can tell "no such tool" from
+    /// Looks up by name or former name regardless of profile, so callers can tell "no such tool" from
     /// "that tool is not in this profile" and say which.
     auto find(const std::string& name) const -> const mcp_tool*;
     auto tools() const -> const std::vector<mcp_tool>&;
@@ -122,12 +144,27 @@ void register_animation_tools(mcp_tool_registry& registry);
 void register_physics_tools(mcp_tool_registry& registry);
 
 /**
- * @brief The arguments a call passed that the tool's input schema does not declare, one message each.
- *        Objects whose schema lists no "properties", or allows additional ones, are not checked.
+ * @brief Checks a call's arguments against the tool's input schema: type, enum, const, minimum / maximum,
+ *        string length, item counts, required properties and anyOf / oneOf forms. Objects whose schema
+ *        lists no "properties" are taken as they are; keys a closed object does not declare become warnings.
  */
-auto find_unknown_arguments(const mcp_tool& tool, const simdjson::dom::element& args) -> std::vector<std::string>;
+auto check_arguments(const mcp_tool& tool, const simdjson::dom::element& args) -> argument_check;
+
+/// Refuses while a deploy runs: it reads the project's files and settings until it finishes. Any thread; off the main
+/// thread it sees the running deploys only, not the Deploy window's queued steps. Defined with the deploy tools.
+auto require_not_deploying(rtti::context& ctx, std::string& error) -> bool;
 
 /// Server usage rules injected into clients via the MCP initialize "instructions" field.
 auto get_server_instructions() -> const std::string&;
+
+/// The skills as MCP resources, the resources/list array: one markdown document per skill at unravel://skills/<name>,
+/// the guides skills_get serves.
+auto list_skill_resources_json() -> std::string;
+
+/**
+ * @brief The resources/read contents array of the skill @p uri names.
+ * @return False with @p error set when it names none.
+ */
+auto read_skill_resource_json(hpp::string_view uri, std::string& contents_json, std::string& error) -> bool;
 
 } // namespace unravel::mcp

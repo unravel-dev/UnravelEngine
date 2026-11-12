@@ -152,6 +152,7 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
     // Play starts from the scene; prefab-mode edits are saved rather than dropped (a prompt
     // cannot stop this path, which continues synchronously). No-op when nothing was edited.
     exit_prefab_mode(ctx, save_option::yes);
+    has_unsaved_changes_before_play_ = has_unsaved_changes_;
     undo_stack.clear();
     pending_actions.clear();
 
@@ -293,6 +294,7 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
         sync_prefab_instances(ctx, scn);
 
     }
+    has_unsaved_changes_ = has_unsaved_changes_before_play_;
 
     pop_undo_stack_enabled();
 
@@ -894,14 +896,17 @@ void editing_manager::enter_prefab_mode(rtti::context& ctx, const asset_handle<p
         // Already in prefab mode, check if we need to save changes
         if (edited_prefab != prefab)
         {
-            auto on_save = [this,&ctx]()
+            auto on_save = [this,&ctx]() -> bool
             {
-                save_prefab_changes(ctx);
+                return save_prefab_changes(ctx);
             };
 
             if(auto_save)
             {
-                on_save();
+                if(!on_save())
+                {
+                    return;
+                }
             }
             else
             {
@@ -923,15 +928,16 @@ void editing_manager::enter_prefab_mode(rtti::context& ctx, const asset_handle<p
 
 }
 
-auto editing_manager::prompt_save_changes(rtti::context& ctx, const std::function<void()>& on_save, const std::function<void()>& on_continue) -> bool
+auto editing_manager::prompt_save_changes(rtti::context& ctx, const std::function<bool()>& on_save, const std::function<void()>& on_continue) -> bool
 {
     ImBox::ShowSaveConfirmation("Save prefab?",
         "Do you want to save the changes you made?",
         [&ctx, on_save, on_continue](ImBox::ModalResult result)
     {
-        if(result == ImBox::ModalResult::Save)
+        // A failed save keeps the prefab open, so its edits are not lost.
+        if(result == ImBox::ModalResult::Save && !on_save())
         {
-            on_save();
+            return;
         }
 
         if(result != ImBox::ModalResult::Cancel)
@@ -955,9 +961,9 @@ void editing_manager::exit_prefab_mode(rtti::context& ctx, save_option save_chan
         save_changes = save_option::no;
     }
     
-    auto on_save = [this,&ctx]()
+    auto on_save = [this,&ctx]() -> bool
     {
-        save_prefab_changes(ctx);
+        return save_prefab_changes(ctx);
     };
 
     auto on_continue = [this, &ctx]()
@@ -977,8 +983,10 @@ void editing_manager::exit_prefab_mode(rtti::context& ctx, save_option save_chan
     switch (save_changes)
     {
         case save_option::yes:
-            on_save();
-            on_continue();
+            if(on_save())
+            {
+                on_continue();
+            }
             break;
             
         case save_option::no:
@@ -1007,29 +1015,30 @@ void editing_manager::exit_prefab_mode(rtti::context& ctx, save_option save_chan
     // APPLOG_INFO("Exited prefab editing mode");
 }
 
-void editing_manager::save_prefab_changes(rtti::context& ctx)
+auto editing_manager::save_prefab_changes(rtti::context& ctx) -> bool
 {
-    if (!is_prefab_mode() || !edited_prefab || !prefab_entity)
+    if (!is_prefab_mode() || !edited_prefab)
     {
-        return;
+        return false;
     }
-    
-    // Make sure the entity is valid
-    if (!prefab_entity.valid())
+    if (!prefab_entity || !prefab_entity.valid())
     {
-        APPLOG_ERROR("Failed to save prefab: Invalid entity");
+        APPLOG_ERROR("Failed to save prefab {}: its root entity is gone", edited_prefab.id());
         ImGui::PushNotification(ImGuiToast(ImGuiToastType_Error, 1000,"Failed to save prefab."));
-
-        return;
+        return false;
     }
-    
     auto prefab_path = fs::resolve_protocol(edited_prefab.id());
     animation_entity_preview::stop_all();
-    asset_writer::atomic_save_to_file(prefab_path.string(), prefab_entity);
+    if(!asset_writer::atomic_save_to_file(prefab_path.string(), prefab_entity))
+    {
+        APPLOG_ERROR("Failed to write prefab {}", prefab_path.string());
+        ImGui::PushNotification(ImGuiToast(ImGuiToastType_Error, 1000,"Failed to save prefab."));
+        return false;
+    }
     prefab_has_unsaved_changes_ = false;
     APPLOG_INFO("Saved changes to prefab: {}", edited_prefab.id());
     ImGui::PushNotification(ImGuiToast(ImGuiToastType_Success, 1000,"Prefab saved."));
-
+    return true;
 }
 
 

@@ -61,7 +61,7 @@ auto collect_component_pretty_names(entt::handle entity) -> std::vector<std::str
 auto entity_has_component_pretty_name(entt::handle entity, const std::string& component_pretty_name) -> bool;
 
 /**
- * @brief True if entity has a pinned ScriptComponent instance of the given C# type name.
+ * @brief True if entity has a pinned ScriptComponent instance of the given C# type, by full or short name.
  */
 auto entity_has_script_type(entt::handle entity, const std::string& script_type_name) -> bool;
 

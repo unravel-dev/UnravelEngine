@@ -53,6 +53,8 @@ public:
     void open(const asset_handle<animation_controller>& controller);
 
     auto get_controller() const -> const asset_handle<animation_controller>&;
+    /// The controller on screen has edits not saved yet.
+    auto has_unsaved_edits() const -> bool;
 
     /// The window has keyboard focus: it takes Ctrl+Z / Y / S for the controller.
     auto is_focused() const -> bool;

@@ -158,6 +158,11 @@ auto animation_panel::get_controller() const -> const asset_handle<animation_con
     return controller_;
 }
 
+auto animation_panel::has_unsaved_edits() const -> bool
+{
+    return dirty_;
+}
+
 auto animation_panel::is_focused() const -> bool
 {
     return focused_;
@@ -521,16 +526,7 @@ void animation_panel::start_preview(rtti::context& ctx)
     {
         return;
     }
-    auto* animation = preview_.start(ctx, debug_entity_);
-    if(animation == nullptr)
-    {
-        return;
-    }
-    if(auto* instance = animation->get_controller_instance())
-    {
-        instance->reset();
-    }
-    animation->get_player().play();
+    preview_.start_playing(ctx, debug_entity_);
 }
 
 void animation_panel::stop_preview()

@@ -218,6 +218,19 @@ void console_log_panel::sink_it_(const details::log_msg& msg)
         {
             first_unnotified_id_ = int64_t(entry.id);
         }
+        log_snapshot_entry snap;
+        snap.id = entry.id;
+        snap.level = entry.level;
+        snap.text.assign(entry.formatted.begin(), entry.formatted.end());
+        snap.filename = entry.source.filename;
+        snap.funcname = entry.source.funcname;
+        snap.line = entry.source.line;
+        snap.is_device_system = entry.is_device_system;
+        history_.push_back(std::move(snap));
+        if(history_.size() > MAX_HISTORY_ENTRIES)
+        {
+            history_.pop_front();
+        }
         entries_.emplace_back(std::move(entry));
     }
     has_new_entries_ = true;
@@ -232,26 +245,13 @@ auto console_log_panel::snapshot_logs(level::level_enum min_level, size_t max_co
 {
     std::lock_guard<std::recursive_mutex> lock(entries_mutex_);
     std::vector<log_snapshot_entry> matched;
-    matched.reserve(std::min(max_count, entries_.size()));
-    for(const auto& entry : entries_)
+    matched.reserve(std::min(max_count, history_.size()));
+    for(const auto& entry : history_)
     {
-        if(entry.id <= after_id)
+        if(entry.id > after_id && entry.level >= min_level)
         {
-            continue;
+            matched.push_back(entry);
         }
-        if(entry.level < min_level)
-        {
-            continue;
-        }
-        log_snapshot_entry snap;
-        snap.id = entry.id;
-        snap.level = entry.level;
-        snap.text.assign(entry.formatted.begin(), entry.formatted.end());
-        snap.filename = entry.source.filename;
-        snap.funcname = entry.source.funcname;
-        snap.line = entry.source.line;
-        snap.is_device_system = entry.is_device_system;
-        matched.push_back(std::move(snap));
     }
     if(matched.size() > max_count)
     {

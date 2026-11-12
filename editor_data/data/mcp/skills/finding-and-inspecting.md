@@ -11,12 +11,13 @@ the top source of broken scenes.
 
 ## The query toolbox
 
-- scene_get_hierarchy_batch: lean id/name/children tree. Scope with parent_id,
+- scene_get_hierarchy: lean id/name/children tree. Scope with parent_id,
   max_depth (1 = a parent's children only), limit; the response says
   "truncated" when the limit hit - narrow the scope rather than raising the
   limit blindly.
-- scene_find_entities_batch: by name_contains, name_exact, component (a name
-  from scene_list_components, like "Light"), type_name (C# type). Filters AND
+- scene_find_entities: by name_contains, name_exact, tag, component (a name
+  from scene_list_components, like "Light"), type_name (C# type), layer (a
+  name from the layer settings) and active (in the hierarchy). Filters AND
   together; parent_id searches only below that entity; limit up to 5000 with
   truncated when more matched; allowed in play mode.
 - scene_get_entities_batch detail levels:
@@ -37,13 +38,13 @@ the top source of broken scenes.
 - viewport_world_to_screen: where world points land in the Scene view (pixel,
   depth, visible) - to check something is in frame before capturing.
 - selection_get: the user's current selection (active entity + list).
-- editor_get_status: project, scene identity and entity count, prefab mode,
-  play phase.
+- editor_get_status: project, scene identity, entity count and unsaved
+  changes, prefab mode, play phase.
 
 ## Do
 
 - Resolve entities by id from your own earlier "created" responses; fall back
-  to scene_find_entities_batch by exact name.
+  to scene_find_entities by exact name.
 - Use detail "summary" first; fetch "components" only for the entities you are
   about to edit.
 - Verify parent/child structure with the hierarchy tools after reparenting -
@@ -53,5 +54,5 @@ the top source of broken scenes.
 
 - Do not pull detail "components" for the whole scene - it is huge and slow.
 - Do not iterate the full hierarchy to find one entity - that is what
-  scene_find_entities_batch is for.
+  scene_find_entities is for.
 - Do not cache names as identity; names can repeat. Ids are the identity.

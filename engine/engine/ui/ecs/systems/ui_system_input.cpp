@@ -123,17 +123,6 @@ namespace
             });
     }
 
-    /// The document of @p entity when it takes input: active and enabled, with a context. Null too when script
-    /// handlers run for another document destroyed @p entity or removed its document.
-    auto find_input_document(entt::registry& registry, entt::entity entity) -> ui_document_component*
-    {
-        if(!registry.valid(entity) || !registry.all_of<active_component>(entity))
-        {
-            return nullptr;
-        }
-        auto* ui_comp = registry.try_get<ui_document_component>(entity);
-        return ui_comp && ui_comp->context && ui_comp->is_enabled() ? ui_comp : nullptr;
-    }
 } // namespace
 
 void ui_system::on_os_event(rtti::context& ctx, os::event& event)
@@ -376,21 +365,25 @@ auto ui_system::refresh_mouse_state(rtti::context& ctx, scene& scn) -> std::vect
     return content_contexts;
 }
 
-void ui_system::visit_pointer_documents(scene& scn, input::coord position, const pointer_visitor& visit)
+auto ui_system::find_pointer_camera(scene& scn) -> entt::handle
 {
-    const Rml::Vector2f screen_position(static_cast<float>(position.x), static_cast<float>(position.y));
-
-    const camera* scene_camera = nullptr;
     entt::handle camera_entity;
     scn.registry->view<camera_component, active_component>().each(
         [&](entt::entity entity, camera_component&, active_component&)
         {
-            if(!scene_camera)
+            if(!camera_entity)
             {
                 camera_entity = scn.create_handle(entity);
-                scene_camera = &camera_entity.get<camera_component>().get_camera();
             }
         });
+    return camera_entity;
+}
+
+void ui_system::visit_pointer_documents(scene& scn, input::coord position, const pointer_visitor& visit)
+{
+    const Rml::Vector2f screen_position(static_cast<float>(position.x), static_cast<float>(position.y));
+    const auto camera_entity = find_pointer_camera(scn);
+    const camera* scene_camera = camera_entity ? &camera_entity.get<camera_component>().get_camera() : nullptr;
 
     if(debug_context_)
     {

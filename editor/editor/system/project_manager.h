@@ -155,7 +155,7 @@ public:
     /// The deploy settings a profile deploys with, with this session's Android device; empty for an unknown
     /// profile.
     auto get_profile_deploy_settings(const std::string& profile) const -> hpp::optional<deploy_settings>;
-    /// The deploy settings of the deploy profile, which the Deploy window and project_deploy deploy with.
+    /// The deploy settings of the deploy profile, which the Deploy window and deploy_start deploy with.
     auto get_deploy_request() const -> deploy_settings;
 
     auto create_profile(rtti::context& ctx, const std::string& name, target_platform platform, const std::string& copy_from = {})
@@ -196,7 +196,9 @@ public:
     /// the texture defaults it compiles with.
     void save_project_settings(rtti::context& ctx);
     void load_deploy_settings();
-    void save_deploy_settings();
+    /// Writes deploy/deploy.cfg. False, with a warning logged, when it was not written (the file still holds settings
+    /// from before profiles that could not be backed up, or the write failed).
+    auto save_deploy_settings() -> bool;
     void load_project_editor_settings();
     void save_project_editor_settings();
     /// Loads `app:/project.cfg` into `project_info_`. If the file is missing,

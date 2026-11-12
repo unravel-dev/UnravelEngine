@@ -22,10 +22,33 @@
 #include <hpp/utility.hpp>
 #include <math/math.h>
 
+#include <algorithm>
+
 namespace unravel::mcp
 {
 namespace
 {
+
+/// ,"unknown_names":[...] for the asked-for names a properties object does not have; empty when it has them all.
+auto list_unread_names(const std::string& properties_json, const std::vector<std::string>& names) -> std::string
+{
+    simdjson::dom::parser parser;
+    simdjson::dom::object properties;
+    if(names.empty() || parser.parse(properties_json).get(properties))
+    {
+        return {};
+    }
+    std::vector<std::string> unread;
+    for(const auto& name : names)
+    {
+        simdjson::dom::element value;
+        if(properties[name].get(value))
+        {
+            unread.push_back(name);
+        }
+    }
+    return unread.empty() ? std::string{} : R"(,"unknown_names":)" + strings_to_json_array(unread);
+}
 
 /// What each preset creates, read by building it into a scratch scene with the same function
 /// scene_new_from_preset uses - so the description cannot drift from the presets themselves.
@@ -37,10 +60,7 @@ auto describe_scene_presets(rtti::context& ctx) -> std::string
     };
     std::string json = "[";
     bool first_preset = true;
-    for(const auto preset : {defaults::scene_preset::low,
-                             defaults::scene_preset::medium,
-                             defaults::scene_preset::high,
-                             defaults::scene_preset::showcase})
+    for(const auto preset : defaults::get_scene_presets())
     {
         scene preview{"mcp_preset_preview"};
         defaults::create_scene_from_preset(ctx, preview, preset);
@@ -204,12 +224,12 @@ auto property_names(const simdjson::dom::object& properties) -> std::vector<std:
 void register_scene_tools(mcp_tool_registry& registry)
 {
     registry.add(
-        {.name = "scene_get_hierarchy_batch",
+        {.name = "scene_get_hierarchy",
          .description =
              "Browse scene hierarchy as lean id/name/children nodes. Optional parent_id, max_depth "
              "(default 2), limit (default 200).",
          .input_schema_json =
-             R"({"type":"object","properties":{"parent_id":{"type":"string"},"max_depth":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":5000}}})",
+             R"({"type":"object","properties":{"parent_id":{"type":"string","description":"Start below this entity; default the scene's roots"},"max_depth":{"type":"integer","minimum":0,"maximum":64,"description":"Levels of children; default 2"},"limit":{"type":"integer","minimum":1,"maximum":5000,"description":"Most nodes returned; default 200"}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -288,7 +308,8 @@ void register_scene_tools(mcp_tool_registry& registry)
                      .is_error = false};
          },
          .mutates_scene = false,
-         .effect = tool_effect::read_only});
+         .effect = tool_effect::read_only,
+         .former_names = {"scene_get_hierarchy_batch"}});
 
     registry.add(
         {.name = "scene_get_entities_batch",
@@ -297,7 +318,7 @@ void register_scene_tools(mcp_tool_registry& registry)
              "child_count) or components (summary + property bags; narrow with components[], names from "
              "scene_list_components).",
          .input_schema_json =
-             R"json({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}},"detail":{"type":"string","enum":["pose","summary","components"]},"components":{"type":"array","items":{"type":"string"}}},"required":["entity_ids"]})json",
+             R"json({"type":"object","properties":{"entity_ids":{"type":"array","minItems":1,"items":{"type":"string"}},"detail":{"type":"string","enum":["pose","summary","components"]},"components":{"type":"array","items":{"type":"string"}}},"required":["entity_ids"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -399,9 +420,10 @@ void register_scene_tools(mcp_tool_registry& registry)
              "Read component properties (a component from scene_list_components, or Script). Each "
              "item: entity_id, component, optional type_name "
              "(and script_index, from 0, for the second script of a type and on) "
-             "(required for Script), optional names: only these properties (read even while hidden).",
+             "(required for Script), optional names: only these properties (read even while hidden); names that "
+             "match no property come back in unknown_names.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string"},"script_index":{"type":"integer","minimum":0,"description":"Which script of that type, from 0 (default 0)"},"names":{"type":"array","items":{"type":"string"}}},"required":["entity_id","component"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string"},"script_index":{"type":"integer","minimum":0,"description":"Which script of that type, from 0 (default 0)"},"names":{"type":"array","items":{"type":"string"}}},"required":["entity_id","component"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -484,10 +506,11 @@ void register_scene_tools(mcp_tool_registry& registry)
                  }
                  else
                  {
-                     json += fmt::format(R"({{"ok":true,"entity_id":{},"component":{},"properties":{}}})",
+                     json += fmt::format(R"({{"ok":true,"entity_id":{},"component":{},"properties":{}{}}})",
                                          make_json_string(entity_id),
                                          make_json_string(component),
-                                         props);
+                                         props,
+                                         list_unread_names(props, property_filter));
                  }
                  ++count;
              }
@@ -505,15 +528,17 @@ void register_scene_tools(mcp_tool_registry& registry)
              "partial nested object merges into the current value; a list takes the array's length. Any rejected "
              "value or unknown name rejects the whole call and nothing changes. The component must exist "
              "(scene_add_components_batch). On a prefab instance each changed property becomes an override. "
-             "Transforms and parents have their own tools (scene_set_transforms_batch, scene_set_parents_batch).",
+             "Transforms and parents have their own tools (scene_set_transforms_batch, scene_set_parents_batch)." +
+             std::string(k_play_edit_note),
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string"},"script_index":{"type":"integer","minimum":0,"description":"Which script of that type, from 0 (default 0)"},"properties":{"type":"object"}},"required":["entity_id","component","properties"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string"},"script_index":{"type":"integer","minimum":0,"description":"Which script of that type, from 0 (default 0)"},"properties":{"type":"object"}},"required":["entity_id","component","properties"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              scene* scn = nullptr;
              std::string error;
-             if(!require_edit_scene(ctx, scn, error))
+             bool is_temporary = false;
+             if(!require_live_scene(ctx, scn, is_temporary, error))
              {
                  return {.text = error, .is_error = true};
              }
@@ -615,18 +640,19 @@ void register_scene_tools(mcp_tool_registry& registry)
              }
              const auto count = edits->sub_actions.size();
              ctx.get_cached<editing_manager>().do_action("MCP Set Component Properties", edits);
-             return {.text = fmt::format(R"({{"ok":true,"count":{}}})", count),
+             return {.text = fmt::format(R"({{"ok":true,"count":{}{}}})", count, temporary_field(is_temporary)),
                      .is_error = false,
                      .warnings = std::move(warnings)};
          },
-         .mutates_scene = true});
+         .mutates_scene = true,
+         .idempotent = true});
 
     registry.add(
         {.name="scene_delete_entities_batch",
          .description=
              "Delete entities with everything under them, in one undo step. On a prefab instance the deletion is "
-             "recorded as a removal.",
-         .input_schema_json=R"({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}}},"required":["entity_ids"]})",
+             "recorded as a removal. Returns the topmost entities deleted (one listed under another goes with it).",
+         .input_schema_json=R"({"type":"object","properties":{"entity_ids":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["entity_ids"]})",
          .handler=[](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              scene* scn = nullptr;
@@ -636,14 +662,38 @@ void register_scene_tools(mcp_tool_registry& registry)
                  return {.text=error, .is_error=true};
              }
 
-             std::vector<entt::handle> entities;
-             if(!read_entity_ids(args, *scn, entities, error))
+             std::vector<entt::handle> listed;
+             if(!read_entity_ids(args, *scn, listed, error))
              {
                  return {.text=error, .is_error=true};
              }
-
+             // An entity listed twice, or under another listed one, goes with it: only the topmost are deleted.
+             std::vector<entt::handle> entities;
+             for(const auto& entity : listed)
+             {
+                 const auto is_listed = [&](entt::handle candidate)
+                 {
+                     return std::find(listed.begin(), listed.end(), candidate) != listed.end();
+                 };
+                 bool is_covered = std::find(entities.begin(), entities.end(), entity) != entities.end();
+                 for(auto parent = entity.get<transform_component>().get_parent(); parent && !is_covered;
+                     parent = parent.get<transform_component>().get_parent())
+                 {
+                     is_covered = is_listed(parent);
+                 }
+                 if(!is_covered)
+                 {
+                     entities.push_back(entity);
+                 }
+             }
+             std::vector<std::string> deleted_ids;
+             for(const auto& entity : entities)
+             {
+                 deleted_ids.push_back(entity_id_string(entity));
+             }
              ctx.get_cached<editing_manager>().do_action<delete_entities_action_t>("MCP Delete Entities", entities);
-             return {.text=fmt::format(R"({{"deleted":{}}})", entities.size()), .is_error=false};
+             return {.text=fmt::format(R"({{"deleted":{},"entity_ids":{}}})", entities.size(), strings_to_json_array(deleted_ids)),
+                     .is_error=false};
          },
          .mutates_scene=true});
 
@@ -729,7 +779,8 @@ void register_scene_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = true,
          .effect = tool_effect::destructive,
-         .idempotent = true});
+         .idempotent = true,
+         .writes_project_files = true});
 
     registry.add(
         {.name = "scene_open",
@@ -793,7 +844,8 @@ void register_scene_tools(mcp_tool_registry& registry)
              "Create a new unsaved scene from a preset (scene_list_presets; default medium). Refuses when the "
              "open scene or prefab has unsaved edits, unless force:true discards them.",
          .input_schema_json =
-             R"({"type":"object","properties":{"preset":{"type":"string","enum":["low","medium","high","showcase"]},"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits"}}})",
+             fmt::format(R"({{"type":"object","properties":{{"preset":{{"type":"string","enum":{}}},"force":{{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits"}}}}}})",
+                         strings_to_json_array(get_scene_preset_names())),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -808,7 +860,8 @@ void register_scene_tools(mcp_tool_registry& registry)
              defaults::scene_preset preset{};
              if(!defaults::parse_scene_preset(preset_str, preset))
              {
-                 return {.text = "Invalid preset (use low|medium|high|showcase)", .is_error = true};
+                 return {.text = fmt::format("Invalid preset (use {})", fmt::join(get_scene_preset_names(), ", ")),
+                         .is_error = true};
              }
 
              bool force = false;

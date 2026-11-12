@@ -14,21 +14,38 @@ order: 10
    through the MCP tools, which run the editor's real setters and validation.
 2. If a workflow seems impossible with the available tools, say so instead of
    working around the tools through the filesystem.
-3. Mutating tools refuse play mode. Stop play (play_set_active {"active":false})
-   before editing, or make edits first and then enter play mode.
+3. Tools that edit the scene, prefabs, components, project settings or scripts
+   refuse play mode. Stop play (play_set_active {"active":false}) before
+   editing, or make edits first and then enter play mode. Three change the
+   running game instead, as the Inspector does while playing:
+   scene_set_component_properties_batch, scene_set_transforms_batch and
+   scene_set_active_batch. Their result says temporary: true, edit_undo takes
+   such a change back until play stops, and stopping play drops it. Reads,
+   captures, waits, play controls, input and UI tools, scripts_invoke,
+   animation_set_parameters, asset imports and the deploy tools work while
+   playing; input_send_mouse, input_send_touch, input_send_gamepad,
+   ui_click_element and scripts_invoke need it.
 4. Components must exist before their properties are set: add them with
    scene_add_components_batch (a C# script is component "Script" with its
    type_name), then configure them with scene_set_component_properties_batch.
-5. MCP writes only inside the project's data folder. Name a location as a key
-   ("app:/data/Props/Crate.mat") or as a path relative to it ("Props/Crate");
-   anything else is refused. The exceptions are project_create / project_open
-   (whole project folders), the deploy folder, and the source files
-   assets_import_files copies in from outside.
+5. MCP writes assets only inside the project's data folder. Name a location
+   as a key ("app:/data/Props/Crate.mat") or as a path relative to it
+   ("Props/Crate"); anything else is refused. Besides assets, the settings
+   tools write the project settings and its profiles, deploy_set_settings the
+   deploy settings, and deploy_keep_release / deploy_remove_release the kept
+   releases, each in its own project folder; project_create / project_open
+   write whole project folders, the deploy tools the deploy folder, and
+   assets_import_batch reads its source files from outside.
+6. Arguments are checked against each tool's input schema before it runs: a
+   wrong type, an unknown enum value, a number out of range or an empty batch
+   refuses the call with the reason, and nothing changes. Unknown argument
+   names come back as warnings.
 
 ## Session bootstrap
 
-1. editor_get_status - project, scene, prefab mode and play state in one call.
-   Always start here. modal names a dialog the editor waits on (a save prompt
+1. editor_get_status - project, scene (with unsaved_changes), prefab mode,
+   play state and pacing (time scale, vsync, max fps, script debug mode) in
+   one call. Always start here. modal names a dialog the editor waits on (a save prompt
    the user's own action opened, for instance); while one is open the editor
    takes no other input - editor_answer_modal {"button":...} presses one of
    its buttons. answerable false means a window only the user can close.
@@ -58,9 +75,9 @@ Building a scene is not shipping a game. The rest of the chain:
   Desktop, Android and Web, and deploys Desktop);
   settings_profiles_create / _rename / _delete manage them. settings_get and
   settings_set with profile read and override a profile's values (overridden
-  lists what it changes), settings_revert stops overriding paths. Layers,
+  lists what it changes), settings_profiles_revert stops overriding paths. Layers,
   input, resolutions and the physics backend are shared by every profile.
-  editor_set_preview_profile runs the editor with a profile's settings; then
+  settings_profiles_set_preview runs the editor with a profile's settings; then
   settings_set without profile reports as shadowed the paths that profile
   overrides, whose values the editor shows instead.
 - input_list_actions / input_map_action define the action names scripts query.
@@ -71,11 +88,11 @@ Building a scene is not shipping a game. The rest of the chain:
   editor manages) and the deploy settings: scope shared (default) writes what
   every profile deploys with, scope profile writes overrides of profile
   (default the deploy profile), and revert stops overriding settings named as
-  its arguments. location is always shared; patch_release and android_* always
-  belong to the profile. deploy_profile selects the profile deploys build, as
+  its arguments. location is always shared; patch_release, desktop_icon,
+  desktop_graphics, steam_*, android_* and web_* always belong to the profile.deploy_profile selects the profile deploys build, as
   the Deploy window's picker does; profile alone never changes it. The result
   says what was written where and which shared values a profile shadows.
-  project_deploy (profile: which one) builds the profile into
+  deploy_start (profile: which one) builds the profile into
   <location>/<profile> once running compiles finish. editor_open_deploy opens
   the Deploy window for a user who should see it. A profile's textures are cooked for its platform (Android: ASTC,
   ETC2, or BC, which ships the editor's own files) into cache/profiles/<profile>, each recompiled in place when a setting
@@ -109,13 +126,13 @@ Building a scene is not shipping a game. The rest of the chain:
   trim_framework leaves out the .NET framework libraries no script and no engine library references (smaller
   desktop, Android and web builds); a library a script loads by a name it builds at run time must then be named in
   kept_assemblies, or the game throws FileNotFoundException where it loads it.
-- Android: project_deploy with an Android profile (a new project has one;
+- Android: deploy_start with an Android profile (a new project has one;
   settings_profiles_create platform android makes more) builds <project>.apk; with run_after_deploy it is
   installed and started on android_device, and the game's log reaches the
   editor log as [Device] lines (logs_get_recent include_device_system adds the device system's own
-  [Device System] lines). android_device_action acts without a new deploy: run_last_build,
+  [Device System] lines). deploy_android_device acts without a new deploy: run_last_build,
   follow_log, clear_data, uninstall.
-- Web: project_deploy with a web profile builds a folder for a web server; with
+- Web: deploy_start with a web profile builds a folder for a web server; with
   run_after_deploy the editor serves it on this computer and opens the page.
   deploy_share_web shares the profile's last deploy at a public HTTPS link (a
   Cloudflare quick tunnel; needs cloudflared) for a phone or a tester, until
@@ -138,7 +155,15 @@ Building a scene is not shipping a game. The rest of the chain:
 - One tool call = one undo step (edit_undo / edit_redo mirror Ctrl+Z/Y and
   take a count).
 - Unknown arguments are reported in "warnings" next to the result - read them,
-  they are usually a typo.
+  they are usually a typo. A tool or argument called by a name it had before a
+  rename still works, with a warning naming the current one.
+- The editor's Build and Developer menu commands run through
+  editor_run_command (reflection captures, prefab graph validation, prefab and
+  color space migrations, recompiling the project's shaders, meshes, UI,
+  scripts or everything, the agent files); scripts_set_debug_mode switches the
+  scripts between debug and release builds.
+- The skills are also MCP resources (resources/list, resources/read at
+  unravel://skills/<name>) for clients that read resources.
 
 ## Working alongside the user
 
@@ -151,14 +176,14 @@ Building a scene is not shipping a game. The rest of the chain:
   folder there and scrolls to it.
 - panel_focus {"panel":"scene"|"game"} switches the center panel ("mcp"
   opens the MCP Server window);
-  window_request_focus raises the editor window.
+  editor_focus_os_window raises the editor window.
 - After imports, loads and play sessions check logs_get_recent (min_level
   "warn") - compile problems and runtime errors land there. Page with after_id.
 
 ## Do
 
 - Prefer batch tools; group related edits into one call for clean undo.
-- Give entities meaningful names at creation - scene_find_entities_batch works
+- Give entities meaningful names at creation - scene_find_entities works
   by name and future sessions depend on it.
 - Fetch the other skills (skills_list / skills_get) before scene building,
   scripting, animation, asset or verification work.

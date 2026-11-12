@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <chrono>
 #include <cstdlib>
 #include <functional>
@@ -60,16 +61,18 @@ auto make_log_condition(const simdjson::dom::object& spec, condition_check& out,
     }
     out = [contains, min_level, newest_seen](rtti::context& ctx, std::string& observed, std::string&) -> bool
     {
-        const auto logs = editor_actions::get_recent_logs(ctx, level::trace, std::numeric_limits<size_t>::max(), 0);
         if(!newest_seen->has_value())
         {
-            *newest_seen = logs.empty() ? int64_t{-1} : static_cast<int64_t>(logs.back().id);
+            const auto newest = editor_actions::get_recent_logs(ctx, level::trace, 1, 0);
+            *newest_seen = newest.empty() ? int64_t{-1} : static_cast<int64_t>(newest.back().id);
             return false;
         }
+        // Only what came since the last look, at the asked level: each check copies the new lines, not the log.
+        const auto after_id = static_cast<uint64_t>(std::max<int64_t>(**newest_seen, 0));
+        const auto logs = editor_actions::get_recent_logs(ctx, min_level, std::numeric_limits<size_t>::max(), after_id);
         for(const auto& entry : logs)
         {
-            if(static_cast<int64_t>(entry.id) > **newest_seen && entry.level >= min_level &&
-               contains_ci(entry.text, contains))
+            if(static_cast<int64_t>(entry.id) > **newest_seen && contains_ci(entry.text, contains))
             {
                 observed = fmt::format(R"({{"id":{},"level":{},"text":{}}})",
                                        entry.id,
@@ -78,17 +81,26 @@ auto make_log_condition(const simdjson::dom::object& spec, condition_check& out,
                 return true;
             }
         }
+        if(!logs.empty())
+        {
+            *newest_seen = static_cast<int64_t>(logs.back().id);
+        }
         return false;
     };
     return true;
 }
 
-auto make_entity_condition(const simdjson::dom::object& spec, condition_check& out, std::string& error) -> bool
+auto make_entity_condition(rtti::context& ctx, const simdjson::dom::object& spec, condition_check& out, std::string& error)
+    -> bool
 {
-    const auto filter = read_entity_filter(spec);
+    auto filter = read_entity_filter(spec);
     if(filter.is_empty())
     {
-        error = "entity needs name_contains, name_exact, component and/or type_name";
+        error = "entity needs name_contains, name_exact, tag, component, type_name, layer and/or active";
+        return false;
+    }
+    if(!resolve_layer_filter(ctx, filter, error))
+    {
         return false;
     }
     bool exists = true;
@@ -148,18 +160,56 @@ auto find_at_path(simdjson::dom::element value, const std::string& path, simdjso
     return true;
 }
 
-/// Whether @p actual relates to @p expected as @p op says; numbers compare by value, anything else by its JSON.
+/// Numbers are equal within the precision a property read prints (6 significant digits).
+auto are_close(double lhs, double rhs) -> bool
+{
+    constexpr double k_relative_tolerance = 1e-5;
+    return std::abs(lhs - rhs) <= k_relative_tolerance * std::max({1.0, std::abs(lhs), std::abs(rhs)});
+}
+
+/// Equal as values: numbers within are_close, arrays element by element (so 1 and 1.0 match), anything else by its
+/// JSON.
+auto are_values_equal(const simdjson::dom::element& lhs, const simdjson::dom::element& rhs) -> bool
+{
+    double lhs_number = 0.0;
+    double rhs_number = 0.0;
+    if(!lhs.get(lhs_number) && !rhs.get(rhs_number))
+    {
+        return are_close(lhs_number, rhs_number);
+    }
+    simdjson::dom::array lhs_array;
+    simdjson::dom::array rhs_array;
+    if(!lhs.get(lhs_array) && !rhs.get(rhs_array))
+    {
+        if(lhs_array.size() != rhs_array.size())
+        {
+            return false;
+        }
+        auto rhs_item = rhs_array.begin();
+        for(auto lhs_item : lhs_array)
+        {
+            if(!are_values_equal(lhs_item, *rhs_item))
+            {
+                return false;
+            }
+            ++rhs_item;
+        }
+        return true;
+    }
+    return std::string(simdjson::minify(lhs)) == std::string(simdjson::minify(rhs));
+}
+
+/// Whether @p actual relates to @p expected as @p op says; == and != by are_values_equal, the others by number.
 auto compare_values(const simdjson::dom::element& actual, const std::string& op, const simdjson::dom::element& expected)
     -> bool
 {
+    if(op == "==" || op == "!=")
+    {
+        return (op == "==") == are_values_equal(actual, expected);
+    }
     double lhs = 0.0;
     double rhs = 0.0;
     const bool is_numeric = !actual.get(lhs) && !expected.get(rhs);
-    if(op == "==" || op == "!=")
-    {
-        const bool is_equal = is_numeric ? lhs == rhs : simdjson::minify(actual) == simdjson::minify(expected);
-        return (op == "==") == is_equal;
-    }
     if(!is_numeric)
     {
         return false;
@@ -198,9 +248,11 @@ auto check_property(rtti::context& ctx, property_watch& watch, std::string& obse
     {
         return false;
     }
-    auto entity = resolve_entity(*scn, watch.entity_id, error);
+    // An entity the game has not made yet is waited for, as its value is.
+    auto entity = find_entity(*scn, watch.entity_id);
     if(!entity)
     {
+        observed = "null";
         return false;
     }
     const auto bag = read_watched_json(ctx, entity, watch, error);
@@ -272,7 +324,7 @@ auto make_play_condition(const std::string& phase, condition_check& out) -> bool
 }
 
 /// The one condition a call names, as a check.
-auto make_condition(const simdjson::dom::object& args, condition_check& out, std::string& error) -> bool
+auto make_condition(rtti::context& ctx, const simdjson::dom::object& args, condition_check& out, std::string& error) -> bool
 {
     const auto given = std::count_if(k_condition_keys.begin(),
                                      k_condition_keys.end(),
@@ -293,7 +345,7 @@ auto make_condition(const simdjson::dom::object& args, condition_check& out, std
     }
     if(!args["entity"].get(spec))
     {
-        return make_entity_condition(spec, out, error);
+        return make_entity_condition(ctx, spec, out, error);
     }
     if(!args["property"].get(spec))
     {
@@ -313,20 +365,22 @@ void register_wait_tools(mcp_tool_registry& registry)
              "Wait until one condition holds, instead of polling: a log entry containing text (logged after the "
              "call, or after log.after_id), entities matching a filter existing or gone, a property reaching a "
              "value (component Transform is the pose: position.1 is world y; any component or Script field "
-             "works), or a play_phase. Returns met, elapsed_ms and the last value seen; a timeout is met false, "
-             "not an error. Mostly for play mode: start play, then wait for what the game should do.",
+             "works; an entity that does not exist yet is waited for), or a play_phase. == and != compare numbers "
+             "within 6 significant digits and arrays element by element; log.min_level defaults to info. Returns "
+             "met, elapsed_ms and the last value seen; a timeout is met false, not an error. Mostly for play mode: "
+             "start play, then wait for what the game should do.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"log":{"type":"object","properties":{"contains":{"type":"string"},"min_level":{"type":"string","enum":["trace","debug","info","warn","warning","error","critical"]},"after_id":{"type":"integer","minimum":0,"description":"Count entries after this id (next_after_id of logs_get_recent)"}},"required":["contains"]},"entity":{"type":"object","properties":{"name_contains":{"type":"string"},"name_exact":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string"},"exists":{"type":"boolean","description":"Wait for a match (true, default) or for none"}}},"property":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string","description":"Transform, a name from scene_list_components, or Script"},"type_name":{"type":"string","description":"Script type, for component Script"},"script_index":{"type":"integer","minimum":0},"name":{"type":"string","description":"Dotted path: light.intensity, position.1, speed"},"op":{"type":"string","enum":["==","!=","<","<=",">",">=","changed"]},"value":{"anyOf":[{"type":"number"},{"type":"boolean"},{"type":"string"},{"type":"array","items":{"type":"number"}}],"description":"What to compare with; not for changed"}},"required":["entity_id","component","name","op"]},"play_phase":{"type":"string","enum":["inactive","splash","active","running"]},"timeout_ms":{"type":"integer","minimum":0,"maximum":120000,"description":"Default 10000"}}})json",
+             R"json({"type":"object","properties":{"log":{"type":"object","properties":{"contains":{"type":"string"},"min_level":{"type":"string","enum":["trace","debug","info","warn","warning","error","critical"]},"after_id":{"type":"integer","minimum":0,"description":"Count entries after this id (next_after_id of logs_get_recent)"}},"required":["contains"]},"entity":{"type":"object","properties":{"name_contains":{"type":"string"},"name_exact":{"type":"string"},"tag":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string"},"layer":{"type":"string"},"active":{"type":"boolean"},"exists":{"type":"boolean","description":"Wait for a match (true, default) or for none"}}},"property":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string","description":"Transform, a name from scene_list_components, or Script"},"type_name":{"type":"string","description":"Script type, for component Script"},"script_index":{"type":"integer","minimum":0},"name":{"type":"string","description":"Dotted path: light.intensity, position.1, speed"},"op":{"type":"string","enum":["==","!=","<","<=",">",">=","changed"]},"value":{"anyOf":[{"type":"number"},{"type":"boolean"},{"type":"string"},{"type":"array","items":{"type":"number"}}],"description":"What to compare with; not for changed"}},"required":["entity_id","component","name","op"]},"play_phase":{"type":"string","enum":["inactive","splash","active","running"]},"wait_ms":{"type":"integer","minimum":0,"maximum":120000,"description":"Default 10000"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              condition_check check;
              std::string error;
-             if(!make_condition(args, check, error))
+             if(!make_condition(ctx, args, check, error))
              {
                  return {.text = error, .is_error = true};
              }
-             const auto timeout = read_timeout_ms(args, k_wait_default_ms, k_wait_max_ms, "timeout_ms");
+             const auto timeout = read_timeout_ms(args, k_wait_default_ms, k_wait_max_ms, "wait_ms");
              const auto started = std::chrono::steady_clock::now();
              auto& mcp = ctx.get_cached<mcp_manager>();
              struct check_outcome
@@ -362,7 +416,8 @@ void register_wait_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .effect = tool_effect::read_only});
+         .effect = tool_effect::read_only,
+         .former_arguments = {{"timeout_ms", "wait_ms"}}});
 }
 
 } // namespace unravel::mcp

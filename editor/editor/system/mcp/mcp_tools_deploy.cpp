@@ -1,4 +1,5 @@
 #include "mcp_asset_lookup.h"
+#include "mcp_meta_properties.h"
 #include "mcp_profile_utils.h"
 #include "mcp_project_paths.h"
 #include "mcp_tools_common.h"
@@ -112,7 +113,14 @@ auto take_snapshot(rtti::context& ctx) -> deploy_snapshot
 {
     deploy_snapshot snapshot;
     snapshot.ready = collect_step_status(ctx, snapshot.steps);
-    if(ctx.has<project_manager>())
+    // The folder of the work the window tracks (an upload or a run may be another profile's), as the window shows it;
+    // with nothing tracked, the deploy profile's.
+    const auto* panel = get_deploy_panel(ctx);
+    if(panel != nullptr && !snapshot.steps.empty() && !panel->get_deployed_location().empty())
+    {
+        snapshot.location = fs::to_utf8_string(panel->get_deployed_location());
+    }
+    else if(ctx.has<project_manager>())
     {
         snapshot.location = fs::to_utf8_string(get_output_location(ctx.get_cached<project_manager>().get_deploy_request()));
     }
@@ -152,11 +160,11 @@ auto wait_for_panel_jobs(rtti::context& ctx, mcp_manager& mcp, std::chrono::stea
         }
         const bool finished = !snapshot.steps.empty() && snapshot.ready == snapshot.steps.size();
         const bool is_untracked = taken && snapshot.steps.empty();
-        if(finished || is_untracked || std::chrono::steady_clock::now() >= deadline)
+        if(finished || is_untracked || std::chrono::steady_clock::now() >= deadline ||
+           !mcp.sleep_unless_stopping(k_deploy_poll_interval))
         {
             return snapshot;
         }
-        std::this_thread::sleep_for(k_deploy_poll_interval);
     }
 }
 
@@ -199,11 +207,6 @@ auto make_jobs_result(const deploy_snapshot& snapshot) -> tool_result
             .is_error = false};
 }
 
-constexpr const char* ORIENTATION_NAMES[] = {"landscape", "portrait", "automatic"};
-constexpr const char* TEXTURE_COMPRESSION_NAMES[] = {"astc", "etc2", "bc"};
-constexpr const char* WEB_GRAPHICS_NAMES[] = {"webgpu", "webgpu_then_webgl2", "webgl2"};
-constexpr const char* WEB_FALLBACK_NOTICE_NAMES[] = {"tell", "ask", "silent"};
-constexpr const char* WEB_RUN_GRAPHICS_NAMES[] = {"automatic", "webgpu", "webgl2"};
 /// The arguments of a web profile's own settings.
 constexpr const char* WEB_SETTING_KEYS[] = {"web_graphics",
                                             "web_fallback_notice",
@@ -212,26 +215,44 @@ constexpr const char* WEB_SETTING_KEYS[] = {"web_graphics",
                                             "web_texture_compression",
                                             "web_phone_texture_compression"};
 
-/// Sets `out` from the name at `key` when the arguments have one; false (with `error`) for an unknown name.
-template<typename Enum, std::size_t Count>
-auto read_enum_name(const simdjson::dom::object& args, const char* key, const char* const (&names)[Count], Enum& out, std::string& error)
-    -> bool
+/// The name deploy_settings.cpp reflects for @p value, as a JSON string; null for a value it does not declare.
+template<typename Enum>
+auto enum_name_json(Enum value) -> std::string
+{
+    for(auto [id, data] : entt::resolve<Enum>().data())
+    {
+        if(data.get({}).template cast<Enum>() == value)
+        {
+            return make_json_string(std::string(entt::get_name(data)));
+        }
+    }
+    return "null";
+}
+
+/// The reflected names of @p Enum as a JSON array, for a schema's "enum".
+template<typename Enum>
+auto enum_names_json() -> std::string
+{
+    return strings_to_json_array(meta_enum_names(entt::resolve<Enum>()));
+}
+
+/// Sets `out` from the reflected name at `key` when the arguments have one; false (with `error`) for an unknown name.
+template<typename Enum>
+auto read_enum_name(const simdjson::dom::object& args, const char* key, Enum& out, std::string& error) -> bool
 {
     std::string name;
     if(!read_string(args, key, name))
     {
         return true;
     }
-    for(std::size_t i = 0; i < Count; ++i)
+    entt::meta_any value;
+    if(!find_meta_enum_value(entt::resolve<Enum>(), name, value, error))
     {
-        if(name == names[i])
-        {
-            out = static_cast<Enum>(i);
-            return true;
-        }
+        error = std::string(key) + ": " + error;
+        return false;
     }
-    error = fmt::format("Unknown {} '{}'", key, name);
-    return false;
+    out = value.cast<Enum>();
+    return true;
 }
 
 auto android_permissions_to_json(const android_permissions& permissions) -> std::string
@@ -251,8 +272,8 @@ auto android_settings_to_json(const android_deploy_settings& android, const std:
         android.application_id.empty() ? "null" : make_json_string(android.application_id),
         android_permissions_to_json(android.permissions),
         android.version_code,
-        make_json_string(ORIENTATION_NAMES[static_cast<int>(android.screen_orientation)]),
-        make_json_string(TEXTURE_COMPRESSION_NAMES[static_cast<int>(android.texture_compression)]),
+        enum_name_json(android.screen_orientation),
+        enum_name_json(android.texture_compression),
         asset_handle_key_json(android.icon),
         color_to_json(android.icon_background),
         bool_to_json(android.release),
@@ -454,27 +475,23 @@ auto read_web_settings(const simdjson::dom::object& args, web_deploy_settings& w
                                return args[key].get(value) == simdjson::SUCCESS;
                            });
     read_string(args, "web_help_link", web.help_link);
-    return read_enum_name(args, "web_graphics", WEB_GRAPHICS_NAMES, web.graphics, error) &&
-           read_enum_name(args, "web_fallback_notice", WEB_FALLBACK_NOTICE_NAMES, web.fallback_notice, error) &&
-           read_enum_name(args, "web_run_graphics", WEB_RUN_GRAPHICS_NAMES, web.run_graphics, error) &&
-           read_enum_name(args, "web_texture_compression", TEXTURE_COMPRESSION_NAMES, web.texture_compression, error) &&
-           read_enum_name(args,
-                          "web_phone_texture_compression",
-                          TEXTURE_COMPRESSION_NAMES,
-                          web.phone_texture_compression,
-                          error);
+    return read_enum_name(args, "web_graphics", web.graphics, error) &&
+           read_enum_name(args, "web_fallback_notice", web.fallback_notice, error) &&
+           read_enum_name(args, "web_run_graphics", web.run_graphics, error) &&
+           read_enum_name(args, "web_texture_compression", web.texture_compression, error) &&
+           read_enum_name(args, "web_phone_texture_compression", web.phone_texture_compression, error);
 }
 
 auto web_settings_to_json(const web_deploy_settings& web) -> std::string
 {
     return fmt::format(
         R"({{"graphics":{},"fallback_notice":{},"help_link":{},"run_graphics":{},"texture_compression":{},"phone_texture_compression":{}}})",
-        make_json_string(WEB_GRAPHICS_NAMES[static_cast<std::size_t>(web.graphics)]),
-        make_json_string(WEB_FALLBACK_NOTICE_NAMES[static_cast<std::size_t>(web.fallback_notice)]),
+        enum_name_json(web.graphics),
+        enum_name_json(web.fallback_notice),
         make_json_string(web.help_link),
-        make_json_string(WEB_RUN_GRAPHICS_NAMES[static_cast<std::size_t>(web.run_graphics)]),
-        make_json_string(TEXTURE_COMPRESSION_NAMES[static_cast<std::size_t>(web.texture_compression)]),
-        make_json_string(TEXTURE_COMPRESSION_NAMES[static_cast<std::size_t>(web.phone_texture_compression)]));
+        enum_name_json(web.run_graphics),
+        enum_name_json(web.texture_compression),
+        enum_name_json(web.phone_texture_compression));
 }
 
 auto desktop_settings_to_json(const desktop_deploy_settings& desktop) -> std::string
@@ -551,8 +568,8 @@ auto read_android_settings(rtti::context& ctx, const simdjson::dom::object& args
                                simdjson::dom::element value;
                                return args[key].get(value) == simdjson::SUCCESS;
                            });
-    if(!read_enum_name(args, "android_orientation", ORIENTATION_NAMES, android.screen_orientation, error) ||
-       !read_enum_name(args, "android_texture_compression", TEXTURE_COMPRESSION_NAMES, android.texture_compression, error) ||
+    if(!read_enum_name(args, "android_orientation", android.screen_orientation, error) ||
+       !read_enum_name(args, "android_texture_compression", android.texture_compression, error) ||
        !read_android_icon(ctx, args, android, error) || !read_android_permissions(args, android.permissions, error))
     {
         return false;
@@ -780,12 +797,12 @@ auto apply_location(fs::path& destination, const std::string& location, bool cre
     return true;
 }
 
-/// Tidies the scene list and the rules as the Deploy window stores them; the keys that name nothing in
-/// the project come back as warnings.
-auto normalize_deploy_keys(rtti::context& ctx, deploy_settings& params) -> std::vector<std::string>
+/// Tidies the scene list and the rules as the Deploy window stores them, against what @p profile ships; the keys
+/// that name nothing in the project come back as warnings.
+auto normalize_deploy_keys(rtti::context& ctx, deploy_settings& params, const std::string& profile) -> std::vector<std::string>
 {
     auto& pm = ctx.get_cached<project_manager>();
-    const auto shipped_settings = pm.get_profile_settings(pm.get_deploy_profile());
+    const auto shipped_settings = pm.get_profile_settings(profile);
     const auto found = deployment::list_content(deployment::make_project_content_source(ctx.get_cached<asset_manager>(), shipped_settings));
     std::vector<std::string> warnings;
     for(const auto& key : deployment::normalize_keys(params, found))
@@ -861,7 +878,9 @@ auto run_public_link_action(rtti::context& ctx, const simdjson::dom::object& arg
 
 auto require_not_deploying(rtti::context& ctx, std::string& error) -> bool
 {
-    const auto* panel = get_deploy_panel(ctx);
+    // The window's steps are main-thread state; a worker-thread tool sees the running deploys' count only.
+    const bool is_main_thread = tpp::this_thread::get_id() == tpp::main_thread::get_id();
+    const auto* panel = is_main_thread ? get_deploy_panel(ctx) : nullptr;
     if(deployment::is_deploy_running() || (panel != nullptr && panel->is_deploying()))
     {
         error = "A deploy is running; wait for it to finish (deploy_get_state) before changing the "
@@ -929,8 +948,8 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "deploy_profile selects the profile deploys build. "
              "scope says where the settings other than location and the profile's own go: \"shared\" (default) "
              "writes them for every profile that does not override them, \"profile\" stores them as overrides of the "
-             "profile only. location is always shared; patch_release, desktop_icon, steam_*, the android_* settings "
-             "and the web_* settings always belong to the profile. steam_app_id, steam_depot_id and steam_account say where deploy_upload_steam "
+             "profile only. location is always shared; patch_release, desktop_icon, desktop_graphics, steam_*, the "
+             "android_* settings and the web_* settings always belong to the profile. steam_app_id, steam_depot_id and steam_account say where deploy_upload_steam "
              "sends a desktop profile's build; steam_branch is the branch it is set live on (empty: none; never "
              "default, which Steam sets live only on its website). written lists where each value went; shadowed lists shared values the profile overrides, so it "
              "keeps deploying with its own (revert them, or pass scope profile). revert lists settings, named as this "
@@ -964,7 +983,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "build a second set for browsers whose GPU does not read the first (astc default; the same format ships "
              "one set). Omitted fields keep their value.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The profile this call writes (its overrides, patch_release, desktop_icon, steam_*, android_*, web_*, revert); default the deploy profile. Does not change the deploy profile"},"deploy_profile":{"type":"string","description":"Select the profile deploys build, as the Deploy window's profile picker does"},"scope":{"type":"string","enum":["shared","profile"],"description":"Where the settings other than location and the profile's own go; default shared"},"revert":{"type":"array","items":{"type":"string"},"description":"Settings, named as this tool's arguments (e.g. pack_assets), the profile stops overriding"},"android_texture_compression":{"type":"string","enum":["astc","etc2","bc"]},"web_graphics":{"type":"string","enum":["webgpu","webgpu_then_webgl2","webgl2"],"description":"Web profiles: the graphics APIs the game renders with; webgpu_then_webgl2 also cooks the WebGL 2 shaders"},"web_fallback_notice":{"type":"string","enum":["tell","ask","silent"],"description":"Web profiles: what the page tells the player when WebGL 2 stands in for WebGPU"},"web_help_link":{"type":"string","description":"Web profiles: a page on turning WebGPU on that the notices link to; empty for the page's own advice"},"web_run_graphics":{"type":"string","enum":["automatic","webgpu","webgl2"],"description":"Web profiles: the API Deploy and Run and the public link start a webgpu_then_webgl2 build with"},"web_texture_compression":{"type":"string","enum":["astc","etc2","bc"],"description":"Web profiles: the formats the project's textures are cooked to"},"web_phone_texture_compression":{"type":"string","enum":["astc","etc2","bc"],"description":"Web profiles: a second texture set for browsers whose GPU does not read web_texture_compression's; the same format ships one set"},"android_application_id":{"type":"string","description":"e.g. com.company.game; empty: com.<company>.<product>, made from the product settings and following them"},"android_permissions":{"type":"object","properties":{"internet":{"type":"boolean"},"network_state":{"type":"boolean"},"vibrate":{"type":"boolean"},"microphone":{"type":"boolean"},"camera":{"type":"boolean"},"location":{"type":"boolean"},"notifications":{"type":"boolean"},"other":{"type":"array","items":{"type":"string"},"description":"Further permissions by name; a name without a dot gets android.permission. in front"}},"description":"The permissions the manifest asks for; a partial object changes only what it names. Defaults: internet and vibrate on"},"android_version_code":{"type":"integer","minimum":1},"android_orientation":{"type":"string","enum":["landscape","portrait","automatic"]},"android_icon":{"type":["string","null"],"description":"Key or uid of a texture the launcher icon is made from, square at best; null or empty for the engine's logo"},"android_icon_background":{"type":"array","items":{"type":"number"},"description":"[r,g,b] from 0 to 1: the opaque color behind the icon's image; default white"},"desktop_icon":{"type":["string","null"],"description":"Desktop profiles: key or uid of a texture the executable's icon is made from (Windows), square at best; null or empty for the engine's logo"},"desktop_graphics":{"type":"object","properties":{"direct3d12":{"type":"boolean"},"direct3d11":{"type":"boolean"},"metal":{"type":"boolean"},"vulkan":{"type":"boolean"},"opengl":{"type":"boolean"}},"description":"Desktop profiles: the graphics APIs the build ships shaders for (Windows: direct3d12, direct3d11, vulkan, opengl; Linux: vulkan, opengl; macOS: metal, vulkan); a partial object changes only what it names. All true (the default) ships every API of the platform; with some false the build is smaller and the game starts only the others, the first that starts on the player's computer"},"steam_app_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the game's Steamworks app id; 0: not uploaded"},"steam_depot_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the depot of the operating system the profile builds for"},"steam_account":{"type":"string","description":"Desktop profiles: the Steam account that uploads, logged in once in a terminal with steamcmd +login <account>"},"steam_branch":{"type":"string","description":"Desktop profiles: the branch the uploaded build is set live on, such as beta; empty for none"},"android_release":{"type":"boolean","description":"A release package signed with android_keystore (passwords from UNRAVEL_KEYSTORE_PASSWORD / UNRAVEL_KEY_PASSWORD); default false, a debug package"},"android_keystore":{"type":"string"},"android_key_alias":{"type":"string"},"android_additions":{"type":"string","description":"Android profiles: a folder with parts the package takes as they are (AndroidManifest.xml merged into the game's, java, res, libs, jniLibs/arm64-v8a, dependencies.txt with one Maven library per line); relative to the project folder; empty for none"},"android_device":{"type":"string","description":"adb serial of the device run_after_deploy installs on"},"location":{"type":"string","description":"Destination folder: absolute, or relative to the project folder such as .deploy"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"run_arguments":{"type":"string","description":"Command line options run_after_deploy starts the game with, separated by spaces, e.g. --gfx-stats (graphics statistics overlay) or --novsync"},"extra_files":{"type":"string","description":"A folder whose files ship with the build as they are, at the same places under the build's top (a library beside the executable; on the web an index.html replaces the loading page); relative to the project folder; empty for none"},"post_command":{"type":"string","description":"A command run through the system's command interpreter in the build's folder once the build is whole (on Android before the install); it reads UNRAVEL_DEPLOY_FOLDER, UNRAVEL_DEPLOY_PROFILE, UNRAVEL_DEPLOY_PLATFORM and UNRAVEL_DEPLOY_VERSION, and a failing command fails the deploy; empty for none"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"trim_framework":{"type":"boolean","description":"Leave out the .NET framework libraries that neither the script libraries nor the script bridge reference, which makes the build smaller; a library scripts load by a name built at run time must be in kept_assemblies; default false"},"kept_assemblies":{"type":"string","description":"Framework libraries a trimmed build keeps whatever references them, by name, separated by spaces or commas, e.g. System.Data.Common"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"Desktop profiles: a kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
+             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The profile this call writes (its overrides, patch_release, desktop_icon, desktop_graphics, steam_*, android_*, web_*, revert); default the deploy profile. Does not change the deploy profile"},"deploy_profile":{"type":"string","description":"Select the profile deploys build, as the Deploy window's profile picker does"},"scope":{"type":"string","enum":["shared","profile"],"description":"Where the settings other than location and the profile's own go; default shared"},"revert":{"type":"array","items":{"type":"string"},"description":"Settings, named as this tool's arguments (e.g. pack_assets), the profile stops overriding"},"android_texture_compression":{"type":"string","enum":)json" + enum_names_json<deploy_texture_compression>() + R"json(},"web_graphics":{"type":"string","enum":)json" + enum_names_json<web_graphics>() + R"json(,"description":"Web profiles: the graphics APIs the game renders with; webgpu_then_webgl2 also cooks the WebGL 2 shaders"},"web_fallback_notice":{"type":"string","enum":)json" + enum_names_json<web_fallback_notice>() + R"json(,"description":"Web profiles: what the page tells the player when WebGL 2 stands in for WebGPU"},"web_help_link":{"type":"string","description":"Web profiles: a page on turning WebGPU on that the notices link to; empty for the page's own advice"},"web_run_graphics":{"type":"string","enum":)json" + enum_names_json<web_run_graphics>() + R"json(,"description":"Web profiles: the API Deploy and Run and the public link start a webgpu_then_webgl2 build with"},"web_texture_compression":{"type":"string","enum":)json" + enum_names_json<deploy_texture_compression>() + R"json(,"description":"Web profiles: the formats the project's textures are cooked to"},"web_phone_texture_compression":{"type":"string","enum":)json" + enum_names_json<deploy_texture_compression>() + R"json(,"description":"Web profiles: a second texture set for browsers whose GPU does not read web_texture_compression's; the same format ships one set"},"android_application_id":{"type":"string","description":"e.g. com.company.game; empty: com.<company>.<product>, made from the product settings and following them"},"android_permissions":{"type":"object","properties":{"internet":{"type":"boolean"},"network_state":{"type":"boolean"},"vibrate":{"type":"boolean"},"microphone":{"type":"boolean"},"camera":{"type":"boolean"},"location":{"type":"boolean"},"notifications":{"type":"boolean"},"other":{"type":"array","items":{"type":"string"},"description":"Further permissions by name; a name without a dot gets android.permission. in front"}},"description":"The permissions the manifest asks for; a partial object changes only what it names. Defaults: internet and vibrate on"},"android_version_code":{"type":"integer","minimum":1,"maximum":2100000000,"description":"Google Play takes 1 to 2100000000"},"android_orientation":{"type":"string","enum":)json" + enum_names_json<android_orientation>() + R"json(},"android_icon":{"type":["string","null"],"description":"Key or uid of a texture the launcher icon is made from, square at best; null or empty for the engine's logo"},"android_icon_background":{"type":"array","items":{"type":"number","minimum":0,"maximum":1},"minItems":3,"maxItems":3,"description":"[r,g,b] from 0 to 1: the opaque color behind the icon's image; default white"},"desktop_icon":{"type":["string","null"],"description":"Desktop profiles: key or uid of a texture the executable's icon is made from (Windows), square at best; null or empty for the engine's logo"},"desktop_graphics":{"type":"object","properties":{"direct3d12":{"type":"boolean"},"direct3d11":{"type":"boolean"},"metal":{"type":"boolean"},"vulkan":{"type":"boolean"},"opengl":{"type":"boolean"}},"description":"Desktop profiles: the graphics APIs the build ships shaders for (Windows: direct3d12, direct3d11, vulkan, opengl; Linux: vulkan, opengl; macOS: metal, vulkan); a partial object changes only what it names. All true (the default) ships every API of the platform; with some false the build is smaller and the game starts only the others, the first that starts on the player's computer"},"steam_app_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the game's Steamworks app id; 0: not uploaded"},"steam_depot_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the depot of the operating system the profile builds for"},"steam_account":{"type":["string","null"],"description":"Desktop profiles: the Steam account that uploads, logged in once in a terminal with steamcmd +login <account>; null or empty clears it"},"steam_branch":{"type":["string","null"],"description":"Desktop profiles: the branch the uploaded build is set live on, such as beta; null or empty for none"},"android_release":{"type":"boolean","description":"A release package signed with android_keystore (passwords from UNRAVEL_KEYSTORE_PASSWORD / UNRAVEL_KEY_PASSWORD); default false, a debug package"},"android_keystore":{"type":"string"},"android_key_alias":{"type":"string"},"android_additions":{"type":"string","description":"Android profiles: a folder with parts the package takes as they are (AndroidManifest.xml merged into the game's, java, res, libs, jniLibs/arm64-v8a, dependencies.txt with one Maven library per line); relative to the project folder; empty for none"},"android_device":{"type":"string","description":"adb serial of the device run_after_deploy installs on"},"location":{"type":"string","description":"Destination folder: absolute, or relative to the project folder such as .deploy; empty sets the default, .deploy"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"run_arguments":{"type":"string","description":"Command line options run_after_deploy starts the game with, separated by spaces, e.g. --gfx-stats (graphics statistics overlay) or --novsync"},"extra_files":{"type":"string","description":"A folder whose files ship with the build as they are, at the same places under the build's top (a library beside the executable; on the web an index.html replaces the loading page); relative to the project folder; empty for none"},"post_command":{"type":"string","description":"A command run through the system's command interpreter in the build's folder once the build is whole (on Android before the install); it reads UNRAVEL_DEPLOY_FOLDER, UNRAVEL_DEPLOY_PROFILE, UNRAVEL_DEPLOY_PLATFORM and UNRAVEL_DEPLOY_VERSION, and a failing command fails the deploy; empty for none"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"trim_framework":{"type":"boolean","description":"Leave out the .NET framework libraries that neither the script libraries nor the script bridge reference, which makes the build smaller; a library scripts load by a name built at run time must be in kept_assemblies; default false"},"kept_assemblies":{"type":"string","description":"Framework libraries a trimmed build keeps whatever references them, by name, separated by spaces or commas, e.g. System.Data.Common"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"Desktop profiles: a kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -1060,8 +1079,8 @@ void register_deploy_tools(mcp_tool_registry& registry)
              }
              if(has_desktop_settings && found->platform != deploy_platform::desktop)
              {
-                 return {.text = fmt::format("Profile {} is no desktop profile: desktop_icon and steam_* belong to a "
-                                             "desktop profile (pass profile).",
+                 return {.text = fmt::format("Profile {} is no desktop profile: desktop_icon, desktop_graphics and steam_* "
+                                             "belong to a desktop profile (pass profile).",
                                              profile),
                          .is_error = true};
              }
@@ -1072,7 +1091,12 @@ void register_deploy_tools(mcp_tool_registry& registry)
                          .is_error = true};
              }
              std::string location;
-             if(read_string(args, "location", location) && !location.empty())
+             const bool has_location = read_string(args, "location", location);
+             if(has_location && location.empty())
+             {
+                 location = DEFAULT_DEPLOY_LOCATION;
+             }
+             if(has_location)
              {
                  bool create_location = true;
                  read_bool(args, "create_location", create_location);
@@ -1082,7 +1106,11 @@ void register_deploy_tools(mcp_tool_registry& registry)
                  }
              }
              params.deploy_location = shared.deploy_location;
-             const auto warnings = normalize_deploy_keys(ctx, params);
+             // Walking the project's content is slow: done only when the call names scenes or rules.
+             const bool has_keys = args["scenes"].error() == simdjson::SUCCESS ||
+                                   args["include"].error() == simdjson::SUCCESS ||
+                                   args["exclude"].error() == simdjson::SUCCESS;
+             const auto warnings = has_keys ? normalize_deploy_keys(ctx, params, profile) : std::vector<std::string>{};
 
              // The shared location and device, the scope's settings, the profile's own, then the selection.
              std::vector<std::string> written_shared;
@@ -1098,7 +1126,11 @@ void register_deploy_tools(mcp_tool_registry& registry)
              }
              if(is_profile_scope)
              {
-                 pm->save_deploy_settings();
+                 if(!pm->save_deploy_settings())
+                 {
+                     return {.text = "The deploy settings were not saved: deploy/deploy.cfg holds settings from before profiles that could not be "
+                                     "backed up (copy the file aside and open the project again), or the file could not be written", .is_error = true};
+                 }
                  if(auto overridden = pm->override_profile_deploy(ctx, profile, params); !overridden.is_ok())
                  {
                      return {.text = overridden.error, .is_error = true};
@@ -1114,7 +1146,11 @@ void register_deploy_tools(mcp_tool_registry& registry)
                  params.desktop = {};
                  params.web = {};
                  pm->get_deploy_settings() = params;
-                 pm->save_deploy_settings();
+                 if(!pm->save_deploy_settings())
+                 {
+                     return {.text = "The deploy settings were not saved: deploy/deploy.cfg holds settings from before profiles that could not be "
+                                     "backed up (copy the file aside and open the project again), or the file could not be written", .is_error = true};
+                 }
                  written_shared.insert(written_shared.end(), scoped.begin(), scoped.end());
              }
              if(has_patch_release)
@@ -1235,8 +1271,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
                                          strings_to_json_array(deployment::list_project_releases(request.profile))),
                      .is_error = false};
          },
-         .mutates_scene = false,
-         .effect = tool_effect::destructive});
+         .mutates_scene = false});
 
     registry.add(
         {.name = "deploy_get_content",
@@ -1366,22 +1401,30 @@ void register_deploy_tools(mcp_tool_registry& registry)
              {
                  return {.text = result.error, .is_error = true};
              }
+             // The profile stops patching the removed release; a profile file that could not be written still names it.
+             std::vector<std::string> warnings;
+             if(const auto resolved = pm->get_profile_deploy_settings(profile); resolved && resolved->deploy_patch_release == name)
+             {
+                 warnings.push_back("The release is removed, but " + profile + " still names it as patch_release (its "
+                                    "settings could not be saved); deploy_set_settings patch_release \"\" clears it");
+             }
              return {.text = fmt::format(R"({{"ok":true,"removed":{},"releases":{}}})",
                                          make_json_string(name),
                                          strings_to_json_array(deployment::list_project_releases(profile))),
-                     .is_error = false};
+                     .is_error = false,
+                     .warnings = std::move(warnings)};
          },
          .mutates_scene = false,
          .effect = tool_effect::destructive});
 
     registry.add(
-        {.name = "project_deploy",
+        {.name = "deploy_start",
          .description =
              "Build the game into the deploy folder, as the editor's Deploy does. The folder must be empty or an "
              "earlier deploy, which is updated in place: unchanged files and pack entries are kept, files the "
              "build no longer ships are removed. Needs a deploy location and a startup scene: call "
              "deploy_get_state first. Waits for running asset and script "
-             "compiles first, then for the deploy, up to timeout_ms in all (default 180000); on timeout the deploy "
+             "compiles first, then for the deploy, up to wait_ms in all (default 180000); on timeout the deploy "
              "keeps running and deploy_get_state reports it. Assets without a compiled file fail the deploy before "
              "the folder is touched, named in failed_steps. Refuses play mode. It deploys the deploy profile, or the "
              "profile given, which becomes the deploy profile. For an Android profile the last step builds "
@@ -1398,7 +1441,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "editor does not compile for (Cooking Shaders: WGSL and, with web_graphics webgpu_then_webgl2 or webgl2, GLSL ES for the web); all are kept in the project's "
              "cache/profiles/<profile> for its next deploys.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"location":{"type":"string","description":"Deploy folder, absolute or relative to the project folder; the profile builds into <location>/<profile>. Also saved into the deploy settings. Optional when already set"},"run_after_deploy":{"type":"boolean","description":"For this deploy only"},"profile":{"type":"string","description":"The profile to deploy; it becomes the deploy profile. An Android profile builds an .apk; with run_after_deploy it is installed and started on android_device"},"android_device":{"type":"string","description":"adb serial from deploy_get_state's android.devices"},"android_replace_installed":{"type":"boolean","description":"When the game on the device was signed with another key (debug vs release), uninstall it first, which removes its saved data; default false reports android.install_conflict instead"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":900000}}})json",
+             R"json({"type":"object","properties":{"location":{"type":"string","description":"Deploy folder, absolute or relative to the project folder; the profile builds into <location>/<profile>. Also saved into the deploy settings. Optional when already set"},"run_after_deploy":{"type":"boolean","description":"For this deploy only"},"profile":{"type":"string","description":"The profile to deploy; it becomes the deploy profile. An Android profile builds an .apk; with run_after_deploy it is installed and started on android_device"},"android_device":{"type":"string","description":"adb serial from deploy_get_state's android.devices"},"android_replace_installed":{"type":"boolean","description":"When the game on the device was signed with another key (debug vs release), uninstall it first, which removes its saved data; default false reports android.install_conflict instead"},"wait_ms":{"type":"integer","minimum":1000,"maximum":900000}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -1436,15 +1479,25 @@ void register_deploy_tools(mcp_tool_registry& registry)
              const bool has_device = read_string(args, "android_device", android_device);
              bool replace_installed = false;
              read_bool(args, "android_replace_installed", replace_installed);
-             // The device check below reads the last listing; this call may be the first of the session.
-             if(has_device || !deployment::has_listed_android_devices())
+             // The device check below reads the last listing, which this call may be the first of; only an Android deploy
+             // asks adb for it.
+             const auto is_android = mcp.invoke_on_main(
+                 [&ctx, &profile]() -> bool
+                 {
+                     std::string error;
+                     auto* pm = get_open_project(ctx, error);
+                     const auto* found = pm != nullptr ? pm->get_profiles().find(profile.empty() ? pm->get_deploy_profile() : profile)
+                                                       : nullptr;
+                     return found != nullptr && found->platform == deploy_platform::android;
+                 });
+             if(is_android && *is_android && (has_device || !deployment::has_listed_android_devices()))
              {
                  deployment::update_android_devices();
              }
              bool run_after_deploy = false;
              const bool has_run_flag = read_bool(args, "run_after_deploy", run_after_deploy);
              const auto timeout =
-                 read_timeout_ms(args, k_default_deploy_timeout_ms, k_max_deploy_timeout_ms, "timeout_ms");
+                 read_timeout_ms(args, k_default_deploy_timeout_ms, k_max_deploy_timeout_ms, "wait_ms");
              const auto deadline = std::chrono::steady_clock::now() + timeout;
 
              // A deploy needs the compiler idle - it is one of the deploy problems - so wait here as a
@@ -1536,7 +1589,9 @@ void register_deploy_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .effect = tool_effect::destructive});
+         .effect = tool_effect::destructive,
+         .former_names = {"project_deploy"},
+         .former_arguments = {{"timeout_ms", "wait_ms"}}});
 
     registry.add(
         {.name = "deploy_cancel",
@@ -1558,6 +1613,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              return {.text = R"({"ok":true,"cancelling":true})", .is_error = false};
          },
          .mutates_scene = false,
+         .requires_main_thread = false,
          .effect = tool_effect::changes,
          .idempotent = true});
 
@@ -1570,16 +1626,16 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "passed), uploads every file of the folder but the deploy's build.stamp and logs left by --log-here to "
              "steam_depot_id of steam_app_id, "
              "and sets the build live on steam_branch when it names one (deploy_set_settings sets them). Deploy the "
-             "profile first (project_deploy). profile defaults to the deploy profile. Waits up to timeout_ms (default "
+             "profile first (deploy_start). profile defaults to the deploy profile. Waits up to wait_ms (default "
              "180000); on timeout the upload keeps running and deploy_get_state reports it. steamcmd's output goes to "
              "the editor log ([steamcmd] lines, logs_get_recent); a failed step quotes its last lines.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The desktop profile to upload; default the deploy profile"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":900000}}})json",
+             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The desktop profile to upload; default the deploy profile"},"wait_ms":{"type":"integer","minimum":1000,"maximum":900000}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
-             const auto timeout = read_timeout_ms(args, k_default_deploy_timeout_ms, k_max_deploy_timeout_ms, "timeout_ms");
+             const auto timeout = read_timeout_ms(args, k_default_deploy_timeout_ms, k_max_deploy_timeout_ms, "wait_ms");
              const auto deadline = std::chrono::steady_clock::now() + timeout;
              auto start = mcp.invoke_on_main(
                  [&ctx, &args]() -> tool_result
@@ -1621,21 +1677,23 @@ void register_deploy_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .effect = tool_effect::destructive});
+         .effect = tool_effect::destructive,
+         .open_world = true,
+         .former_arguments = {{"timeout_ms", "wait_ms"}}});
 
     registry.add(
         {.name = "deploy_share_web",
          .description =
              "Share a web profile's last deploy at a public HTTPS link, as the Deploy window's Share Public Link does: "
-             "the editor serves the profile's folder (deploy it first, project_deploy) and cloudflared (Editor Settings "
+             "the editor serves the profile's folder (deploy it first, deploy_start) and cloudflared (Editor Settings "
              "> External Tools, else the one on PATH or where its installer puts it) opens a Cloudflare quick tunnel to "
              "it, a new https://<name>.trycloudflare.com address each time. Anyone with the link can play until action "
              "stop or the editor closes; a new address may take a few seconds to resolve. action share (default) waits "
-             "up to timeout_ms (default 30000) for the tunnel to connect, stop ends it, status reports it. profile "
+             "up to wait_ms (default 30000) for the tunnel to connect, stop ends it, status reports it. profile "
              "defaults to the deploy profile. Returns state (stopped, starting, running or failed), profile, address "
              "(the page's public address) and error.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"action":{"type":"string","enum":["share","stop","status"],"description":"Default share"},"profile":{"type":"string","description":"The web profile to share; default the deploy profile"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":120000}}})json",
+             R"json({"type":"object","properties":{"action":{"type":"string","enum":["share","stop","status"],"description":"Default share"},"profile":{"type":"string","description":"The web profile to share; default the deploy profile"},"wait_ms":{"type":"integer","minimum":1000,"maximum":120000}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -1646,7 +1704,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              {
                  return {.text = "action is share, stop or status", .is_error = true};
              }
-             const auto timeout = read_timeout_ms(args, k_default_share_timeout_ms, k_max_share_timeout_ms, "timeout_ms");
+             const auto timeout = read_timeout_ms(args, k_default_share_timeout_ms, k_max_share_timeout_ms, "wait_ms");
              const auto deadline = std::chrono::steady_clock::now() + timeout;
              auto acted = mcp.invoke_on_main(
                  [&ctx, &args, &action]() -> tool_result
@@ -1682,14 +1740,16 @@ void register_deploy_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .effect = tool_effect::changes});
+         .effect = tool_effect::changes,
+         .open_world = true,
+         .former_arguments = {{"timeout_ms", "wait_ms"}}});
 
     registry.add(
-        {.name = "android_device_action",
+        {.name = "deploy_android_device",
          .description =
              "Act on the game of the deploy profile (an Android profile) on a device without a new deploy, as the "
              "Deploy window's On Device row does. run_last_build installs <location>/<profile>/<project>.apk (from "
-             "an earlier project_deploy of the profile) and starts it; its steps show in deploy_get_state and the game's log goes to the "
+             "an earlier deploy_start of the profile) and starts it; its steps show in deploy_get_state and the game's log goes to the "
              "editor log as [Device] lines. follow_log follows the log of the game already running. clear_data "
              "removes the game's saved data (pm clear), which stops it. uninstall removes the game with its saved "
              "data. clear_data and uninstall finish in the background; logs_get_recent shows the outcome. "
@@ -1742,23 +1802,14 @@ void register_deploy_tools(mcp_tool_registry& registry)
                          params.android_device = android_device;
                      }
                      const auto devices = deployment::get_android_devices();
-                     // As in the Deploy window, the only ready device is the one to use.
+                     // As in the Deploy window: the only ready device, or the named one by its own serial.
+                     params.android_device = deployment::resolve_android_device(devices, params.android_device);
                      const auto ready_count = std::count_if(devices.begin(),
                                                             devices.end(),
                                                             [](const deployment::android_device& device)
                                                             {
                                                                 return device.is_ready();
                                                             });
-                     if(params.android_device.empty() && ready_count == 1)
-                     {
-                         params.android_device = std::find_if(devices.begin(),
-                                                              devices.end(),
-                                                              [](const deployment::android_device& device)
-                                                              {
-                                                                  return device.is_ready();
-                                                              })
-                                                     ->serial;
-                     }
                      const bool is_ready = std::any_of(devices.begin(),
                                                        devices.end(),
                                                        [&params](const deployment::android_device& device)
@@ -1782,7 +1833,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
                      {
                          if(!deployment::has_android_package(ctx, params))
                          {
-                             return {.text = fmt::format("No package at {}; run project_deploy of the profile first",
+                             return {.text = fmt::format("No package at {}; run deploy_start of the profile first",
                                                          fs::to_utf8_string(deployment::get_android_package_path(ctx, params))),
                                      .is_error = true};
                          }
@@ -1819,7 +1870,8 @@ void register_deploy_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .effect = tool_effect::destructive});
+         .effect = tool_effect::destructive,
+         .former_names = {"android_device_action"}});
 }
 
 } // namespace unravel::mcp

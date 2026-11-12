@@ -10,6 +10,8 @@
 #include "os_touches.hpp"
 #include "pointer_zones.hpp"
 
+#include <array>
+
 #include <ospp/event.h>
 #include <hpp/optional.hpp>
 
@@ -152,6 +154,9 @@ public:
     auto map_window_position(coord window_position) -> coord;
     /// A finger's position in work zone pixels. Fingers come normalized to the window under them.
     auto map_finger_position(const os::touch_finger_event& finger) -> coord;
+    /// Inverse of map_finger_position: where on the window a finger at @p work_position (work zone pixels) lies,
+    /// each coordinate normalized to 0...1 as touch_finger_event carries it.
+    auto unmap_finger_position(coord work_position) -> std::array<float, 2>;
 
 private:
     void on_finger_event(const os::event& e);

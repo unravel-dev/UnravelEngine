@@ -1,4 +1,5 @@
 #include "script_system.h"
+#include <string_utils/utils.h>
 #include <engine/animation/ecs/components/animation_component.h>
 #include "engine/assets/impl/asset_extensions.h"
 #include <engine/assets/asset_manager.h>
@@ -1461,7 +1462,7 @@ auto script_system::describe_ui_models(entt::entity owner, const std::string& mo
     catch(const dotnet::exception& e)
     {
         log_exception(e);
-        return "null";
+        return R"({"error":)" + string_utils::make_json_string(std::string("Reading the models failed: ") + e.what()) + "}";
     }
 }
 
@@ -1471,7 +1472,7 @@ auto script_system::invoke_script_method(const dotnet::object& script,
 {
     if(!domain_ || !cache_.invoke_method.valid())
     {
-        return "null";
+        return R"({"error":"Scripting is not loaded"})";
     }
     std::string encoded;
     for(const auto& argument : arguments)
@@ -1490,7 +1491,7 @@ auto script_system::invoke_script_method(const dotnet::object& script,
     catch(const dotnet::exception& e)
     {
         log_exception(e);
-        return "null";
+        return R"({"error":)" + string_utils::make_json_string(std::string("The call failed: ") + e.what()) + "}";
     }
 }
 

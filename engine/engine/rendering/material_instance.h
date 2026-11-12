@@ -212,4 +212,22 @@ private:
     std::vector<entt::id_type> changed_properties_;
 };
 
+/**
+ * @brief An editable copy of what @p instance draws with: @p shared with the instance's overrides set on it.
+ */
+auto make_instance_values(const material_instance& instance, const material& shared) -> material::sptr;
+
+/// The properties override_changed_values changed on an instance, and those the instance refused.
+struct instance_value_changes
+{
+    std::vector<entt::id_type> overridden;
+    std::vector<entt::id_type> refused;
+};
+
+/**
+ * @brief Overrides on @p instance every property whose value in @p values differs from what the instance draws with
+ * now: what an edit of a make_instance_values copy changed, setter side effects included. Property order.
+ */
+auto override_changed_values(material_instance& instance, const material& values) -> instance_value_changes;
+
 } // namespace unravel

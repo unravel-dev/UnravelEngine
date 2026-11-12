@@ -4,6 +4,7 @@
 
 #include <editor/assets/asset_actions.h>
 #include <editor/editing/actions/actions.h>
+#include <editor/editing/editor_actions.h>
 #include <editor/system/project_manager.h>
 #include <editor/system/mcp_manager.h>
 #include <engine/assets/asset_manager.h>
@@ -65,20 +66,6 @@ auto script_source_of(rtti::context& ctx,
         return false;
     }
     return true;
-}
-
-auto unique_script_path(const fs::path& dir, const std::string& stem) -> fs::path
-{
-    const auto ext = ex::get_format<script>();
-    fs::path candidate = dir / (stem + ext);
-    fs::error_code ec;
-    int i = 0;
-    while(fs::exists(candidate, ec))
-    {
-        ++i;
-        candidate = dir / (fmt::format("{}{}", stem, i) + ext);
-    }
-    return candidate;
 }
 
 /**
@@ -161,6 +148,22 @@ auto has_unbuilt_sources(const asset_compiler::script_compilation_result& last) 
                       return built.contains(source.first) || !fs::exists(source.second, ec);
                   });
     return !sources.paths.empty();
+}
+
+/// Whether the API index answered with a failure instead of a listing: it answers in text, failures included.
+auto is_api_index_failure(const std::string& answer) -> bool
+{
+    constexpr std::array<const char*, 5> k_failures{"Scripting is not loaded",
+                                                    "The API index failed",
+                                                    "No type named",
+                                                    "Several types match",
+                                                    "Empty query"};
+    return std::any_of(k_failures.begin(),
+                       k_failures.end(),
+                       [&answer](const char* failure)
+                       {
+                           return starts_with(answer, failure);
+                       });
 }
 
 /// scripts_invoke's "arguments": numbers, booleans, strings, and number arrays for vector parameters.
@@ -271,7 +274,9 @@ void register_script_tools(mcp_tool_registry& registry)
                  return {.text = "Missing query", .is_error = true};
              }
              const auto limit = static_cast<int>(read_int64_or(args, "limit", 0));
-             return {.text = ctx.get_cached<script_system>().search_api(query, limit), .is_error = false};
+             auto found = ctx.get_cached<script_system>().search_api(query, limit);
+             const bool failed = is_api_index_failure(found);
+             return {.text = std::move(found), .is_error = failed};
          },
          .mutates_scene = false,
          .effect = tool_effect::read_only});
@@ -296,7 +301,9 @@ void register_script_tools(mcp_tool_registry& registry)
              {
                  return {.text = "Missing type", .is_error = true};
              }
-             return {.text = ctx.get_cached<script_system>().describe_api_type(type_name), .is_error = false};
+             auto described = ctx.get_cached<script_system>().describe_api_type(type_name);
+             const bool failed = is_api_index_failure(described);
+             return {.text = std::move(described), .is_error = failed};
          },
          .mutates_scene = false,
          .effect = tool_effect::read_only});
@@ -349,7 +356,7 @@ void register_script_tools(mcp_tool_registry& registry)
              const auto& script = entity.get<script_component>().get_script_components()[position->index];
              auto result =
                  ctx.get_cached<script_system>().invoke_script_method(script.pinned->get_object(), method, arguments);
-             const bool failed = result == "null" || starts_with(result, R"({"error")");
+             const bool failed = starts_with(result, R"({"error")");
              return {.text = std::move(result), .is_error = failed};
          },
          .mutates_scene = false});
@@ -360,10 +367,10 @@ void register_script_tools(mcp_tool_registry& registry)
              "Whether the project's scripts are building, and the last build's errors and warnings with file, "
              "line and message. wait:true first waits for a queued or running build to finish and, when it "
              "succeeds, for the editor to load it - new script types can be attached once it returns - up to "
-             "timeout_ms (default 60000). Call it after scripts_set_sources_batch; play mode will not start while "
+             "wait_ms (default 60000). Call it after scripts_set_sources_batch; play mode will not start while "
              "has_errors is true.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"wait":{"type":"boolean"},"timeout_ms":{"type":"integer","minimum":0,"maximum":300000}}})json",
+             R"json({"type":"object","properties":{"wait":{"type":"boolean"},"wait_ms":{"type":"integer","minimum":0,"maximum":300000}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -375,7 +382,7 @@ void register_script_tools(mcp_tool_registry& registry)
              auto& mcp = ctx.get_cached<mcp_manager>();
              bool wait = false;
              read_bool(args, "wait", wait);
-             const auto timeout = read_timeout_ms(args, k_default_wait_ms, k_max_wait_ms, "timeout_ms");
+             const auto timeout = read_timeout_ms(args, k_default_wait_ms, k_max_wait_ms, "wait_ms");
 
              struct build_state
              {
@@ -401,9 +408,9 @@ void register_script_tools(mcp_tool_registry& registry)
              auto state = query();
              const auto deadline = std::chrono::steady_clock::now() + timeout;
              // A main thread busy loading the new build misses a query: a reason to keep waiting, not to fail.
-             while(wait && (!state || state->pending) && std::chrono::steady_clock::now() < deadline)
+             while(wait && (!state || state->pending) && std::chrono::steady_clock::now() < deadline &&
+                   mcp.sleep_unless_stopping(k_poll_interval))
              {
-                 std::this_thread::sleep_for(k_poll_interval);
                  state = query();
              }
              if(!state)
@@ -447,7 +454,8 @@ void register_script_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .effect = tool_effect::read_only});
+         .effect = tool_effect::read_only,
+         .former_arguments = {{"timeout_ms", "wait_ms"}}});
 
     registry.add(
         {.name = "scripts_get_source",
@@ -514,7 +522,7 @@ void register_script_tools(mcp_tool_registry& registry)
              "A batch that adds a new file builds once the asset pipeline has imported it (build: "
              "after_import); scripts_get_compile_status wait:true waits for that build.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"code":{"type":"string"},"path":{"type":"string"},"key":{"type":"string"},"entity_id":{"type":"string"},"type_name":{"type":"string"}},"required":["code"]}},"recompile":{"type":"boolean","default":true}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"code":{"type":"string"},"path":{"type":"string"},"key":{"type":"string"},"entity_id":{"type":"string"},"type_name":{"type":"string"}},"required":["code"]}},"recompile":{"type":"boolean","default":true}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -618,7 +626,8 @@ void register_script_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .effect = tool_effect::destructive,
-         .idempotent = true});
+         .idempotent = true,
+         .writes_project_files = true});
 
     registry.add(
         {.name = "scripts_create_batch",
@@ -628,7 +637,7 @@ void register_script_tools(mcp_tool_registry& registry)
              "(default true, once). New files build once the asset pipeline has imported them (build: "
              "after_import); scripts_get_compile_status wait:true waits for that build.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"}},"required":["name"]}},"recompile":{"type":"boolean","default":true}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"}},"required":["name"]}},"recompile":{"type":"boolean","default":true}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -644,9 +653,7 @@ void register_script_tools(mcp_tool_registry& registry)
              }
              bool recompile = true;
              read_bool(args, "recompile", recompile);
-             const auto template_path =
-                 fs::resolve_protocol("engine:/data/templates/TemplateComponent" + ex::get_format<script>() + ".in");
-             std::string results = "[";
+std::string results = "[";
              bool first = true;
              size_t ok_count = 0;
              size_t requested = 0;
@@ -671,9 +678,10 @@ void register_script_tools(mcp_tool_registry& registry)
                      results += R"({"ok":false,"error":"Missing name"})";
                      continue;
                  }
-                 if(name.size() > 3 && name.substr(name.size() - 3) == ".cs")
+                 const auto extension = ex::get_format<script>();
+                 if(name.size() > extension.size() && ends_with_ci(name, extension))
                  {
-                     name = name.substr(0, name.size() - 3);
+                     name.resize(name.size() - extension.size());
                  }
                  if(!asset_actions::is_valid_csharp_identifier(name))
                  {
@@ -689,8 +697,8 @@ void register_script_tools(mcp_tool_registry& registry)
                      continue;
                  }
                  const auto dir = fs::absolute(fs::resolve_protocol(folder_key));
-                 const auto dst = unique_script_path(dir, name);
-                 if(!asset_actions::create_script_from_template(template_path, dst, &error))
+                 const auto dst = asset_actions::create_new_script(dir, name, &error);
+                 if(dst.empty())
                  {
                      results += fmt::format(R"({{"ok":false,"error":{}}})", make_json_string(error));
                      continue;
@@ -719,7 +727,38 @@ void register_script_tools(mcp_tool_registry& registry)
                                          make_json_string(protocol)),
                      .is_error = ok_count == 0 && requested > 0};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .writes_project_files = true});
+
+    registry.add(
+        {.name = "scripts_set_debug_mode",
+         .description = "Build the project's scripts debuggable (debug:true; a C# debugger can attach, scripts run "
+                        "slower) or optimized (false), as the header's script mode does. A change recompiles and "
+                        "reloads every script: scripts_get_compile_status {wait:true} waits for it. Refused while "
+                        "playing; editor_get_status pacing.script_debug_mode shows the mode.",
+         .input_schema_json =
+             R"({"type":"object","properties":{"debug":{"type":"boolean"}},"required":["debug"]})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             std::string error;
+             if(!require_not_play_mode(ctx, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             bool is_debug = false;
+             if(!read_bool(args, "debug", is_debug))
+             {
+                 return {.text = "Missing debug", .is_error = true};
+             }
+             const bool changed = editor_actions::set_script_debug_mode(is_debug);
+             return {.text = fmt::format(R"({{"ok":true,"debug":{},"changed":{}}})",
+                                         bool_to_json(script_system::get_script_debug_mode()),
+                                         bool_to_json(changed)),
+                     .is_error = false};
+         },
+         .mutates_scene = false,
+         .idempotent = true});
 }
 
 } // namespace unravel::mcp

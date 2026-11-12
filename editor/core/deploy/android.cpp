@@ -533,6 +533,27 @@ auto android_device::is_named(const std::string& name) const -> bool
     return serial == name || std::find(aliases.begin(), aliases.end(), name) != aliases.end();
 }
 
+auto resolve_android_device(const std::vector<android_device>& devices, const std::string& requested) -> std::string
+{
+    if(requested.empty())
+    {
+        const auto is_ready = [](const android_device& device)
+        {
+            return device.is_ready();
+        };
+        const auto ready = std::find_if(devices.begin(), devices.end(), is_ready);
+        return std::count_if(devices.begin(), devices.end(), is_ready) == 1 ? ready->serial : std::string{};
+    }
+    // A second connection to the phone is folded into one entry: the entry's own serial is used.
+    const auto chosen = std::find_if(devices.begin(),
+                                     devices.end(),
+                                     [&requested](const android_device& device)
+                                     {
+                                         return device.is_named(requested);
+                                     });
+    return chosen != devices.end() ? chosen->serial : requested;
+}
+
 auto android_device::get_name() const -> std::string
 {
     if(!device_name.empty())

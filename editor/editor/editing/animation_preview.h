@@ -61,9 +61,14 @@ public:
 
     /// Stops every preview, putting each previewed entity's own pose back.
     static void stop_all();
+    /// Whether a preview animates @p entity now.
+    static auto is_previewing(entt::handle entity) -> bool;
 
     /// Captures the entity's pose and starts previewing it; the component to drive, or nullptr.
     auto start(rtti::context& ctx, entt::handle entity) -> animation_component*;
+    /// Starts previewing the entity and plays its controller from the start, as play would; false without an
+    /// Animation component.
+    auto start_playing(rtti::context& ctx, entt::handle entity) -> bool;
     /// Stops the entity's player, clears its layers and puts the captured pose back.
     void stop();
     /// Called every frame by the tool drawing the preview; a preview nobody draws stops.

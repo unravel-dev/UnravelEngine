@@ -62,8 +62,8 @@ void register_profile_tools(mcp_tool_registry& registry)
              "settings_set with profile), deploy_overrides are deploy settings as deploy_set_settings names them. "
              "unreadable_files lists a profile's files that could not be read: they override nothing, and edits are "
              "refused until the file is mended. deploy_profile is the profile deploys build (deploy_set_settings "
-             "deploy_profile, or project_deploy profile, changes it); preview_profile is the one the editor runs "
-             "with (editor_set_preview_profile; null for the project settings).",
+             "deploy_profile, or deploy_start profile, changes it); preview_profile is the one the editor runs "
+             "with (settings_profiles_set_preview; null for the project settings).",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -84,11 +84,9 @@ void register_profile_tools(mcp_tool_registry& registry)
          .description =
              "Create a settings profile; it builds into <deploy location>/<name>. With copy_from it starts as a copy of "
              "that profile, on its platform. Otherwise platform (desktop, android or web, default desktop) picks "
-             "the platform, and the profile starts with that platform's starting values, stored as overrides. An Android "
-             "profile starts with textures of at most 1024, a smaller global illumination cache, half resolution "
-             "particles, and global illumination, screen space reflections, screen space indirect lighting, ambient "
-             "occlusion, soft and contact shadows turned off, anti-aliasing at most FXAA and shadow maps of at most "
-             "1024 (graphics.limits). A web profile starts with global illumination turned off, which WebGPU cannot run.",
+             "the platform, and the profile starts with that platform's starting values, stored as overrides: lighter "
+             "graphics for Android, global illumination off for the web (WebGPU cannot run it). The result's "
+             "settings_overrides lists each one; settings_get with the profile reads their values.",
          .input_schema_json =
              R"json({"type":"object","properties":{"name":{"type":"string"},"platform":{"type":"string","enum":["desktop","android","web"]},"copy_from":{"type":"string","description":"A profile to copy, platform included"}},"required":["name"]})json",
          .handler =
@@ -188,7 +186,7 @@ void register_profile_tools(mcp_tool_registry& registry)
          .effect = tool_effect::destructive});
 
     registry.add(
-        {.name = "editor_set_preview_profile",
+        {.name = "settings_profiles_set_preview",
          .description =
              "Run the editor with a settings profile's settings, or with the project settings for null or an empty "
              "name. The Scene and Game views render with its graphics, lighting and particle settings at once (the "
@@ -216,7 +214,8 @@ void register_profile_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .effect = tool_effect::changes,
-         .idempotent = true});
+         .idempotent = true,
+         .former_names = {"editor_set_preview_profile"}});
 }
 
 } // namespace unravel::mcp

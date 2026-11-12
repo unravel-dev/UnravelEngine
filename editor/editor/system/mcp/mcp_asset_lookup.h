@@ -10,25 +10,21 @@
 #include <logging/logging.h>
 #include <uuid/uuid.h>
 
+#include <algorithm>
 #include <string>
 
 namespace unravel::mcp
 {
 
-/// True when extension @p ext is one of T's formats, in its own case or in lower case.
+/**
+ * @brief True when @p ext is exactly one of T's extensions. ex::is_format matches part of an extension (".ma" is in
+ *        ".mat"), so a file of another kind could pass it and then be loaded, or saved over, as a T.
+ */
 template<typename T>
 auto matches_asset_extension(const std::string& ext) -> bool
 {
-    if(ext.empty())
-    {
-        return false;
-    }
-    if(ex::is_format<T>(ext))
-    {
-        return true;
-    }
-    const auto lower = to_lower_ascii(ext);
-    return lower != ext && ex::is_format<T>(lower);
+    const auto& formats = ex::get_suported_formats<T>();
+    return !ext.empty() && std::find(formats.begin(), formats.end(), ext) != formats.end();
 }
 
 /**
@@ -73,7 +69,7 @@ auto find_existing_asset(rtti::context& ctx, const std::string& key_or_uid, std:
         key = ex::resolve_key_missing_extension<T>(key);
     }
     const auto extension = fs::path(key).extension().generic_string();
-    if(!ex::is_format<T>(extension))
+    if(!matches_asset_extension<T>(extension))
     {
         error = fmt::format("{} is not the right asset type here (expected {})",
                             key,
@@ -90,6 +86,23 @@ auto find_existing_asset(rtti::context& ctx, const std::string& key_or_uid, std:
     if(!handle)
     {
         error = "Asset failed to load: " + key;
+    }
+    return handle;
+}
+
+/**
+ * @brief find_existing_asset for a tool that reads or changes the asset itself: the load is waited for, and an asset
+ *        that did not load is refused. Its handle would hand out the process-wide empty asset every reader of a
+ *        missing T shares, and a write there would change them all.
+ */
+template<typename T>
+auto find_loaded_asset(rtti::context& ctx, const std::string& key_or_uid, std::string& error) -> asset_handle<T>
+{
+    auto handle = find_existing_asset<T>(ctx, key_or_uid, error);
+    if(handle && asset_handle<T>::is_empty(handle.get()))
+    {
+        error = handle.id() + " did not load: it may still be compiling (assets_wait_ready_batch) or its file is damaged";
+        return {};
     }
     return handle;
 }

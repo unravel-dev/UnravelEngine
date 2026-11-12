@@ -259,11 +259,28 @@ auto read_kind_inputs(rtti::context& ctx,
     return true;
 }
 
+/// The material slots the item's model has: one for a built-in shape, the mesh's own for a mesh (one while its
+/// materials have not loaded).
+auto count_material_slots(rtti::context& ctx, const create_item& item) -> size_t
+{
+    if(item.asset_key.empty())
+    {
+        return 1;
+    }
+    return std::max<size_t>(1, defaults::make_model_from_mesh(ctx, item.asset_key).get_shared_materials().size());
+}
+
 auto read_material(rtti::context& ctx, const simdjson::dom::object& obj, create_item& item, std::string& error) -> bool
 {
+    const bool has_index = obj["material_index"].error() == simdjson::SUCCESS;
     std::string material_key;
     if(!read_string(obj, "material", material_key))
     {
+        if(has_index)
+        {
+            error = "material_index names the slot material goes into; pass material too";
+            return false;
+        }
         return true;
     }
     item.material = find_existing_asset<material>(ctx, to_asset_key(material_key), error);
@@ -272,9 +289,10 @@ auto read_material(rtti::context& ctx, const simdjson::dom::object& obj, create_
         return false;
     }
     const int64_t index = read_int64_or(obj, "material_index", 0);
-    if(index < 0 || index >= k_max_material_slots)
+    const auto slot_count = count_material_slots(ctx, item);
+    if(index < 0 || static_cast<size_t>(index) >= slot_count)
     {
-        error = fmt::format("material_index must be 0..{}", k_max_material_slots - 1);
+        error = fmt::format("material_index {} is outside the model's material slots 0..{}", index, slot_count - 1);
         return false;
     }
     item.material_index = static_cast<uint32_t>(index);
@@ -308,8 +326,8 @@ auto read_create_item(rtti::context& ctx,
         }
     }
     read_string(obj, "name", item.name);
-    read_transform_snapshot(obj, item.pose);
-    return read_transform_space(obj, item.is_local, error) && check_kind_fields(obj, *kind, error) &&
+    return read_transform_snapshot(obj, item.pose, error) && read_transform_space(obj, item.is_local, error) &&
+           check_kind_fields(obj, *kind, error) &&
            read_kind_inputs(ctx, obj, *kind, item, error) && read_material(ctx, obj, item, error);
 }
 

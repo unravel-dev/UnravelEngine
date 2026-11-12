@@ -120,13 +120,14 @@ void register_project_tools(mcp_tool_registry& registry)
         {.name = "project_open",
          .description =
              "Open an existing project by path, recent:true, or recent_index. Refuses a folder that is "
-             "not a project or was saved only by older engine builds unless upgrade:true, one a newer engine "
-             "build has opened unless downgrade:true, and unsaved edits in "
+             "not a project or was saved only by older engine builds unless upgrade:true - which writes project.cfg "
+             "and the project's folders (data, settings, ...) into that folder, as the start page does after asking - "
+             "one a newer engine build has opened unless downgrade:true, and unsaved edits in "
              "the open project unless force:true. Seeds a scene from preset when the project has none. "
              "scenes_not_opened says why the scene the project had open, or its startup scene, was refused (one a "
              "newer engine saved, say); a scene seeded from preset then takes its place.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute project folder"},"recent":{"type":"boolean","description":"Open the most recent project"},"recent_index":{"type":"integer","minimum":0},"preset":{"type":"string","enum":["low","medium","high","showcase"],"description":"Scene seeded when the project has none; default medium"},"upgrade":{"type":"boolean","default":false,"description":"Open a legacy folder without project.cfg, or a project saved by an older engine"},"downgrade":{"type":"boolean","default":false,"description":"Open a project saved by a newer engine"},"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits"}}})json",
+             R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute project folder"},"recent":{"type":"boolean","description":"Open the most recent project"},"recent_index":{"type":"integer","minimum":0},"preset":{"type":"string","enum":)json" + strings_to_json_array(get_scene_preset_names()) + R"json(,"description":"Scene seeded when the project has none; default medium"},"upgrade":{"type":"boolean","default":false,"description":"Open a legacy folder without project.cfg (project.cfg and the project folders are written into it), or a project saved by an older engine"},"downgrade":{"type":"boolean","default":false,"description":"Open a project saved by a newer engine"},"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -166,13 +167,13 @@ void register_project_tools(mcp_tool_registry& registry)
                      defaults::scene_preset preset{};
                      if(!defaults::parse_scene_preset(preset_str, preset))
                      {
-                         return {.text = "Invalid preset (use low|medium|high|showcase)", .is_error = true};
+                         return {.text = fmt::format("Invalid preset (use {})", fmt::join(get_scene_preset_names(), ", ")), .is_error = true};
                      }
 
                      auto& pm = ctx.get_cached<project_manager>();
                      fs::path project_path;
                      const auto& recent_projects = pm.get_editor_settings().projects.recent_projects;
-                     if(recent || path_arg == "recent")
+                     if(recent)
                      {
                          if(recent_projects.empty())
                          {
@@ -261,7 +262,7 @@ void register_project_tools(mcp_tool_registry& registry)
              "instructions. version_control git (the default) also writes a .gitignore file; it does "
              "not create a repository. Use project_open for a project that already exists.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute directory for the new project"},"preset":{"type":"string","enum":["low","medium","high","showcase"],"description":"Scene seeded into the new project; default medium"},"version_control":{"type":"string","enum":["none","git"],"description":"Version control the new project is set up for; default git"},"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits in the open project"}},"required":["path"]})json",
+             R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute directory for the new project"},"preset":{"type":"string","enum":)json" + strings_to_json_array(get_scene_preset_names()) + R"json(,"description":"Scene seeded into the new project; default medium"},"version_control":{"type":"string","enum":["none","git"],"description":"Version control the new project is set up for; default git"},"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits in the open project"}},"required":["path"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -297,7 +298,7 @@ void register_project_tools(mcp_tool_registry& registry)
                      defaults::scene_preset preset{};
                      if(!defaults::parse_scene_preset(preset_str, preset))
                      {
-                         return {.text = "Invalid preset (use low|medium|high|showcase)", .is_error = true};
+                         return {.text = fmt::format("Invalid preset (use {})", fmt::join(get_scene_preset_names(), ", ")), .is_error = true};
                      }
                      if(version_control_str != "none" && version_control_str != "git")
                      {
@@ -310,7 +311,10 @@ void register_project_tools(mcp_tool_registry& registry)
                      std::string create_error;
                      if(!pm.can_create_project(fs::path(path_arg), &create_error))
                      {
-                         return {.text = create_error + " (project_open opens an existing project)",
+                         // A folder with files in it may be a project already.
+                         fs::error_code ec;
+                         const bool has_files = fs::is_directory(fs::path(path_arg), ec) && !fs::is_empty(fs::path(path_arg), ec);
+                         return {.text = create_error + (has_files ? " (project_open opens an existing project)" : ""),
                                  .is_error = true};
                      }
                      if(!release_unsaved_work(ctx, force, error))
@@ -319,7 +323,7 @@ void register_project_tools(mcp_tool_registry& registry)
                      }
                      if(!pm.create_project(ctx, fs::path(path_arg), version_control, &create_error))
                      {
-                         return {.text = create_error + " (project_open opens an existing project)",
+                         return {.text = create_error,
                                  .is_error = true};
                      }
 
@@ -380,7 +384,8 @@ void register_project_tools(mcp_tool_registry& registry)
              return {.text = R"({"ok":true,"was_open":true})", .is_error = false};
          },
          .mutates_scene = true,
-         .effect = tool_effect::destructive});
+         .effect = tool_effect::destructive,
+         .idempotent = true});
 }
 
 } // namespace unravel::mcp

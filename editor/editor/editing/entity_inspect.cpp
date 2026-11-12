@@ -56,17 +56,20 @@ auto find_entity_by_id(scene& scn, const std::string& id) -> entt::handle
     {
         return {};
     }
+    // Every scene entity has a transform; the scene's own reserved entity has nothing and is no one's to edit.
     // A uuid that matches nothing is a stale id: it names no entity, whatever its leading digits read as.
     if(auto uuid = hpp::uuid::from_string(id))
     {
-        return scn.find_entity_by_uuid(*uuid);
+        auto found = scn.find_entity_by_uuid(*uuid);
+        return found && found.all_of<transform_component>() ? found : entt::handle{};
     }
     // Entities without an id component are addressed by their entt value, all digits.
     std::uint32_t value{};
     const auto* const end = id.data() + id.size();
     const auto [ptr, error] = std::from_chars(id.data(), end, value);
     const auto integral = static_cast<entt::entity>(value);
-    if(error != std::errc{} || ptr != end || !scn.registry->valid(integral))
+    if(error != std::errc{} || ptr != end || !scn.registry->valid(integral) ||
+       !scn.registry->all_of<transform_component>(integral))
     {
         return {};
     }
@@ -138,7 +141,8 @@ auto entity_has_script_type(entt::handle entity, const std::string& script_type_
         {
             continue;
         }
-        if(obj.pinned->get_object().get_type().get_fullname() == script_type_name)
+        const auto type = obj.pinned->get_object().get_type();
+        if(type.get_fullname() == script_type_name || type.get_name() == script_type_name)
         {
             return true;
         }

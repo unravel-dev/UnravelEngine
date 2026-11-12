@@ -71,18 +71,6 @@ constexpr float CONTENT_ITEM_SIZE_IN_FRAMES = 6.0f;
 
 fs::path pending_rename;
 
-auto get_new_file_simple(const fs::path& path, const std::string& name, const std::string& ext = "") -> fs::path
-{
-    int i = 0;
-    fs::error_code err;
-    while(fs::exists(path / (fmt::format("{}{}", name.c_str(), i) + ext), err))
-    {
-        ++i;
-    }
-
-    return path / (fmt::format("{}{}", name.c_str(), i) + ext);
-}
-
 auto process_drag_drop_source(const gfx::texture::ptr& preview, const fs::path& absolute_path) -> bool
 {
     if(ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
@@ -1075,20 +1063,9 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
 
         if(ImGui::MenuItem("C# Script"))
         {
-            const auto available =
-                get_new_file_simple(target_path, "NewScriptComponent", ex::get_format<script>());
-
-            // The template lives outside the compiled scripts tree (.cs.in)
-            // so it never ends up in the engine assembly. Instantiate it with
-            // the unique file stem as the class name: the file must be valid,
-            // collision-free C# from the moment it exists, because a
-            // recompile can trigger before the user finishes renaming.
-            auto new_script_template = fs::resolve_protocol("engine:/data/templates/TemplateComponent" +
-                                                            ex::get_format<script>() + ".in");
-
-            if(asset_actions::create_script_from_template(new_script_template, available))
+            if(const auto created = asset_actions::create_new_script(target_path, "NewScriptComponent"); !created.empty())
             {
-                pending_rename = available;
+                pending_rename = created;
             }
         }
 

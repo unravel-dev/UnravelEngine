@@ -142,4 +142,10 @@ private:
  */
 void get_documents_by_sort_order(entt::registry& registry, std::vector<entt::entity>& documents);
 
+/**
+ * @brief The document of @p entity when it takes input: active and enabled, with a context. Null too when script
+ * handlers run for another document destroyed @p entity or removed its document.
+ */
+auto find_input_document(entt::registry& registry, entt::entity entity) -> ui_document_component*;
+
 } // namespace unravel

@@ -44,7 +44,7 @@ void register_ui_tools(mcp_tool_registry& registry)
              "path (the extension is added) or folder + name. Edit them with ui_set_sources_batch; show a "
              "document with a UI Document component whose asset is the .rhtml key.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["document","style_sheet"]},"path":{"type":"string"},"folder":{"type":"string"},"name":{"type":"string"}},"required":["kind"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["document","style_sheet"]},"path":{"type":"string"},"folder":{"type":"string"},"name":{"type":"string"}},"required":["kind"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -98,20 +98,20 @@ void register_ui_tools(mcp_tool_registry& registry)
                  read_string(item, "path", path);
                  read_string(item, "folder", folder);
                  read_string(item, "name", name);
-                 std::string requested = path;
-                 if(requested.empty() && !folder.empty() && !name.empty())
+                 std::string requested_path = path;
+                 if(requested_path.empty() && !folder.empty() && !name.empty())
                  {
-                     requested = folder + "/" + name;
+                     requested_path = folder + "/" + name;
                  }
-                 if(requested.empty())
+                 if(requested_path.empty())
                  {
                      fail({}, "Provide path, or folder + name");
                      continue;
                  }
                  std::string key;
-                 if(!to_project_data_file_key(ctx, requested, {source_extension(kind)}, key, error))
+                 if(!to_project_data_file_key(ctx, requested_path, {source_extension(kind)}, key, error))
                  {
-                     fail(requested, error);
+                     fail(requested_path, error);
                      continue;
                  }
                  fs::error_code ec;
@@ -142,14 +142,15 @@ void register_ui_tools(mcp_tool_registry& registry)
                                          requested),
                      .is_error = ok_count == 0};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .writes_project_files = true});
 
     registry.add(
         {.name = "ui_get_sources_batch",
          .description = "Read UI source files (.rhtml documents, .rcss style sheets) by key - project "
                         "files or the engine's own under engine:/data/ui, such as the base rml.rcss.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"keys":{"type":"array","items":{"type":"string"}}},"required":["keys"]})json",
+             R"json({"type":"object","properties":{"keys":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["keys"]})json",
          .handler =
              [](rtti::context&, const simdjson::dom::object& args) -> tool_result
          {
@@ -160,6 +161,7 @@ void register_ui_tools(mcp_tool_registry& registry)
                  return {.text = error.empty() ? "Pass keys" : error, .is_error = true};
              }
              std::string results = "[";
+             size_t read_count = 0;
              bool first = true;
              for(const auto& key : keys)
              {
@@ -182,12 +184,13 @@ void register_ui_tools(mcp_tool_registry& registry)
                                             make_json_string(read_error));
                      continue;
                  }
+                 ++read_count;
                  results += fmt::format(R"({{"key":{},"ok":true,"source":{}}})",
                                         make_json_string(key),
                                         make_json_string(source));
              }
              results += "]";
-             return {.text = results, .is_error = false};
+             return {.text = results, .is_error = read_count == 0};
          },
          .mutates_scene = false,
          .effect = tool_effect::read_only});
@@ -199,7 +202,7 @@ void register_ui_tools(mcp_tool_registry& registry)
              "reimport and documents on screen reload in edit mode; during play a document keeps what it loaded, "
              "so stop play first. RCSS differs from CSS: see the ui skill.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string"},"source":{"type":"string"}},"required":["key","source"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"key":{"type":"string"},"source":{"type":"string"}},"required":["key","source"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -257,7 +260,8 @@ void register_ui_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .effect = tool_effect::destructive,
-         .idempotent = true});
+         .idempotent = true,
+         .writes_project_files = true});
 }
 
 } // namespace unravel::mcp

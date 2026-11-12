@@ -1,6 +1,7 @@
 #include "filesystem.h"
 #include <algorithm>
 #include <fstream>
+#include <shared_mutex>
 namespace fs
 {
 
@@ -218,14 +219,26 @@ stream_buffer<std::string> read_stream_buffer_str(std::istream& stream)
     return result;
 }
 
+namespace
+{
+/// Guards the protocol map: a project open adds protocols on the main thread while worker threads resolve paths.
+auto get_protocols_mutex() -> std::shared_mutex&
+{
+    static std::shared_mutex protocols_mutex;
+    return protocols_mutex;
+}
+} // namespace
+
 bool add_path_protocol(const std::string& protocol, const path& dir)
 {
     // Protocol matching is case insensitive, convert to lower case
     auto protocol_lower = detail::to_lower(protocol);
+    auto root = detail::normalize_protocol_root(dir).string();
 
+    std::unique_lock<std::shared_mutex> lock(get_protocols_mutex());
     auto& protocols = get_path_protocols();
     // Add to the list
-    protocols[protocol_lower] = detail::normalize_protocol_root(dir).string();
+    protocols[protocol_lower] = std::move(root);
 
     // Success!
     return true;
@@ -266,16 +279,19 @@ path resolve_protocol(const path& _path)
 
     fs::path relative_path = string_path.substr(pos + separator.size());
     // Matching path protocol in our list?
-    const auto& protocols = get_path_protocols();
-
-    auto it = protocols.find(root);
-
-    if(it == std::end(protocols))
+    std::string resolved_root;
     {
-        return _path;
+        std::shared_lock<std::shared_mutex> lock(get_protocols_mutex());
+        const auto& protocols = get_path_protocols();
+        auto it = protocols.find(root);
+        if(it == std::end(protocols))
+        {
+            return _path;
+        }
+        resolved_root = it->second;
     }
 
-    auto result = path(it->second);
+    auto result = path(resolved_root);
     if(!relative_path.empty())
     {
         result = result / relative_path.make_preferred();
@@ -296,6 +312,7 @@ bool has_known_protocol(const path& _path)
 
     const auto root = string_path.substr(0, pos);
 
+    std::shared_lock<std::shared_mutex> lock(get_protocols_mutex());
     const auto& protocols = get_path_protocols();
 
     // Matching path protocol in our list?
@@ -308,6 +325,7 @@ namespace
 /// matching root; `fallback` when no root matches.
 auto match_protocol_root(const std::string& string_path, const path& fallback) -> path
 {
+    std::shared_lock<std::shared_mutex> lock(get_protocols_mutex());
     const auto& protocols = get_path_protocols();
 
     const protocols_t::value_type* best_protocol{};

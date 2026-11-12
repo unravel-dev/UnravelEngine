@@ -1,5 +1,7 @@
 #include "ui_document_component.h"
 
+#include <engine/ecs/components/transform_component.h>
+
 #include <RmlUi/Core/ElementDocument.h>
 
 #include <algorithm>
@@ -60,6 +62,16 @@ auto ui_document_component::is_enabled() const -> bool
 void ui_document_component::set_enabled(bool enabled)
 {
     enabled_ = enabled;
+}
+
+auto find_input_document(entt::registry& registry, entt::entity entity) -> ui_document_component*
+{
+    if(!registry.valid(entity) || !registry.all_of<active_component>(entity))
+    {
+        return nullptr;
+    }
+    auto* ui_comp = registry.try_get<ui_document_component>(entity);
+    return ui_comp && ui_comp->context && ui_comp->is_enabled() ? ui_comp : nullptr;
 }
 
 void get_documents_by_sort_order(entt::registry& registry, std::vector<entt::entity>& documents)

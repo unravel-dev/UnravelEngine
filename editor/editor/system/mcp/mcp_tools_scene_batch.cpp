@@ -72,15 +72,17 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
         {.name = "scene_set_transforms_batch",
          .description =
              "Set transforms on many entities in one undoable action. Each item: entity_id, optional "
-             "space/position/rotation_euler/scale.",
+             "space/position/rotation_euler/scale." +
+             std::string(k_play_edit_note),
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"space":{"type":"string","enum":["world","local"]},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"scale":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["entity_id"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"space":{"type":"string","enum":["world","local"]},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"scale":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["entity_id"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              scene* scn = nullptr;
              std::string error;
-             if(!require_edit_scene(ctx, scn, error))
+             bool is_temporary = false;
+             if(!require_live_scene(ctx, scn, is_temporary, error))
              {
                  return {.text = error, .is_error = true};
              }
@@ -120,12 +122,10 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                  }
                  entry e{};
                  e.entity = entt::make_uhandle(entity);
-                 std::string space;
-                 if(read_string(obj, "space", space) && space == "local")
+                 if(!read_transform_space(obj, e.is_local, error) || !read_transform_snapshot(obj, e.pose, error))
                  {
-                     e.is_local = true;
+                     return {.text = entity_id + ": " + error, .is_error = true};
                  }
-                 read_transform_snapshot(obj, e.pose);
                  if(!e.pose.has_position && !e.pose.has_rotation && !e.pose.has_scale)
                  {
                      return {.text = "Item sets nothing (pass position, rotation_euler and/or scale): " + entity_id,
@@ -162,18 +162,20 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                      }
                  });
 
-             return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
+             return {.text = fmt::format(R"({{"ok":true,"count":{}{}}})", entries.size(), temporary_field(is_temporary)),
+                     .is_error = false};
          },
-         .mutates_scene = true});
+         .mutates_scene = true,
+         .idempotent = true});
 
     registry.add(
         {.name = "scene_set_model_materials_batch",
          .description =
              "Assign shared material assets to model slots in one undoable step. Each item: entity_id, "
-             "material (asset key or uid), optional index (default 0; below the model's slot count). "
+             "material (asset key or uid), optional material_index (default 0; below the model's slot count). "
              "Several items may target one entity's different slots.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"material":{"type":"string"},"index":{"type":"integer","minimum":0}},"required":["entity_id","material"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"material":{"type":"string"},"material_index":{"type":"integer","minimum":0}},"required":["entity_id","material"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -234,10 +236,10 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                      existing = entries.insert(entries.end(), entry{uhandle, current, current});
                  }
                  const auto slot_count = std::max<size_t>(1, existing->new_model.get_shared_materials().size());
-                 const int64_t index = read_int64_or(obj, "index", 0);
+                 const int64_t index = read_int64_or(obj, "material_index", 0);
                  if(index < 0 || static_cast<size_t>(index) >= slot_count)
                  {
-                     return {.text = fmt::format("index {} is outside {}'s material slots 0..{}",
+                     return {.text = fmt::format("material_index {} is outside {}'s material slots 0..{}",
                                                  index,
                                                  entity_id,
                                                  slot_count - 1),
@@ -277,15 +279,17 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
              return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
          },
          .mutates_scene = true,
-         .idempotent = true});
+         .idempotent = true,
+         .former_arguments = {{"items[].index", "material_index"}}});
 
     registry.add(
         {.name = "scene_get_bounds_batch",
          .description =
              "Get world-space AABB for one entity_id or many entity_ids (union). Optional depth "
-             "(-1 = full hierarchy). Allowed in play mode.",
+             "(-1 = full hierarchy). Entities with nothing to measure (no model, a mesh still loading) are listed in "
+             "unmeasured and left out; bounds is null when none had any. Allowed in play mode.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"entity_id":{"type":"string"},"entity_ids":{"type":"array","items":{"type":"string"}},"depth":{"type":"integer"}}})json",
+             R"json({"type":"object","properties":{"entity_id":{"type":"string"},"entity_ids":{"type":"array","minItems":1,"items":{"type":"string"}},"depth":{"type":"integer","minimum":-1,"description":"Levels of children to include; -1 (default) all"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -303,38 +307,43 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
              }
 
              const int64_t depth = read_int64_or(args, "depth", -1);
-
-             math::bbox bounds;
-             bool first = true;
+             // Entities with nothing to measure (no model, a mesh still loading) are listed, not sized up.
+             hpp::optional<math::bbox> bounds;
+             std::vector<std::string> unmeasured;
              for(auto entity : entities)
              {
-                 auto eb = defaults::calc_bounds_global(entity, static_cast<int>(depth));
-                 if(first)
+                 const auto measured = defaults::calc_measured_bounds_global(entity, static_cast<int>(depth));
+                 if(!measured)
                  {
-                     bounds = eb;
-                     first = false;
+                     unmeasured.push_back(entity_id_string(entity));
+                     continue;
                  }
-                 else
+                 if(!bounds)
                  {
-                     bounds.add_point(eb.min);
-                     bounds.add_point(eb.max);
+                     bounds = measured;
+                     continue;
                  }
+                 bounds->add_point(measured->min);
+                 bounds->add_point(measured->max);
              }
-             return {.text = fmt::format(R"({{"count":{},"bounds":{}}})", entities.size(), bbox_to_json(bounds)),
+             return {.text = fmt::format(R"({{"count":{},"bounds":{},"unmeasured":{}}})",
+                                         entities.size(),
+                                         bounds ? bbox_to_json(*bounds) : std::string("null"),
+                                         strings_to_json_array(unmeasured)),
                      .is_error = false};
          },
          .mutates_scene = false,
          .effect = tool_effect::read_only});
 
     registry.add(
-        {.name = "scene_find_entities_batch",
+        {.name = "scene_find_entities",
          .description =
-             "Find entities by name_contains and/or name_exact and/or component (a name from scene_list_components) "
-             "and/or type_name (C# full name). Filters AND together. parent_id searches only below "
-             "that entity. Returns up to limit (default 100, max 5000); truncated says more matched. "
+             "Find entities by name (name_contains, name_exact), tag, component (a name from scene_list_components), "
+             "type_name (C# full or short name), layer and active; the filters given AND together. parent_id searches "
+             "only below that entity. Returns up to limit (default 100, max 5000); truncated says more matched. "
              "Allowed in play mode.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"name_contains":{"type":"string"},"name_exact":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string"},"parent_id":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":5000}}})json",
+             R"json({"type":"object","properties":{"name_contains":{"type":"string","description":"Part of the name, any case"},"name_exact":{"type":"string"},"tag":{"type":"string","description":"The entity's tag, exactly"},"component":{"type":"string","description":"A name from scene_list_components"},"type_name":{"type":"string","description":"A C# script type, full or short name"},"layer":{"type":"string","description":"A layer name from settings_get group layer"},"active":{"type":"boolean","description":"Active in the hierarchy (true) or not (false)"},"parent_id":{"type":"string","description":"Search only below this entity"},"limit":{"type":"integer","minimum":1,"maximum":5000}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -345,12 +354,15 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
 
-             const auto filter = read_entity_filter(args);
+             auto filter = read_entity_filter(args);
              if(filter.is_empty())
              {
-                 return {.text =
-                             "Provide name_contains, name_exact, component, and/or type_name",
+                 return {.text = "Provide name_contains, name_exact, tag, component, type_name, layer and/or active",
                          .is_error = true};
+             }
+             if(!resolve_layer_filter(ctx, filter, error))
+             {
+                 return {.text = error, .is_error = true};
              }
 
              const auto limit = static_cast<size_t>(std::clamp<int64_t>(read_int64_or(args, "limit", 100), 1, 5000));
@@ -392,7 +404,8 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                      .is_error = false};
          },
          .mutates_scene = false,
-         .effect = tool_effect::read_only});
+         .effect = tool_effect::read_only,
+         .former_names = {"scene_find_entities_batch"}});
 
     registry.add(
         {.name = "scene_duplicate_entities_batch",
@@ -400,7 +413,7 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
              "Duplicate entities with everything under them, under the same parent and at the same pose, in one "
              "undo step. Returns created [{id, name, parent_id}].",
          .input_schema_json =
-             R"json({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}}},"required":["entity_ids"]})json",
+             R"json({"type":"object","properties":{"entity_ids":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["entity_ids"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {

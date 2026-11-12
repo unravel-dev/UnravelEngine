@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 
 namespace unravel
@@ -48,6 +49,18 @@ auto prepare_game_input(mcp_manager& mcp,
  * @brief Runs @p push on the main thread, where OS events must be queued. Worker thread only.
  */
 auto push_on_main(mcp_manager& mcp, const std::function<void()>& push) -> bool;
+
+/**
+ * @brief Posts a release or a hand-back to the main thread and waits a while for it: unlike push_on_main it is never
+ *        dropped, so a key or button pressed earlier is let go however late the main thread is. @p push owns what it
+ *        uses. Worker thread only.
+ * @return Whether it ran within the wait; when not, it still runs once the main thread is free.
+ */
+auto release_on_main(mcp_manager& mcp, std::function<void()> push) -> bool;
+
+/// Held for the length of one input tool call: synthesized sequences run one at a time, so one call's release or
+/// pointer hand-back cannot land in the middle of another's press.
+auto lock_input_sequence() -> std::unique_lock<std::mutex>;
 
 /**
  * @brief Moves the virtual pointer to @p game_position (pixels in the game's render target, the

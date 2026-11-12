@@ -1,4 +1,6 @@
 #include "mouse_action_map.hpp"
+
+#include <algorithm>
 #include <stdexcept>
 namespace input
 {
@@ -234,12 +236,24 @@ auto mouse_action_map::is_down(const action_id_t& action, const mouse& device) c
 
 
 //  ----------------------------------------------------------------------------
+namespace
+{
+/// Adds @p entry unless the action has it already: mapping a binding twice keeps one.
+void add_unique(std::vector<mouse_action_map::mouse_entry>& entries, const mouse_action_map::mouse_entry& entry)
+{
+    if(std::find(entries.begin(), entries.end(), entry) == entries.end())
+    {
+        entries.push_back(entry);
+    }
+}
+} // namespace
+
 void mouse_action_map::map(const action_id_t& action, mouse_button button)
 {
     mouse_entry entry = {};
     entry.type = input_type::button;
     entry.value = static_cast<uint32_t>(button);
-    entries_by_action_id_[action].push_back(entry);
+    add_unique(entries_by_action_id_[action], entry);
 }
 
 void mouse_action_map::map(const action_id_t& action,
@@ -250,7 +264,6 @@ void mouse_action_map::map(const action_id_t& action,
     entry.type = input_type::axis;
     entry.range = range;
     entry.value = static_cast<uint32_t>(axis);
-
-    entries_by_action_id_[action].push_back(entry);
+    add_unique(entries_by_action_id_[action], entry);
 }
 } // namespace input

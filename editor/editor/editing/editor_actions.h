@@ -188,6 +188,9 @@ struct editor_actions
     static auto migrate_prefabs(rtti::context& ctx, size_t* total_count = nullptr) -> size_t;
     static void recompile_ui(const std::string& group = "");
     static void recompile_scripts(const std::string& group = "");
+    /// Builds the project's C# scripts debuggable (true, slower) or optimized (false). Only a real change goes
+    /// through: it recompiles and reloads every script. Returns whether the mode changed.
+    static auto set_script_debug_mode(bool is_debug_mode) -> bool;
     static void recompile_meshes(const std::string& group = "");
     static void recompile_all(const std::string& group = "");
     static void generate_script_workspace();

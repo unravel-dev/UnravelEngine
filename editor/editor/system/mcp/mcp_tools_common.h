@@ -3,11 +3,14 @@
 #include "mcp_protocol.h"
 #include "mcp_tool_registry.h"
 
+#include <engine/defaults/defaults.h>
+#include <engine/ecs/components/layer_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/scene.h>
 #include <engine/play_mode.h>
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/editor_actions.h>
 #include <editor/editing/entity_inspect.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <editor/system/project_manager.h>
@@ -22,6 +25,8 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
+#include <limits>
 #include <logging/logging.h>
 #include <hpp/optional.hpp>
 #include <string>
@@ -66,6 +71,35 @@ inline auto require_edit_scene(rtti::context& ctx, scene*& out_scene, std::strin
     return require_active_scene(ctx, out_scene, error);
 }
 
+/// What the tools that also edit the running game say about it.
+constexpr const char* k_play_edit_note =
+    " While playing, it changes the running game: the result says temporary, edit_undo takes it back until play "
+    "stops, and play stopping drops it.";
+
+/**
+ * @brief The scene a tool edits, also while playing: then the running game's scene, where the edit lasts until
+ *        play stops.
+ * @param is_temporary Set when the edit goes to the running game.
+ */
+inline auto require_live_scene(rtti::context& ctx, scene*& out_scene, bool& is_temporary, std::string& error) -> bool
+{
+    const auto play = editor_actions::get_play_state(ctx);
+    if(play.is_splash)
+    {
+        error = "Play is showing the splash screen and the game scene is not loaded yet (editor_wait_for "
+                "{\"play_phase\":\"running\"})";
+        return false;
+    }
+    is_temporary = play.is_active;
+    return require_active_scene(ctx, out_scene, error);
+}
+
+/// The result field that marks an edit made to the running game, empty for one made to the scene.
+inline auto temporary_field(bool is_temporary) -> const char*
+{
+    return is_temporary ? R"(,"temporary":true)" : "";
+}
+
 inline auto read_string(const simdjson::dom::object& args, const char* key, std::string& out) -> bool
 {
     hpp::string_view view;
@@ -99,6 +133,13 @@ inline auto read_double(const simdjson::dom::object& args, const char* key, doub
     return true;
 }
 
+/// Whether `value` survives the cast to float: JSON has no infinity, but 1e39 becomes one.
+inline auto fits_float(double value) -> bool
+{
+    return std::abs(value) <= static_cast<double>(std::numeric_limits<float>::max());
+}
+
+/// Reads [x,y,z] of numbers that fit a float. False when absent or malformed.
 inline auto read_vec3(const simdjson::dom::object& args, const char* key, math::vec3& out) -> bool
 {
     simdjson::dom::array arr;
@@ -110,7 +151,7 @@ inline auto read_vec3(const simdjson::dom::object& args, const char* key, math::
     for(auto el : arr)
     {
         double v = 0.0;
-        if(el.get(v))
+        if(el.get(v) || !fits_float(v))
         {
             return false;
         }
@@ -127,19 +168,18 @@ inline auto read_vec3(const simdjson::dom::object& args, const char* key, math::
 inline auto parse_number(const simdjson::dom::element& value, float& out, std::string& error) -> bool
 {
     double d = 0.0;
-    if(!value.get(d))
+    if(value.get(d))
     {
-        out = static_cast<float>(d);
-        return true;
+        error = "Expected number";
+        return false;
     }
-    int64_t i = 0;
-    if(!value.get(i))
+    if(!fits_float(d))
     {
-        out = static_cast<float>(i);
-        return true;
+        error = fmt::format("{} is outside the range a float holds", d);
+        return false;
     }
-    error = "Expected number";
-    return false;
+    out = static_cast<float>(d);
+    return true;
 }
 
 inline auto parse_vec2(const simdjson::dom::element& value, math::vec2& out, std::string& error) -> bool
@@ -550,26 +590,10 @@ inline auto project_info_json(rtti::context& ctx) -> std::string
     return project_info_json(ctx.get_cached<project_manager>());
 }
 
+/// The play phase the editor reports (inactive, splash, active, running), as editor_actions says it.
 inline auto play_phase_from_ctx(rtti::context& ctx) -> std::string
 {
-    if(!ctx.has<play_mode>())
-    {
-        return "inactive";
-    }
-    auto& play = ctx.get_cached<play_mode>();
-    if(play.is_splash())
-    {
-        return "splash";
-    }
-    if(play.is_simulation_running())
-    {
-        return "running";
-    }
-    if(play.is_active())
-    {
-        return "active";
-    }
-    return "inactive";
+    return editor_actions::get_play_state(ctx).phase;
 }
 
 /// Number of live entities. The entity storage keeps released ids for reuse, so its size()
@@ -590,10 +614,11 @@ inline auto active_scene_status_json(rtti::context& ctx) -> std::string
     }
     const auto entity_count = count_live_entities(*scn->registry);
     const auto source = scn->source ? scn->source.id() : std::string{};
-    return fmt::format(R"({{"has_scene":true,"tag":{},"source":{},"entity_count":{},"play_phase":{}}})",
+    return fmt::format(R"({{"has_scene":true,"tag":{},"source":{},"entity_count":{},"unsaved_changes":{},"play_phase":{}}})",
                        make_json_string(scn->tag),
                        make_json_string(source),
                        entity_count,
+                       bool_to_json(em.has_unsaved_changes()),
                        make_json_string(phase));
 }
 
@@ -621,10 +646,6 @@ inline auto require_not_play_mode(rtti::context& ctx, std::string& error) -> boo
     }
     return true;
 }
-
-/// Refuses while a deploy runs: it reads the project's files and settings until it finishes.
-/// Defined with the deploy tools, which own the deploy state.
-auto require_not_deploying(rtti::context& ctx, std::string& error) -> bool;
 
 /// Whether prefab mode is on, which prefab it edits and whether it has unsaved edits. While it
 /// is on, the scene tools work on the prefab's contents.
@@ -665,6 +686,17 @@ inline auto release_unsaved_work(rtti::context& ctx, bool discard, std::string& 
     em.exit_prefab_mode(ctx, editing_manager::save_option::no);
     em.clear_unsaved_changes();
     return true;
+}
+
+/// The scene preset names scene_new_from_preset, project_open and project_create take, cheapest first.
+inline auto get_scene_preset_names() -> std::vector<std::string>
+{
+    std::vector<std::string> names;
+    for(const auto preset : defaults::get_scene_presets())
+    {
+        names.emplace_back(defaults::scene_preset_to_string(preset));
+    }
+    return names;
 }
 
 inline auto require_open_project(rtti::context& ctx, std::string& error) -> bool
@@ -717,11 +749,22 @@ struct transform_snapshot
     bool has_scale{false};
 };
 
-inline auto read_transform_snapshot(const simdjson::dom::object& obj, transform_snapshot& out) -> void
+/// Reads position, rotation_euler and scale; false with `error` when one is given but is not [x,y,z] of finite numbers.
+inline auto read_transform_snapshot(const simdjson::dom::object& obj, transform_snapshot& out, std::string& error) -> bool
 {
-    out.has_position = read_vec3(obj, "position", out.position);
-    out.has_rotation = read_vec3(obj, "rotation_euler", out.rotation_euler);
-    out.has_scale = read_vec3(obj, "scale", out.scale);
+    const auto read_channel = [&](const char* key, math::vec3& value, bool& is_set) -> bool
+    {
+        is_set = read_vec3(obj, key, value);
+        if(!is_set && obj[key].error() == simdjson::SUCCESS)
+        {
+            error = fmt::format("{} must be [x, y, z] of numbers that fit a float", key);
+            return false;
+        }
+        return true;
+    };
+    return read_channel("position", out.position, out.has_position) &&
+           read_channel("rotation_euler", out.rotation_euler, out.has_rotation) &&
+           read_channel("scale", out.scale, out.has_scale);
 }
 
 inline void apply_pose_direct(entt::handle entity, const transform_snapshot& pose, bool is_local)
@@ -903,26 +946,61 @@ struct entity_filter
     /// Case-insensitive part of the name.
     std::string name_contains;
     std::string name_exact;
+    /// The entity's tag, exactly (Scene.FindEntitiesByTag in scripts).
+    std::string tag;
     /// A component name from scene_list_components.
     std::string component;
     /// A C# script type, full or short name.
     std::string script_type;
+    /// A layer name from the project settings; layer_bit is its bit once resolved (resolve_layer_filter).
+    std::string layer;
+    int layer_bit{};
+    /// Active (true) or inactive (false) in the hierarchy.
+    hpp::optional<bool> active;
 
     auto is_empty() const -> bool
     {
-        return name_contains.empty() && name_exact.empty() && component.empty() && script_type.empty();
+        return name_contains.empty() && name_exact.empty() && tag.empty() && component.empty() && script_type.empty() &&
+               layer.empty() && !active;
     }
 };
 
-/// Reads name_contains, name_exact, component and type_name.
+/// Reads name_contains, name_exact, tag, component, type_name, layer and active.
 inline auto read_entity_filter(const simdjson::dom::object& args) -> entity_filter
 {
     entity_filter filter;
     read_string(args, "name_contains", filter.name_contains);
     read_string(args, "name_exact", filter.name_exact);
+    read_string(args, "tag", filter.tag);
     read_string(args, "component", filter.component);
     read_string(args, "type_name", filter.script_type);
+    read_string(args, "layer", filter.layer);
+    bool active = false;
+    if(read_bool(args, "active", active))
+    {
+        filter.active = active;
+    }
     return filter;
+}
+
+/// Finds the bit of the filter's layer among the project's layer names; false with @p error for a name it has not.
+inline auto resolve_layer_filter(rtti::context& ctx, entity_filter& filter, std::string& error) -> bool
+{
+    if(filter.layer.empty())
+    {
+        return true;
+    }
+    const auto& layers = ctx.get_cached<project_manager>().get_settings().layer.layers;
+    for(size_t i = 0; i < layers.size(); ++i)
+    {
+        if(layers[i] == filter.layer)
+        {
+            filter.layer_bit = 1 << i;
+            return true;
+        }
+    }
+    error = "No layer named " + filter.layer + " (settings_get group layer lists them)";
+    return false;
 }
 
 inline auto entity_matches_filter(entt::handle entity, const entity_filter& filter) -> bool
@@ -930,9 +1008,22 @@ inline auto entity_matches_filter(entt::handle entity, const entity_filter& filt
     const auto* tag = entity.try_get<tag_component>();
     const std::string name = tag != nullptr ? tag->name : std::string{};
     if((!filter.name_exact.empty() && name != filter.name_exact) ||
-       (!filter.name_contains.empty() && !contains_ci(name, filter.name_contains)))
+       (!filter.name_contains.empty() && !contains_ci(name, filter.name_contains)) ||
+       (!filter.tag.empty() && (tag == nullptr || tag->tag != filter.tag)))
     {
         return false;
+    }
+    if(filter.active && entity.get<transform_component>().is_active_global() != *filter.active)
+    {
+        return false;
+    }
+    if(filter.layer_bit != 0)
+    {
+        const auto* layers = entity.try_get<layer_component>();
+        if(layers == nullptr || (layers->layers.mask & filter.layer_bit) == 0)
+        {
+            return false;
+        }
     }
     if(!filter.component.empty() && !entity_has_component_pretty_name(entity, filter.component))
     {

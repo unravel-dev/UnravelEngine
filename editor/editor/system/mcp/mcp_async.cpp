@@ -1,5 +1,7 @@
 #include "mcp_async.h"
 
+#include <engine/events.h>
+
 #include "mcp_protocol.h"
 
 #include <editor/hub/panels/panel_base.h>
@@ -65,14 +67,30 @@ enum class blit_status
     failed,
 };
 
-/// Keeps a capture whose readback never landed alive for the rest of the session: its pixel buffer and blit texture
-/// may still be the target of a pending copy, and freeing them would hand the render thread freed memory.
-auto abandon_capture_state(std::shared_ptr<fbo_capture_state> state) -> void
+/// Frees a capture whose readback has not landed once it has: until the render frame it was issued for retires, its
+/// pixel buffer and blit texture may still be the target of the copy. Checked at each frame end on the main thread,
+/// and posted so it is set up however late the main thread is.
+auto abandon_capture_state(mcp_manager& mcp, rtti::context& ctx, std::shared_ptr<fbo_capture_state> state) -> void
 {
-    static std::mutex abandoned_mutex;
-    static std::vector<std::shared_ptr<fbo_capture_state>> abandoned;
-    std::lock_guard<std::mutex> lock(abandoned_mutex);
-    abandoned.push_back(std::move(state));
+    mcp.post_on_main(
+        [context = &ctx, state = std::move(state)]()
+        {
+            auto& frame_end = context->get_cached<events>().on_frame_end;
+            frame_end.connect(
+                [state, &frame_end](rtti::context&, const frame_times&)
+                {
+                    if(gfx::get_render_frame() < state->ready_frame)
+                    {
+                        return;
+                    }
+                    if(bgfx::isValid(state->blit_tex))
+                    {
+                        bgfx::destroy(state->blit_tex);
+                        state->blit_tex = BGFX_INVALID_HANDLE;
+                    }
+                    frame_end.disconnect_current();
+                });
+        });
 }
 
 /// Blits the framebuffer's color into a READ_BACK texture and requests its readback. Main thread only.
@@ -333,8 +351,8 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
         return {.text = state->error.empty() ? "Failed to request capture" : state->error, .is_error = true};
     }
 
-    // The READ_BACK buffer must outlive bgfx's copy (freeing it earlier crashed the editor on the render thread);
-    // the loop still returns as soon as the readback lands.
+    // The READ_BACK buffer must outlive bgfx's copy, which the render thread makes when the read's frame retires; the
+    // loop returns as soon as the readback lands.
     const auto deadline = std::chrono::steady_clock::now() + readback_guard_timeout;
     bool ready = false;
     while(std::chrono::steady_clock::now() < deadline)
@@ -350,28 +368,30 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
             ready = true;
             break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(32));
+        if(!mcp.sleep_unless_stopping(std::chrono::milliseconds(32)))
+        {
+            break;
+        }
     }
 
     if(!ready)
     {
         // The readback never landed: its buffer and blit texture may still be the target of a pending copy.
         const uint32_t ready_frame = state->ready_frame;
-        abandon_capture_state(std::move(state));
+        abandon_capture_state(mcp, ctx, std::move(state));
         return {.text = fmt::format("Timed out waiting for GPU readback (frame {})", ready_frame), .is_error = true};
     }
 
-    mcp.invoke_on_main(
-        [state]() -> bool
+    // Posted, never abandoned: the blit texture goes however late the main thread is.
+    mcp.post_on_main(
+        [state]()
         {
             if(bgfx::isValid(state->blit_tex))
             {
                 bgfx::destroy(state->blit_tex);
                 state->blit_tex = BGFX_INVALID_HANDLE;
             }
-            return true;
-        },
-        std::chrono::milliseconds(10000));
+        });
 
     uint16_t out_w = state->width;
     uint16_t out_h = state->height;

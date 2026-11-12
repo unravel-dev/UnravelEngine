@@ -1085,6 +1085,15 @@ auto defaults::scene_preset_to_string(scene_preset preset) -> const char*
     return "medium";
 }
 
+auto defaults::get_scene_presets() -> const std::vector<scene_preset>&
+{
+    static const std::vector<scene_preset> presets{scene_preset::low,
+                                                   scene_preset::medium,
+                                                   scene_preset::high,
+                                                   scene_preset::showcase};
+    return presets;
+}
+
 void defaults::create_default_3d_scene(rtti::context& ctx, scene& scn)
 {
     create_scene_from_preset(ctx, scn, scene_preset::medium);
@@ -1404,21 +1413,27 @@ void defaults::focus_camera_on_entities(entt::handle camera,
     }
 }
 
-auto defaults::calc_bounds_global(entt::handle entity, int depth) -> math::bbox
+auto defaults::calc_measured_bounds_global(entt::handle entity, int depth) -> hpp::optional<math::bbox>
 {
-    // 1) Get the "true" union of all models (possibly empty)
     math::bbox bounds;
     calc_bounds_global_impl(bounds, entity, depth);
-
-    // 2) If nothing was found, fall back *once* here to a unit cube
     if(!bounds.is_populated())
     {
-        const math::vec3 one{1, 1, 1};
-        const auto pos = entity.get<transform_component>().get_position_global();
-        bounds = math::bbox{pos - one, pos + one};
+        return std::nullopt;
     }
-
     return bounds;
+}
+
+auto defaults::calc_bounds_global(entt::handle entity, int depth) -> math::bbox
+{
+    // Nothing to measure: a cube around the entity, so callers framing it still have a size.
+    if(auto measured = calc_measured_bounds_global(entity, depth))
+    {
+        return *measured;
+    }
+    const math::vec3 one{1, 1, 1};
+    const auto pos = entity.get<transform_component>().get_position_global();
+    return math::bbox{pos - one, pos + one};
 }
 
 auto defaults::calc_bounds_sphere_global(entt::handle entity, bool use_bbox_diagonal) -> math::bsphere

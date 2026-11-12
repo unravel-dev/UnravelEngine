@@ -36,6 +36,24 @@ auto make_model_swap(entt::handle entity, const model& before, const model& afte
     return {put(after), put(before)};
 }
 
+/// The slot an item names (default 0), when the model has it; nullopt with `error` past its slots.
+auto read_slot_index(const simdjson::dom::object& item, const model& mdl, std::string& error) -> hpp::optional<uint32_t>
+{
+    const int64_t index = read_int64_or(item, "material_index", 0);
+    const auto slot_count = std::max<size_t>(1, mdl.get_shared_materials().size());
+    if(index < 0 || static_cast<uint64_t>(index) >= slot_count)
+    {
+        error = fmt::format("material_index {} is outside the model's material slots 0..{}", index, slot_count - 1);
+        return std::nullopt;
+    }
+    return static_cast<uint32_t>(index);
+}
+
+auto item_error_json(const std::string& entity_id, const std::string& error) -> std::string
+{
+    return fmt::format(R"({{"ok":false,"entity_id":{},"error":{}}})", make_json_string(entity_id), make_json_string(error));
+}
+
 } // namespace
 
 void register_material_tools(mcp_tool_registry& registry)
@@ -48,10 +66,10 @@ void register_material_tools(mcp_tool_registry& registry)
              "keeps following the shared material, and the .mat file and other renderers are untouched. "
              "shares_draw in the result is true while every override is a per-instance property (colors and "
              "numbers), so the entity still draws together with the shared material's other renderers. Each "
-             "item: entity_id, properties, optional index (slot, default 0). All or nothing per item; one undo "
+             "item: entity_id, properties, optional material_index (slot, default 0). All or nothing per item; one undo "
              "step.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"index":{"type":"integer","minimum":0},"properties":{"type":"object"}},"required":["entity_id","properties"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"material_index":{"type":"integer","minimum":0},"properties":{"type":"object"}},"required":["entity_id","properties"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -69,7 +87,7 @@ void register_material_tools(mcp_tool_registry& registry)
              struct item_t
              {
                  std::string entity_id;
-                 uint32_t index{0};
+                 std::string item_json;
                  std::string props_json;
              };
              std::vector<item_t> items;
@@ -85,15 +103,11 @@ void register_material_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "Item missing entity_id", .is_error = true};
                  }
-                 int64_t index_i = 0;
-                 if(!obj["index"].get(index_i) && index_i >= 0)
-                 {
-                     item.index = static_cast<uint32_t>(index_i);
-                 }
                  if(obj["properties"].error())
                  {
                      return {.text = "Item missing properties object", .is_error = true};
                  }
+                 item.item_json = std::string(simdjson::minify(el));
                  item.props_json = std::string(simdjson::minify(obj["properties"]));
                  items.push_back(std::move(item));
              }
@@ -137,20 +151,23 @@ void register_material_tools(mcp_tool_registry& registry)
                      continue;
                  }
                  const auto old_model = entity.get<model_component>().get_model();
-                 const auto slot_count = std::max<size_t>(1, old_model.get_shared_materials().size());
-                 if(item.index >= slot_count)
+                 simdjson::dom::parser item_parser;
+                 simdjson::dom::object item_object;
+                 if(item_parser.parse(item.item_json).get(item_object))
                  {
-                     results += fmt::format(R"({{"ok":false,"entity_id":{},"error":{}}})",
-                                            make_json_string(item.entity_id),
-                                            make_json_string(fmt::format("index {} is outside the model's material slots 0..{}",
-                                                                         item.index,
-                                                                         slot_count - 1)));
+                     results += item_error_json(item.entity_id, "Failed to read the item");
+                     continue;
+                 }
+                 const auto index = read_slot_index(item_object, old_model, error);
+                 if(!index)
+                 {
+                     results += item_error_json(item.entity_id, error);
                      continue;
                  }
                  // The instance is edited on a copy of the model: the swap below is one undo step, and a rejected
                  // edit changes nothing.
                  auto new_model = old_model;
-                 auto& instance = new_model.get_material_instance(item.index);
+                 auto& instance = new_model.get_material_instance(*index);
                  auto applied = apply_material_instance_properties(ctx, instance, properties);
                  if(!applied.ok)
                  {
@@ -160,12 +177,12 @@ void register_material_tools(mcp_tool_registry& registry)
                      continue;
                  }
                  const bool shares_draw = instance.shares_draw();
-                 const auto swap = make_model_swap(entity, old_model, new_model, item.index);
+                 const auto swap = make_model_swap(entity, old_model, new_model, *index);
                  em.do_action("MCP Set Model Material Instance", swap.first, swap.second);
                  ++ok_count;
-                 results += fmt::format(R"({{"ok":true,"entity_id":{},"index":{},"shares_draw":{},"result":{}}})",
+                 results += fmt::format(R"({{"ok":true,"entity_id":{},"material_index":{},"shares_draw":{},"result":{}}})",
                                         make_json_string(entity_id_string(entity)),
-                                        item.index,
+                                        *index,
                                         shares_draw ? "true" : "false",
                                         apply_result_to_json(applied));
              }
@@ -173,15 +190,17 @@ void register_material_tools(mcp_tool_registry& registry)
              return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{}}})", results, ok_count, items.size()),
                      .is_error = ok_count == 0};
          },
-         .mutates_scene = true});
+         .mutates_scene = true,
+         .former_arguments = {{"items[].index", "material_index"}}});
 
     registry.add(
         {.name = "scene_clear_model_material_instances_batch",
          .description =
              "Revert every override of model slots' material instances (batch), so the slots draw exactly like "
-             "their shared materials again.",
+             "their shared materials again. Each item: entity_id, optional material_index (slot, default 0). cleared is false "
+             "for a slot that had no overrides.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"index":{"type":"integer","minimum":0}},"required":["entity_id"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"material_index":{"type":"integer","minimum":0}},"required":["entity_id"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -214,12 +233,6 @@ void register_material_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "Item missing entity_id", .is_error = true};
                  }
-                 uint32_t index = 0;
-                 int64_t index_i = 0;
-                 if(!obj["index"].get(index_i) && index_i >= 0)
-                 {
-                     index = static_cast<uint32_t>(index_i);
-                 }
                  if(!first)
                  {
                      results += ",";
@@ -235,21 +248,33 @@ void register_material_tools(mcp_tool_registry& registry)
                      continue;
                  }
                  const auto old_model = entity.get<model_component>().get_model();
-                 auto new_model = old_model;
-                 new_model.get_material_instance(index).revert_all();
-                 const auto swap = make_model_swap(entity, old_model, new_model, index);
-                 em.do_action("MCP Clear Model Material Instance", swap.first, swap.second);
+                 const auto index = read_slot_index(obj, old_model, error);
+                 if(!index)
+                 {
+                     results += item_error_json(entity_id, error);
+                     continue;
+                 }
+                 const bool had_overrides = old_model.get_material_instance(*index).has_overrides();
+                 if(had_overrides)
+                 {
+                     auto new_model = old_model;
+                     new_model.get_material_instance(*index).revert_all();
+                     const auto swap = make_model_swap(entity, old_model, new_model, *index);
+                     em.do_action("MCP Clear Model Material Instance", swap.first, swap.second);
+                 }
                  ++ok_count;
-                 results += fmt::format(R"({{"ok":true,"entity_id":{},"index":{},"cleared":true}})",
+                 results += fmt::format(R"({{"ok":true,"entity_id":{},"material_index":{},"cleared":{}}})",
                                         make_json_string(entity_id_string(entity)),
-                                        index);
+                                        *index,
+                                        bool_to_json(had_overrides));
              }
              results += "]";
              return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{}}})", results, ok_count, requested),
                      .is_error = ok_count == 0 && requested > 0};
          },
          .mutates_scene = true,
-         .idempotent = true});
+         .idempotent = true,
+         .former_arguments = {{"items[].index", "material_index"}}});
 }
 
 } // namespace unravel::mcp

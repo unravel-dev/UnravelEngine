@@ -207,7 +207,7 @@ is imported again):
    "properties": {"retarget_pose": "t_pose", "retarget_pose_offsets": [
      {"role": "left_upper_arm", "rotation": [0, 0, 25]},
      {"role": "right_upper_arm", "rotation": [0, 0, 25]}]}}]}}
-{"name": "assets_set_import_settings", "arguments": {"wait_ms": 120000, "items": [
+{"name": "assets_set_import_settings_batch", "arguments": {"wait_ms": 120000, "items": [
   {"key": "app:/data/Characters/Pack/Pack.glb", "settings": {"rig": {"humanoid_overrides": [
     {"role": "left_hand", "bone": "hand.l"}, {"role": "right_hand", "bone": "hand.r"}]}}}]}}
 ```
@@ -223,8 +223,8 @@ Check the roles on both sides; every role the clip uses should exist on the char
 Read and change a clip's root motion settings (the clip is imported again with them):
 
 ```json
-{"name": "assets_get_import_settings", "arguments": {"keys": ["app:/data/Characters/Pack/Pack_Walk.anim"]}}
-{"name": "assets_set_import_settings", "arguments": {"items": [
+{"name": "assets_get_import_settings_batch", "arguments": {"keys": ["app:/data/Characters/Pack/Pack_Walk.anim"]}}
+{"name": "assets_set_import_settings_batch", "arguments": {"items": [
   {"key": "app:/data/Characters/Pack/Pack_Walk.anim", "settings": {"root_motion": {"keep_position_xz": false}}}]}}
 ```
 

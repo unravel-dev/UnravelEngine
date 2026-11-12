@@ -57,7 +57,8 @@ auto add_path_protocol(const std::string& protocol, const path& directory) -> bo
 //-----------------------------------------------------------------------------
 //  Name : get_path_protocols ()
 /// <summary>
-/// Returns the registered path protocols.
+/// Returns the registered path protocols. Unguarded: add_path_protocol and the path lookups lock the map against
+/// each other, a caller of this does not (tests, while nothing else runs).
 /// </summary>
 //-----------------------------------------------------------------------------
 auto get_path_protocols() -> protocols_t&;

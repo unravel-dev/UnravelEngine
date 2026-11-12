@@ -683,11 +683,13 @@ void draw_toolbar_controls(rtti::context& ctx, editing_manager& em, state& menu_
         em.show_gizmos = !em.show_gizmos;
     }
     draw_settings_dropdown(ctx, em, menu_state, popup_max_height);
-    // Only a change made here becomes the project's setting; what a tool changes for a capture ends with the session.
+    // Only a change made here becomes the project's setting, field by field; what a tool changed for a capture ends
+    // with the session.
     const gizmo_setup setup = em.get_gizmo_setup();
     if(setup != setup_before)
     {
-        ctx.get_cached<project_manager>().get_project_editor_settings().gizmos = setup;
+        auto& saved = ctx.get_cached<project_manager>().get_project_editor_settings().gizmos;
+        saved = merge_gizmo_change(saved, setup_before, setup);
     }
 }
 

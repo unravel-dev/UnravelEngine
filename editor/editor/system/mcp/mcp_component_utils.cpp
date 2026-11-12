@@ -566,6 +566,13 @@ auto is_exposed_field(const dotnet::field& field) -> bool
            !field.has_attribute("HideAttribute");
 }
 
+/// A script the tools count and index: loaded and not about to be destroyed. Summaries, property bags,
+/// get / set and remove all count these, so a script_index means the same script in each.
+auto is_counted_script(const script_component::script_object& script) -> bool
+{
+    return script.pinned && script.pinned->get_object().valid() && !script.is_marked_for_destroy();
+}
+
 /// The index-th of the entity's scripts of exactly `type` - counted as scripts_summary_json and the
 /// remove action count them - or an empty one with `error` saying how many there are.
 auto find_selected_script(const script_component& comp,
@@ -576,7 +583,7 @@ auto find_selected_script(const script_component& comp,
     size_t seen = 0;
     for(const auto& candidate : comp.get_script_components())
     {
-        if(!candidate.pinned || candidate.is_marked_for_destroy() || !candidate.pinned->get_object().get_type().equals(type))
+        if(!is_counted_script(candidate) || !candidate.pinned->get_object().get_type().equals(type))
         {
             continue;
         }
@@ -991,7 +998,7 @@ auto entity_supported_component_properties_json(rtti::context& ctx,
         std::map<std::string, size_t> type_counts;
         for(const auto& script : scripts->get_script_components())
         {
-            if(!script.pinned || !script.pinned->get_object().valid())
+            if(!is_counted_script(script))
             {
                 continue;
             }
@@ -1039,18 +1046,25 @@ auto find_script_position(entt::handle entity, const script_selector& script) ->
         return std::nullopt;
     }
     const auto& list = scripts->get_script_components();
+    // A short name picks the type of the first script it matches; the index then counts that type only,
+    // as the summaries number scripts per full type.
+    std::string full_name;
     size_t seen = 0;
     for(size_t i = 0; i < list.size(); ++i)
     {
-        if(!list[i].pinned || !list[i].pinned->get_object().valid())
+        if(!is_counted_script(list[i]))
         {
             continue;
         }
         const auto type = list[i].pinned->get_object().get_type();
-        if(type.get_fullname() != script.type && type.get_name() != script.type)
+        const bool matches = full_name.empty()
+                                 ? type.get_fullname() == script.type || type.get_name() == script.type
+                                 : type.get_fullname() == full_name;
+        if(!matches)
         {
             continue;
         }
+        full_name = type.get_fullname();
         if(seen++ == script.index)
         {
             return script_position{i, type.get_fullname()};
@@ -1082,7 +1096,7 @@ auto scripts_summary_json(entt::handle entity) -> std::string
     std::map<std::string, size_t> type_counts;
     for(const auto& script : scripts->get_script_components())
     {
-        if(!script.pinned || !script.pinned->get_object().valid())
+        if(!is_counted_script(script))
         {
             continue;
         }

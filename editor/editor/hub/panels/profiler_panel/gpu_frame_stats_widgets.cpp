@@ -643,6 +643,12 @@ void draw_view_stats(const bgfx::Stats* stats, const widget_layout& layout, cons
 
 } // namespace
 
+void set_gpu_view_timing(bool& enabled, bool enable)
+{
+    enabled = enable;
+    bgfx::setDebug(enable ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
+}
+
 void draw_gpu_submit_profiler_ui(const bgfx::Stats* stats, bool* enable_profiler)
 {
     if(enable_profiler == nullptr)
@@ -656,8 +662,7 @@ void draw_gpu_submit_profiler_ui(const bgfx::Stats* stats, bool* enable_profiler
                                  *enable_profiler,
                                  "Record the CPU submit and GPU execute time of every view."))
         {
-            *enable_profiler = !*enable_profiler;
-            bgfx::setDebug(*enable_profiler ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
+            set_gpu_view_timing(*enable_profiler, !*enable_profiler);
         }
     }
     panel_toolbar::end_strip();

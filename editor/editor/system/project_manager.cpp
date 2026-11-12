@@ -439,16 +439,21 @@ void project_manager::load_deploy_settings()
     }
 }
 
-void project_manager::save_deploy_settings()
+auto project_manager::save_deploy_settings() -> bool
 {
     // Saving would drop the settings from before profiles the file still holds without a backup.
     if(profiles_.has_unkept_legacy_settings())
     {
         APPLOG_WARNING("The deploy settings are not saved: deploy/deploy.cfg holds settings from before profiles that "
                        "could not be backed up. Copy the file aside, then open the project again.");
-        return;
+        return false;
     }
-    asset_writer::atomic_save_to_file(fs::resolve_protocol(app_deploy_cfg).string(), deploy_settings_);
+    if(!asset_writer::atomic_save_to_file(fs::resolve_protocol(app_deploy_cfg).string(), deploy_settings_))
+    {
+        APPLOG_WARNING("The deploy settings could not be written to deploy/deploy.cfg.");
+        return false;
+    }
+    return true;
 }
 
 void project_manager::load_project_editor_settings()

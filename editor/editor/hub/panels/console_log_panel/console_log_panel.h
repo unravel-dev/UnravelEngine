@@ -1,4 +1,6 @@
 #pragma once
+
+#include <deque>
 #include "../panel_base.h"
 #include <editor/imgui/integration/imgui.h>
 
@@ -74,7 +76,8 @@ public:
 
     /**
      * @brief Snapshot recent log entries (thread-safe). Newest-last order.
-     * Filters by min_level (inclusive) and optional after_id exclusive cursor.
+     * Filters by min_level (inclusive) and optional after_id exclusive cursor. Reads the log history,
+     * which clearing the console (by hand, on play, on recompile) leaves whole.
      */
     auto snapshot_logs(level::level_enum min_level, size_t max_count, uint64_t after_id = 0) const
         -> std::vector<log_snapshot_entry>;
@@ -121,6 +124,10 @@ private:
     mutable std::recursive_mutex entries_mutex_;
     ///
     entries_t entries_;
+    /// The newest MAX_HISTORY_ENTRIES entries whatever the console cleared since, for readers that are
+    /// not the panel (snapshot_logs): a play start or a recompile must not hide the lines before it.
+    std::deque<log_snapshot_entry> history_;
+    static constexpr size_t MAX_HISTORY_ENTRIES = 4096;
     ///
     std::atomic<bool> has_new_entries_ = {false};
 
