@@ -737,116 +737,6 @@ auto defaults::deinit(rtti::context& ctx) -> bool
 auto defaults::init_assets(rtti::context& ctx) -> bool
 {
     auto& manager = ctx.get_cached<asset_manager>();
-    {
-        const auto id = "engine:/embedded/cube";
-        auto instance = std::make_shared<mesh>();
-        instance->create_cube(gfx::mesh_vertex::get_layout(), 1.0f, 1.0f, 1.0f, 1, 1, 1);
-        manager.get_asset_from_instance(id, instance);
-    }
-    {
-        const auto id = "engine:/embedded/cube_rounded";
-        auto instance = std::make_shared<mesh>();
-        instance->create_rounded_cube(gfx::mesh_vertex::get_layout(), 1.0f, 1.0f, 1.0f, 1, 1, 1);
-        manager.get_asset_from_instance(id, instance);
-    }
-    {
-        const auto id = "engine:/embedded/sphere";
-        auto instance = std::make_shared<mesh>();
-        instance->create_sphere(gfx::mesh_vertex::get_layout(), 0.5f, 20, 20);
-        manager.get_asset_from_instance(id, instance);
-    }
-    {
-        const auto id = "engine:/embedded/plane";
-        auto instance = std::make_shared<mesh>();
-        instance->create_plane(gfx::mesh_vertex::get_layout(), 10.0f, 10.0f, 1, 1);
-        manager.get_asset_from_instance(id, instance);
-    }
-    {
-        const auto id = "engine:/embedded/cylinder";
-        auto instance = std::make_shared<mesh>();
-        instance->create_cylinder(gfx::mesh_vertex::get_layout(), 0.5f, 2.0f, 20, 20);
-        manager.get_asset_from_instance(id, instance);
-    }
-    {
-        const auto id = "engine:/embedded/capsule_2m";
-        auto instance = std::make_shared<mesh>();
-        instance->create_capsule(gfx::mesh_vertex::get_layout(), 0.5f, 2.0f, 20, 20);
-        manager.get_asset_from_instance(id, instance);
-    }
-    {
-        const auto id = "engine:/embedded/capsule_1m";
-        auto instance = std::make_shared<mesh>();
-        instance->create_capsule(gfx::mesh_vertex::get_layout(), 0.5f, 1.0f, 20, 20);
-        manager.get_asset_from_instance(id, instance);
-    }
-    {
-        const auto id = "engine:/embedded/cone";
-        auto instance = std::make_shared<mesh>();
-        instance->create_cone(gfx::mesh_vertex::get_layout(), 0.5f, 2, 20, 20);
-        manager.get_asset_from_instance(id, instance);
-    }
-    {
-        const auto id = "engine:/embedded/torus";
-        auto instance = std::make_shared<mesh>();
-        instance->create_torus(gfx::mesh_vertex::get_layout(), 1.0f, 0.5f, 20, 20);
-        manager.get_asset_from_instance(id, instance);
-    }
-    {
-        const auto id = "engine:/embedded/terrain_test";
-        constexpr uint32_t sx = 64;
-        constexpr uint32_t sz = 64;
-        constexpr float k_pi = 3.14159265f;
-        std::vector<float> heights(static_cast<size_t>(sx + 1) * static_cast<size_t>(sz + 1));
-        for(uint32_t z = 0; z <= sz; ++z)
-        {
-            const float tz = static_cast<float>(z) / static_cast<float>(sz);
-            for(uint32_t x = 0; x <= sx; ++x)
-            {
-                const float tx = static_cast<float>(x) / static_cast<float>(sx);
-                const float nx = tx * 2.0f - 1.0f;
-                const float nz = tz * 2.0f - 1.0f;
-                heights[static_cast<size_t>(z) * static_cast<size_t>(sx + 1) + static_cast<size_t>(x)] =
-                    std::sin(nx * k_pi * 2.0f) * std::cos(nz * k_pi * 2.0f) * 0.5f + 0.5f;
-            }
-        }
-        auto instance = std::make_shared<mesh>();
-        instance->create_heightfield(gfx::mesh_vertex::get_layout(),
-                                     heights,
-                                     sx,
-                                     sz,
-                                     25.0f,
-                                     25.0f,
-                                     4.0f,
-                                     true);
-        manager.get_asset_from_instance(id, instance);
-    }
-    {
-        const auto id = "engine:/embedded/teapot";
-        auto instance = std::make_shared<mesh>();
-        instance->create_teapot(gfx::mesh_vertex::get_layout());
-        manager.get_asset_from_instance(id, instance);
-    }
-    {
-        const auto id = "engine:/embedded/icosahedron";
-        auto instance = std::make_shared<mesh>();
-        instance->create_icosahedron(gfx::mesh_vertex::get_layout());
-        manager.get_asset_from_instance(id, instance);
-    }
-    {
-        const auto id = "engine:/embedded/dodecahedron";
-        auto instance = std::make_shared<mesh>();
-        instance->create_dodecahedron(gfx::mesh_vertex::get_layout());
-        manager.get_asset_from_instance(id, instance);
-    }
-
-    for(int i = 0; i < 20; ++i)
-    {
-        const auto id = std::string("engine:/embedded/icosphere") + std::to_string(i);
-        auto instance = std::make_shared<mesh>();
-        instance->create_icosphere(gfx::mesh_vertex::get_layout(), i);
-        manager.get_asset_from_instance(id, instance);
-    }
-
     // The engine's other fonts load when a game uses them, and a deploy ships only those (engine_asset_keys.h).
     font::default_regular() = manager.get_asset<font>(TEXT_DEFAULT_FONT_KEY);
 
@@ -891,31 +781,35 @@ void defaults::focus_camera_on_bounds(entt::handle camera, const math::bbox& bou
 }
 namespace
 {
-auto get_embedded_mesh_key(const std::string& name) -> std::string
+/// The built-in shape the editor's Terrain entry creates.
+constexpr const char* TERRAIN_MESH_NAME = "terrain_test";
+
+/// The key of the built-in shape a menu or a tool calls `name` ("Capsule 2m" -> the file capsule_2m.emesh).
+auto get_built_in_mesh_key_of_name(const std::string& name) -> std::string
 {
-    return "engine:/embedded/" + string_utils::replace(string_utils::to_lower(name), " ", "_");
+    return get_built_in_mesh_key(string_utils::replace(string_utils::to_lower(name), " ", "_"));
 }
 } // namespace
 
-auto defaults::has_embedded_mesh(rtti::context& ctx, const std::string& name) -> bool
+auto defaults::has_built_in_mesh(rtti::context& ctx, const std::string& name) -> bool
 {
-    return static_cast<bool>(ctx.get_cached<asset_manager>().find_asset<mesh>(get_embedded_mesh_key(name)));
+    const auto& am = ctx.get_cached<asset_manager>();
+    return !am.get_metadata_for_key(get_built_in_mesh_key_of_name(name)).location.empty();
 }
 
-auto defaults::create_embedded_mesh_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle
+auto defaults::create_built_in_mesh_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle
 {
-    if(!has_embedded_mesh(ctx, name))
+    if(!has_built_in_mesh(ctx, name))
     {
         return {};
     }
     auto& am = ctx.get_cached<asset_manager>();
-    const auto id = get_embedded_mesh_key(name);
+    const auto id = get_built_in_mesh_key_of_name(name);
     auto asset = am.get_asset<mesh>(id);
-    auto mesh_asset = asset.get();
-    auto bounds = mesh_asset->get_bounds();
-    math::vec3 position = {0.0f, bounds.get_extents().y, 0.0f};
-
-    return create_mesh_entity_at(ctx, scn, id, position);
+    // A shape whose compiled file is missing still gets its entity, at the origin.
+    const auto mesh_asset = asset.get();
+    const float lift = mesh_asset ? mesh_asset->get_bounds().get_extents().y : 0.0f;
+    return create_mesh_entity_at(ctx, scn, id, math::vec3{0.0f, lift, 0.0f});
 }
 
 auto defaults::create_prefab_at(rtti::context& ctx, scene& scn, const std::string& key) -> entt::handle
@@ -1015,8 +909,7 @@ auto defaults::create_mesh_entity_at(rtti::context& ctx,
 
 auto defaults::create_terrain(rtti::context& ctx, scene& scn, math::vec3 pos) -> entt::handle
 {
-    static constexpr const char* terrain_mesh_id = "engine:/embedded/terrain_test";
-    auto object = create_mesh_entity_at(ctx, scn, terrain_mesh_id, pos);
+    auto object = create_mesh_entity_at(ctx, scn, get_built_in_mesh_key(TERRAIN_MESH_NAME), pos);
     if(object)
     {
         object.get<tag_component>().name = "Terrain";
@@ -1396,7 +1289,7 @@ auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
     auto camera = create_default_3d_scene_for_preview(ctx, scn, size);
 
     
-    auto object = create_embedded_mesh_entity(ctx, scn, "Sphere");
+    auto object = create_built_in_mesh_entity(ctx, scn, "Sphere");
     auto& model_comp = object.get<model_component>();
     auto model = model_comp.get_model();
     model.set_shared_material(asset, 0);

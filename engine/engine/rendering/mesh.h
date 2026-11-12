@@ -275,6 +275,16 @@ protected:
     int32_t maximum_blend_index_;
 };
 
+/// Whether a mesh built in code by a mesh::create_* call also gets the distance field global illumination
+/// represents it by. A shape that is an asset (an .emesh file) carries the field its compile baked instead.
+enum class primitive_sdf : uint8_t
+{
+    /// No field: the mesh renders, and neither occludes nor bounces indirect light.
+    none,
+    /// A field baked before the call returns (mesh::generate_sdf), on the calling thread and the thread pool.
+    baked,
+};
+
 /**
  * @brief Main class representing a 3D mesh with support for different LODs, submeshes, and skinning.
  */
@@ -506,6 +516,10 @@ public:
         bool are_cards_disabled = false;
         ///< The LOD the cards are built from, compiled and at runtime (clamped to the generated levels).
         uint32_t cards_lod_index = 1;
+        ///< The triangles global illumination represents the mesh by when they differ from the rendered ones (a
+        ///< shape's plane: its upward sheet, see mesh::create_plane_gi_geometry); without positions otherwise. The
+        ///< compiler bakes the field and the cards from them, and the mesh keeps them for cards built at runtime.
+        sdf_source_geometry gi_source_geometry;
     };
 
     /**
@@ -593,6 +607,7 @@ public:
      * @param width_segments The number of segments along the width.
      * @param height_segments The number of segments along the height.
      * @param hardware_copy Whether to use hardware copy.
+     * @param sdf Whether the mesh also gets its distance field (see primitive_sdf).
      * @return true If the plane was successfully created.
      * @return false If creating the plane failed.
      */
@@ -601,7 +616,8 @@ public:
                       float height,
                       uint32_t width_segments,
                       uint32_t height_segments,
-                      bool hardware_copy = true) -> bool;
+                      bool hardware_copy = true,
+                      primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     /**
      * @brief The triangles global illumination represents a @ref create_plane plane by: its upward sheet alone.
@@ -628,7 +644,8 @@ public:
                           float half_extent_x,
                           float half_extent_z,
                           float height_scale,
-                          bool hardware_copy = true) -> bool;
+                          bool hardware_copy = true,
+                          primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     /**
      * @brief Creates a cube geometry.
@@ -641,6 +658,7 @@ public:
      * @param height_segments The number of segments along the height.
      * @param depth_segments The number of segments along the depth.
      * @param hardware_copy Whether to use hardware copy.
+     * @param sdf Whether the mesh also gets its distance field (see primitive_sdf).
      * @return true If the cube was successfully created.
      * @return false If creating the cube failed.
      */
@@ -651,7 +669,8 @@ public:
                      uint32_t width_segments,
                      uint32_t height_segments,
                      uint32_t depth_segments,
-                     bool hardware_copy = true) -> bool;
+                     bool hardware_copy = true,
+                     primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     auto create_rounded_cube(const bgfx::VertexLayout& format,
                     float width,
@@ -660,7 +679,8 @@ public:
                     uint32_t width_segments,
                     uint32_t height_segments,
                     uint32_t depth_segments,
-                    bool hardware_copy = true) -> bool;
+                    bool hardware_copy = true,
+                    primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     /**
      * @brief Creates a sphere geometry.
@@ -670,6 +690,7 @@ public:
      * @param stacks The number of stacks.
      * @param slices The number of slices.
      * @param hardware_copy Whether to use hardware copy.
+     * @param sdf Whether the mesh also gets its distance field (see primitive_sdf).
      * @return true If the sphere was successfully created.
      * @return false If creating the sphere failed.
      */
@@ -677,7 +698,8 @@ public:
                        float radius,
                        uint32_t stacks,
                        uint32_t slices,
-                       bool hardware_copy = true) -> bool;
+                       bool hardware_copy = true,
+                       primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     /**
      * @brief Creates a cylinder geometry.
@@ -688,6 +710,7 @@ public:
      * @param stacks The number of stacks.
      * @param slices The number of slices.
      * @param hardware_copy Whether to use hardware copy.
+     * @param sdf Whether the mesh also gets its distance field (see primitive_sdf).
      * @return true If the cylinder was successfully created.
      * @return false If creating the cylinder failed.
      */
@@ -696,7 +719,8 @@ public:
                          float height,
                          uint32_t stacks,
                          uint32_t slices,
-                         bool hardware_copy = true) -> bool;
+                         bool hardware_copy = true,
+                         primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     /**
      * @brief Creates a capsule geometry.
@@ -707,6 +731,7 @@ public:
      * @param stacks The number of stacks.
      * @param slices The number of slices.
      * @param hardware_copy Whether to use hardware copy.
+     * @param sdf Whether the mesh also gets its distance field (see primitive_sdf).
      * @return true If the capsule was successfully created.
      * @return false If creating the capsule failed.
      */
@@ -715,7 +740,8 @@ public:
                         float height,
                         uint32_t stacks,
                         uint32_t slices,
-                        bool hardware_copy = true) -> bool;
+                        bool hardware_copy = true,
+                        primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     /**
      * @brief Creates a cone geometry.
@@ -726,6 +752,7 @@ public:
      * @param stacks The number of stacks.
      * @param slices The number of slices.
      * @param hardware_copy Whether to use hardware copy.
+     * @param sdf Whether the mesh also gets its distance field (see primitive_sdf).
      * @return true If the cone was successfully created.
      * @return false If creating the cone failed.
      */
@@ -734,7 +761,8 @@ public:
                      float height,
                      uint32_t stacks,
                      uint32_t slices,
-                     bool hardware_copy = true) -> bool;
+                     bool hardware_copy = true,
+                     primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     /**
      * @brief Creates a torus geometry.
@@ -745,6 +773,7 @@ public:
      * @param bands The number of bands.
      * @param sides The number of sides.
      * @param hardware_copy Whether to use hardware copy.
+     * @param sdf Whether the mesh also gets its distance field (see primitive_sdf).
      * @return true If the torus was successfully created.
      * @return false If creating the torus failed.
      */
@@ -753,37 +782,47 @@ public:
                       float inner_radius,
                       uint32_t bands,
                       uint32_t sides,
-                      bool hardware_copy = true) -> bool;
+                      bool hardware_copy = true,
+                      primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     /**
      * @brief Creates a teapot geometry.
      *
      * @param format The vertex format.
      * @param hardware_copy Whether to use hardware copy.
+     * @param sdf Whether the mesh also gets its distance field (see primitive_sdf).
      * @return true If the teapot was successfully created.
      * @return false If creating the teapot failed.
      */
-    auto create_teapot(const bgfx::VertexLayout& format, bool hardware_copy = true) -> bool;
+    auto create_teapot(const bgfx::VertexLayout& format,
+                       bool hardware_copy = true,
+                       primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     /**
      * @brief Creates an icosahedron geometry.
      *
      * @param format The vertex format.
      * @param hardware_copy Whether to use hardware copy.
+     * @param sdf Whether the mesh also gets its distance field (see primitive_sdf).
      * @return true If the icosahedron was successfully created.
      * @return false If creating the icosahedron failed.
      */
-    auto create_icosahedron(const bgfx::VertexLayout& format, bool hardware_copy = true) -> bool;
+    auto create_icosahedron(const bgfx::VertexLayout& format,
+                            bool hardware_copy = true,
+                            primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     /**
      * @brief Creates a dodecahedron geometry.
      *
      * @param format The vertex format.
      * @param hardware_copy Whether to use hardware copy.
+     * @param sdf Whether the mesh also gets its distance field (see primitive_sdf).
      * @return true If the dodecahedron was successfully created.
      * @return false If creating the dodecahedron failed.
      */
-    auto create_dodecahedron(const bgfx::VertexLayout& format, bool hardware_copy = true) -> bool;
+    auto create_dodecahedron(const bgfx::VertexLayout& format,
+                             bool hardware_copy = true,
+                             primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     /**
      * @brief Creates an icosphere geometry.
@@ -791,10 +830,14 @@ public:
      * @param format The vertex format.
      * @param tesselation_level The level of tesselation.
      * @param hardware_copy Whether to use hardware copy.
+     * @param sdf Whether the mesh also gets its distance field (see primitive_sdf).
      * @return true If the icosphere was successfully created.
      * @return false If creating the icosphere failed.
      */
-    auto create_icosphere(const bgfx::VertexLayout& format, int tesselation_level, bool hardware_copy = true) -> bool;
+    auto create_icosphere(const bgfx::VertexLayout& format,
+                          int tesselation_level,
+                          bool hardware_copy = true,
+                          primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     /**
      * @brief Ends the preparation of the mesh and builds the render data.
@@ -854,10 +897,10 @@ public:
     /**
      * @brief Bakes a signed distance field for this mesh from its prepared geometry.
      *
-     * For meshes built at runtime. Compiled assets carry a field baked by the asset compiler,
-     * which is preferable because it happens once at import rather than on every load; a mesh
-     * created procedurally has no such opportunity, and without a field it is invisible to the
-     * surface cache -- it neither occludes nor bounces indirect light.
+     * For meshes built at runtime, on request: the caller pays the bake where it calls this (or asks a create_*
+     * call for it with primitive_sdf::baked). Compiled assets carry a field baked by the asset compiler, which is
+     * preferable because it happens once at import rather than on every load; without a field a mesh is
+     * invisible to the surface cache -- it neither occludes nor bounces indirect light.
      *
      * Must be called after @ref end_prepare, which is what populates the system-memory vertex
      * and index buffers this reads.
@@ -876,12 +919,12 @@ public:
     auto get_gi_source_geometry() const -> const sdf_source_geometry*;
 
     /**
-     * @brief Finishes a procedurally created mesh: @ref end_prepare, then @ref generate_sdf.
+     * @brief Finishes a procedurally created mesh: @ref end_prepare, then @ref generate_sdf when @p sdf asks for
+     * the field.
      *
-     * The single exit point for every create_* primitive, so a new primitive cannot silently
-     * skip its distance field and go missing from global illumination.
+     * The single exit point for every create_* primitive, so each of them takes the request the same way.
      */
-    auto end_prepare_primitive(bool hardware_copy = true) -> bool;
+    auto end_prepare_primitive(bool hardware_copy = true, primitive_sdf sdf = primitive_sdf::none) -> bool;
 
     /**
      * @brief Retrieves the signed distance field baked for this mesh.

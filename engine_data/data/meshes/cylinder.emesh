@@ -1,0 +1,9 @@
+{
+ "shape": {
+  "kind": "cylinder",
+  "radius": 0.5,
+  "height": 2.0,
+  "stacks": 20,
+  "slices": 20
+ }
+}

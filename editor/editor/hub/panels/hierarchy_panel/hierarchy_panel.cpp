@@ -283,7 +283,7 @@ void create_mesh_entity(rtti::context& ctx, entt::handle parent_entity, const st
     queue_create_with_parent(ctx, parent_entity, "Create Mesh Entity",
         [mesh_name](rtti::context& ctx, scene& scn) -> entt::handle
         {
-            return defaults::create_embedded_mesh_entity(ctx, scn, mesh_name);
+            return defaults::create_built_in_mesh_entity(ctx, scn, mesh_name);
         });
 }
 

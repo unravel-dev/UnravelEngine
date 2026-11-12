@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <type_traits>
 #include <unordered_map>
 
 namespace unravel
@@ -124,6 +125,8 @@ public:
      */
     auto get_metadata(const hpp::uuid& uid) const -> asset_database::meta;
     auto get_metadata_for_path(const fs::path& path) const -> asset_database::meta;
+    /// The entry of the asset at `key`. A built-in shape named in its earlier spelling ("engine:/embedded/cube")
+    /// is the shape's file.
     auto get_metadata_for_key(const std::string& key) const -> asset_database::meta;
     /// Whether the import settings of the texture at `key` call it a normal map.
     auto is_normal_map_texture(const std::string& key) const -> bool;
@@ -176,18 +179,7 @@ public:
                    load_mode mode = load_mode::immediate) -> asset_handle<T>
     {
         auto& storage = get_storage<T>();
-        if(ex::should_keep_key_as_is(key))
-        {
-            return load_asset_from_file_impl<T>(key,
-                                                flags,
-                                                mode,
-                                                storage.container_mutex,
-                                                storage.container,
-                                                storage.container_by_uid,
-                                                storage.load_from_file);
-        }
-        const std::string resolved_key = ex::resolve_key_missing_extension<T>(key);
-        return load_asset_from_file_impl<T>(resolved_key,
+        return load_asset_from_file_impl<T>(resolve_key<T>(key),
                                             flags,
                                             mode,
                                             storage.container_mutex,
@@ -274,16 +266,7 @@ public:
     auto register_asset(const std::string& key) -> asset_handle<T>
     {
         auto& storage = get_storage<T>();
-        if(ex::should_keep_key_as_is(key))
-        {
-            return register_asset_impl<T>(key,
-                                          storage.container_mutex,
-                                          storage.container,
-                                          storage.container_by_uid,
-                                          storage.load_from_file);
-        }
-        const std::string resolved_key = ex::resolve_key_missing_extension<T>(key);
-        return register_asset_impl<T>(resolved_key,
+        return register_asset_impl<T>(resolve_key<T>(key),
                                       storage.container_mutex,
                                       storage.container,
                                       storage.container_by_uid,
@@ -341,12 +324,7 @@ public:
     auto find_asset(const std::string& key) const -> const asset_handle<T>&
     {
         auto& storage = get_storage<T>();
-        if(ex::should_keep_key_as_is(key))
-        {
-            return find_asset_impl<T>(key, storage.container_mutex, storage.container);
-        }
-        const std::string resolved_key = ex::resolve_key_missing_extension<T>(key);
-        return find_asset_impl<T>(resolved_key, storage.container_mutex, storage.container);
+        return find_asset_impl<T>(resolve_key<T>(key), storage.container_mutex, storage.container);
     }
 
     /**
@@ -704,6 +682,34 @@ private:
 
         return asset_handle<T>::get_empty();
     }
+
+    /**
+     * @brief The key a request for `key` loads: a key without an extension gets the one of its file, and a mesh
+     * key in the earlier spelling of a built-in shape ("engine:/embedded/cube") names the shape's file.
+     * @tparam T The type of the asset.
+     */
+    template<typename T>
+    auto resolve_key(const std::string& key) const -> std::string
+    {
+        if(!ex::should_keep_key_as_is(key))
+        {
+            return ex::resolve_key_missing_extension<T>(key);
+        }
+        if constexpr(std::is_same_v<T, mesh>)
+        {
+            return resolve_built_in_mesh_key(key);
+        }
+        else
+        {
+            return key;
+        }
+    }
+
+    /// `key`, or the file of the built-in shape it names in the earlier spelling when the engine has that shape.
+    auto resolve_built_in_mesh_key(const std::string& key) const -> std::string;
+
+    /// The entry the database of `key`'s protocol holds at exactly `key`; without a location when it holds none.
+    auto find_metadata_for_key(const std::string& key) const -> asset_database::meta;
 
     /**
      * @brief Checks whether the storage for an asset type has been registered.

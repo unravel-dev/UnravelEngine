@@ -250,6 +250,13 @@ auto extract_sdf_source_geometry(const mesh::load_data& data,
     {
         return false;
     }
+    // A mesh that global illumination represents by other triangles than it renders is those triangles at
+    // every LOD: they are already as simple as the representation gets.
+    if(data.gi_source_geometry.is_valid())
+    {
+        out = data.gi_source_geometry;
+        return true;
+    }
     // LOD 0 is the base topology in triangle_data; data.lods holds the GENERATED levels, so
     // LOD n lives at index n - 1 and the valid range is [0, lods.size()].
     //

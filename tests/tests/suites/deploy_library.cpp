@@ -466,8 +466,8 @@ void test_walk_shipped_settings(walk_project project)
           "the shipped settings' handles are followed instead of the settings file's");
 }
 
-/// A project whose scene, style sheet and script use engine fonts, beside engine fonts and UI files nothing
-/// uses.
+/// A project whose scene, style sheet and script use engine fonts and built-in shapes, beside engine fonts, UI
+/// files and a shape nothing uses.
 auto make_engine_walk_project(const fs::path& root) -> walk_project
 {
     walk_project project;
@@ -493,10 +493,17 @@ auto make_engine_walk_project(const fs::path& root) -> walk_project
     add_asset(engine, make_uid("30000000-0000-4000-8000-00000000000d"), "engine:/data/ui/sample_hud.rhtml");
     add_asset(engine, make_uid("30000000-0000-4000-8000-00000000000e"), "engine:/data/scripts/SampleHud.cs");
     add_asset(engine, make_uid("30000000-0000-4000-8000-00000000000f"), "engine:/data/textures/default_color.dds");
+    const auto cube = make_uid("30000000-0000-4000-8000-000000000020");
+    add_asset(engine, cube, unravel::get_built_in_mesh_key("cube"));
+    add_asset(engine, make_uid("30000000-0000-4000-8000-000000000021"), unravel::get_built_in_mesh_key("sphere"));
+    add_asset(engine, make_uid("30000000-0000-4000-8000-000000000022"), unravel::get_built_in_mesh_key("teapot"));
     write_text(project_root / "data/levels/one.spfb",
-               "{\"font\": {\"uid\": " + quote(bold) + "}, \"style\": \"app:/data/ui/hud.rcss\"}");
+               "{\"font\": {\"uid\": " + quote(bold) + "}, \"mesh\": {\"uid\": " + quote(cube) +
+                   "}, \"style\": \"app:/data/ui/hud.rcss\"}");
     write_text(project_root / "data/ui/hud.rcss", "@font-face { src: \"engine:/data/fonts/Inter/static/Inter-Black.ttf\"; }");
-    write_text(project_root / "data/scripts/game.cs", "class Game { string font = \"engine:/data/fonts/Inter/static/Inter-Light\"; }");
+    write_text(project_root / "data/scripts/game.cs",
+               "class Game { string font = \"engine:/data/fonts/Inter/static/Inter-Light\"; "
+               "string ball = \"engine:/embedded/sphere\"; string look = \"engine:/embedded/standard\"; }");
     write_text(engine_root / "data/ui/splash.rhtml", "<rml><head><link type=\"text/rcss\" href=\"splash.rcss\"/></head></rml>");
     write_text(engine_root / "data/scripts/SampleHud.cs",
                "class SampleHud { const string Layout = \"engine:/data/ui/sample_hud.rhtml\"; }");
@@ -528,6 +535,18 @@ void test_walk_engine(const fs::path& root)
           "an engine document an engine script names ships");
     check(is_unused(found, "engine:/data/fonts/Inter/static/Inter-Thin.ttf") && is_unused(found, "engine:/data/ui/template.rhtml"),
           "engine fonts and UI files nothing uses are unused");
+    check(is_used_by(found, unravel::get_built_in_mesh_key("cube"), reason::referenced, "app:/data/levels/one.spfb"),
+          "a built-in shape a scene holds by uid ships");
+    check(is_used_by(found, unravel::get_built_in_mesh_key("sphere"), reason::named_in_script, "app:/data/scripts/game.cs"),
+          "a built-in shape a script names in the earlier spelling ships");
+    check(is_unused(found, unravel::get_built_in_mesh_key("teapot")), "a built-in shape nothing uses is unused");
+    const bool names_shapes = std::any_of(found.named_folders.begin(),
+                                          found.named_folders.end(),
+                                          [](const deployment::named_folder& named)
+                                          {
+                                              return named.key == unravel::BUILT_IN_MESH_FOLDER;
+                                          });
+    check(!names_shapes, "a script naming whole embedded keys, a shape's and a material's, raises no note");
     const auto* thin = found.find("engine:/data/fonts/Inter/static/Inter-Thin.ttf");
     check(thin != nullptr && thin->size == COMPILED_FONT_SIZE, "an engine asset's size is its compiled file's in the engine folder");
     deploy_settings params;
@@ -537,6 +556,10 @@ void test_walk_engine(const fs::path& root)
               !left_out.contains(fs::make_path_key("engine:/data/fonts/Inter/static/Inter-Black.ttf")) &&
               !left_out.contains(fs::make_path_key("engine:/data/textures/default_color.dds")),
           "only used assets leave the unused engine fonts out");
+    check(left_out.contains(fs::make_path_key(unravel::get_built_in_mesh_key("teapot"))) &&
+              !left_out.contains(fs::make_path_key(unravel::get_built_in_mesh_key("cube"))) &&
+              !left_out.contains(fs::make_path_key(unravel::get_built_in_mesh_key("sphere"))),
+          "only used assets leave the unused built-in shape out");
     deployment::content_tree tree;
     tree.build(found);
     tree.update(params, {});
@@ -549,9 +572,12 @@ void test_walk_engine(const fs::path& root)
                                                             return entry.key.rfind("engine:/data/", 0) == 0;
                                                         }));
     const auto& engine_row = tree.get_nodes()[rows.back()];
+    // The thin font, the UI template and the teapot.
+    constexpr std::size_t unused_engine_assets = 3;
     check(engine_row.name == "Engine" && engine_row.key == "engine:/data" && engine_row.asset_count == engine_count &&
-              engine_row.shipped_count + 2 == engine_count && tree.get_root().asset_count == 2 + engine_count,
-          "the content tree lists the engine's assets under a last top row, the unused fonts and UI files left out");
+              engine_row.shipped_count + unused_engine_assets == engine_count &&
+              tree.get_root().asset_count == 2 + engine_count,
+          "the content tree lists the engine's assets under a last top row, the unused font, UI file and shape left out");
 }
 
 /// What the engine walk does at its edges: links out of the engine, rules on engine keys, paths scripts build.
@@ -568,7 +594,11 @@ void test_walk_engine_edges(const fs::path& root)
     write_text(engine_root / "data/scripts/SampleHud.cs",
                "class SampleHud { const string Layout = \"engine:/data/ui/sample_hud.rhtml\";\n"
                "string Texture(string name) => $\"engine:/data/textures/{name}.dds\";\n"
-               "string Font(string style) => $\"engine:/data/fonts/Inter/static/{style}.ttf\"; }");
+               "string Font(string style) => $\"engine:/data/fonts/Inter/static/{style}.ttf\";\n"
+               "string Shape(string name) => $\"engine:/embedded/{name}\"; }");
+    write_text(root / "project" / "data/scripts/game.cs",
+               "class Game { string Pot(int size) => \"engine:/embedded/tea\" + size; "
+               "string Other(int n) => \"engine:/embedded/pyramid\" + n; }");
     const auto found = deployment::detect_content(project.source, {}, project.startup_scene);
     check(is_unused(found, "app:/data/ui/lost.rcss") &&
               is_used_by(found, "engine:/data/ui/splash.rcss", reason::referenced, unravel::SPLASH_DOCUMENT_KEY),
@@ -582,6 +612,15 @@ void test_walk_engine_edges(const fs::path& root)
     check(!names_textures, "a script building paths in an engine folder that always ships raises no note");
     check(is_named_by(found, "engine:/data/fonts/Inter/static", "engine:/data/scripts/SampleHud.cs"),
           "in one the walk decides, it does");
+    const std::vector<std::string> shape_builders = {"app:/data/scripts/game.cs", "engine:/data/scripts/SampleHud.cs"};
+    const bool names_shapes = std::any_of(found.named_folders.begin(),
+                                          found.named_folders.end(),
+                                          [&shape_builders](const deployment::named_folder& named)
+                                          {
+                                              return named.key == unravel::BUILT_IN_MESH_FOLDER &&
+                                                     named.scripts == shape_builders;
+                                          });
+    check(names_shapes, "scripts building a built-in shape's key in the earlier spelling raise the note on the shapes' folder");
     deploy_settings params;
     params.deploy_only_used_assets = true;
     params.deploy_excluded = {"engine:/data/textures/default_color.dds"};

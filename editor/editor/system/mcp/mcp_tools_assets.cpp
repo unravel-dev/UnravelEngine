@@ -16,6 +16,7 @@
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_reader.h>
 #include <engine/assets/impl/asset_writer.h>
+#include <engine/defaults/engine_asset_keys.h>
 #include <engine/ecs/components/prefab_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/prefab.h>
@@ -562,19 +563,20 @@ void register_asset_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "assets_list_embedded_primitives",
          .description = "List the engine's built-in meshes by name, for scene_create_batch kind primitive "
-                        "(cube is 1 m, centred on the origin).",
+                        "(cube is 1 m, centred on the origin). The mesh of a name is the asset "
+                        "engine:/data/meshes/<name>.emesh.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
          {
-             constexpr const char* k_embedded_prefix = "engine:/embedded/";
+             const std::string folder = std::string(BUILT_IN_MESH_FOLDER) + "/";
              std::vector<std::string> names;
-             for(const auto& handle : ctx.get_cached<asset_manager>().get_assets<mesh>(k_embedded_prefix))
+             for(const auto& handle : ctx.get_cached<asset_manager>().get_assets<mesh>(folder))
              {
                  // The list starts with the empty handle ("None") pickers offer.
-                 if(handle && starts_with(handle.id(), k_embedded_prefix))
+                 if(handle && starts_with(handle.id(), folder))
                  {
-                     names.push_back(handle.id().substr(std::strlen(k_embedded_prefix)));
+                     names.push_back(fs::path(handle.id()).stem().string());
                  }
              }
              return {.text = strings_to_json_array(names)};

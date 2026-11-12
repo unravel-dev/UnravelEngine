@@ -523,6 +523,10 @@ auto mesh::load_mesh(load_data&& data, bool hardware_copy) -> bool
 
     bool result = true;
     result &= prepare_mesh(data.vertex_format);
+    if(data.gi_source_geometry.is_valid())
+    {
+        gi_source_geometry_ = std::make_shared<const sdf_source_geometry>(std::move(data.gi_source_geometry));
+    }
     result &= set_bounding_box(data.bbox);
     result &= set_vertex_source(std::move(data.vertex_data), data.vertex_count, data.vertex_format);
     result &= set_primitives(std::move(data.triangle_data));
@@ -567,7 +571,8 @@ auto mesh::create_plane(const bgfx::VertexLayout& format,
                         float height,
                         uint32_t width_segments,
                         uint32_t height_segments,
-                        bool hardware_copy /* = true */) -> bool
+                        bool hardware_copy,
+                        primitive_sdf sdf) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
@@ -585,7 +590,7 @@ auto mesh::create_plane(const bgfx::VertexLayout& format,
     gi_source_geometry_ = std::make_shared<const sdf_source_geometry>(
         create_plane_gi_geometry(width, height, width_segments, height_segments));
     // Finish up
-    return end_prepare_primitive(hardware_copy);
+    return end_prepare_primitive(hardware_copy, sdf);
 }
 
 auto mesh::create_plane_gi_geometry(float width, float height, uint32_t width_segments, uint32_t height_segments)
@@ -617,7 +622,8 @@ auto mesh::create_heightfield(const bgfx::VertexLayout& format,
                               float half_extent_x,
                               float half_extent_z,
                               float height_scale,
-                              bool hardware_copy) -> bool
+                              bool hardware_copy,
+                              primitive_sdf sdf) -> bool
 {
     const uint32_t sx = segments_x;
     const uint32_t sz = segments_z;
@@ -667,7 +673,7 @@ auto mesh::create_heightfield(const bgfx::VertexLayout& format,
     auto mesh = rotate_mesh(hf_mesh, rot);
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     
-    return end_prepare_primitive(hardware_copy);
+    return end_prepare_primitive(hardware_copy, sdf);
 }
 
 auto mesh::create_cube(const bgfx::VertexLayout& format,
@@ -677,7 +683,8 @@ auto mesh::create_cube(const bgfx::VertexLayout& format,
                        uint32_t width_segments,
                        uint32_t height_segments,
                        uint32_t depth_segments,
-                       bool hardware_copy /* = true */) -> bool
+                       bool hardware_copy,
+                       primitive_sdf sdf) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
@@ -689,7 +696,7 @@ auto mesh::create_cube(const bgfx::VertexLayout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare_primitive(hardware_copy);
+    return end_prepare_primitive(hardware_copy, sdf);
 }
 
 
@@ -700,7 +707,8 @@ auto mesh::create_rounded_cube(const bgfx::VertexLayout& format,
     uint32_t width_segments,
     uint32_t height_segments,
     uint32_t depth_segments,
-    bool hardware_copy /* = true */) -> bool
+    bool hardware_copy,
+    primitive_sdf sdf) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
@@ -712,14 +720,15 @@ auto mesh::create_rounded_cube(const bgfx::VertexLayout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare_primitive(hardware_copy);
+    return end_prepare_primitive(hardware_copy, sdf);
 }
 
 auto mesh::create_sphere(const bgfx::VertexLayout& format,
                          float radius,
                          uint32_t stacks,
                          uint32_t slices,
-                         bool hardware_copy /* = true */) -> bool
+                         bool hardware_copy,
+                         primitive_sdf sdf) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
@@ -731,7 +740,7 @@ auto mesh::create_sphere(const bgfx::VertexLayout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare_primitive(hardware_copy);
+    return end_prepare_primitive(hardware_copy, sdf);
 }
 
 auto mesh::create_cylinder(const bgfx::VertexLayout& format,
@@ -739,7 +748,8 @@ auto mesh::create_cylinder(const bgfx::VertexLayout& format,
                            float height,
                            uint32_t stacks,
                            uint32_t slices,
-                           bool hardware_copy /* = true */) -> bool
+                           bool hardware_copy,
+                           primitive_sdf sdf) -> bool
 {
     // Clear out old data.
     dispose();
@@ -755,7 +765,7 @@ auto mesh::create_cylinder(const bgfx::VertexLayout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare_primitive(hardware_copy);
+    return end_prepare_primitive(hardware_copy, sdf);
 }
 
 auto mesh::create_capsule(const bgfx::VertexLayout& format,
@@ -763,7 +773,8 @@ auto mesh::create_capsule(const bgfx::VertexLayout& format,
                           float height,
                           uint32_t stacks,
                           uint32_t slices,
-                          bool hardware_copy /* = true */) -> bool
+                          bool hardware_copy,
+                          primitive_sdf sdf) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
@@ -775,7 +786,7 @@ auto mesh::create_capsule(const bgfx::VertexLayout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare_primitive(hardware_copy);
+    return end_prepare_primitive(hardware_copy, sdf);
 }
 
 auto mesh::create_cone(const bgfx::VertexLayout& format,
@@ -783,7 +794,8 @@ auto mesh::create_cone(const bgfx::VertexLayout& format,
                        float height,
                        uint32_t stacks,
                        uint32_t slices,
-                       bool hardware_copy /* = true */) -> bool
+                       bool hardware_copy,
+                       primitive_sdf sdf) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
@@ -795,7 +807,7 @@ auto mesh::create_cone(const bgfx::VertexLayout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare_primitive(hardware_copy);
+    return end_prepare_primitive(hardware_copy, sdf);
 }
 
 auto mesh::create_torus(const bgfx::VertexLayout& format,
@@ -803,7 +815,8 @@ auto mesh::create_torus(const bgfx::VertexLayout& format,
                         float inner_radius,
                         uint32_t bands,
                         uint32_t sides,
-                        bool hardware_copy /* = true */) -> bool
+                        bool hardware_copy,
+                        primitive_sdf sdf) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
@@ -815,10 +828,12 @@ auto mesh::create_torus(const bgfx::VertexLayout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare_primitive(hardware_copy);
+    return end_prepare_primitive(hardware_copy, sdf);
 }
 
-auto mesh::create_teapot(const bgfx::VertexLayout& format, bool hardware_copy /*= true*/) -> bool
+auto mesh::create_teapot(const bgfx::VertexLayout& format,
+                         bool hardware_copy,
+                         primitive_sdf sdf) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
@@ -830,10 +845,12 @@ auto mesh::create_teapot(const bgfx::VertexLayout& format, bool hardware_copy /*
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare_primitive(hardware_copy);
+    return end_prepare_primitive(hardware_copy, sdf);
 }
 
-auto mesh::create_icosahedron(const bgfx::VertexLayout& format, bool hardware_copy /*= true*/) -> bool
+auto mesh::create_icosahedron(const bgfx::VertexLayout& format,
+                              bool hardware_copy,
+                              primitive_sdf sdf) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
@@ -845,10 +862,12 @@ auto mesh::create_icosahedron(const bgfx::VertexLayout& format, bool hardware_co
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare_primitive(hardware_copy);
+    return end_prepare_primitive(hardware_copy, sdf);
 }
 
-auto mesh::create_dodecahedron(const bgfx::VertexLayout& format, bool hardware_copy /*= true*/) -> bool
+auto mesh::create_dodecahedron(const bgfx::VertexLayout& format,
+                               bool hardware_copy,
+                               primitive_sdf sdf) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
@@ -860,10 +879,13 @@ auto mesh::create_dodecahedron(const bgfx::VertexLayout& format, bool hardware_c
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare_primitive(hardware_copy);
+    return end_prepare_primitive(hardware_copy, sdf);
 }
 
-auto mesh::create_icosphere(const bgfx::VertexLayout& format, int tesselation_level, bool hardware_copy /*= true*/)
+auto mesh::create_icosphere(const bgfx::VertexLayout& format,
+                            int tesselation_level,
+                            bool hardware_copy,
+                            primitive_sdf sdf)
     -> bool
 {
     // We are in the process of preparing.
@@ -876,7 +898,7 @@ auto mesh::create_icosphere(const bgfx::VertexLayout& format, int tesselation_le
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare_primitive(hardware_copy);
+    return end_prepare_primitive(hardware_copy, sdf);
 }
 
 void mesh::check_for_degenerates()
@@ -1326,20 +1348,23 @@ auto mesh::generate_sdf(const mesh_sdf_bake_settings& settings) -> bool
     return true;
 }
 
-auto mesh::end_prepare_primitive(bool hardware_copy) -> bool
+auto mesh::end_prepare_primitive(bool hardware_copy, primitive_sdf sdf) -> bool
 {
     if(!end_prepare(hardware_copy))
     {
         return false;
     }
-    // Procedurally created meshes never pass through the asset compiler, so this is their only
-    // opportunity to get a distance field. Without one they are invisible to the surface cache:
-    // they neither occlude nor bounce indirect light, which is easy to miss because they still
-    // render perfectly normally.
+    // A mesh created in code never passes through the asset compiler, so a field it should have is baked here,
+    // when the caller asks: the bake takes from milliseconds to seconds and must not run where nobody chose it.
+    // Without a field the mesh is invisible to the surface cache: it neither occludes nor bounces indirect
+    // light, which is easy to miss because it still renders perfectly normally.
     //
     // A failed bake is not a failed mesh -- degenerate or sub-voxel primitives simply do not
     // participate in global illumination.
-    generate_sdf();
+    if(sdf == primitive_sdf::baked)
+    {
+        generate_sdf();
+    }
     return true;
 }
 

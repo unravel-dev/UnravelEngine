@@ -6,6 +6,7 @@
 #include "mesh/mesh_import_materials.h"
 
 #include <engine/meta/assets/asset_importer_meta.hpp>
+#include <engine/meta/rendering/mesh_shape.hpp>
 
 #include <graphics/graphics.h>
 #include <logging/logging.h>
@@ -259,6 +260,34 @@ void mesh_importer_init()
     // }
 }
 
+namespace
+{
+/// Whether `path` describes a shape for a generator (an .emesh file) instead of holding geometry.
+auto is_shape_source(const fs::path& path) -> bool
+{
+    return path.extension().string() == ex::get_mesh_shape_format();
+}
+
+/// The mesh the generator builds from the shape `path` describes: geometry alone, without materials or clips.
+auto load_shape_data_from_file(const fs::path& path, mesh::load_data& load_data) -> bool
+{
+    mesh_shape shape;
+    if(!load_from_file(path.string(), shape))
+    {
+        APPLOG_ERROR("Mesh Importer: {} cannot be read.", path.generic_string());
+        return false;
+    }
+    if(!build_shape_load_data(shape, load_data))
+    {
+        APPLOG_ERROR("Mesh Importer: {} names no shape the engine can build. Its \"kind\" must be one of the "
+                     "generators (cube, sphere, ...), with segments above zero.",
+                     path.generic_string());
+        return false;
+    }
+    return true;
+}
+} // namespace
+
 auto load_mesh_data_from_file(asset_manager& am,
                               const fs::path& path,
                               const mesh_importer_meta& import_meta,
@@ -267,6 +296,10 @@ auto load_mesh_data_from_file(asset_manager& am,
                               std::vector<imported_material>& materials,
                               std::vector<imported_texture>& textures) -> bool
 {
+    if(is_shape_source(path))
+    {
+        return load_shape_data_from_file(path, load_data);
+    }
     // Multi-file formats (glTF + .bin/textures, OBJ + mtllib) must be complete on disk
     // before Assimp reads them; otherwise vertex buffers can import as empty.
     if(!mesh_import::wait_for_mesh_source_dependencies(path))

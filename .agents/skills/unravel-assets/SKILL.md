@@ -49,6 +49,18 @@ asset_compiler::compile<T>(source_path, ...);
 
 Importers live in `engine/engine/assets/impl/importers/`.
 
+## Built-in shapes
+
+The engine's cube, sphere and the other shapes of the Create menu are mesh assets:
+`engine_data/data/meshes/<name>.emesh`, a few lines of text that name a generator and its
+numbers (`mesh_shape`, `engine/engine/rendering/mesh_shape.h`). The mesh importer builds the
+geometry from the description and the compile bakes the distance field and the cards, as
+for an imported model. Each `.meta` holds the id the shape had while it was generated at
+startup, so never regenerate those ids. A key in the earlier spelling
+(`engine:/embedded/cube`) loads the file. A deploy ships the shapes a game uses
+(`ENGINE_FOLDERS_SHIPPED_WHEN_USED`). A generator change needs a bump of
+`ex::get_format_version<mesh>()`, like a baker change.
+
 ## Loading modes
 
 `asset_manager` supports sync and async/deferred loading. Hot paths (frame render) must not block on uncached loads.

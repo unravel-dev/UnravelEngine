@@ -1,0 +1,8 @@
+{
+ "shape": {
+  "kind": "sphere",
+  "radius": 0.5,
+  "stacks": 20,
+  "slices": 20
+ }
+}

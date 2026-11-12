@@ -2,6 +2,7 @@
 #include "filesystem/filesystem.h"
 #include "impl/asset_extensions.h"
 #include "impl/asset_reader.h"
+#include <engine/defaults/engine_asset_keys.h>
 
 #include <engine/animation/animation.h>
 #include <engine/animation/animation_controller.h>
@@ -298,6 +299,17 @@ auto asset_manager::get_metadata_for_path(const fs::path& path) const -> asset_d
 
 auto asset_manager::get_metadata_for_key(const std::string& key) const -> asset_database::meta
 {
+    auto meta = find_metadata_for_key(key);
+    if(!meta.location.empty())
+    {
+        return meta;
+    }
+    const auto shape_key = get_built_in_mesh_key_of_embedded(key);
+    return shape_key.empty() ? meta : find_metadata_for_key(shape_key);
+}
+
+auto asset_manager::find_metadata_for_key(const std::string& key) const -> asset_database::meta
+{
     // `databases_` is keyed by *protocol* (e.g. "app"), not by full asset key.
     // The asset's metadata lives inside the database for its protocol, so we
     // need to extract the protocol from the key before doing the map lookup.
@@ -310,6 +322,20 @@ auto asset_manager::get_metadata_for_key(const std::string& key) const -> asset_
         return empty;
     }
     return it->second.get_metadata(key);
+}
+
+auto asset_manager::resolve_built_in_mesh_key(const std::string& key) const -> std::string
+{
+    const auto shape_key = get_built_in_mesh_key_of_embedded(key);
+    if(shape_key.empty())
+    {
+        return key;
+    }
+    if(!find_metadata_for_key(shape_key).location.empty())
+    {
+        return shape_key;
+    }
+    return parent_ ? parent_->resolve_built_in_mesh_key(key) : key;
 }
 
 auto asset_manager::is_normal_map_texture(const std::string& key) const -> bool

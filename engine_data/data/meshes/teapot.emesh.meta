@@ -1,0 +1,54 @@
+{
+ "meta": {
+  "type": ".emesh",
+  "uid": "4bad7667-80cd-405b-9a18-73cb0b12dce2",
+  "importer": {
+   "polymorphic_id": 2147483649,
+   "polymorphic_name": "mesh_importer_meta",
+   "ptr_wrapper": {
+    "id": 2147483649,
+    "data": {
+     "base_type": {},
+     "model": {
+      "weld_vertices": true,
+      "optimize_meshes": true,
+      "split_large_meshes": true,
+      "find_degenerates": true,
+      "find_invalid_data": true,
+      "generate_lods": false,
+      "lod_target_error": 0.009999999776482582,
+      "import_meshes": true
+     },
+     "sdf": {
+      "generate_sdf": true,
+      "target_voxel_size": 0.0,
+      "resolution": 64,
+      "min_voxel_size": 0.009999999776482582,
+      "max_voxel_size": 1.0,
+      "max_total_voxels": 262144,
+      "lod_index": 2,
+      "two_sided": false,
+      "two_sided_thickness": 0.05000000074505806,
+      "max_component_spread": 32.0
+     },
+     "cards": {
+      "generate_cards": true,
+      "max_cards": 12,
+      "lod_index": 1
+     },
+     "rig": {},
+     "animations": {
+      "import_animations": true
+     },
+     "materials": {
+      "import_materials": true,
+      "remove_redundant_materials": true
+     }
+    }
+   }
+  },
+  "header": {
+   "polymorphic_id": 0
+  }
+ }
+}

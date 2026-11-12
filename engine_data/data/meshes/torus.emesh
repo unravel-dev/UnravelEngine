@@ -1,0 +1,9 @@
+{
+ "shape": {
+  "kind": "torus",
+  "radius": 1.0,
+  "tube_radius": 0.5,
+  "stacks": 20,
+  "slices": 20
+ }
+}

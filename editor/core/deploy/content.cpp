@@ -117,11 +117,36 @@ auto get_compiled_size(const std::string& key, const fs::path& protocol_root) ->
     return size;
 }
 
+/// The built-in shapes' folder when `written` starts the key of one in its earlier spelling, which a script
+/// completes at run time ("engine:/embedded/icosphere" + level); empty for any other text.
+auto get_named_shape_folder(const std::string& written, const content& found) -> std::string
+{
+    const std::string prefix = EMBEDDED_MESH_PREFIX;
+    if(written.compare(0, prefix.size(), prefix) != 0)
+    {
+        return {};
+    }
+    const std::string started_key = std::string(BUILT_IN_MESH_FOLDER) + "/" + written.substr(prefix.size());
+    const bool starts_a_shape = std::any_of(found.entries.begin(),
+                                            found.entries.end(),
+                                            [&started_key](const content_entry& entry)
+                                            {
+                                                return entry.key.compare(0, started_key.size(), started_key) == 0;
+                                            });
+    return starts_a_shape ? std::string(BUILT_IN_MESH_FOLDER) : std::string{};
+}
+
 /// The folder a script path that names no asset points into: before an interpolation ("{"), else its
-/// parent folder ("app:/data/levels/level_" + n).
+/// parent folder ("app:/data/levels/level_" + n). A path in the earlier spelling of the built-in shapes points
+/// into their folder.
 auto get_named_folder(const std::string& path, const content& found) -> std::string
 {
-    auto folder = normalize_key(path.substr(0, path.find('{')));
+    const auto written = path.substr(0, path.find('{'));
+    if(const auto shapes = get_named_shape_folder(written, found); !shapes.empty())
+    {
+        return shapes;
+    }
+    auto folder = normalize_key(written);
     if(!found.has_folder(folder))
     {
         const size_t slash = folder.rfind('/');
@@ -309,6 +334,11 @@ private:
         if(reach(path, use, used_by))
         {
             return true;
+        }
+        // A built-in shape named the way it was spelled before it was a file still loads that file.
+        if(const auto shape_key = get_built_in_mesh_key_of_embedded(path); !shape_key.empty())
+        {
+            return reach(shape_key, use, used_by);
         }
         const auto [first, last] = entries_by_stem_.equal_range(fs::make_path_key(path));
         for(auto it = first; it != last; ++it)

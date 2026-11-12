@@ -480,6 +480,13 @@ inline auto should_keep_key_as_is(const std::string& key) noexcept -> bool
     return has_filename_extension(key) || is_embedded_key(key);
 }
 
+/// The mesh format that describes a shape for a generator (unravel::mesh_shape) instead of holding geometry.
+inline auto get_mesh_shape_format() -> const std::string&
+{
+    static const std::string format = ".emesh";
+    return format;
+}
+
 /**
  * @brief Appends a supported extension when @p key has none.
  *
@@ -698,9 +705,9 @@ inline auto is_binary(const std::string& ex) -> bool
     }
     if(is_format<unravel::mesh>(ex))
     {
-        // .emesh is binary, but source formats like .obj, .gltf can be text
+        // .emesh is the text of a shape description, and source formats like .obj, .gltf can be text
         // Check for binary formats specifically
-        return ex == ".emesh" || ex == ".glb" || ex == ".fbx" || ex == ".FBX" || 
+        return ex == ".glb" || ex == ".fbx" || ex == ".FBX" || 
                ex == ".blend" || ex == ".3ds" || ex == ".dae";
     }
     if(is_format<unravel::audio_clip>(ex))

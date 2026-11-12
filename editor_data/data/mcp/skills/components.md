@@ -169,7 +169,8 @@ Look:
   motion as the camera sees it (rain and snow streak when the camera moves
   through them); 0 = their own motion only.
 - render_mode mesh draws render_mesh (a mesh asset key, e.g.
-  "engine:/embedded/cube" or "engine:/embedded/sphere") per particle with
+  "engine:/data/meshes/cube.emesh" or "engine:/data/meshes/sphere.emesh"; the
+  earlier spelling "engine:/embedded/cube" loads the same mesh) per particle with
   render_material (unset = the mesh's own materials), drawn, lit, shadowed
   (mesh_cast_shadows) and with motion vectors like the scene's models: debris,
   rocks, shells, leaves. Size 1 is the mesh's own size, times size_axes (and

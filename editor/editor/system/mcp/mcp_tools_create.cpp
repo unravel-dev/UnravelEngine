@@ -87,7 +87,7 @@ const std::array<create_kind, 12> k_create_kinds{{
      create_input::primitive,
      [](rtti::context& ctx, scene& scn, const create_item& item)
      {
-         return defaults::create_embedded_mesh_entity(ctx, scn, item.primitive);
+         return defaults::create_built_in_mesh_entity(ctx, scn, item.primitive);
      }},
     {"mesh",
      create_input::asset,
@@ -230,9 +230,9 @@ auto read_kind_inputs(rtti::context& ctx,
     switch(kind.input)
     {
         case create_input::primitive:
-            if(!read_string(obj, "primitive", item.primitive) || !defaults::has_embedded_mesh(ctx, item.primitive))
+            if(!read_string(obj, "primitive", item.primitive) || !defaults::has_built_in_mesh(ctx, item.primitive))
             {
-                error = "primitive must name an embedded mesh (assets_list_embedded_primitives): " + item.primitive;
+                error = "primitive must name a built-in shape (assets_list_embedded_primitives): " + item.primitive;
                 return false;
             }
             return true;

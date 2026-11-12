@@ -15,7 +15,8 @@ order: 50
   all). Results are [{key, uid, type}] up to limit; truncated says more
   matched.
 - assets_get_batch resolves key <-> uid; assets_get_mesh_info returns a mesh's
-  local AABB; assets_list_embedded_primitives lists the built-in meshes.
+  local AABB; assets_list_embedded_primitives lists the built-in meshes, which
+  are the assets engine:/data/meshes/<name>.emesh.
 - assets_create_folder makes folders in the data folder.
 
 ## Importing: always through assets_import_files

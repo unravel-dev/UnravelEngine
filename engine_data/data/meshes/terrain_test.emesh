@@ -1,0 +1,10 @@
+{
+ "shape": {
+  "kind": "wave_terrain",
+  "width": 50.0,
+  "height": 4.0,
+  "depth": 50.0,
+  "width_segments": 64,
+  "depth_segments": 64
+ }
+}

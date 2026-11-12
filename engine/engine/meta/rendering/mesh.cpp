@@ -403,6 +403,8 @@ SAVE(mesh::load_data)
     try_save(ar, ser20::make_nvp("cards_lod_index", obj.cards_lod_index));
     // Fields added later go last: binary archives read by position.
     try_save(ar, ser20::make_nvp("humanoid_overrides", obj.humanoid_overrides));
+    try_save(ar, ser20::make_nvp("gi_source_positions", obj.gi_source_geometry.positions));
+    try_save(ar, ser20::make_nvp("gi_source_indices", obj.gi_source_geometry.indices));
 
     // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
 }
@@ -431,6 +433,12 @@ LOAD(mesh::load_data)
     try_load(ar, ser20::make_nvp("are_cards_disabled", obj.are_cards_disabled));
     try_load(ar, ser20::make_nvp("cards_lod_index", obj.cards_lod_index));
     try_load(ar, ser20::make_nvp("humanoid_overrides", obj.humanoid_overrides));
+    try_load(ar, ser20::make_nvp("gi_source_positions", obj.gi_source_geometry.positions));
+    try_load(ar, ser20::make_nvp("gi_source_indices", obj.gi_source_geometry.indices));
+    for(const auto& position : obj.gi_source_geometry.positions)
+    {
+        obj.gi_source_geometry.bounds.add_point(position);
+    }
 
     // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
 }

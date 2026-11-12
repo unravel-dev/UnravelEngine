@@ -1,19 +1,50 @@
 #pragma once
 
+#include <engine/assets/impl/asset_extensions.h>
+
 #include <array>
 #include <cstddef>
+#include <string>
 
 namespace unravel
 {
+
+/// The folder of the engine's built-in shapes (cube.emesh, sphere.emesh, ...), which the editor's Create menu
+/// offers by name.
+inline constexpr const char* BUILT_IN_MESH_FOLDER = "engine:/data/meshes";
+
+/// How a built-in shape's key was spelled while the shapes were generated at startup: this and the shape's name
+/// ("engine:/embedded/cube"). Keys in that spelling still load the shape.
+inline constexpr const char* EMBEDDED_MESH_PREFIX = "engine:/embedded/";
+
+/// The key of the built-in shape called `name` ("cube" -> "engine:/data/meshes/cube.emesh").
+inline auto get_built_in_mesh_key(const std::string& name) -> std::string
+{
+    return std::string(BUILT_IN_MESH_FOLDER) + "/" + name + ex::get_mesh_shape_format();
+}
+
+/// The built-in shape a key in the earlier spelling names ("engine:/embedded/cube" ->
+/// "engine:/data/meshes/cube.emesh"); empty for every other key. Whether the engine has that shape is the caller's
+/// question.
+inline auto get_built_in_mesh_key_of_embedded(const std::string& key) -> std::string
+{
+    const std::string prefix = EMBEDDED_MESH_PREFIX;
+    if(key.size() <= prefix.size() || key.compare(0, prefix.size(), prefix) != 0)
+    {
+        return {};
+    }
+    return get_built_in_mesh_key(key.substr(prefix.size()));
+}
 
 /**
  * The engine folders a deploy decides asset by asset when it ships only used assets: their assets ship when the game
  * uses them or the engine loads them by path (ENGINE_LOADED_KEYS). Every other engine asset always ships. An asset in
  * these folders that the engine loads by path must therefore be listed below, or such a deploy leaves it out.
  */
-inline constexpr std::array<const char*, 2> ENGINE_FOLDERS_SHIPPED_WHEN_USED = {
+inline constexpr std::array<const char*, 3> ENGINE_FOLDERS_SHIPPED_WHEN_USED = {
     "engine:/data/fonts",
     "engine:/data/ui",
+    BUILT_IN_MESH_FOLDER,
 };
 
 /// The UI's font faces, which the UI system loads as it starts and the base style sheet declares again.

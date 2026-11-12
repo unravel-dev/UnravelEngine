@@ -9,10 +9,12 @@ order: 30
 ## Coordinate system
 
 X right, Y up, Z forward (left handed). rotation_euler is degrees as
-[pitch_x, yaw_y, roll_z]. The embedded cube is 1x1x1 with its origin at the
-center; non-uniform scale is its size in meters. plane is 1x1 in XZ, sphere is
-1m diameter, cylinder is 1m tall with 0.5m radius, capsule_1m / capsule_2m are
-named by height. assets_list_embedded_primitives lists every built-in shape.
+[pitch_x, yaw_y, roll_z]. The built-in cube is 1x1x1 with its origin at the
+center; non-uniform scale is its size in meters. plane is 10x10 in XZ, sphere is
+1m diameter, cylinder is 2m tall with 0.5m radius, capsule_1m / capsule_2m are
+named by height. assets_list_embedded_primitives lists every built-in shape;
+each is the mesh asset engine:/data/meshes/<name>.emesh, whose text holds its
+numbers.
 
 ## WORLD vs LOCAL (the number one source of broken layouts)
 
@@ -32,7 +34,7 @@ named by height. assets_list_embedded_primitives lists every built-in shape.
 
 scene_create_batch makes everything the hierarchy's Create menu makes, in one
 undo step, each item checked before anything is created: kind empty,
-primitive (primitive: an embedded mesh name), mesh / prefab (asset: key or
+primitive (primitive: a built-in shape's name), mesh / prefab (asset: key or
 uid), light (light_type), reflection_probe (probe_type), camera, volume,
 audio_source, particle_emitter, text, ui_document.
 

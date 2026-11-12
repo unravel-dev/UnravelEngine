@@ -46,18 +46,18 @@ struct defaults
     static auto init_assets(rtti::context& ctx) -> bool;
 
     /**
-     * @brief Creates an embedded mesh entity.
+     * @brief Creates an entity that draws one of the engine's built-in shapes, resting on the ground.
      * @param ctx The context for creation.
      * @param scn The scene to create the entity in.
-     * @param name The embedded mesh's name ("Cube", "Capsule 2m", ...).
-     * @return A handle to the created entity; empty when no embedded mesh has that name.
+     * @param name The shape's name ("Cube", "Capsule 2m", ...).
+     * @return A handle to the created entity; empty when no built-in shape has that name.
      */
-    static auto create_embedded_mesh_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
+    static auto create_built_in_mesh_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
 
     /**
-     * @brief Whether an embedded mesh is called @p name ("Cube", "Capsule 2m", ...).
+     * @brief Whether a built-in shape is called @p name ("Cube", "Capsule 2m", ...).
      */
-    static auto has_embedded_mesh(rtti::context& ctx, const std::string& name) -> bool;
+    static auto has_built_in_mesh(rtti::context& ctx, const std::string& name) -> bool;
 
     /**
      * @brief Creates a prefab entity at a specified position.
