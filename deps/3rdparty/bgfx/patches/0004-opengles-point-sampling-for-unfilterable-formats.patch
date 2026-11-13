@@ -5,14 +5,15 @@ an incomplete texture reads as zero; R32F, RG32F and RGBA32F filter only with OE
 renderer already forces point sampling for formats without linear filtering (s_textureFilter), but marked every
 format filterable and applied it only in the per-texture sampler state, which OpenGL ES never uses: it binds
 sampler objects. On OpenGL ES the depth formats, and the 32-bit float ones without OES_texture_float_linear, are
-now unfilterable, and the point sampling is applied where the texture's sampler flags are resolved, for both
-paths. Comparison samplers keep their filter: they filter the comparison results, which every depth format allows.
-In WebGL a deferred renderer sampling its depth buffer with the default (linear) sampler saw no geometry at all.
+now unfilterable, and the point sampling is applied where the texture's sampler flags are resolved, with the
+point sampling of integer formats, for both paths. Comparison samplers keep their filter: they filter the
+comparison results, which every depth format allows. In WebGL a deferred renderer sampling its depth buffer with
+the default (linear) sampler saw no geometry at all.
 
 diff --git a/src/renderer_gl.cpp b/src/renderer_gl.cpp
 --- a/src/renderer_gl.cpp
 +++ b/src/renderer_gl.cpp
-@@ -2533,6 +2533,22 @@ namespace bgfx { namespace gl
+@@ -2521,6 +2521,22 @@ namespace bgfx { namespace gl
  				// Allow all texture filters.
  				bx::memSet(s_textureFilter, true, BX_COUNTOF(s_textureFilter) );
  
@@ -35,33 +36,19 @@ diff --git a/src/renderer_gl.cpp b/src/renderer_gl.cpp
  				bool bc123Supported = 0
  					|| s_extension[Extension::EXT_texture_compression_s3tc        ].m_supported
  					|| s_extension[Extension::MOZ_WEBGL_compressed_texture_s3tc   ].m_supported
-@@ -7633,11 +7649,28 @@ namespace bgfx { namespace gl
+@@ -7646,7 +7662,14 @@ namespace bgfx { namespace gl
  			}
  		}
  
--		const uint32_t samplerFlags = 0 != (m_flags & BGFX_TEXTURE_SRGB_MUTABLE)
-+		uint32_t samplerFlags = 0 != (m_flags & BGFX_TEXTURE_SRGB_MUTABLE)
- 			? flags
- 			: flags | BGFX_SAMPLER_SRGB
- 			;
- 
-+		if (!s_textureFilter[m_textureFormat]
-+		&&  0 == (samplerFlags & BGFX_SAMPLER_COMPARE_MASK) )
-+		{
-+			// Force point sampling when the texture format doesn't support linear sampling, also through sampler
-+			// objects. A comparison sampler filters the results of its comparisons, which every depth format allows.
-+			samplerFlags &= ~(0
-+				| BGFX_SAMPLER_MIN_MASK
-+				| BGFX_SAMPLER_MAG_MASK
-+				| BGFX_SAMPLER_MIP_MASK
-+				);
-+			samplerFlags |= 0
-+				| BGFX_SAMPLER_MIN_POINT
-+				| BGFX_SAMPLER_MAG_POINT
-+				| BGFX_SAMPLER_MIP_POINT
-+				;
-+		}
+-		const uint32_t filterFlags = isIntegerFormat(TextureFormat::Enum(m_textureFormat) )
++		// Force point sampling when the texture format doesn't support linear sampling, also through sampler
++		// objects. A comparison sampler filters the results of its comparisons, which every depth format allows.
++		const bool pointSampled = false
++			|| isIntegerFormat(TextureFormat::Enum(m_textureFormat) )
++			|| (!s_textureFilter[m_textureFormat] && 0 == (flags & BGFX_SAMPLER_COMPARE_MASK) )
++			;
 +
- 		if (s_renderGL->m_samplerObjectSupport)
- 		{
- 			s_renderGL->setSamplerState(_stage, m_numMips, samplerFlags, _palette[index], _lodMin, _lodMax);
++		const uint32_t filterFlags = pointSampled
+ 			? (flags & ~(BGFX_SAMPLER_MIN_MASK|BGFX_SAMPLER_MAG_MASK|BGFX_SAMPLER_MIP_MASK) ) | BGFX_SAMPLER_POINT
+ 			: flags
+ 			;
