@@ -2,6 +2,7 @@
 #include "watcher.h"
 
 #include <algorithm>
+#include <iterator>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -79,6 +80,51 @@ static auto entry_serialization_key(const fs::path& watch_root, const fs::watche
     const fs::path parent = entry.path.parent_path();
     const fs::path key = parent.empty() ? watch_root : parent;
     return normalize_key(key);
+}
+
+using path_key_set = std::unordered_set<fs::path::string_type>;
+
+/// The spelling batch entries are compared in: a synced entry is built from its reference entry's path, the batch
+/// spells the same file from the directory walk.
+static auto make_batch_key(const fs::path& path) -> fs::path::string_type
+{
+    return path.lexically_normal().native();
+}
+
+/// The files a live batch created or modified.
+static auto collect_changed_files(const std::vector<watcher::entry>& entries) -> path_key_set
+{
+    path_key_set changed;
+    changed.reserve(entries.size());
+    for(const auto& entry : entries)
+    {
+        const bool is_changed =
+            entry.status == watcher::entry_status::created || entry.status == watcher::entry_status::modified;
+        if(is_changed && entry.type != fs::file_type::directory)
+        {
+            changed.insert(make_batch_key(entry.path));
+        }
+    }
+    return changed;
+}
+
+/// The synced entries that the batch of `changed` files created or modified too.
+static auto find_changed_entries(const std::vector<fs::path>& synced_entries, const path_key_set& changed)
+    -> std::vector<fs::path>
+{
+    std::vector<fs::path> found;
+    if(changed.empty())
+    {
+        return found;
+    }
+    std::copy_if(synced_entries.begin(),
+                 synced_entries.end(),
+                 std::back_inserter(found),
+                 [&changed](const fs::path& synced_entry)
+                 {
+                     return changed.count(make_batch_key(synced_entry)) > 0;
+                 });
+    return found;
 }
 
 syncer::~syncer()
@@ -196,7 +242,9 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
 
     const auto on_change = [this, on_progress](const auto& entries, bool is_initial_listing)
     {
-        const auto process_entry = [this, is_initial_listing](const watcher::entry& entry)
+        // Only a live batch is collected: the initial listing of a big project reports every file and changes none.
+        const path_key_set changed_files = is_initial_listing ? path_key_set{} : collect_changed_files(entries);
+        const auto process_entry = [this, is_initial_listing, &changed_files](const watcher::entry& entry)
         {
             const bool is_directory = (entry.type == fs::file_type::directory);
             const std::string entry_extension = this->get_mapping_key(entry.path, is_directory);
@@ -215,7 +263,11 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
                     auto callback = this->get_on_created_callback(entry_extension);
                     if(callback)
                     {
-                        callback(entry_extension, entry.path, synced_entries, is_initial_listing);
+                        callback(entry_extension,
+                                 entry.path,
+                                 synced_entries,
+                                 is_initial_listing,
+                                 find_changed_entries(synced_entries, changed_files));
                     }
                 }
                 break;
@@ -225,7 +277,11 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
                     if(callback)
                     {
                         const auto synced_entries = this->get_synced_entries(entry.path, is_directory);
-                        callback(entry_extension, entry.path, synced_entries, is_initial_listing);
+                        callback(entry_extension,
+                                 entry.path,
+                                 synced_entries,
+                                 is_initial_listing,
+                                 find_changed_entries(synced_entries, changed_files));
                     }
                 }
                 break;

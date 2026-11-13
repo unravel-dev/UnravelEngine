@@ -17,8 +17,12 @@ public:
 
     /// current_entry: the last entry of the reference folder that was handled, relative to it.
     using on_sync_progress_t = std::function<void(size_t completed, size_t total, const std::string& current_entry)>;
-    using on_entry_created_t = std::function<void(const std::string&, const fs::path&, const std::vector<fs::path>&, bool)>;
-    using on_entry_modified_t = std::function<void(const std::string&, const fs::path&, const std::vector<fs::path>&, bool)>;
+    /// (mapping key, entry, synced entries, is initial listing, the synced entries created or modified in the same
+    /// batch as the entry). The last list is empty for the initial listing, which reports what is there, not changes.
+    using on_entry_created_t = std::function<
+        void(const std::string&, const fs::path&, const std::vector<fs::path>&, bool, const std::vector<fs::path>&)>;
+    using on_entry_modified_t = std::function<
+        void(const std::string&, const fs::path&, const std::vector<fs::path>&, bool, const std::vector<fs::path>&)>;
     using on_entry_removed_t = std::function<void(const std::string&, const fs::path&, const std::vector<fs::path>&)>;
     using on_entry_renamed_t = std::function<void(const std::string&, const rename_pair_t&, const std::vector<rename_pair_t>&)>;
 

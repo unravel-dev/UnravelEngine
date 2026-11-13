@@ -12,7 +12,8 @@
  *   - a dotted file is handled by the mapping of its real extension and its synced entry keeps the
  *     whole name;
  *   - a file whose extension has no mapping gets no callback;
- *   - a dotted directory is handled by the directory mapping.
+ *   - a dotted directory is handled by the directory mapping;
+ *   - a created or modified file's callback names the synced entries changed in the same batch.
  *
  * Environment: UNRAVEL_FS_SYNCER_TEST_DIR overrides the scratch folder.
  */
@@ -21,6 +22,7 @@
 
 #include <filesystem/filesystem.h>
 #include <filesystem/syncer.h>
+#include <filesystem/watcher.h>
 
 #include <algorithm>
 #include <chrono>
@@ -63,11 +65,11 @@ auto get_run_root() -> fs::path
     return base / ("run_" + std::to_string(stamp));
 }
 
-void write_file(const fs::path& path)
+void write_file(const fs::path& path, const std::string& content = "data\n")
 {
     fs::error_code err;
     fs::create_directories(path.parent_path(), err);
-    std::ofstream(path, std::ios::binary) << "data\n";
+    std::ofstream(path, std::ios::binary) << content;
 }
 
 struct observed_entries
@@ -107,12 +109,14 @@ void test_dotted_names()
     write_file(reference / "Models.v2" / "inner.png");
 
     observed_entries observed;
-    const auto on_file = [&](const std::string& key, const fs::path& path, const std::vector<fs::path>& entries, bool)
+    const auto on_file =
+        [&](const std::string& key, const fs::path& path, const std::vector<fs::path>& entries, bool, const std::vector<fs::path>&)
     {
         std::lock_guard<std::mutex> lock(observed.mutex);
         observed.files.emplace_back(key, path.filename().string(), entries);
     };
-    const auto on_directory = [&](const std::string&, const fs::path& path, const std::vector<fs::path>&, bool)
+    const auto on_directory =
+        [&](const std::string&, const fs::path& path, const std::vector<fs::path>&, bool, const std::vector<fs::path>&)
     {
         std::lock_guard<std::mutex> lock(observed.mutex);
         observed.directories.push_back(path.filename().string());
@@ -147,11 +151,102 @@ void test_dotted_names()
     fs::remove_all(root, err);
 }
 
+/// One created or modified file callback: the file, whether it came from the initial listing, and the names of
+/// its synced entries the same batch changed.
+struct observed_change
+{
+    std::string name;
+    bool is_initial_listing{};
+    std::vector<std::string> changed_synced;
+};
+
+struct observed_changes
+{
+    std::mutex mutex;
+    std::vector<observed_change> changes;
+
+    /// Waits for a callback of `name` (from the initial listing or not) and copies it to `found`.
+    auto wait_for(const std::string& name, bool is_initial_listing, observed_change& found) -> bool
+    {
+        const auto deadline = std::chrono::steady_clock::now() + EVENT_TIMEOUT;
+        while(std::chrono::steady_clock::now() < deadline)
+        {
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                const auto it = std::find_if(changes.begin(),
+                                             changes.end(),
+                                             [&](const observed_change& change)
+                                             {
+                                                 return change.name == name && change.is_initial_listing == is_initial_listing;
+                                             });
+                if(it != changes.end())
+                {
+                    found = *it;
+                    return true;
+                }
+            }
+            std::this_thread::sleep_for(POLL_STEP);
+        }
+        return false;
+    }
+};
+
+/// The editor's meta syncer rewrites a file's .meta to have it compiled, unless the .meta changed in the same
+/// batch: then it is compiled already. These pin what the callback is told, with the .meta beside its file as in
+/// the editor:
+///   - the initial listing names no changed synced entry;
+///   - a file that arrives with its .meta in one batch names its .meta;
+///   - a file changed alone names none.
+void test_same_batch_changes()
+{
+    const fs::path root = get_run_root();
+    const fs::path data = root / "data";
+    write_file(data / "kept.png");
+    write_file(data / "kept.png.meta");
+    observed_changes observed;
+    const auto on_file = [&](const std::string&,
+                             const fs::path& path,
+                             const std::vector<fs::path>&,
+                             bool is_initial_listing,
+                             const std::vector<fs::path>& changed_synced)
+    {
+        observed_change change{path.filename().string(), is_initial_listing, {}};
+        for(const auto& entry : changed_synced)
+        {
+            change.changed_synced.push_back(entry.filename().string());
+        }
+        std::lock_guard<std::mutex> lock(observed.mutex);
+        observed.changes.push_back(std::move(change));
+    };
+    fs::syncer syncer;
+    syncer.set_mapping(".png", {".meta"}, on_file, on_file, nullptr, nullptr);
+    syncer.sync(data, data);
+    observed_change listed;
+    check(observed.wait_for("kept.png", true, listed) && listed.changed_synced.empty(),
+          "the initial listing names no changed synced entry");
+    {
+        fs::watcher::scoped_pause pause;
+        write_file(data / "arrived.png", "arrived image\n");
+        write_file(data / "arrived.png.meta", "arrived meta\n");
+    }
+    observed_change arrived;
+    check(observed.wait_for("arrived.png", false, arrived) && arrived.changed_synced == std::vector<std::string>{"arrived.png.meta"},
+          "a file that arrives with its .meta names the .meta as changed with it");
+    write_file(data / "kept.png", "edited image\n");
+    observed_change edited;
+    check(observed.wait_for("kept.png", false, edited) && edited.changed_synced.empty(),
+          "a file changed alone names no changed synced entry");
+    syncer.unsync();
+    fs::error_code err;
+    fs::remove_all(root, err);
+}
+
 auto run_fs_syncer_suite(rtti::context& /*ctx*/) -> int
 {
     g_checks = 0;
     g_failures = 0;
     test_dotted_names();
+    test_same_batch_changes();
     std::printf("fs syncer: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }

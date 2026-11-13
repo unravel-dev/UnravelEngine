@@ -221,6 +221,29 @@ auto get_meta_key(const fs::path& path) -> std::string
     return key + ".meta";
 }
 
+/// The other file that already holds @p uid while it still exists: a copy of a file made together with its .meta
+/// (a folder copied outside the editor) claims the id of the original. Empty when the id is free, is @p ref_path's
+/// own, or names a file that is gone (a move reported as a new file).
+auto find_other_holder_of_uid(const asset_manager& am, const hpp::uuid& uid, const fs::path& ref_path) -> std::string
+{
+    const auto holder = am.get_metadata(uid);
+    if(holder.location.empty())
+    {
+        return {};
+    }
+    const auto own_key = fs::convert_to_protocol(ref_path).generic_string();
+    if(fs::make_path_key(holder.location) == fs::make_path_key(own_key))
+    {
+        return {};
+    }
+    fs::error_code ec;
+    if(!fs::has_known_protocol(holder.location) || !fs::exists(fs::resolve_protocol(holder.location), ec))
+    {
+        return {};
+    }
+    return holder.location;
+}
+
 /// False when @p key's source is gone: the compiled file @p entry_path left behind is removed. Its .meta is removed
 /// only on @p is_initial_listing (a source deleted while the editor was closed). Live, the meta syncer owns metas,
 /// and a compile that lands while its source is being moved would otherwise delete the .meta - and the asset's id -
@@ -475,8 +498,11 @@ static void add_to_syncer(rtti::context& ctx,
     auto& ts = ctx.get_cached<threader>();
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto on_modified =
-        [&ts, &am](const std::string& ext, const auto& ref_path, const auto& synced_paths, bool is_initial_listing)
+    auto on_modified = [&ts, &am](const std::string& ext,
+                                  const auto& ref_path,
+                                  const auto& synced_paths,
+                                  bool is_initial_listing,
+                                  const std::vector<fs::path>& /*changed_synced_paths*/)
     {
         auto paths = remove_meta_tag(synced_paths);
 
@@ -523,7 +549,7 @@ static void add_to_syncer(rtti::context& ctx,
         }
         if(!stale.empty())
         {
-            on_modified(ext, ref_paths.second, stale, false);
+            on_modified(ext, ref_paths.second, stale, false, {});
         }
     };
 
@@ -557,8 +583,11 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
     auto& ts = ctx.get_cached<threader>();
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto on_modified =
-        [&ts, &am](const std::string& ext, const auto& ref_path, const auto& synced_paths, bool is_initial_listing)
+    auto on_modified = [&ts, &am](const std::string& ext,
+                                  const auto& ref_path,
+                                  const auto& synced_paths,
+                                  bool is_initial_listing,
+                                  const std::vector<fs::path>& /*changed_synced_paths*/)
     {
         auto paths = remove_meta_tag(synced_paths);
         if(paths.empty())
@@ -636,8 +665,11 @@ void watch_synced<gfx::shader>(rtti::context& ctx, std::vector<uint64_t>& watche
 
 void asset_watcher::setup_directory(rtti::context& ctx, fs::syncer& syncer)
 {
-    const auto on_dir_modified =
-        [](const std::string& ext, const auto& /*ref_path*/, const auto& /*synced_paths*/, bool /*is_initial_listing*/)
+    const auto on_dir_modified = [](const std::string& ext,
+                                    const auto& /*ref_path*/,
+                                    const auto& /*synced_paths*/,
+                                    bool /*is_initial_listing*/,
+                                    const std::vector<fs::path>& /*changed_synced_paths*/)
     {
 
     };
@@ -695,8 +727,11 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
         am.rename_asset_info_for_path(ref_paths.first, ref_paths.second);
     };
 
-    const auto on_file_modified =
-        [&am, this](const std::string& ext, const auto& ref_path, const auto& synced_paths, bool is_initial_listing)
+    const auto on_file_modified = [&am, this](const std::string& ext,
+                                              const auto& ref_path,
+                                              const auto& synced_paths,
+                                              bool is_initial_listing,
+                                              const std::vector<fs::path>& changed_synced_paths)
     {
         for(const auto& synced_path : synced_paths)
         {
@@ -725,6 +760,21 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
             }
             
 
+            if(!meta.uid.is_nil())
+            {
+                // Two files with one id would make every reference to the first one load the second.
+                const auto holder = find_other_holder_of_uid(am, meta.uid, ref_path);
+                if(!holder.empty())
+                {
+                    const auto protocol_path = fs::convert_to_protocol(ref_path);
+                    meta.uid = am.generate_metadata(protocol_path).uid;
+                    APPLOG_WARNING("{} had the id of {} (a copy made together with its .meta). It gets an id of its own, "
+                                   "and references keep pointing at {}.",
+                                   protocol_path.generic_string(),
+                                   holder,
+                                   holder);
+                }
+            }
             if(meta.uid.is_nil() || recreate_meta_file)
             {
                 auto new_meta = am.get_metadata_for_path(ref_path).meta;
@@ -746,10 +796,15 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
             meta.uid = am.add_asset_info_for_path(ref_path, meta, true);
 
             // Writing the .meta is what recompiles the asset (the compiled-asset syncer watches it), so
-            // a changed source always rewrites it. The first listing writes only what is missing or
-            // changed: rewriting every unchanged .meta would recompile the whole project on every open.
+            // a changed source rewrites it. A .meta that changed in the same batch as its source (it
+            // came with it: an import, a package, a pull) is compiled by that syncer already, and a
+            // second write would compile the asset twice. The first listing writes only what is
+            // missing or changed: rewriting every unchanged .meta would recompile the whole project.
             const bool is_meta_changed = !has_meta_file || recreate_meta_file || meta.uid != loaded_uid;
-            if(!is_initial_listing || is_meta_changed)
+            const bool is_meta_in_batch = std::find(changed_synced_paths.begin(), changed_synced_paths.end(), synced_path) !=
+                                          changed_synced_paths.end();
+            const bool needs_compile_trigger = !is_initial_listing && !is_meta_in_batch;
+            if(is_meta_changed || needs_compile_trigger)
             {
                 save_to_file(synced_path.string(), meta);
             }
