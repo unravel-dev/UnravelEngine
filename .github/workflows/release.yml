@@ -547,6 +547,11 @@ jobs:
               echo "::error::$(basename "$package") is not a package of version ${PACKAGE_VERSION}."
               exit 1
             fi
+            # CMake names a build of sources that differ from the commit -dirty; a release holds builds of the commit.
+            if [[ "$(basename "$package")" == "${prefix}dirty-"* ]]; then
+              echo "::error::$(basename "$package") was built from sources that differ from the commit."
+              exit 1
+            fi
           done
           if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --draft --verify-tag --title "$RELEASE_TAG" --generate-notes
@@ -589,3 +594,51 @@ jobs:
           for package in "${packages[@]}"; do
             echo "Uploaded $(basename "$package") to ${RELEASE_TAG}." >> "$GITHUB_STEP_SUMMARY"
           done
+      # latest.json: the newest published build of every platform, read from the package names of all releases. The
+      # editor's update check fetches releases/latest/download/latest.json, a release download and no API request.
+      # The run's own release counts even as a draft, so its copy is right once the draft is published; the release
+      # GitHub serves as the latest, when it is another one, gets a copy of the published builds only. It runs after
+      # the upload, so the file never names a package that is not there.
+      - name: Write the update manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          releases="$(gh api --paginate "repos/${GH_REPO}/releases?per_page=100" | jq -s '[.[][]]')"
+          # Writes the manifest of the published releases, and of release $1 when it is not empty, to file $2. Only
+          # packages named as the step above names them count: older ones also carry the commit (-g1a2b3c4d), and a
+          # build of changed sources says -dirty. An optional group that did not match reads as null or "", as jq
+          # versions differ. A manifest without builds means the package names were not understood, so it fails.
+          write_manifest() {
+            jq --arg include "$1" '
+              [ .[]
+                | select(((.draft or .prerelease) | not) or .tag_name == $include)
+                | .tag_name as $tag
+                | .assets[]
+                | (.name | capture("^UnravelEngine-(?<version>[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9]+)?)(?<commit>-g[0-9a-f]+)?(?<dirty>-dirty)?-(?<platform>[A-Za-z][A-Za-z0-9._-]*)\\.zip$")) as $m
+                | select(($m.commit // "") == "" and ($m.dirty // "") == "")
+                | {platform: $m.platform, version: $m.version, tag: $tag, asset: .name,
+                   order: ($m.version | [splits("[.-]")] | map(tonumber))} ]
+              | group_by(.platform)
+              | map(max_by(.order) | del(.order))
+              | {schema: 1, builds: .}' <<< "$releases" > "$2"
+            jq -e '.builds | length > 0' "$2" > /dev/null
+          }
+          mkdir -p manifest/run manifest/latest
+          write_manifest "$RELEASE_TAG" manifest/run/latest.json
+          gh release upload "$RELEASE_TAG" manifest/run/latest.json --clobber
+          {
+            echo "latest.json of ${RELEASE_TAG}:"
+            echo '```json'
+            cat manifest/run/latest.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # No published release answers 404; whatever gh prints then is no tag.
+          latest_tag="$(gh api "repos/${GH_REPO}/releases/latest" --jq .tag_name 2> /dev/null || true)"
+          if [[ "$latest_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$latest_tag" != "$RELEASE_TAG" ]; then
+            write_manifest "" manifest/latest/latest.json
+            gh release upload "$latest_tag" manifest/latest/latest.json --clobber
+            echo "Updated latest.json of ${latest_tag}, the latest release." >> "$GITHUB_STEP_SUMMARY"
+          fi
