@@ -1,716 +1,233 @@
 #include "version_manager.h"
-#include "editor/imgui/integration/fonts/icons/icons_material_design_icons.h"
-#include "imgui/imgui.h"
-#include "threadpp/future.hpp"
-#include <context/context.hpp>
+
 #include <editor/imgui/integration/imgui_notify.h>
+#include <editor/system/project_manager.h>
+#include <imgui/imgui.h>
+#include <logging/logging.h>
+#include <threadpp/future.hpp>
+#include <update_check/update_fetch.h>
 
-#include <version/version.h>
-
-
-#include <algorithm>
-#include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <string>
-#include <vector>
-#include <hpp/string_view.hpp>
-#include <hpp/optional.hpp>
-
-#include <logging/logging.h>
-#include <ser20/external/simdjson/simdjson.h>
-// #define CPPHTTPLIB_OPENSSL_SUPPORT 1
-// #include <httplib.h>
-#include <fstream>
-#include <filesystem/filesystem.h>
-#include <engine/assets/impl/asset_writer.h>
 
 namespace unravel
 {
-
 namespace
 {
-fs::path github_rate_limit_cfg = fs::persistent_path() / "unravel" / "github_rate_limit.cfg";
 
-/// Minimum interval between GitHub API checks.
-constexpr auto github_check_interval = std::chrono::hours(6);
+/// The update check's toast: a later answer replaces the one shown. Distinct from the other toasts' ids.
+constexpr std::uint64_t UPDATE_TOAST_ID = 100;
+constexpr int UPDATE_NOTICE_DURATION_MS = 60000;
+constexpr int UPDATE_ANSWER_DURATION_MS = 5000;
 
-/**
- * @brief Reads the last GitHub check timestamp from the cfg file.
- * @return Seconds since epoch of the last check, or 0 if the file doesn't exist or is invalid.
- */
-auto read_last_check_time() -> std::int64_t
+auto is_startup_check_enabled(rtti::context& ctx) -> bool
 {
-    fs::error_code ec;
-    if(!fs::exists(github_rate_limit_cfg, ec) || ec)
-    {
-        return 0;
-    }
-    std::ifstream file(github_rate_limit_cfg);
-    if(!file.is_open())
-    {
-        return 0;
-    }
-    std::int64_t timestamp = 0;
-    file >> timestamp;
-    if(file.fail())
-    {
-        return 0;
-    }
-    return timestamp;
+    return ctx.get_cached<project_manager>().get_editor_settings().updates.check_at_startup;
 }
 
-/**
- * @brief Writes the current time as the last GitHub check timestamp to the cfg file.
- */
-void write_last_check_time()
+/// A version as a package names it: without the commit.
+auto get_update_display_version(version::engine_version version) -> std::string
 {
-    fs::error_code ec;
-    auto parent = github_rate_limit_cfg.parent_path();
-    if(!fs::exists(parent, ec))
-    {
-        fs::create_directories(parent, ec);
-    }
-
-    asset_writer::atomic_write_file(github_rate_limit_cfg, [](const fs::path& path)
-    {
-        std::ofstream file(path, std::ios::trunc);
-        if(file.is_open())
-        {
-            auto now = std::chrono::system_clock::now();
-            auto epoch_seconds = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-            file << epoch_seconds;
-        }
-    }, ec);
+    version.sha.clear();
+    return version.to_string();
 }
 
-/**
- * @brief Checks whether enough time has passed since the last GitHub API check.
- * @return True if a fresh check should be performed.
- */
-auto should_check_github() -> bool
+void show_update_answer(ImGuiToastType type, const std::string& title, const std::string& content)
 {
-    auto last_check = read_last_check_time();
-    if(last_check == 0)
-    {
-        return true;
-    }
-    auto now = std::chrono::system_clock::now();
-    auto now_seconds = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-    auto elapsed = std::chrono::seconds(now_seconds - last_check);
-    return elapsed >= github_check_interval;
+    ImGuiToast toast(type, UPDATE_ANSWER_DURATION_MS);
+    toast.set_title("%s", title.c_str());
+    toast.set_content("%s", content.c_str());
+    toast.set_horizontal_pos(ImGuiToastHorizontalPos_Left);
+    ImGui::PushNotification(UPDATE_TOAST_ID, toast);
 }
 
-// github_releases.cpp
-//
-// Requirements:
-//   - cpp-httplib (with OpenSSL enabled)  https://github.com/yhirose/cpp-httplib
-//   - simdjson                            https://github.com/simdjson/simdjson
-//
-// Build idea (example):
-//   g++ -std=c++20 github_releases.cpp -lssl -lcrypto -o github_releases
-//
-// What this does:
-//   1) Fetches GitHub releases (optionally only newest N) via REST API
-//   2) Lists releases + assets (artifacts)
-//   3) Checks if an update is available compared to a "current version"
-//      Version pattern: major.minor.patch-commit_count_since_tag[-gSHA]
-//      e.g. 1.0.0-66-gc83fa23; 1.0.0-61; 1.0.1-0; etc.
-
-// #include <httplib.h>
-
-// ----------------------------- Data model -----------------------------
-
-struct GitHubAsset
+void log_update_outcome(const update_check::check_outcome& outcome)
 {
-    std::string name;
-    std::string browser_download_url;
-    std::uint64_t size = 0;
-    std::string sha256; // Optional: only if you encode it somewhere (GitHub doesn't provide sha256 by default)
-};
-
-struct GitHubRelease
-{
-    std::string tag_name; // Often used as "version"
-    std::string name;     // Human title
-    bool draft = false;
-    bool prerelease = false;
-    std::string published_at; // ISO string
-    std::vector<GitHubAsset> assets;
-};
-
-// ----------------------------- Version parsing & compare -----------------------------
-//
-// The core parser/comparator lives in <version/version.h>. We re-use those
-// canonical implementations and only keep the asset-name-specific logic
-// (which is a launcher concern, not a general version concern) here.
-
-using EngineVersion = version::engine_version;
-
-// Adapter: hpp::string_view is not implicitly convertible to hpp::string_view.
-// The parser API lives in <version/version.h> and takes hpp::string_view, so
-// we convert here at the boundary.
-static auto parse_engine_version(hpp::string_view ver) -> hpp::optional<EngineVersion>
-{
-    return version::parse(hpp::string_view(ver.data(), ver.size()));
-}
-
-// Back-compat alias for compare_versions: the shared implementation returns
-// int in exactly the same sign convention (-1 / 0 / +1).
-using version::compare;
-static auto compare_versions(const EngineVersion& a, const EngineVersion& b) -> int
-{
-    return version::compare(a, b);
-}
-
-// Extract version from asset filename.
-// Pattern: "UnravelEngine-{version}-{platform-info}"
-// Example: "UnravelEngine-1.0.0-69-g1ead714-Windows-AMD64.exe" -> "1.0.0-69-g1ead714"
-static auto extract_version_from_asset_name(hpp::string_view asset_name) -> hpp::optional<EngineVersion>
-{
-    // Look for "UnravelEngine-" prefix
-    constexpr hpp::string_view prefix = "UnravelEngine-";
-    if(asset_name.size() < prefix.size() || asset_name.substr(0, prefix.size()) != prefix)
+    if(!outcome.has_answer)
     {
-        return std::nullopt;
+        APPLOG_TRACE("Update check: no answer. {}", outcome.error);
+        return;
     }
-    
-    // Get the part after "UnravelEngine-"
-    hpp::string_view version_part = asset_name.substr(prefix.size());
-    
-    // Find where the platform part starts by looking for known platform prefixes
-    // Platform names: Windows, Linux, macOS (case-insensitive check for common ones)
-    constexpr const char* platform_prefixes[] = {
-        "-Windows-", "-Linux-", "-macOS-", "-Darwin-", "-Android-"
-    };
-    
-    size_t version_end = version_part.size();
-    for(const char* platform : platform_prefixes)
+    if(!outcome.build)
     {
-        size_t pos = version_part.find(platform);
-        if(pos != hpp::string_view::npos)
-        {
-            // Found a platform prefix, try parsing up to this point
-            hpp::string_view candidate = version_part.substr(0, pos);
-            auto parsed = parse_engine_version(candidate);
-            if(parsed)
-            {
-                version_end = pos;
-                break;
-            }
-        }
+        APPLOG_TRACE("Update check: latest.json lists no build for {}.", update_check::get_own_platform());
+        return;
     }
-    
-    // Also try case-insensitive search for platform names
-    if(version_end == version_part.size())
-    {
-        // Look for patterns like "-Windows", "-Linux" (capital letter after dash, followed by more dashes/end)
-        for(size_t i = 1; i < version_part.size(); ++i)
-        {
-            if(version_part[i - 1] == '-' && version_part[i] >= 'A' && version_part[i] <= 'Z')
-            {
-                // Found a dash followed by capital letter - might be platform
-                // Check if we can parse a valid version before this point
-                hpp::string_view candidate = version_part.substr(0, i - 1);
-                auto parsed = parse_engine_version(candidate);
-                if(parsed)
-                {
-                    version_end = i - 1;
-                    break;
-                }
-            }
-        }
-    }
-    
-    // Try parsing the version part
-    hpp::string_view version_str = version_part.substr(0, version_end);
-    auto result = parse_engine_version(version_str);
-    
-    // If parsing failed, try the entire remaining string (maybe no platform info)
-    if(!result && version_end == version_part.size())
-    {
-        // Already tried the full string, return nullopt
-        return std::nullopt;
-    }
-    
-    return result;
-}
-
-// Convenience: returns true if latest > current, nullopt if parsing fails
-static auto is_newer_version_available(hpp::string_view current_version_str, hpp::string_view latest_version_str) -> hpp::optional<bool>
-{
-    auto cur = parse_engine_version(current_version_str);
-    auto lat = parse_engine_version(latest_version_str);
-    if(!cur || !lat)
-    {
-        return std::nullopt;
-    }
-    return compare_versions(*cur, *lat) < 0;
-}
-
-// ----------------------------- GitHub API -----------------------------
-
-struct GitHubClientConfig
-{
-    std::string owner;
-    std::string repo;
-
-    // Optional. Strongly recommended for launchers to avoid rate limits.
-    // If provided, use "Bearer <token>".
-    std::string token;
-
-    // Include drafts? Usually no for public updates.
-    bool include_drafts = false;
-
-    // Include prereleases? Up to you.
-    bool include_prereleases = false;
-
-    // GitHub REST API host
-    std::string host = "api.github.com";
-
-    // How many releases to request per page (max 100).
-    int per_page = 50;
-};
-
-// Parse JSON into our structs
-static auto parse_release_json(const simdjson::dom::element& r) -> GitHubRelease
-{
-    GitHubRelease rel;
-    
-    auto tag_name = r["tag_name"];
-    if(!tag_name.error())
-    {
-        hpp::string_view tag_sv;
-        if(tag_name.get(tag_sv) == simdjson::SUCCESS)
-            rel.tag_name = std::string(tag_sv);
-    }
-    
-    auto name = r["name"];
-    if(!name.error())
-    {
-        hpp::string_view name_sv;
-        if(name.get(name_sv) == simdjson::SUCCESS)
-            rel.name = std::string(name_sv);
-    }
-    
-    auto draft = r["draft"];
-    if(!draft.error())
-    {
-        bool draft_val;
-        if(draft.get(draft_val) == simdjson::SUCCESS)
-            rel.draft = draft_val;
-    }
-    
-    auto prerelease = r["prerelease"];
-    if(!prerelease.error())
-    {
-        bool prerelease_val;
-        if(prerelease.get(prerelease_val) == simdjson::SUCCESS)
-            rel.prerelease = prerelease_val;
-    }
-    
-    auto published_at = r["published_at"];
-    if(!published_at.error())
-    {
-        hpp::string_view published_sv;
-        if(published_at.get(published_sv) == simdjson::SUCCESS)
-            rel.published_at = std::string(published_sv);
-    }
-
-    auto assets = r["assets"];
-    if(!assets.error() && assets.type() == simdjson::dom::element_type::ARRAY)
-    {
-        for(const auto& a : assets)
-        {
-            GitHubAsset asset;
-            
-            auto asset_name = a["name"];
-            if(!asset_name.error())
-            {
-                hpp::string_view name_sv;
-                if(asset_name.get(name_sv) == simdjson::SUCCESS)
-                    asset.name = std::string(name_sv);
-            }
-            
-            auto browser_url = a["browser_download_url"];
-            if(!browser_url.error())
-            {
-                hpp::string_view url_sv;
-                if(browser_url.get(url_sv) == simdjson::SUCCESS)
-                    asset.browser_download_url = std::string(url_sv);
-            }
-            
-            auto size = a["size"];
-            if(!size.error())
-            {
-                uint64_t size_val;
-                if(size.get(size_val) == simdjson::SUCCESS)
-                    asset.size = size_val;
-            }
-
-            // NOTE: GitHub releases API does NOT provide sha256 by default.
-            // If you want sha256, you can:
-            //   - upload a .sha256 file as a separate asset and parse it
-            //   - or store hashes in release notes and parse body
-            rel.assets.push_back(std::move(asset));
-        }
-    }
-    return rel;
-}
-
-// Result type for fetch operations
-struct FetchResult
-{
-    std::vector<GitHubRelease> releases;
-    std::string error_message;
-    
-    bool has_error() const { return !error_message.empty(); }
-};
-
-// Fetch all releases (paginated), filtered by config flags.
-// Returns newest-first as GitHub provides.
-static auto fetch_github_releases(const GitHubClientConfig& cfg) -> FetchResult
-{
-    // httplib::SSLClient cli(cfg.host);
-    // cli.set_follow_location(true);
-
-    // auto timeout = std::chrono::seconds(10);
-    // cli.set_max_timeout(std::chrono::milliseconds(timeout).count());
-    // httplib::Headers headers = {{"User-Agent", "UnravelLauncher"}, {"Accept", "application/vnd.github+json"}};
-    // if(!cfg.token.empty())
-    // {
-    //     headers.emplace("Authorization", "Bearer " + cfg.token);
-    // }
-
-    // FetchResult result;
-    // int page = 1;
-    // simdjson::dom::parser parser;
-
-    // while(true)
-    // {
-    //     std::string path = "/repos/" + cfg.owner + "/" + cfg.repo +
-    //                        "/releases?per_page=" + std::to_string(cfg.per_page) + "&page=" + std::to_string(page);
-
-    //     auto res = cli.Get(path.c_str(), headers);
-    //     if(!res)
-    //     {
-    //         result.error_message = "HTTP request failed (no response) for " + path;
-    //         return result;
-    //     }
-    //     if(res->status != 200)
-    //     {
-    //         result.error_message = "GitHub API error " + std::to_string(res->status) + " for " + path +
-    //                                " body: " + res->body;
-    //         return result;
-    //     }
-
-    //     auto remaining = res->get_header_value("X-RateLimit-Remaining");
-    //     auto reset     = res->get_header_value("X-RateLimit-Reset");
-
-    //     APPLOG_TRACE("GitHub Rate Limit: Remaining: {}", remaining);
-    //     APPLOG_TRACE("GitHub Rate Limit: Reset: {}", reset);
-
-    //     simdjson::dom::element j;
-    //     auto error = parser.parse(res->body).get(j);
-    //     if(error != simdjson::SUCCESS)
-    //     {
-    //         result.error_message = "Failed to parse JSON for " + path + ": " + simdjson::error_message(error);
-    //         return result;
-    //     }
-        
-    //     if(j.type() != simdjson::dom::element_type::ARRAY)
-    //     {
-    //         result.error_message = "Unexpected JSON (expected array) for " + path;
-    //         return result;
-    //     }
-
-    //     size_t array_size = 0;
-    //     for(const auto& r : j)
-    //     {
-    //         array_size++;
-    //         GitHubRelease rel = parse_release_json(r);
-
-    //         if(!cfg.include_drafts && rel.draft)
-    //             continue;
-    //         if(!cfg.include_prereleases && rel.prerelease)
-    //             continue;
-
-    //         result.releases.push_back(std::move(rel));
-    //     }
-
-    //     if(array_size == 0)
-    //         break;
-
-    //     // If less than per_page, no more pages.
-    //     if(static_cast<int>(array_size) < cfg.per_page)
-    //         break;
-
-    //     ++page;
-    //     // (Optional) hard cap to prevent runaway
-    //     if(page > 50)
-    //         break;
-    // } 
-    // return result;
-    return {};
-}
-
-// Extract the best version from a release (checks both tag_name and asset names).
-static auto get_best_version_from_release(const GitHubRelease& release) -> hpp::optional<EngineVersion>
-{
-    // First, try tag_name
-    auto tag_ver = parse_engine_version(release.tag_name);
-    
-    // Also check asset names for versions
-    hpp::optional<EngineVersion> asset_ver;
-    for(const auto& asset : release.assets)
-    {
-        auto extracted = extract_version_from_asset_name(asset.name);
-        if(extracted)
-        {
-            // Use the highest version found in assets
-            if(!asset_ver || compare_versions(*extracted, *asset_ver) > 0)
-            {
-                asset_ver = extracted;
-            }
-        }
-    }
-    
-    // Use the highest version between tag and assets
-    if(tag_ver && asset_ver)
-    {
-        return (compare_versions(*tag_ver, *asset_ver) > 0) ? tag_ver : asset_ver;
-    }
-    if(tag_ver)
-    {
-        return tag_ver;
-    }
-    return asset_ver;
-}
-
-// Find "latest" release by comparing tag_name versions and asset versions (your custom scheme).
-// Checks both the release tag_name and versions extracted from asset filenames.
-// Ignores releases whose tag_name doesn't parse (unless assets have parseable versions).
-static auto pick_latest_by_version(const std::vector<GitHubRelease>& releases) -> hpp::optional<GitHubRelease>
-{
-    hpp::optional<GitHubRelease> best;
-    hpp::optional<EngineVersion> best_ver;
-
-    for(const auto& r : releases)
-    {
-        auto release_ver = get_best_version_from_release(r);
-        if(!release_ver)
-        {
-            // Neither tag nor assets have a parseable version, skip this release
-            continue;
-        }
-
-        if(!best || compare_versions(*release_ver, *best_ver) > 0)
-        {
-            best = r;
-            best_ver = release_ver;
-        }
-    }
-    return best;
-}
-
-// Checks if update exists compared to current_version.
-// Returns the chosen latest release if newer, else nullopt.
-// Uses your compare: major/minor/patch then commit_count.
-// Checks both release tag_name and versions extracted from asset filenames.
-static auto check_for_update(const std::vector<GitHubRelease>& releases,
-                                                     hpp::string_view current_version) -> hpp::optional<GitHubRelease>
-{
-    auto cur = parse_engine_version(current_version);
-    if(!cur)
-    {
-        return std::nullopt;
-    }
-
-    auto latest = pick_latest_by_version(releases);
-    if(!latest)
-        return std::nullopt;
-
-    // Get the best version from the release (considering both tag and assets)
-    auto latest_ver = get_best_version_from_release(*latest);
-    if(!latest_ver)
-        return std::nullopt;
-
-    if(compare_versions(*cur, *latest_ver) < 0)
-    {
-        return latest;
-    }
-    return std::nullopt;
-}
-
-// ----------------------------- Example usage -----------------------------
-
-static void print_releases_and_assets(const std::vector<GitHubRelease>& releases)
-{
-    for(const auto& r : releases)
-    {
-        std::string release_info = "Release: " + r.tag_name;
-        if(!r.name.empty())
-            release_info += "  (" + r.name + ")";
-        if(!r.published_at.empty())
-            release_info += "  published: " + r.published_at;
-        if(r.prerelease)
-            release_info += "  [prerelease]";
-        if(r.draft)
-            release_info += "  [draft]";
-        APPLOG_TRACE("{}", release_info);
-
-        for(const auto& a : r.assets)
-        {
-            APPLOG_TRACE("  - {}  ({:.2f} MB)", a.name, a.size / (1024.0 * 1024.0));
-            APPLOG_TRACE("    {}", a.browser_download_url);
-        }
-        APPLOG_TRACE("");
-    }
-}
-
-auto check_for_update(bool force_check = false) -> bool
-{
-    if(!should_check_github() && !force_check)
-    {
-        APPLOG_TRACE("Skipping GitHub update check (last check was less than 6 hours ago).");
-        return false;
-    }
-
-    if(force_check)
-    {
-        write_last_check_time();
-    }
-
-    GitHubClientConfig cfg;
-    cfg.owner = "unravel-dev";
-    cfg.repo = "UnravelEngine";
-    // cfg.token = "ghp_..."; // strongly recommended for a launcher
-    cfg.include_drafts = false;
-    cfg.include_prereleases = false;
-    cfg.per_page = 50;
-
-    // Example current version (your scheme)
-    std::string current_version = version::get_full();
-
-    auto fetch_result = fetch_github_releases(cfg);
-    if(fetch_result.has_error())
-    {
-        APPLOG_ERROR("Error fetching releases: {}", fetch_result.error_message);
-        return false;
-    }
-
-
-    // Print everything we got (versions + artifacts)
-    print_releases_and_assets(fetch_result.releases);
-
-    // Update check
-    if(auto update = check_for_update(fetch_result.releases, current_version))
-    {
-        APPLOG_INFO("UPDATE AVAILABLE!");
-        APPLOG_INFO("  Current: {}", current_version);
-        APPLOG_INFO("  Latest:  {}", update->tag_name);
-        APPLOG_INFO("  Assets:");
-        for(const auto& a : update->assets)
-        {
-            APPLOG_INFO("    * {}", a.name);
-        }
-        return true;
-    }
-    else
-    {
-        APPLOG_TRACE("No update available. Current: {}", current_version);
-    }
-
-    return false;
+    APPLOG_TRACE("Update check: the newest build for {} is {} in {}.",
+                 outcome.build->platform,
+                 outcome.build->version.to_string(),
+                 outcome.build->tag);
 }
 
 } // namespace
+
 auto version_manager::init(rtti::context& ctx) -> bool
 {
-    tpp::async(
-        []()
-        {
-            return should_check_github();
-        })
-        .then(tpp::this_thread::get_id(),
-              [](auto result)
-              {
-                  auto has_update = result.get();
-                  if(has_update)
-                  {
-                    ImGuiToast toast(ImGuiToastType_Warning, 99999);
-                    // toast.set_title("New version available.");
-                    toast.set_show_dismiss_button(true);
-                    toast.set_horizontal_pos(ImGuiToastHorizontalPos_Left);
-                    toast.set_on_dismiss(
-                        []()
-                        {
-                            // Write the last check time to the cfg file
-                            write_last_check_time();
-                        }
-                    );
-                    toast.set_draw_callback(
-                        [](const ImGuiToast& toast, float opacity, const ImVec4& text_color)
-                        {
-                            ImGui::TextColored(text_color, "New update available!");
-                            ImGui::SameLine();
-                            if(ImGui::Button("Install Now"))
-                            {
-                                ImGui::OpenInShell("https://github.com/unravel-dev/UnravelEngine/releases");
-                            }
-                        });
-                    ImGui::PushNotification(toast);
-                  }
-              });
+    own_version_ = update_check::get_own_version();
+    state_path_ = update_check::get_update_state_path(update_check::get_own_platform());
+    state_ = update_check::load_update_state(state_path_);
+    if(!own_version_ || !is_startup_check_enabled(ctx))
+    {
+        return true;
+    }
+    // A due check announces with its own answer, so a build it no longer lists is never shown first.
+    if(update_check::is_check_due(state_, std::chrono::system_clock::now()))
+    {
+        start_check(false);
+        return true;
+    }
+    if(auto build = update_check::get_build_to_announce(state_, *own_version_, false))
+    {
+        announce_update(*build);
+    }
     return true;
 }
 
 auto version_manager::deinit(rtti::context& ctx) -> bool
 {
+    is_stopping_->store(true);
     return true;
 }
 
 void version_manager::check_for_update_async()
 {
+    if(!own_version_)
+    {
+        show_update_answer(ImGuiToastType_Warning,
+                           "This editor has no version.",
+                           "It was built from sources without their tags, so it cannot be compared with a release.");
+        return;
+    }
+    start_check(true);
+}
+
+void version_manager::start_check(bool is_manual)
+{
+    if(is_checking_)
+    {
+        is_manual_check_ = is_manual_check_ || is_manual;
+        return;
+    }
+    is_checking_ = true;
+    is_manual_check_ = is_manual;
+    auto is_stopping = is_stopping_;
     tpp::async(
-        []()
+        [is_stopping]()
         {
-            return check_for_update(true);
+            return update_check::fetch_update(
+                [is_stopping]()
+                {
+                    return is_stopping->load();
+                });
         })
         .then(tpp::this_thread::get_id(),
-              [](auto result)
+              [this, is_stopping](auto result)
               {
-                  auto has_update = result.get();
-                  if(has_update)
+                  // Once the editor closes, the manager may be gone.
+                  if(is_stopping->load())
                   {
-                    ImGuiToast toast(ImGuiToastType_Warning, 99999);
-                    toast.set_title("New version available.");
-                    toast.set_horizontal_pos(ImGuiToastHorizontalPos_Left);
-                    toast.set_show_dismiss_button(true);
-                    toast.set_on_dismiss(
-                        []()
-                        {
-                            // Write the last check time to the cfg file
-                            write_last_check_time();
-                        }
-                    );
-                    toast.set_draw_callback(
-                        [](const ImGuiToast& toast, float opacity, const ImVec4& text_color)
-                        {
-                            ImGui::Text("Download from ");
-                            ImGui::SameLine();
-                            ImGui::TextLinkOpenURL("Releases.", "https://github.com/unravel-dev/UnravelEngine/releases");
-                        });
-                    ImGui::PushNotification(toast);
+                      return;
                   }
-                  else
-                  {
-                    ImGuiToast toast(ImGuiToastType_Warning, 2000);
-                    toast.set_title("There are no updates available.");
-                    toast.set_content("You are using the latest version.");
-                    toast.set_horizontal_pos(ImGuiToastHorizontalPos_Left);
-
-                    ImGui::PushNotification(toast);
-                  }
+                  apply_outcome(result.get());
               });
 }
+
+void version_manager::apply_outcome(const update_check::check_outcome& outcome)
+{
+    const bool is_manual = is_manual_check_;
+    is_checking_ = false;
+    is_manual_check_ = false;
+    log_update_outcome(outcome);
+    change_state(
+        [&outcome](update_check::update_state& state)
+        {
+            update_check::record_outcome(state, outcome, std::chrono::system_clock::now());
+        });
+    if(auto build = update_check::get_build_to_announce(state_, *own_version_, is_manual))
+    {
+        announce_update(*build);
+        return;
+    }
+    if(is_manual)
+    {
+        show_manual_answer(outcome);
+    }
+}
+
+void version_manager::announce_update(const update_check::release_build& build)
+{
+    const std::string version_text = build.version.to_string();
+    const std::string title = "Unravel Engine " + version_text + " is available.";
+    const std::string content = "This editor is " + get_update_display_version(*own_version_) + ".";
+    const std::string page_url = update_check::get_release_page_url(build.tag);
+    APPLOG_INFO("{} {}", title, page_url);
+    ImGuiToast toast(ImGuiToastType_Info, UPDATE_NOTICE_DURATION_MS);
+    toast.set_title("%s", title.c_str());
+    toast.set_content("%s", content.c_str());
+    toast.set_horizontal_pos(ImGuiToastHorizontalPos_Left);
+    // The dismiss button is "Not now": this build is not announced again, a newer one is.
+    toast.set_show_dismiss_button(true);
+    toast.set_on_dismiss(
+        [this, is_stopping = is_stopping_, version_text]()
+        {
+            if(!is_stopping->load())
+            {
+                dismiss_update(version_text);
+            }
+        });
+    toast.set_draw_callback(
+        [page_url](const ImGuiToast&, float, const ImVec4&)
+        {
+            if(ImGui::Button("Open the download page"))
+            {
+                ImGui::OpenInShell(page_url.c_str());
+            }
+        });
+    ImGui::PushNotification(UPDATE_TOAST_ID, toast);
+}
+
+void version_manager::show_manual_answer(const update_check::check_outcome& outcome)
+{
+    if(!outcome.has_answer)
+    {
+        show_update_answer(ImGuiToastType_Warning,
+                           "The update information could not be read.",
+                           "GitHub could not be reached or answered with an error. Check the connection and try again.");
+        return;
+    }
+    if(!outcome.build)
+    {
+        show_update_answer(ImGuiToastType_Info,
+                           "No build for this platform is published.",
+                           "This editor is built for " + std::string(update_check::get_own_platform()) + ".");
+        return;
+    }
+    show_update_answer(ImGuiToastType_Success,
+                       "This editor is up to date.",
+                       "The newest published build is " + outcome.build->version.to_string() + ". This editor is " +
+                           get_update_display_version(*own_version_) + ".");
+}
+
+void version_manager::dismiss_update(const std::string& version)
+{
+    change_state(
+        [&version](update_check::update_state& state)
+        {
+            state.dismissed_version = version;
+        });
+}
+
+void version_manager::change_state(const std::function<void(update_check::update_state&)>& change)
+{
+    // Other editors of this platform share the file: a change goes onto what it holds now, not onto what this
+    // editor read at start, so their answers and dismissals stay.
+    state_ = update_check::load_update_state(state_path_);
+    change(state_);
+    if(!update_check::save_update_state(state_path_, state_))
+    {
+        APPLOG_TRACE("Update check: {} could not be written.", state_path_.string());
+    }
+}
+
 } // namespace unravel

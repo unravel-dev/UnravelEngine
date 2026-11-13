@@ -40,7 +40,6 @@ struct engine_version
 auto parse(std::string_view text) -> std::optional<engine_version>;
 
 /// Three-way compare: returns -1 if a<b, 0 if equal, +1 if a>b.
-/// Compatible with the legacy API surface in version_manager.cpp.
 auto compare(const engine_version& a, const engine_version& b) -> int;
 
 /// Returns the version the engine was built with (parsed from get_full()).

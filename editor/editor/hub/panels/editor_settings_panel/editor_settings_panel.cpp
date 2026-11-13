@@ -52,6 +52,11 @@ void draw_scripting_settings(rtti::context& ctx)
     }
 }
 
+void draw_updates_settings(rtti::context& ctx)
+{
+    inspect_and_save(ctx, ctx.get_cached<project_manager>().get_editor_settings().updates);
+}
+
 auto make_editor_settings_categories() -> std::vector<settings_category>
 {
     return {
@@ -65,6 +70,11 @@ auto make_editor_settings_categories() -> std::vector<settings_category>
          "What reloads when scripts compile and play mode changes.",
          "reload domain app engine compile play mode",
          &draw_scripting_settings},
+        {"Updates",
+         ICON_MDI_UPDATE,
+         "Whether the editor looks for a newer build at start.",
+         "update updates check version release github startup",
+         &draw_updates_settings},
 #if DOTNETPP_BACKEND_MONO
         {"Debugger",
          ICON_MDI_BUG_OUTLINE,

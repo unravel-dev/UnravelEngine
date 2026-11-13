@@ -71,6 +71,7 @@ auto tests::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     parser.set_optional<std::string>("s", "suite", "", "Run only suites whose name contains this.");
     parser.set_optional<bool>("b", "bench", false, "Run benchmarks as well as correctness checks.");
     parser.set_optional<bool>("bo", "bench-only", false, "Run benchmarks and skip the checks.");
+    parser.set_optional<bool>("", "network", false, "Run the checks that reach the internet as well.");
 
     return true;
 }
@@ -83,7 +84,7 @@ auto tests::wants(const std::string& option) -> bool
 
 auto tests::init(const cmd_line::parser& parser) -> bool
 {
-    for(const char* option : {"bench", "bench-only"})
+    for(const char* option : {"bench", "bench-only", "network"})
     {
         bool value = false;
         parser.try_get(option, value);

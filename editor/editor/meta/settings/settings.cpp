@@ -186,6 +186,35 @@ LOAD_INLINE(editor_settings::scripting_settings)
     obj.reload_app_domain = true;
 }
 
+REFLECT_INLINE(editor_settings::updates_settings)
+{
+    entt::meta_factory<editor_settings::updates_settings>{}
+        .type("updates_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "updates_settings"},
+            entt::attribute{"category", "EDITOR"},
+            entt::attribute{"pretty_name", "Updates"},
+        })
+        .data<&editor_settings::updates_settings::check_at_startup>("check_at_startup"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "check_at_startup"},
+            entt::attribute{"pretty_name", "Check at Startup"},
+            entt::attribute{"tooltip",
+                            "Asks GitHub at most every 6 hours whether a newer build of the editor is published. "
+                            "Nothing about you or this computer is sent. Help > Check for Updates... works either way."},
+        });
+}
+
+SAVE_INLINE(editor_settings::updates_settings)
+{
+    try_save(ar, ser20::make_nvp("check_at_startup", obj.check_at_startup));
+}
+
+LOAD_INLINE(editor_settings::updates_settings)
+{
+    try_load(ar, ser20::make_nvp("check_at_startup", obj.check_at_startup));
+}
+
 REFLECT(editor_settings)
 {
     entt::meta_factory<editor_settings>{}
@@ -212,6 +241,12 @@ REFLECT(editor_settings)
             entt::attribute{"name", "scripting"},
             entt::attribute{"pretty_name", "Scripting"},
             entt::attribute{"tooltip", "Script domain reload behaviour."},
+        })
+        .data<&editor_settings::updates>("updates"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "updates"},
+            entt::attribute{"pretty_name", "Updates"},
+            entt::attribute{"tooltip", "Whether the editor looks for a newer build at start."},
         });
 }
 
@@ -220,6 +255,7 @@ SAVE(editor_settings)
     try_save(ar, ser20::make_nvp("debugger", obj.debugger));
     try_save(ar, ser20::make_nvp("external_tools", obj.external_tools));
     try_save(ar, ser20::make_nvp("scripting", obj.scripting));
+    try_save(ar, ser20::make_nvp("updates", obj.updates));
     try_save(ar, ser20::make_nvp("projects", obj.projects));
 }
 SAVE_INSTANTIATE(editor_settings, ser20::oarchive_associative_t);
@@ -230,6 +266,7 @@ LOAD(editor_settings)
     try_load(ar, ser20::make_nvp("debugger", obj.debugger));
     try_load(ar, ser20::make_nvp("external_tools", obj.external_tools));
     try_load(ar, ser20::make_nvp("scripting", obj.scripting));
+    try_load(ar, ser20::make_nvp("updates", obj.updates));
     try_load(ar, ser20::make_nvp("projects", obj.projects));
 }
 LOAD_INSTANTIATE(editor_settings, ser20::iarchive_associative_t);

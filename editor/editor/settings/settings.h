@@ -34,6 +34,13 @@ struct editor_settings
         bool reload_engine_domain = false;
     } scripting;
 
+    struct updates_settings
+    {
+        /// Whether the editor asks GitHub at start, at most every 6 hours, whether a newer build is published.
+        /// Help > Check for Updates... asks either way.
+        bool check_at_startup = true;
+    } updates;
+
     struct projects_settings
     {
         std::vector<fs::path> recent_projects;

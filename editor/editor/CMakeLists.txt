@@ -18,6 +18,7 @@ target_link_libraries(${target_name} PUBLIC
     deploy
     asset_compiler
     packages
+    update_check
     imgui
     filedialog 
     httplib

@@ -74,6 +74,10 @@ JPG, TGA, DDS, KTX, HDR) and audio (WAV, MP3, OGG Vorbis, FLAC).
 Requirements: 64-bit Windows 10 / 11 or Linux (Ubuntu 20.04 or newer), and a GPU with
 Direct3D 11, Vulkan or OpenGL support.
 
+At start, at most every 6 hours, the editor fetches `latest.json` from the latest release on GitHub to see
+whether a newer build for its platform is published; nothing about you or your computer is sent. Editor
+Settings > Updates turns that off. With a project open, Help > Check for Updates... asks at any time.
+
 ## Platforms
 
 | Editor runs on | Deploys to |

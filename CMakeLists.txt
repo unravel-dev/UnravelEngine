@@ -73,6 +73,16 @@ string(REGEX REPLACE "-g[0-9a-f]+((-dirty)?)$" "\\1" GIT_VERSION_NO_SHA "${GIT_V
 set(VERSION_SHORT "${GIT_VERSION_MAJOR}.${GIT_VERSION_MINOR}.${GIT_VERSION_PATCH}${GIT_VERSION_SHA1}")
 string(REGEX REPLACE "^v" "" VERSION_SHORT_NO_SHA "${GIT_VERSION_NO_SHA}")
 
+# The platform part of a package's name (Windows-AMD64, Linux-x86_64-Ubuntu-24.04). CPack names the package with
+# it, and the editor's update check finds its own build in a release's latest.json by it.
+set(UNRAVEL_PACKAGE_PLATFORM "${CMAKE_SYSTEM_NAME}-${CMAKE_HOST_SYSTEM_PROCESSOR}")
+if(DISTRO_NAME)
+    string(APPEND UNRAVEL_PACKAGE_PLATFORM "-${DISTRO_NAME}")
+endif()
+if(DISTRO_VERSION)
+    string(APPEND UNRAVEL_PACKAGE_PLATFORM "-${DISTRO_VERSION}")
+endif()
+
 message(STATUS "Version ${GIT_VERSION}")
 message(STATUS "Version (no sha) ${VERSION_SHORT_NO_SHA}")
 message(STATUS "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
@@ -502,31 +512,8 @@ set(CPACK_COMPONENTS_GROUPING ALL_COMPONENTS_IN_ONE)
 set(CPACK_COMPONENT_INCLUDE_TOPLEVEL_DIRECTORY ON)
 
 
-# 3) Override the *file* name for all generators (NSIS, ZIP, DEB, RPM, etc):
-#    <name>-<version>-<distro>-<system>.<ext>
-set(CPACK_PACKAGE_FILE_NAME
-   "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_HOST_SYSTEM_PROCESSOR}"
-)
-
-
-# Override the *file* name for all generators (NSIS, ZIP, DEB, RPM, etc):
-#    <name>-<version>-<distro>-<system>.<ext>
-set(CPACK_PACKAGE_FILE_NAME
-   "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_HOST_SYSTEM_PROCESSOR}"
-)
-
-
-if(DISTRO_NAME)
-    set(CPACK_PACKAGE_FILE_NAME
-        "${CPACK_PACKAGE_FILE_NAME}-${DISTRO_NAME}"
-    )
-endif()
-
-if(DISTRO_VERSION)
-    set(CPACK_PACKAGE_FILE_NAME
-        "${CPACK_PACKAGE_FILE_NAME}-${DISTRO_VERSION}"
-    )
-endif()
+# The file name for all generators (ZIP, NSIS, DEB, RPM, etc): <name>-<version>-<platform>.<ext>
+set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${UNRAVEL_PACKAGE_PLATFORM}")
 
 message(STATUS "PACKAGE_FILE_NAME ${CPACK_PACKAGE_FILE_NAME}")
 
