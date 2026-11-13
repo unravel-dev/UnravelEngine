@@ -1,6 +1,7 @@
 #include "filesystem.h"
 #include <algorithm>
 #include <fstream>
+#include <mutex>
 #include <shared_mutex>
 namespace fs
 {
