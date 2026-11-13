@@ -131,6 +131,9 @@ constexpr std::size_t COMPILED_WALL_SIZE = 123;
 constexpr std::size_t COMPILED_FONT_SIZE = 77;
 constexpr auto SPAWN_WAIT = std::chrono::seconds(10);
 constexpr auto SPAWN_POLL = std::chrono::milliseconds(50);
+/// A file a process prints, larger than the output limit of the call that runs it.
+constexpr std::size_t SUBPROCESS_OUTPUT_FILE_SIZE = 256 * 1024;
+constexpr std::size_t SUBPROCESS_OUTPUT_LIMIT = 64 * 1024;
 
 int g_checks = 0;
 int g_failures = 0;
@@ -2258,6 +2261,30 @@ void test_subprocess(const fs::path& root)
           "its output arrives line by line, without line breaks, and sees the added variable");
     check(result.out_output.find("second") != std::string::npos, "its whole output is kept too");
     check(!subprocess::call({(root / "no_such_program.exe").string()}).started, "a program that does not exist does not start");
+    // Output without line breaks, so that only the byte count can end it.
+    fs::error_code err;
+    fs::create_directories(root, err);
+    const auto long_output = root / "long_output.txt";
+    std::ofstream(long_output, std::ios::binary) << std::string(SUBPROCESS_OUTPUT_FILE_SIZE, 'x');
+#ifdef _WIN32
+    // type reads a forward slash as the start of a switch.
+    const std::vector<std::string> print_file = {shell == nullptr ? "cmd.exe" : shell,
+                                                 "/c",
+                                                 "type",
+                                                 fs::path(long_output).make_preferred().string()};
+#else
+    const std::vector<std::string> print_file = {"cat", long_output.string()};
+#endif
+    const auto cut = subprocess::call(print_file, {}, {}, {}, SUBPROCESS_OUTPUT_LIMIT);
+    check(cut.started && cut.is_output_cut && cut.out_output.size() == SUBPROCESS_OUTPUT_LIMIT,
+          "output beyond the limit ends the process and only the output up to the limit is kept: " +
+              std::to_string(cut.out_output.size()) + " bytes, exit code " + std::to_string(cut.retcode) + ", " +
+              cut.out_output.substr(0, 200));
+    const auto whole = subprocess::call(print_file);
+    check(!whole.is_output_cut && whole.out_output.size() == SUBPROCESS_OUTPUT_FILE_SIZE,
+          "without a limit the whole output is kept: " + std::to_string(whole.out_output.size()) + " bytes, " +
+              whole.out_output.substr(0, 200));
+    fs::remove(long_output, err);
     const auto call_begin = std::chrono::steady_clock::now();
     const auto stopped = subprocess::call(waiting, {}, {}, []() { return true; });
     check(stopped.started && std::chrono::steady_clock::now() - call_begin < std::chrono::seconds(20),

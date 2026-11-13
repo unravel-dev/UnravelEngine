@@ -123,20 +123,40 @@ private:
     std::string pending_;
 };
 
-/// Reads until the process closes its output; also kept whole in `output` when it is given.
-void read_output(subprocess_s& process, line_splitter& splitter, std::string* output)
+/// Hands a block of output to the line splitter and, when it is given, to the kept output.
+void take_output(const char* data, std::size_t size, line_splitter& splitter, std::string* output)
+{
+    if(output != nullptr)
+    {
+        output->append(data, size);
+    }
+    splitter.add(data, size);
+}
+
+/**
+ * @brief Reads until the process closes its output; also kept whole in `output` when it is given.
+ *
+ * Output beyond `max_size` bytes is dropped and ends the process at once. True when that happened.
+ */
+auto read_output(subprocess_s& process, line_splitter& splitter, std::string* output, std::size_t max_size) -> bool
 {
     char buffer[READ_BUFFER_SIZE];
     unsigned read = 0;
+    std::size_t total_size = 0;
     while((read = subprocess_read_stdout(&process, buffer, sizeof(buffer))) > 0)
     {
-        if(output != nullptr)
+        if(read > max_size - total_size)
         {
-            output->append(buffer, read);
+            take_output(buffer, max_size - total_size, splitter, output);
+            splitter.finish();
+            subprocess_terminate(&process);
+            return true;
         }
-        splitter.add(buffer, read);
+        total_size += read;
+        take_output(buffer, read, splitter, output);
     }
     splitter.finish();
+    return false;
 }
 
 /// Ends a process once `should_stop` says so, from a thread of its own: the caller's read blocks until the
@@ -186,7 +206,8 @@ private:
 auto call(const std::vector<std::string>& args_array,
           const std::vector<std::string>& environment_array,
           const line_callback& on_line,
-          const stop_check& should_stop) -> call_result
+          const stop_check& should_stop,
+          std::size_t max_output_size) -> call_result
 {
     call_result result;
     subprocess_s process;
@@ -200,7 +221,7 @@ auto call(const std::vector<std::string>& args_array,
     {
         // Gone before the join: it must not end a process that already exited.
         const process_stopper stopper(process, should_stop);
-        read_output(process, splitter, &result.out_output);
+        result.is_output_cut = read_output(process, splitter, &result.out_output, max_output_size);
     }
     subprocess_join(&process, &result.retcode);
     subprocess_destroy(&process);
@@ -234,7 +255,7 @@ auto stream::start(const std::vector<std::string>& args_array, line_callback on_
         [started]()
         {
             line_splitter splitter(started->on_line);
-            read_output(started->process, splitter, nullptr);
+            read_output(started->process, splitter, nullptr, UNLIMITED_OUTPUT_SIZE);
             started->is_running = false;
         });
     return true;

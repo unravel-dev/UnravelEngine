@@ -1,7 +1,9 @@
 #pragma once
 #include "environment.h"
 #include "subprocess.h"
+#include <cstddef>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -14,6 +16,9 @@ using line_callback = std::function<void(const std::string& line)>;
 /// Asked a few times a second while a call's process runs, on a thread of the call's own; true ends the process.
 using stop_check = std::function<bool()>;
 
+/// A call that keeps all of a process's output.
+constexpr std::size_t UNLIMITED_OUTPUT_SIZE = std::numeric_limits<std::size_t>::max();
+
 struct call_result
 {
     /// The exit code; 1 when the process did not start.
@@ -23,6 +28,9 @@ struct call_result
     std::string err_output;
     /// Whether the process started.
     bool started{};
+    /// Whether it printed more than the call's output limit: the call then ended it and kept the output up to
+    /// the limit.
+    bool is_output_cut{};
 };
 
 /**
@@ -34,11 +42,14 @@ struct call_result
  * @param on_line Gets every output line as it arrives, on this thread; may be empty.
  * @param should_stop Ends the process early when it returns true; may be empty. The result then has the exit
  *        code of an ended process and the output up to there.
+ * @param max_output_size Output beyond this many bytes ends the process at once (call_result::is_output_cut), so
+ *        a process that prints without end cannot fill memory.
  */
 auto call(const std::vector<std::string>& args_array,
           const std::vector<std::string>& environment_array = {},
           const line_callback& on_line = {},
-          const stop_check& should_stop = {}) -> call_result;
+          const stop_check& should_stop = {},
+          std::size_t max_output_size = UNLIMITED_OUTPUT_SIZE) -> call_result;
 
 inline auto call(const std::string& process, const std::vector<std::string>& args_array = {}) -> call_result
 {
