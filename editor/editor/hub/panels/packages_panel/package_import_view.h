@@ -1,12 +1,14 @@
 #pragma once
 
+#include "packages_widgets.h"
+
 #include <context/context.hpp>
 #include <engine/threading/threader.h>
 #include <packages/package_install.h>
 
+#include <hpp/optional.hpp>
 #include <imgui/imgui.h>
 
-#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -25,7 +27,8 @@ class package_import_view
 public:
     /// Opens the package and starts planning its import. An error is shown in the view.
     void open(rtti::context& ctx, const fs::path& package_file);
-    /// Closes the review; never while is_busy().
+    /// Closes the review. A running import is waited for first: it writes the project it was planned for, so it
+    /// ends before that project can close.
     void close();
     auto is_open() const -> bool
     {
@@ -42,9 +45,6 @@ public:
     auto draw(rtti::context& ctx) -> bool;
 
 private:
-    /// The status groups the file list filters by.
-    static constexpr std::size_t FILTER_COUNT = 5;
-
     /// What applying the plan came to, from the background job.
     struct apply_outcome
     {
@@ -63,17 +63,23 @@ private:
     void draw_open_error();
     void draw_header();
     void draw_notes();
-    void draw_counters();
+    /// The counters of the files, which also filter the list.
+    void draw_filters();
     void draw_files();
-    void draw_file_filters();
-    void draw_file_row(std::size_t index, int row_index);
-    void draw_removal_row(std::size_t index, int row_index);
+    void draw_file_toolbar();
+    /// What happens to the planned file, as a dropdown when there is a choice.
+    void draw_file_choice(std::size_t index);
+    /// Whether the file the new version drops goes to the trash or stays.
+    void draw_removal_choice(std::size_t index);
+    void draw_file_tooltip(std::size_t index) const;
+    void draw_removal_tooltip(std::size_t index) const;
     void draw_readme();
     /// @return False once the user closes the view.
     auto draw_footer(rtti::context& ctx) -> bool;
     auto draw_result(rtti::context& ctx) -> bool;
     void apply(rtti::context& ctx);
     auto is_file_shown(std::size_t index) const -> bool;
+    auto is_removal_shown(std::size_t index) const -> bool;
     auto get_apply_label() const -> std::string;
     auto get_blocking_reason() const -> std::string;
 
@@ -94,7 +100,9 @@ private:
     bool has_result_{};
     packages::install_result result_;
     ImGuiTextFilter search_;
-    std::array<bool, FILTER_COUNT> shown_groups_{true, true, true, true, true};
+    /// The counter the list shows only the files of; empty shows every file.
+    hpp::optional<std::size_t> active_filter_;
+    packages_widgets::file_list_state files_state_;
 };
 
 } // namespace unravel

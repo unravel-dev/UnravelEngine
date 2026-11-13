@@ -8,9 +8,11 @@
 
 #include <editor/assets/package_actions.h>
 #include <editor/editing/editing_manager.h>
+#include <editor/events.h>
 #include <editor/format/format_bytes.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <editor/imgui/integration/imgui_context_menu_style.h>
+#include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/imgui/integration/imgui_style.h>
 #include <editor/system/project_manager.h>
 #include <packages/package_archive.h>
@@ -37,11 +39,9 @@ constexpr float LIST_TILE_GAP = 0.6f;
 constexpr float DETAILS_TILE_SIZE = 3.4f;
 constexpr float DETAILS_TILE_GAP = 0.85f;
 constexpr float TOOLBAR_SEARCH_WIDTH = 13.0f;
-constexpr float FILE_ROW_PADDING_X = 0.45f;
-constexpr float FILE_STATUS_COLUMN = 7.0f;
+constexpr float FILE_STATUS_COLUMN = 5.5f;
 constexpr float FILES_MAX_HEIGHT = 16.0f;
 constexpr int DETAILS_COUNTER_COUNT = 4;
-constexpr const char* REMOVE_POPUP_ID = "Remove Package?##packages";
 
 /// The top folders of the project's data folder: what the toolbar's Export menu offers.
 auto list_top_folders() -> std::vector<std::string>
@@ -87,6 +87,40 @@ void draw_value_row(const char* label, const char* tooltip, const std::string& v
 
 packages_panel::packages_panel(imgui_panels* parent) : parent_(parent)
 {
+}
+
+void packages_panel::init(rtti::context& ctx)
+{
+    auto& ui_ev = ctx.get_cached<ui_events>();
+    ui_ev.on_close_project.connect(sentinel_, 100, this, &packages_panel::on_project_closed);
+}
+
+void packages_panel::on_project_closed(rtti::context& /*ctx*/)
+{
+    close_reviews();
+    registry_ = {};
+    registry_error_.clear();
+    library_.clear();
+    installed_items_.clear();
+    library_items_.clear();
+    selected_name_.clear();
+    selected_state_ = {};
+    selected_readme_.clear();
+    is_selection_pending_ = false;
+    is_selected_authored_ = false;
+    search_.Clear();
+    installed_files_state_.clear();
+    library_files_state_.clear();
+    message_.clear();
+    is_message_error_ = false;
+    is_refresh_pending_ = true;
+}
+
+void packages_panel::close_reviews()
+{
+    import_view_.close();
+    export_view_.close();
+    queued_imports_.clear();
 }
 
 void packages_panel::show(bool s)
@@ -140,11 +174,16 @@ void packages_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
     {
         return;
     }
-    if(ImGui::Begin(name, &show_))
+    // No close button while an import writes the project: it cannot stop halfway.
+    if(ImGui::Begin(name, import_view_.is_busy() ? nullptr : &show_))
     {
         draw_ui(ctx);
     }
     ImGui::End();
+    if(!show_)
+    {
+        close_reviews();
+    }
 }
 
 void packages_panel::draw_ui(rtti::context& ctx)
@@ -195,7 +234,6 @@ void packages_panel::draw_ui(rtti::context& ctx)
     }
     draw_toolbar(ctx);
     draw_browse(ctx);
-    draw_remove_popup(ctx);
 }
 
 void packages_panel::draw_toolbar(rtti::context& ctx)
@@ -477,7 +515,7 @@ void packages_panel::draw_installed_details(rtti::context& ctx, const list_item&
                          ImMax(0.0f, ImGui::GetContentRegionAvail().x - deploy_widgets::calc_button_width(ICON_MDI_DELETE_OUTLINE " Remove...")));
     if(deploy_widgets::draw_button(ICON_MDI_DELETE_OUTLINE " Remove...", false, true))
     {
-        is_remove_popup_requested_ = true;
+        confirm_remove(ctx);
     }
     ImGui::SetItemTooltipEx("%s", "Remove the package from the project. Its unchanged files go to the trash, and edited ones stay.");
     deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
@@ -526,57 +564,30 @@ void packages_panel::draw_installed_files(const packages::installed_package& pac
     {
         present.insert(file.uid);
     }
-    struct file_row
-    {
-        std::string path;
-        const char* state;
-        ImU32 color;
-    };
-    std::vector<file_row> rows;
+    std::vector<packages_widgets::file_list_row> rows;
     for(const auto& file : selected_state_.files)
     {
         rows.push_back({packages::get_data_path(file.key),
+                        {},
                         file.is_edited ? "Edited" : "Unchanged",
-                        file.is_edited ? packages_widgets::COLOR_EDITED : packages_widgets::COLOR_MUTED_PILL});
+                        file.is_edited ? packages_widgets::COLOR_EDITED : packages_widgets::COLOR_MUTED_PILL,
+                        false});
     }
     for(const auto& file : package.files)
     {
         if(present.count(file.uid) == 0)
         {
-            rows.push_back({file.path, "Deleted", packages_widgets::COLOR_ERROR});
+            rows.push_back({file.path, {}, "Deleted", packages_widgets::COLOR_ERROR, true});
         }
     }
-    const float font_size = ImGui::GetFontSize();
-    const float row_height = ImGui::GetFrameHeight();
-    const float height = ImMin(row_height * float(ImMax<std::size_t>(rows.size(), 1)) + ImGui::GetStyle().WindowPadding.y,
-                               packages_widgets::to_pixels(FILES_MAX_HEIGHT));
-    if(ImGui::BeginChild("##installed_file_list", ImVec2(0.0f, height)))
-    {
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
-        ImGuiListClipper clipper;
-        clipper.Begin(int(rows.size()), row_height);
-        while(clipper.Step())
-        {
-            for(int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index)
-            {
-                const auto& row = rows[std::size_t(index)];
-                const ImVec2 min = ImGui::GetCursorScreenPos();
-                const ImRect rect(min, ImVec2(min.x + ImGui::GetContentRegionAvail().x, min.y + row_height));
-                packages_widgets::draw_row_background(rect, index, ImGui::IsMouseHoveringRect(rect.Min, rect.Max) && ImGui::IsWindowHovered(), false);
-                const float padding = font_size * FILE_ROW_PADDING_X;
-                const ImVec2 pill = packages_widgets::calc_pill_size(row.state);
-                packages_widgets::draw_pill(ImGui::GetWindowDrawList(), ImVec2(rect.Min.x + padding, rect.Min.y + (row_height - pill.y) * 0.5f), row.state, row.color);
-                packages_widgets::draw_path_text(ImGui::GetWindowDrawList(),
-                                                 ImVec2(rect.Min.x + padding + font_size * FILE_STATUS_COLUMN, ImFloor(rect.Min.y + (row_height - font_size) * 0.5f)),
-                                                 rect.Max.x - padding,
-                                                 row.path,
-                                                 ImGui::GetColorU32(ImGuiCol_Text));
-                ImGui::Dummy(ImVec2(rect.GetWidth(), row_height));
-            }
-        }
-        ImGui::PopStyleVar();
-    }
-    ImGui::EndChild();
+    packages_widgets::file_list_parts parts;
+    parts.label_width = FILE_STATUS_COLUMN;
+    packages_widgets::draw_file_list("##installed_file_list",
+                                     rows,
+                                     installed_files_state_,
+                                     parts,
+                                     packages_widgets::to_pixels(FILES_MAX_HEIGHT),
+                                     "The package has no file.");
 }
 
 void packages_panel::draw_library_details(rtti::context& ctx, const list_item& item)
@@ -647,53 +658,22 @@ void packages_panel::draw_library_files(const packages::package_manifest& manife
     {
         return;
     }
-    const float font_size = ImGui::GetFontSize();
-    const float row_height = ImGui::GetFrameHeight();
-    const float height = ImMin(row_height * float(ImMax<std::size_t>(manifest.files.size(), 1)) + ImGui::GetStyle().WindowPadding.y,
-                               packages_widgets::to_pixels(FILES_MAX_HEIGHT));
-    if(ImGui::BeginChild("##library_file_list", ImVec2(0.0f, height)))
+    std::vector<packages_widgets::file_list_row> rows;
+    rows.reserve(manifest.files.size());
+    for(const auto& file : manifest.files)
     {
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
-        ImGuiListClipper clipper;
-        clipper.Begin(int(manifest.files.size()), row_height);
-        while(clipper.Step())
-        {
-            for(int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index)
-            {
-                const auto& file = manifest.files[std::size_t(index)];
-                const ImVec2 min = ImGui::GetCursorScreenPos();
-                const ImRect rect(min, ImVec2(min.x + ImGui::GetContentRegionAvail().x, min.y + row_height));
-                packages_widgets::draw_row_background(rect, index, ImGui::IsMouseHoveringRect(rect.Min, rect.Max) && ImGui::IsWindowHovered(), false);
-                const float padding = font_size * FILE_ROW_PADDING_X;
-                const auto size = format_bytes(file.size, 1);
-                const float size_width = ImGui::CalcTextSize(size.c_str()).x;
-                const float text_y = ImFloor(rect.Min.y + (row_height - font_size) * 0.5f);
-                packages_widgets::draw_path_text(ImGui::GetWindowDrawList(),
-                                                 ImVec2(rect.Min.x + padding, text_y),
-                                                 rect.Max.x - size_width - padding * 2.0f,
-                                                 file.path,
-                                                 ImGui::GetColorU32(ImGuiCol_Text));
-                ImGui::GetWindowDrawList()->AddText(ImVec2(rect.Max.x - padding - size_width, text_y), imgui_style::get_muted_text_color_u32(), size.c_str());
-                ImGui::Dummy(ImVec2(rect.GetWidth(), row_height));
-            }
-        }
-        ImGui::PopStyleVar();
+        rows.push_back({file.path, file.size});
     }
-    ImGui::EndChild();
+    packages_widgets::draw_file_list("##library_file_list",
+                                     rows,
+                                     library_files_state_,
+                                     {},
+                                     packages_widgets::to_pixels(FILES_MAX_HEIGHT),
+                                     "The package has no file.");
 }
 
-void packages_panel::draw_remove_popup(rtti::context& ctx)
+void packages_panel::confirm_remove(rtti::context& ctx)
 {
-    if(is_remove_popup_requested_)
-    {
-        is_remove_popup_requested_ = false;
-        ImGui::OpenPopup(REMOVE_POPUP_ID);
-    }
-    ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 30.0f, 0.0f));
-    if(!ImGui::BeginPopupModal(REMOVE_POPUP_ID, nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
-    {
-        return;
-    }
     const std::size_t edited = std::size_t(std::count_if(selected_state_.files.begin(),
                                                          selected_state_.files.end(),
                                                          [](const packages::planned_removal& file)
@@ -701,37 +681,42 @@ void packages_panel::draw_remove_popup(rtti::context& ctx)
                                                              return file.is_edited;
                                                          }));
     const std::size_t trashed = selected_state_.files.size() - edited;
-    packages_widgets::draw_title(fmt::format("Remove {}?", selected_state_.package.get_title()).c_str());
-    const auto text = fmt::format("{} file(s) go to the project's trash, where they can be restored. {} edited file(s) stay in the "
-                                  "project, no longer part of the package. Scenes that use the removed files lose those references.",
-                                  trashed,
-                                  edited);
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(text.c_str());
-    ImGui::PopTextWrapPos();
-    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
-    if(deploy_widgets::draw_button("Cancel", false, true))
+    const auto title = fmt::format("Remove {}?", selected_state_.package.get_title());
+    const auto message = fmt::format("{} file(s) go to the project's trash, where they can be restored. {} edited file(s) stay in the "
+                                     "project, no longer part of the package.\n\nScenes that use the removed files lose those "
+                                     "references.",
+                                     trashed,
+                                     edited);
+    ImBox::ShowConfirmation(title,
+                            message,
+                            [this, context = &ctx, name = selected_state_.package.name](ImBox::ModalResult result)
+                            {
+                                if(result == ImBox::ModalResult::Ok)
+                                {
+                                    remove_package(*context, name);
+                                }
+                            },
+                            ImBox::MessageType::Warning);
+}
+
+void packages_panel::remove_package(rtti::context& ctx, const std::string& name)
+{
+    // The answer comes after the question: the project may have closed, or the package gone, meanwhile.
+    const auto* item = find_item(name);
+    if(!ctx.get_cached<project_manager>().has_open_project() || item == nullptr || item->installed == nullptr)
     {
-        ImGui::CloseCurrentPopup();
+        return;
     }
-    ImGui::SameLine();
-    const char* label = ICON_MDI_DELETE_OUTLINE " Remove";
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImMax(0.0f, ImGui::GetContentRegionAvail().x - deploy_widgets::calc_button_width(label)));
-    if(deploy_widgets::draw_button(label, true, true))
-    {
-        const auto project = package_actions::make_project_view(ctx);
-        const auto plan = packages::plan_removal(project, selected_state_.package.name);
-        const auto result = package_actions::remove(ctx, plan, project);
-        is_message_error_ = !result.is_done;
-        message_ = result.is_done ? fmt::format("Removed {}: {} file(s) went to the trash and {} edited file(s) stayed.",
-                                                plan.package.get_title(),
-                                                result.removed_keys.size(),
-                                                result.kept_count)
-                                  : "Removing the package failed and nothing changed: " + result.error;
-        refresh(ctx);
-        ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
+    const auto project = package_actions::make_project_view(ctx);
+    const auto plan = packages::plan_removal(project, name);
+    const auto result = package_actions::remove(ctx, plan, project);
+    is_message_error_ = !result.is_done;
+    message_ = result.is_done ? fmt::format("Removed {}: {} file(s) went to the trash and {} edited file(s) stayed.",
+                                            plan.package.get_title(),
+                                            result.removed_keys.size(),
+                                            result.kept_count)
+                              : "Removing the package failed and nothing changed: " + result.error;
+    refresh(ctx);
 }
 
 void packages_panel::draw_message()

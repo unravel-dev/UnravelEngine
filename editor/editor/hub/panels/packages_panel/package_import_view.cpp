@@ -18,6 +18,9 @@
 #include <imgui_widgets/tooltips.h>
 #include <logging/logging.h>
 
+#include <algorithm>
+#include <array>
+
 namespace unravel
 {
 namespace
@@ -25,24 +28,32 @@ namespace
 using packages::file_action;
 using packages::file_status;
 
-constexpr float STATUS_COLUMN = 8.0f;
+constexpr float STATUS_COLUMN = 7.5f;
 constexpr float ACTION_COLUMN = 9.5f;
-constexpr int COUNTER_COUNT = 5;
 
-/// The groups the file list filters by.
-struct status_group
+/// A counter of the review that filters its file list. A color of 0 draws the count in the text color.
+struct import_file_filter
 {
-    const char* name;
+    const char* label;
     ImU32 color;
+    const char* tooltip;
 };
 
-constexpr status_group STATUS_GROUPS[] = {
-    {"New", packages_widgets::COLOR_NEW},
-    {"Updates", packages_widgets::COLOR_UPDATE},
-    {"Edited by You", packages_widgets::COLOR_EDITED},
-    {"Clashes", packages_widgets::COLOR_CLASH},
-    {"Other", packages_widgets::COLOR_MUTED_PILL},
+/// The status groups get_group gives, then the files the new version drops.
+constexpr import_file_filter IMPORT_FILE_FILTERS[] = {
+    {"New Files", packages_widgets::COLOR_NEW, "Show only the files the project does not have yet."},
+    {"Updates", packages_widgets::COLOR_UPDATE, "Show only the files the package brings a new version of."},
+    {"Edited by You", packages_widgets::COLOR_EDITED, "Show only the files you edited or deleted since an earlier version installed them."},
+    {"Clashes", packages_widgets::COLOR_CLASH, "Show only the files whose id or place another file of the project has."},
+    {"Other", 0, "Show only the files that need nothing: unchanged, already here, or not readable."},
+    {"Dropped", packages_widgets::COLOR_ERROR, "Show only the files the new version no longer has."},
 };
+constexpr std::size_t IMPORT_FILE_FILTER_COUNT = sizeof(IMPORT_FILE_FILTERS) / sizeof(IMPORT_FILE_FILTERS[0]);
+constexpr std::size_t DROPPED_FILES_FILTER = IMPORT_FILE_FILTER_COUNT - 1;
+constexpr const char* TRASH_CHOICE_NAME = "To the trash";
+constexpr const char* TRASH_CHOICE_DESCRIPTION = "The file goes to the project's trash, where it can be restored.";
+constexpr const char* KEEP_CHOICE_NAME = "Keep";
+constexpr const char* KEEP_CHOICE_DESCRIPTION = "The file stays in the project and is no longer part of the package.";
 
 auto get_group(file_status status) -> std::size_t
 {
@@ -149,6 +160,10 @@ void package_import_view::open(rtti::context& ctx, const fs::path& package_file)
 
 void package_import_view::close()
 {
+    if(apply_job_.valid())
+    {
+        apply_job_.wait();
+    }
     is_open_ = false;
     open_error_.clear();
     archive_.reset();
@@ -163,7 +178,8 @@ void package_import_view::close()
     has_result_ = false;
     result_ = {};
     search_.Clear();
-    shown_groups_.fill(true);
+    active_filter_.reset();
+    files_state_.clear();
 }
 
 auto package_import_view::get_package_name() const -> const std::string&
@@ -253,7 +269,7 @@ auto package_import_view::draw(rtti::context& ctx) -> bool
         return draw_footer(ctx);
     }
     draw_notes();
-    draw_counters();
+    draw_filters();
     draw_files();
     draw_readme();
     return draw_footer(ctx);
@@ -350,35 +366,51 @@ void package_import_view::draw_notes()
     }
 }
 
-void package_import_view::draw_counters()
+void package_import_view::draw_filters()
 {
     deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
-    const float gap = ImGui::GetFontSize() * 0.5f;
-    const float width = packages_widgets::calc_tile_width(COUNTER_COUNT);
-    const ImU32 text_color = ImGui::GetColorU32(ImGuiCol_Text);
-    const auto count_color = [text_color](std::size_t count, ImU32 color)
+    std::array<std::size_t, IMPORT_FILE_FILTER_COUNT> counts{};
+    for(const auto& planned : plan_.files)
     {
-        return count > 0 ? color : text_color;
-    };
-    const std::size_t added = plan_.count(file_status::added);
-    const std::size_t updated = plan_.count(file_status::updated);
-    const std::size_t edited = plan_.count(file_status::edited) + plan_.count(file_status::deleted);
-    const std::size_t clashes = plan_.count(file_status::uid_clash) + plan_.count(file_status::path_clash);
-    const std::size_t removed = std::size_t(std::count_if(plan_.removals.begin(),
+        ++counts[get_group(planned.status)];
+    }
+    counts[DROPPED_FILES_FILTER] = plan_.removals.size();
+    const std::size_t trashed = std::size_t(std::count_if(plan_.removals.begin(),
                                                           plan_.removals.end(),
                                                           [](const packages::planned_removal& removal)
                                                           {
                                                               return removal.is_removed;
                                                           }));
-    packages_widgets::draw_tile("New Files", std::to_string(added), count_color(added, packages_widgets::COLOR_NEW), width);
-    ImGui::SameLine(0.0f, gap);
-    packages_widgets::draw_tile("Updates", std::to_string(updated), count_color(updated, packages_widgets::COLOR_UPDATE), width);
-    ImGui::SameLine(0.0f, gap);
-    packages_widgets::draw_tile("Edited by You", std::to_string(edited), count_color(edited, packages_widgets::COLOR_EDITED), width);
-    ImGui::SameLine(0.0f, gap);
-    packages_widgets::draw_tile("Clashes", std::to_string(clashes), count_color(clashes, packages_widgets::COLOR_CLASH), width);
-    ImGui::SameLine(0.0f, gap);
-    packages_widgets::draw_tile("To the Trash", std::to_string(removed), count_color(removed, packages_widgets::COLOR_ERROR), width);
+    const std::string dropped_tooltip =
+        fmt::format("{} {} of them go to the project's trash.", IMPORT_FILE_FILTERS[DROPPED_FILES_FILTER].tooltip, trashed);
+    const float gap = ImGui::GetFontSize() * 0.5f;
+    const float width = packages_widgets::calc_tile_width(int(IMPORT_FILE_FILTER_COUNT));
+    for(std::size_t filter = 0; filter < IMPORT_FILE_FILTER_COUNT; ++filter)
+    {
+        if(filter > 0)
+        {
+            ImGui::SameLine(0.0f, gap);
+        }
+        const auto& entry = IMPORT_FILE_FILTERS[filter];
+        packages_widgets::filter_tile tile;
+        tile.label = entry.label;
+        tile.count = counts[filter];
+        tile.color = entry.color != 0 ? entry.color : ImGui::GetColorU32(ImGuiCol_Text);
+        tile.is_active = active_filter_ == filter;
+        if(tile.is_active)
+        {
+            tile.tooltip = "Show every file again.";
+        }
+        else if(tile.count > 0)
+        {
+            tile.tooltip = filter == DROPPED_FILES_FILTER ? dropped_tooltip.c_str() : entry.tooltip;
+        }
+        const std::string id = fmt::format("##filter_{}", filter);
+        if(packages_widgets::draw_filter_tile(id.c_str(), tile, width))
+        {
+            active_filter_ = tile.is_active ? hpp::optional<std::size_t>{} : hpp::optional<std::size_t>{filter};
+        }
+    }
 }
 
 void package_import_view::draw_files()
@@ -389,53 +421,73 @@ void package_import_view::draw_files()
     {
         return;
     }
-    draw_file_filters();
-    std::vector<std::size_t> shown;
+    draw_file_toolbar();
+    // The list's rows: the shown planned files, then the shown files the new version drops.
+    std::vector<std::size_t> shown_files;
+    std::vector<std::size_t> shown_removals;
+    std::vector<packages_widgets::file_list_row> rows;
     for(std::size_t index = 0; index < plan_.files.size(); ++index)
     {
         if(is_file_shown(index))
         {
-            shown.push_back(index);
+            const auto& planned = plan_.files[index];
+            const auto& file = plan_.manifest.files[planned.index];
+            shown_files.push_back(index);
+            rows.push_back({file.path,
+                            file.size,
+                            packages::get_file_status_name(planned.status),
+                            get_status_color(planned.status),
+                            planned.action == file_action::skip});
         }
     }
-    const float row_height = ImGui::GetFrameHeight();
-    const std::size_t row_count = shown.size() + plan_.removals.size();
-    const float wanted = row_height * float(ImMax<std::size_t>(row_count, 1)) + ImGui::GetStyle().WindowPadding.y;
-    const float reserved = ImGui::GetFrameHeightWithSpacing() * 3.0f;
-    const float height = ImClamp(wanted,
-                                 packages_widgets::to_pixels(packages_widgets::LIST_MIN_HEIGHT),
-                                 ImMax(packages_widgets::to_pixels(packages_widgets::LIST_MIN_HEIGHT), ImGui::GetContentRegionAvail().y - reserved));
-    if(ImGui::BeginChild("##import_file_list", ImVec2(0.0f, height)))
+    for(std::size_t index = 0; index < plan_.removals.size(); ++index)
     {
-        if(shown.empty() && plan_.removals.empty())
+        if(is_removal_shown(index))
         {
-            packages_widgets::draw_centered_hint("Nothing to show", "No file passes the search and the filters.");
+            const auto& removal = plan_.removals[index];
+            shown_removals.push_back(index);
+            rows.push_back({packages::get_data_path(removal.key),
+                            {},
+                            removal.is_edited ? "Dropped, edited" : "Dropped",
+                            removal.is_edited ? packages_widgets::COLOR_EDITED : packages_widgets::COLOR_ERROR,
+                            false});
         }
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
-        ImGuiListClipper clipper;
-        clipper.Begin(int(row_count), row_height);
-        while(clipper.Step())
-        {
-            for(int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
-            {
-                if(std::size_t(row) < shown.size())
-                {
-                    draw_file_row(shown[std::size_t(row)], row);
-                }
-                else
-                {
-                    draw_removal_row(std::size_t(row) - shown.size(), row);
-                }
-            }
-        }
-        ImGui::PopStyleVar();
     }
-    ImGui::EndChild();
+    const std::size_t file_count = shown_files.size();
+    packages_widgets::file_list_parts parts;
+    parts.label_width = STATUS_COLUMN;
+    parts.trailing_width = ACTION_COLUMN;
+    parts.draw_trailing = [&](std::size_t row)
+    {
+        if(row < file_count)
+        {
+            draw_file_choice(shown_files[row]);
+            return;
+        }
+        draw_removal_choice(shown_removals[row - file_count]);
+    };
+    parts.draw_tooltip = [&](std::size_t row)
+    {
+        if(row < file_count)
+        {
+            draw_file_tooltip(shown_files[row]);
+            return;
+        }
+        draw_removal_tooltip(shown_removals[row - file_count]);
+    };
+    const float min_height = packages_widgets::to_pixels(packages_widgets::LIST_MIN_HEIGHT);
+    const float reserved = ImGui::GetFrameHeightWithSpacing() * 3.0f;
+    packages_widgets::draw_file_list("##import_file_list",
+                                     rows,
+                                     files_state_,
+                                     parts,
+                                     ImMax(min_height, ImGui::GetContentRegionAvail().y - reserved),
+                                     "No file passes the search and the filter.");
 }
 
-void package_import_view::draw_file_filters()
+void package_import_view::draw_file_toolbar()
 {
-    if(panel_toolbar::begin_strip("##import_file_filters"))
+    if(panel_toolbar::begin_strip("##import_file_toolbar"))
     {
         const float font_size = ImGui::GetFontSize();
         panel_toolbar::search_field(search_,
@@ -444,148 +496,79 @@ void package_import_view::draw_file_filters()
                                     font_size * packages_widgets::SEARCH_MIN_WIDTH,
                                     font_size * packages_widgets::SEARCH_WIDTH);
         panel_toolbar::align_right();
-        std::array<std::size_t, FILTER_COUNT> counts{};
-        for(const auto& planned : plan_.files)
-        {
-            ++counts[get_group(planned.status)];
-        }
-        for(std::size_t group = 0; group < FILTER_COUNT; ++group)
-        {
-            const std::string id = fmt::format("##group_{}", group);
-            const std::string text = fmt::format("{} {}", STATUS_GROUPS[group].name, counts[group]);
-            const std::string tooltip = fmt::format("Show or hide the {} files.", STATUS_GROUPS[group].name);
-            if(panel_toolbar::filter_toggle(id.c_str(), text.c_str(), shown_groups_[group], STATUS_GROUPS[group].color, tooltip.c_str()))
-            {
-                shown_groups_[group] = !shown_groups_[group];
-            }
-        }
+        packages_widgets::draw_collapse_button("##import_collapse", files_state_);
     }
     panel_toolbar::end_strip();
 }
 
-void package_import_view::draw_file_row(std::size_t index, int row_index)
+void package_import_view::draw_file_choice(std::size_t index)
 {
     auto& planned = plan_.files[index];
-    const auto& file = plan_.manifest.files[planned.index];
-    const float font_size = ImGui::GetFontSize();
-    const ImVec2 row_min = ImGui::GetCursorScreenPos();
-    const float row_width = ImGui::GetContentRegionAvail().x;
-    const ImRect rect(row_min, ImVec2(row_min.x + row_width, row_min.y + ImGui::GetFrameHeight()));
-    ImGui::PushID(int(index));
-    const bool is_hovered = ImGui::IsMouseHoveringRect(rect.Min, rect.Max) && ImGui::IsWindowHovered();
-    packages_widgets::draw_row_background(rect, row_index, is_hovered, false);
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    const float padding = font_size * packages_widgets::ROW_PADDING_X;
-    const char* status_name = packages::get_file_status_name(planned.status);
-    const ImVec2 pill_size = packages_widgets::calc_pill_size(status_name);
-    packages_widgets::draw_pill(draw_list,
-                                ImVec2(rect.Min.x + padding, rect.Min.y + (rect.GetHeight() - pill_size.y) * 0.5f),
-                                status_name,
-                                get_status_color(planned.status));
-    const float action_width = font_size * ACTION_COLUMN;
-    const float path_x = rect.Min.x + padding + font_size * STATUS_COLUMN;
-    const float path_max_x = rect.Max.x - action_width - padding * 2.0f;
-    const bool is_skipped = planned.action == file_action::skip;
-    const ImU32 name_color = is_skipped ? imgui_style::get_muted_text_color_u32() : ImGui::GetColorU32(ImGuiCol_Text);
-    packages_widgets::draw_path_text(draw_list,
-                                     ImVec2(path_x, ImFloor(rect.Min.y + (rect.GetHeight() - font_size) * 0.5f)),
-                                     path_max_x,
-                                     file.path,
-                                     name_color);
-    ImGui::SetCursorScreenPos(rect.Min);
-    ImGui::InvisibleButton("##row", ImVec2(path_max_x - rect.Min.x, rect.GetHeight()));
-    if(ImGui::BeginItemTooltip())
-    {
-        ImGui::TextUnformatted(file.path.c_str());
-        ImGui::PushTextWrapPos(font_size * 28.0f);
-        packages_widgets::draw_muted_wrapped(describe_status(planned).c_str());
-        const auto destination = describe_destination(planned);
-        if(!destination.empty())
-        {
-            packages_widgets::draw_muted_wrapped(destination.c_str());
-        }
-        ImGui::PopTextWrapPos();
-        ImGui::EndTooltip();
-    }
-    ImGui::SetCursorScreenPos(ImVec2(rect.Max.x - action_width - padding, rect.Min.y));
-    if(planned.choices.size() > 1)
-    {
-        ImGui::SetNextItemWidth(action_width);
-        if(ImGui::BeginCombo("##action", packages::get_file_action_name(planned.action)))
-        {
-            for(const auto choice : planned.choices)
-            {
-                if(ImGui::Selectable(packages::get_file_action_name(choice), choice == planned.action))
-                {
-                    planned.action = choice;
-                    // Which scripts get written decides whether a type would be defined twice.
-                    packages::update_script_clashes(plan_, project_);
-                }
-                ImGui::SetItemTooltipEx("%s", packages::describe_file_action(choice));
-            }
-            ImGui::EndCombo();
-        }
-        ImGui::SetItemTooltipEx("%s", packages::describe_file_action(planned.action));
-    }
-    else
+    if(planned.choices.size() <= 1)
     {
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("%s", planned.choices.empty() ? "Nothing to do" : packages::get_file_action_name(planned.action));
+        if(!planned.choices.empty())
+        {
+            ImGui::SetItemTooltipEx("%s", packages::describe_file_action(planned.action));
+        }
+        return;
     }
-    ImGui::SetCursorScreenPos(ImVec2(rect.Min.x, rect.Max.y));
-    ImGui::Dummy(ImVec2(0.0f, 0.0f));
-    ImGui::PopID();
+    if(packages_widgets::begin_row_choice("##action", packages::get_file_action_name(planned.action), ImGui::GetFontSize() * ACTION_COLUMN))
+    {
+        for(const auto choice : planned.choices)
+        {
+            if(packages_widgets::draw_choice(packages::get_file_action_name(choice), packages::describe_file_action(choice), choice == planned.action))
+            {
+                planned.action = choice;
+                // Which scripts get written decides whether a type would be defined twice.
+                packages::update_script_clashes(plan_, project_);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltipEx("%s", packages::describe_file_action(planned.action));
 }
 
-void package_import_view::draw_removal_row(std::size_t index, int row_index)
+void package_import_view::draw_removal_choice(std::size_t index)
 {
     auto& removal = plan_.removals[index];
-    const float font_size = ImGui::GetFontSize();
-    const ImVec2 row_min = ImGui::GetCursorScreenPos();
-    const ImRect rect(row_min, ImVec2(row_min.x + ImGui::GetContentRegionAvail().x, row_min.y + ImGui::GetFrameHeight()));
-    ImGui::PushID(int(plan_.files.size() + index));
-    const bool is_hovered = ImGui::IsMouseHoveringRect(rect.Min, rect.Max) && ImGui::IsWindowHovered();
-    packages_widgets::draw_row_background(rect, row_index, is_hovered, false);
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    const float padding = font_size * packages_widgets::ROW_PADDING_X;
-    const char* status_name = removal.is_edited ? "Dropped, edited" : "Dropped";
-    const ImVec2 pill_size = packages_widgets::calc_pill_size(status_name);
-    packages_widgets::draw_pill(draw_list,
-                                ImVec2(rect.Min.x + padding, rect.Min.y + (rect.GetHeight() - pill_size.y) * 0.5f),
-                                status_name,
-                                removal.is_edited ? packages_widgets::COLOR_EDITED : packages_widgets::COLOR_ERROR);
-    const float action_width = font_size * ACTION_COLUMN;
-    packages_widgets::draw_path_text(draw_list,
-                                     ImVec2(rect.Min.x + padding + font_size * STATUS_COLUMN, ImFloor(rect.Min.y + (rect.GetHeight() - font_size) * 0.5f)),
-                                     rect.Max.x - action_width - padding * 2.0f,
-                                     packages::get_data_path(removal.key),
-                                     ImGui::GetColorU32(ImGuiCol_Text));
-    ImGui::SetCursorScreenPos(rect.Min);
-    ImGui::InvisibleButton("##row", ImVec2(rect.GetWidth() - action_width - padding * 2.0f, rect.GetHeight()));
-    ImGui::SetItemTooltipEx("%s",
-                            removal.is_edited ? "The new version no longer has this file. You edited it, so it is kept by default."
-                                              : "The new version no longer has this file.");
-    ImGui::SetCursorScreenPos(ImVec2(rect.Max.x - action_width - padding, rect.Min.y));
-    ImGui::SetNextItemWidth(action_width);
-    if(ImGui::BeginCombo("##removal", removal.is_removed ? "To the trash" : "Keep"))
+    if(packages_widgets::begin_row_choice("##removal", removal.is_removed ? TRASH_CHOICE_NAME : KEEP_CHOICE_NAME, ImGui::GetFontSize() * ACTION_COLUMN))
     {
-        if(ImGui::Selectable("To the trash", removal.is_removed))
+        if(packages_widgets::draw_choice(TRASH_CHOICE_NAME, TRASH_CHOICE_DESCRIPTION, removal.is_removed))
         {
             removal.is_removed = true;
             packages::update_script_clashes(plan_, project_);
         }
-        ImGui::SetItemTooltipEx("%s", "The file goes to the project's trash, where it can be restored.");
-        if(ImGui::Selectable("Keep", !removal.is_removed))
+        if(packages_widgets::draw_choice(KEEP_CHOICE_NAME, KEEP_CHOICE_DESCRIPTION, !removal.is_removed))
         {
             removal.is_removed = false;
             packages::update_script_clashes(plan_, project_);
         }
-        ImGui::SetItemTooltipEx("%s", "The file stays in the project and is no longer part of the package.");
         ImGui::EndCombo();
     }
-    ImGui::SetCursorScreenPos(ImVec2(rect.Min.x, rect.Max.y));
-    ImGui::Dummy(ImVec2(0.0f, 0.0f));
-    ImGui::PopID();
+    ImGui::SetItemTooltipEx("%s", removal.is_removed ? TRASH_CHOICE_DESCRIPTION : KEEP_CHOICE_DESCRIPTION);
+}
+
+void package_import_view::draw_file_tooltip(std::size_t index) const
+{
+    const auto& planned = plan_.files[index];
+    ImGui::TextUnformatted(plan_.manifest.files[planned.index].path.c_str());
+    packages_widgets::draw_muted_wrapped(describe_status(planned).c_str());
+    const auto destination = describe_destination(planned);
+    if(!destination.empty())
+    {
+        packages_widgets::draw_muted_wrapped(destination.c_str());
+    }
+}
+
+void package_import_view::draw_removal_tooltip(std::size_t index) const
+{
+    const auto& removal = plan_.removals[index];
+    ImGui::TextUnformatted(packages::get_data_path(removal.key).c_str());
+    packages_widgets::draw_muted_wrapped(removal.is_edited
+                                             ? "The new version no longer has this file. You edited it, so it is kept by default."
+                                             : "The new version no longer has this file.");
 }
 
 void package_import_view::draw_readme()
@@ -707,11 +690,20 @@ void package_import_view::apply(rtti::context& ctx)
 auto package_import_view::is_file_shown(std::size_t index) const -> bool
 {
     const auto& planned = plan_.files[index];
-    if(!shown_groups_[get_group(planned.status)])
+    if(active_filter_ && *active_filter_ != get_group(planned.status))
     {
         return false;
     }
     return search_.PassFilter(plan_.manifest.files[planned.index].path.c_str());
+}
+
+auto package_import_view::is_removal_shown(std::size_t index) const -> bool
+{
+    if(active_filter_ && *active_filter_ != DROPPED_FILES_FILTER)
+    {
+        return false;
+    }
+    return search_.PassFilter(packages::get_data_path(plan_.removals[index].key).c_str());
 }
 
 auto package_import_view::get_apply_label() const -> std::string

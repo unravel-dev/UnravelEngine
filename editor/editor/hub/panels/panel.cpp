@@ -57,6 +57,7 @@ void imgui_panels::init(rtti::context& ctx)
     game_panel_->init(ctx);
     animation_panel_->init(ctx);
     mcp_panel_->init(ctx);
+    packages_panel_->init(ctx);
 
     auto layouts_dir = fs::resolve_protocol("editor:/settings/layouts");
     layout_manager_.init(layouts_dir);

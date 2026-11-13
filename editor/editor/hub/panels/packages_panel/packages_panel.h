@@ -2,6 +2,7 @@
 
 #include "package_export_view.h"
 #include "package_import_view.h"
+#include "packages_widgets.h"
 
 #include <context/context.hpp>
 #include <packages/package_install.h>
@@ -11,6 +12,7 @@
 #include <imgui/imgui.h>
 
 #include <deque>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -28,6 +30,8 @@ class packages_panel
 public:
     explicit packages_panel(imgui_panels* parent);
 
+    /// Closes the reviews with the project: an import or export is for the project it was opened in.
+    void init(rtti::context& ctx);
     void on_frame_ui_render(rtti::context& ctx, const char* name);
     void show(bool s);
     /// Shows the window with the review of importing the package file. A review already open (or an import running)
@@ -67,7 +71,12 @@ private:
                              ImU32 state_color);
     void draw_installed_files(const packages::installed_package& package);
     void draw_library_files(const packages::package_manifest& manifest);
-    void draw_remove_popup(rtti::context& ctx);
+    void on_project_closed(rtti::context& ctx);
+    /// Closes the import and export reviews and drops the imports waiting for theirs.
+    void close_reviews();
+    /// Asks before the selected package is removed; the answer removes it.
+    void confirm_remove(rtti::context& ctx);
+    void remove_package(rtti::context& ctx, const std::string& name);
     void draw_message();
     void refresh(rtti::context& ctx);
     void select(rtti::context& ctx, const std::string& name);
@@ -103,10 +112,12 @@ private:
     ImGuiTextFilter search_;
     package_import_view import_view_;
     package_export_view export_view_;
-    bool is_remove_popup_requested_{};
+    packages_widgets::file_list_state installed_files_state_;
+    packages_widgets::file_list_state library_files_state_;
     /// What the last action did, shown under the details.
     std::string message_;
     bool is_message_error_{};
+    std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 };
 
 } // namespace unravel

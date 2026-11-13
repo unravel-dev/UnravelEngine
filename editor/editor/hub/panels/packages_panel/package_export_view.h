@@ -1,5 +1,7 @@
 #pragma once
 
+#include "packages_widgets.h"
+
 #include <asset_compiler/asset_compiler.h>
 #include <context/context.hpp>
 #include <packages/package_export.h>
@@ -56,7 +58,10 @@ private:
     void draw_header();
     void draw_form();
     void draw_contents();
-    void draw_entry_row(std::size_t index, int row_index);
+    void draw_contents_toolbar();
+    /// The check box that puts the file into the package or leaves it out.
+    void draw_entry_check(std::size_t index);
+    void draw_entry_tooltip(std::size_t index) const;
     void draw_scripts();
     /// @return False once the user closes the view.
     auto draw_footer(rtti::context& ctx) -> bool;
@@ -88,6 +93,7 @@ private:
     fs::path exported_file_;
     packages::package_manifest exported_;
     ImGuiTextFilter search_;
+    packages_widgets::file_list_state files_state_;
 };
 
 } // namespace unravel

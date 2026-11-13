@@ -28,8 +28,7 @@ namespace
 using packages::export_reason;
 
 constexpr float CHECK_COLUMN = 1.9f;
-constexpr float REASON_COLUMN = 9.0f;
-constexpr float SIZE_COLUMN = 5.5f;
+constexpr float REASON_COLUMN = 7.0f;
 constexpr float DESCRIPTION_LINES = 3.0f;
 constexpr std::size_t SCRIPT_ERRORS_SHOWN = 6;
 /// How many times a failed check adds the scripts it misses and runs again.
@@ -103,6 +102,7 @@ void package_export_view::close()
     is_exported_ = false;
     exported_file_.clear();
     search_.Clear();
+    files_state_.clear();
 }
 
 void package_export_view::poll_jobs()
@@ -391,7 +391,42 @@ void package_export_view::draw_contents()
         const std::string note = fmt::format("{} engine asset(s) are used and stay out: every engine has them.", plan_.engine_assets.size());
         deploy_widgets::draw_icon_line(ICON_MDI_CUBE_OUTLINE, muted, note.c_str(), muted);
     }
-    if(panel_toolbar::begin_strip("##export_search"))
+    draw_contents_toolbar();
+    std::vector<std::size_t> shown;
+    std::vector<packages_widgets::file_list_row> rows;
+    for(std::size_t index = 0; index < plan_.entries.size(); ++index)
+    {
+        const auto& entry = plan_.entries[index];
+        if(search_.PassFilter(entry.path.c_str()))
+        {
+            shown.push_back(index);
+            rows.push_back({entry.path, entry.size, packages::get_export_reason_name(entry.reason), get_reason_color(entry.reason), !entry.is_included});
+        }
+    }
+    packages_widgets::file_list_parts parts;
+    parts.leading_width = CHECK_COLUMN;
+    parts.label_width = REASON_COLUMN;
+    parts.draw_leading = [&](std::size_t row)
+    {
+        draw_entry_check(shown[row]);
+    };
+    parts.draw_tooltip = [&](std::size_t row)
+    {
+        draw_entry_tooltip(shown[row]);
+    };
+    const float min_height = packages_widgets::to_pixels(packages_widgets::LIST_MIN_HEIGHT);
+    const float reserved = ImGui::GetFrameHeightWithSpacing() * 6.0f;
+    packages_widgets::draw_file_list("##export_file_list",
+                                     rows,
+                                     files_state_,
+                                     parts,
+                                     ImMax(min_height, ImGui::GetContentRegionAvail().y - reserved),
+                                     plan_.entries.empty() ? "The folder holds no asset." : "No file passes the search.");
+}
+
+void package_export_view::draw_contents_toolbar()
+{
+    if(panel_toolbar::begin_strip("##export_contents_toolbar"))
     {
         const float font_size = ImGui::GetFontSize();
         panel_toolbar::search_field(search_,
@@ -399,98 +434,34 @@ void package_export_view::draw_contents()
                                     "Show the files whose path holds the text.",
                                     font_size * packages_widgets::SEARCH_MIN_WIDTH,
                                     font_size * packages_widgets::SEARCH_WIDTH);
+        panel_toolbar::align_right();
+        packages_widgets::draw_collapse_button("##export_collapse", files_state_);
     }
     panel_toolbar::end_strip();
-    std::vector<std::size_t> shown;
-    for(std::size_t index = 0; index < plan_.entries.size(); ++index)
-    {
-        if(search_.PassFilter(plan_.entries[index].path.c_str()))
-        {
-            shown.push_back(index);
-        }
-    }
-    const float row_height = ImGui::GetFrameHeight();
-    const float wanted = row_height * float(ImMax<std::size_t>(shown.size(), 1)) + ImGui::GetStyle().WindowPadding.y;
-    const float reserved = ImGui::GetFrameHeightWithSpacing() * 6.0f;
-    const float height = ImClamp(wanted,
-                                 packages_widgets::to_pixels(packages_widgets::LIST_MIN_HEIGHT),
-                                 ImMax(packages_widgets::to_pixels(packages_widgets::LIST_MIN_HEIGHT), ImGui::GetContentRegionAvail().y - reserved));
-    if(ImGui::BeginChild("##export_file_list", ImVec2(0.0f, height)))
-    {
-        if(shown.empty())
-        {
-            packages_widgets::draw_centered_hint("Nothing to show", plan_.entries.empty() ? "The folder holds no asset." : "No file passes the search.");
-        }
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
-        ImGuiListClipper clipper;
-        clipper.Begin(int(shown.size()), row_height);
-        while(clipper.Step())
-        {
-            for(int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
-            {
-                draw_entry_row(shown[std::size_t(row)], row);
-            }
-        }
-        ImGui::PopStyleVar();
-    }
-    ImGui::EndChild();
 }
 
-void package_export_view::draw_entry_row(std::size_t index, int row_index)
+void package_export_view::draw_entry_check(std::size_t index)
 {
     auto& entry = plan_.entries[index];
-    const float font_size = ImGui::GetFontSize();
-    const ImVec2 row_min = ImGui::GetCursorScreenPos();
-    const ImRect rect(row_min, ImVec2(row_min.x + ImGui::GetContentRegionAvail().x, row_min.y + ImGui::GetFrameHeight()));
-    ImGui::PushID(int(index));
-    const bool is_hovered = ImGui::IsMouseHoveringRect(rect.Min, rect.Max) && ImGui::IsWindowHovered();
-    packages_widgets::draw_row_background(rect, row_index, is_hovered, false);
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    const float padding = font_size * packages_widgets::ROW_PADDING_X;
-    ImGui::SetCursorScreenPos(ImVec2(rect.Min.x + padding, rect.Min.y));
     if(ImGui::Checkbox("##included", &entry.is_included) && entry.type == ".cs")
     {
         is_script_check_stale_ = true;
     }
     ImGui::SetItemTooltipEx("%s", entry.is_included ? "The file goes into the package." : "The file stays out of the package.");
-    const float size_width = font_size * SIZE_COLUMN;
-    const float reason_width = font_size * REASON_COLUMN;
-    const float path_x = rect.Min.x + padding + font_size * CHECK_COLUMN;
-    const float path_max_x = rect.Max.x - size_width - reason_width - padding * 2.0f;
-    const float text_y = ImFloor(rect.Min.y + (rect.GetHeight() - font_size) * 0.5f);
-    const ImU32 name_color = entry.is_included ? ImGui::GetColorU32(ImGuiCol_Text) : imgui_style::get_muted_text_color_u32();
-    packages_widgets::draw_path_text(draw_list, ImVec2(path_x, text_y), path_max_x, entry.path, name_color);
-    const char* reason = packages::get_export_reason_name(entry.reason);
-    const ImVec2 pill_size = packages_widgets::calc_pill_size(reason);
-    packages_widgets::draw_pill(draw_list,
-                                ImVec2(path_max_x + padding, rect.Min.y + (rect.GetHeight() - pill_size.y) * 0.5f),
-                                reason,
-                                get_reason_color(entry.reason));
-    const auto size_text = format_bytes(entry.size, 1);
-    const float size_text_width = ImGui::CalcTextSize(size_text.c_str()).x;
-    draw_list->AddText(ImVec2(rect.Max.x - padding - size_text_width, text_y), imgui_style::get_muted_text_color_u32(), size_text.c_str());
-    ImGui::SetCursorScreenPos(ImVec2(path_x, rect.Min.y));
-    ImGui::InvisibleButton("##row", ImVec2(ImMax(1.0f, rect.Max.x - path_x), rect.GetHeight()));
-    if(ImGui::BeginItemTooltip())
+}
+
+void package_export_view::draw_entry_tooltip(std::size_t index) const
+{
+    const auto& entry = plan_.entries[index];
+    ImGui::TextUnformatted(entry.key.c_str());
+    if(entry.reason == export_reason::in_folder)
     {
-        ImGui::TextUnformatted(entry.key.c_str());
-        ImGui::PushTextWrapPos(font_size * 28.0f);
-        if(entry.reason == export_reason::in_folder)
-        {
-            packages_widgets::draw_muted_wrapped("It lies in the package's folder.");
-        }
-        else
-        {
-            const std::string used_by = fmt::format("{} uses it.", entry.used_by);
-            packages_widgets::draw_muted_wrapped(used_by.c_str());
-            packages_widgets::draw_muted_wrapped("It lies outside the folder and installs at the same path in other projects.");
-        }
-        ImGui::PopTextWrapPos();
-        ImGui::EndTooltip();
+        packages_widgets::draw_muted_wrapped("It lies in the package's folder.");
+        return;
     }
-    ImGui::SetCursorScreenPos(ImVec2(rect.Min.x, rect.Max.y));
-    ImGui::Dummy(ImVec2(0.0f, 0.0f));
-    ImGui::PopID();
+    const std::string used_by = fmt::format("{} uses it.", entry.used_by);
+    packages_widgets::draw_muted_wrapped(used_by.c_str());
+    packages_widgets::draw_muted_wrapped("It lies outside the folder and installs at the same path in other projects.");
 }
 
 void package_export_view::draw_scripts()
