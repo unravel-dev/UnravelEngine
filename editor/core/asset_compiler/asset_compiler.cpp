@@ -1144,10 +1144,9 @@ auto needs_essl_310(const std::vector<std::uint8_t>& bytes) -> bool
     return code.find("binding = ") != std::string_view::npos || code.find("CubeArray") != std::string_view::npos;
 }
 
-/// What a GLSL ES shader's manifest records beside its sources: shaderc writes its fragment shaders in full precision
-/// (bgfx patch 0005) and keeps the shaders that use bit encoders in GLSL ES 3.00 (bgfx patch 0006), and a cooked file
-/// without this record compiles again.
-constexpr std::string_view ESSL_COMPILE_PARAMETERS = "fragment precision highp; bit encoders in essl 300";
+/// What a GLSL ES shader's manifest records beside its sources: shaderc keeps the shaders that use bit encoders in
+/// GLSL ES 3.00 (bgfx patch 0006), and a cooked file without this record compiles again.
+constexpr std::string_view ESSL_COMPILE_PARAMETERS = "bit encoders in essl 300";
 
 /// What a WGSL shader's manifest records beside its sources: shaderc writes its loops without `continuing` blocks
 /// (bgfx patch 0007), and a cooked file without this record compiles again.
