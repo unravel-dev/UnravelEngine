@@ -2786,6 +2786,44 @@ auto parse_compilation_warnings(const std::string& log) -> std::vector<script_co
     return parse_compilation_entries(log, "warning");
 }
 
+auto check_script_files(const std::vector<fs::path>& files, std::vector<script_compilation_entry>& errors) -> bool
+{
+    errors.clear();
+    if(files.empty())
+    {
+        return true;
+    }
+    dotnet::compiler_params params;
+    const auto engine_library = fs::resolve_protocol(script_system::get_lib_compiled_key("engine"));
+    params.references.emplace_back(engine_library.filename().string());
+    params.references_locations.emplace_back(engine_library.parent_path().string());
+    for(const auto& file : files)
+    {
+        params.files.emplace_back(file.string());
+    }
+    fs::error_code err;
+    // One folder per check: checks may run side by side.
+    const auto folder = fs::temp_directory_path(err) / ("unravel-script-check-" + hpp::to_string(generate_uuid()));
+    fs::create_directories(folder, err);
+    params.output_name = (folder / "check.dll").string();
+    params.output_doc_name = (folder / "check.xml").string();
+    params.suppress_doc_warnings = true;
+    params.suppress_unassigned_field_warnings = true;
+    std::string output;
+    const auto cmd = dotnet::create_compile_command_detailed_rsp(params, (folder / "check.rsp").string());
+    const bool builds = run_process(cmd.cmd, cmd.args, true, output);
+    if(!builds)
+    {
+        errors = parse_compilation_errors(output);
+        if(errors.empty())
+        {
+            errors.push_back({.msg = output});
+        }
+    }
+    fs::remove_all(folder, err);
+    return builds;
+}
+
 template<>
 auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {

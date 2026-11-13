@@ -31,6 +31,7 @@ imgui_panels::imgui_panels()
     profiler_timeline_panel_ = std::make_unique<profiler_timeline_panel>(this, PROFILER_VIEW);
     animation_panel_ = std::make_unique<animation_panel>(this);
     mcp_panel_ = std::make_unique<mcp_panel>(this);
+    packages_panel_ = std::make_unique<packages_panel>(this);
 
     deploy_panel_ = std::make_unique<deploy_panel>(this);
     project_settings_panel_ = std::make_unique<project_settings_panel>(this);
@@ -158,6 +159,8 @@ void imgui_panels::on_frame_ui_render(rtti::context& ctx)
 
         mcp_panel_->on_frame_ui_render(ctx, MCP_VIEW);
 
+        packages_panel_->on_frame_ui_render(ctx, PACKAGES_VIEW);
+
         deploy_panel_->on_frame_ui_render(ctx, DEPLOY_VIEW);
 
         project_settings_panel_->on_frame_ui_render(ctx, PROJECT_SETTINGS_VIEW);
@@ -236,6 +239,11 @@ auto imgui_panels::get_animation_panel() -> animation_panel&
 auto imgui_panels::get_mcp_panel() -> mcp_panel&
 {
     return *mcp_panel_;
+}
+
+auto imgui_panels::get_packages_panel() -> packages_panel&
+{
+    return *packages_panel_;
 }
 
 auto imgui_panels::get_profiler_timeline_panel() -> profiler_timeline_panel&

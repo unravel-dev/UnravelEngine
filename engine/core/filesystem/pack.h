@@ -13,6 +13,10 @@
 
 namespace fs
 {
+namespace pack_detail
+{
+struct pack_image;
+} // namespace pack_detail
 
 /// One file to put into a pack.
 struct pack_input
@@ -95,6 +99,41 @@ struct pack_layout
  * @return False with `err` set when the file is missing, is not a pack or is damaged.
  */
 auto read_pack_layout(const path& pack_file, pack_layout& layout, std::string& err) -> bool;
+
+/**
+ * @brief A pack file opened to read its entries by name, without mounting it: what a tool that takes a pack
+ * apart (an editor package) reads it with. Every entry is checked against its content hash as it is read.
+ */
+class pack_reader
+{
+public:
+    pack_reader();
+    ~pack_reader();
+    pack_reader(pack_reader&&) noexcept;
+    auto operator=(pack_reader&&) noexcept -> pack_reader&;
+    pack_reader(const pack_reader&) = delete;
+    auto operator=(const pack_reader&) -> pack_reader& = delete;
+
+    /// Maps the pack. @return False with `err` set when it is missing, is not a pack, is damaged or is a patch.
+    auto open(const path& pack_file, std::string& err) -> bool;
+    auto is_open() const -> bool;
+    /// The names of the entries that hold bytes, sorted.
+    auto get_names() const -> std::vector<std::string>;
+    /// Whether an entry of that name holds bytes.
+    auto has_entry(const std::string& name) const -> bool;
+    /// The raw size of an entry; 0 when there is none.
+    auto get_size(const std::string& name) const -> std::uint64_t;
+    /**
+     * @brief The bytes of an entry, decoded.
+     * @return False with `err` set when there is no such entry or its bytes do not give its content hash.
+     */
+    auto read(const std::string& name, byte_array_t& bytes, std::string& err) const -> bool;
+    /// Identifies the pack's content: the hash of its table of contents.
+    auto get_contents_hash() const -> std::uint64_t;
+
+private:
+    std::shared_ptr<const pack_detail::pack_image> image_;
+};
 
 /**
  * @brief Mounts a pack: its entries answer for the files under the root of `protocol`.

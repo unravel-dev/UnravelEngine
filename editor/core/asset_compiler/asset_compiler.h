@@ -62,5 +62,14 @@ struct script_compilation_result
  */
 auto get_last_script_compilation(const std::string& protocol) -> script_compilation_result;
 
+/**
+ * @brief Builds `files` alone against the engine's script library, into a temporary folder that is removed after:
+ *        whether a set of scripts builds without the rest of the project (a package's scripts). Slow (it runs the C#
+ *        compiler); any thread.
+ * @param errors Receives the compiler's errors when the build fails.
+ * @return True when the files build.
+ */
+auto check_script_files(const std::vector<fs::path>& files, std::vector<script_compilation_entry>& errors) -> bool;
+
 } // namespace asset_compiler
 } // namespace unravel

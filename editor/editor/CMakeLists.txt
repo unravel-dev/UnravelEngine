@@ -17,7 +17,8 @@ target_link_libraries(${target_name} PUBLIC
     engine
     deploy
     asset_compiler
-    imgui 
+    packages
+    imgui
     filedialog 
     httplib
 )

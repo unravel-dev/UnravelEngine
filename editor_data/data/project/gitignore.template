@@ -21,6 +21,9 @@
 /.deploy/
 /releases/
 
+# Exported content packages. Their source folders are in data/.
+/.packages/
+
 # Signing keys never belong in the repository
 *.keystore
 *.jks

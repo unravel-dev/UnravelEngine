@@ -16,4 +16,5 @@
 
 #define ANIMATION_VIEW     ICON_MDI_STATE_MACHINE " Animation Controller"
 #define MCP_VIEW        ICON_MDI_CONSOLE_NETWORK " MCP Server"
+#define PACKAGES_VIEW   ICON_MDI_PACKAGE_VARIANT " Packages"
 #define PROFILER_VIEW   ICON_MDI_CHART_BAR " Profiler"

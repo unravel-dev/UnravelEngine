@@ -214,6 +214,110 @@ auto mount_image(const std::string& protocol,
 }
 } // namespace
 
+pack_reader::pack_reader() = default;
+pack_reader::~pack_reader() = default;
+pack_reader::pack_reader(pack_reader&&) noexcept = default;
+auto pack_reader::operator=(pack_reader&&) noexcept -> pack_reader& = default;
+
+auto pack_reader::open(const path& pack_file, std::string& err) -> bool
+{
+    image_.reset();
+    auto image = std::make_shared<pack_detail::pack_image>();
+    if(!pack_detail::open_pack_image(pack_file, *image, err))
+    {
+        err = pack_file.generic_string() + ": " + err;
+        return false;
+    }
+    if(image->is_patch())
+    {
+        err = pack_file.generic_string() + ": a patch, which holds only the changes to another pack";
+        return false;
+    }
+    image_ = std::move(image);
+    return true;
+}
+
+auto pack_reader::is_open() const -> bool
+{
+    return image_ != nullptr;
+}
+
+auto pack_reader::get_names() const -> std::vector<std::string>
+{
+    std::vector<std::string> names;
+    if(!image_)
+    {
+        return names;
+    }
+    names.reserve(image_->entries.size());
+    for(const auto& [key, record] : image_->entries)
+    {
+        if(!record.is_deleted())
+        {
+            names.push_back(record.name);
+        }
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+auto pack_reader::has_entry(const std::string& name) const -> bool
+{
+    const auto* record = image_ ? image_->find(name) : nullptr;
+    return record != nullptr && !record->is_deleted();
+}
+
+auto pack_reader::get_size(const std::string& name) const -> std::uint64_t
+{
+    const auto* record = image_ ? image_->find(name) : nullptr;
+    return record != nullptr && !record->is_deleted() ? record->raw_size : 0;
+}
+
+auto pack_reader::read(const std::string& name, byte_array_t& bytes, std::string& err) const -> bool
+{
+    const auto* record = image_ ? image_->find(name) : nullptr;
+    if(record == nullptr || record->is_deleted())
+    {
+        err = name + ": not in the pack";
+        return false;
+    }
+    if(record->codec == pack_detail::PACK_STORED_CODEC)
+    {
+        const auto* data = image_->file.data() + record->offset;
+        bytes.assign(data, data + record->raw_size);
+    }
+    else
+    {
+        std::shared_ptr<const byte_array_t> decoded;
+        try
+        {
+            decoded = pack_detail::decode_entry(*image_, *record);
+        }
+        catch(const std::bad_alloc&)
+        {
+            decoded = nullptr;
+        }
+        if(!decoded)
+        {
+            err = name + ": does not decode (the pack is damaged)";
+            return false;
+        }
+        bytes = *decoded;
+    }
+    if(pack_detail::hash_bytes(bytes.data(), bytes.size()) != record->content_hash)
+    {
+        err = name + ": its bytes do not match their hash (the pack is damaged)";
+        bytes.clear();
+        return false;
+    }
+    return true;
+}
+
+auto pack_reader::get_contents_hash() const -> std::uint64_t
+{
+    return image_ ? image_->toc_hash : 0;
+}
+
 auto read_pack_layout(const path& pack_file, pack_layout& layout, std::string& err) -> bool
 {
     pack_detail::pack_image image;

@@ -49,6 +49,12 @@ asset_compiler::compile<T>(source_path, ...);
 
 Importers live in `engine/engine/assets/impl/importers/`.
 
+In the editor, writing a `.meta` is what compiles its asset: the compiled-asset syncer watches the `.meta`
+files. The source syncer (`asset_watcher::setup_meta_syncer`) rewrites a changed file's `.meta` for that, except
+when the `.meta` changed in the same watcher batch (it came with the file: an import, a package, a pull);
+`fs::syncer` passes those synced entries to the created / modified callbacks. A file that arrives with its
+`.meta` then compiles once. The initial listing writes only missing or re-ided `.meta` files.
+
 ## Built-in shapes
 
 The engine's cube, sphere and the other shapes of the Create menu are mesh assets:
@@ -113,6 +119,39 @@ single thread-pool job for the whole batch.
 `type` filters accept `mat`, `.mat`, `pfb`, `emesh`, `etex`, `cs`, `spfb`, etc. (aliases normalized).
 
 Code: `editor/editor/system/mcp/mcp_tools_assets.cpp`.
+
+## Content packages (.unravelpkg)
+
+Shareable content between projects, an editor feature (the game never sees a package):
+
+| Purpose | Path |
+|---------|------|
+| Manifest, versions, archive, export, import plan, install | `editor/core/packages/` (library `packages`) |
+| Editor glue: project view, trash hooks, library folder | `editor/editor/assets/package_actions.h` |
+| Packages window (browse, import review, export) | `editor/editor/hub/panels/packages_panel/` |
+| Suite | `tests/tests/suites/content_packages.cpp` (`--suite "content packages"`) |
+
+- A package is an engine pack (`fs::write_pack`) holding `package.json`, `content/<path>` and
+  `content/<path>.meta`; files keep their data-folder paths and their uids. Compiled output never ships.
+- Export walks references with `deployment::find_content_references`, adds the scripts of script types
+  scenes and prefabs use, builds the package's scripts alone (`asset_compiler::check_script_files`) and
+  adds the scripts the build misses. A folder's `package.json` keeps its name and version.
+- Import is `plan_import` (pure, writes nothing) then `install_package` (staged, all-or-nothing, replaced
+  files to the editor trash). A uid another project file holds gets a copy uid from
+  `make_copy_uid(project_guid, name, uid)` and the package's text files are rewritten to it.
+- The install record is `<project>/packages.cfg` keyed by project uid (no `.meta` change): it tells
+  unchanged, edited and deleted files apart for updates and removal. When it does not read, imports and
+  removals refuse (`project_view::registry_error`) rather than save over it.
+- Script types two files would define are checked from the actions picked (`update_script_clashes` after an
+  action changes); each script file in a manifest lists its types. The review plans and imports in the
+  background, and the import plans again first: when the project changed (`is_same_plan`), nothing is written.
+- Exports go to `<project>/.packages/` (gitignored for new projects, like `.deploy/`); the Packages window lists
+  that folder. Dropping a `.unravelpkg` on the Content Browser opens the import review; folders have Export as
+  Package.
+- Install and removal write with `fs::watcher::scoped_pause` held and touch the files inside it, as
+  `editor_actions::import_files` does. The script build itself waits until the asset manager holds every `.cs`
+  the asset database lists (`script_system::is_waiting_for_sources`), since each file arrives after its own
+  asset compile job.
 
 ## Protocols and paths
 

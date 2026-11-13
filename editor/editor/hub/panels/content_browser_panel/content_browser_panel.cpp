@@ -10,6 +10,7 @@
 #include <editor/editing/editor_actions.h>
 #include <editor/editing/thumbnail_manager.h>
 #include <editor/assets/asset_actions.h>
+#include <editor/assets/package_actions.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <editor/imgui/integration/imgui_context_menu_style.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
@@ -70,6 +71,8 @@ constexpr float CONTENT_SCALE_SLIDER_WIDTH = 100.0f;
 constexpr float CONTENT_ITEM_SIZE_IN_FRAMES = 6.0f;
 
 fs::path pending_rename;
+/// A folder whose context menu asked for Export as Package: the panel opens the export once the grid is drawn.
+fs::path pending_package_export;
 
 auto process_drag_drop_source(const gfx::texture::ptr& preview, const fs::path& absolute_path) -> bool
 {
@@ -332,6 +335,11 @@ void draw_entry_context_menu(const fs::path& absolute_path, entry_interaction& i
         {
             asset_actions::reimport_path(absolute_path);
         }
+        fs::error_code err;
+        if(fs::is_directory(absolute_path, err) && ImGui::MenuItemIcon(ICON_MDI_PACKAGE_UP, "Export as Package..."))
+        {
+            pending_package_export = absolute_path;
+        }
         ImGui::Separator();
         if(ImGui::MenuItemIcon(ICON_MDI_PENCIL, "Rename", ImGui::GetKeyName(shortcuts::rename_item)))
         {
@@ -544,6 +552,12 @@ void content_browser_panel::draw(rtti::context& ctx)
     }
 
     auto& em = ctx.get_cached<editing_manager>();
+
+    if(!pending_package_export.empty())
+    {
+        parent_->get_packages_panel().open_export(ctx, fs::convert_to_protocol(pending_package_export).generic_string());
+        pending_package_export.clear();
+    }
 
     const auto root_path = fs::resolve_protocol("app:/data");
 
@@ -1183,7 +1197,23 @@ void content_browser_panel::import(rtti::context& ctx, const fs::path& target_pa
 
 void content_browser_panel::on_import(rtti::context& ctx, const std::vector<std::string>& paths, const fs::path& target_path)
 {
-    editor_actions::import_files(ctx, paths, target_path, true);
+    // A package is reviewed in the Packages window, never copied in as a file; several are reviewed one after the other.
+    std::vector<std::string> files;
+    std::vector<fs::path> package_files;
+    for(const auto& path : paths)
+    {
+        if(package_actions::is_package_file(path))
+        {
+            package_files.emplace_back(path);
+            continue;
+        }
+        files.push_back(path);
+    }
+    parent_->get_packages_panel().open_imports(ctx, package_files);
+    if(!files.empty())
+    {
+        editor_actions::import_files(ctx, files, target_path, true);
+    }
 }
 
 void content_browser_panel::prompt_delete_asset(const std::string& name, const std::function<void()>& on_delete)
