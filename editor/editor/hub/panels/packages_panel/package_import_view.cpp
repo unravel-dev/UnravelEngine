@@ -20,25 +20,13 @@
 
 namespace unravel
 {
-// A unity build merges the anonymous namespaces of the editor's sources; the view's own namespace keeps its
-// helper names from clashing.
-namespace package_import_window
-{
 namespace
 {
-namespace widgets = packages_widgets;
 using packages::file_action;
 using packages::file_status;
 
 constexpr float STATUS_COLUMN = 8.0f;
 constexpr float ACTION_COLUMN = 9.5f;
-constexpr float ROW_PADDING_X = 0.45f;
-constexpr float SEARCH_WIDTH = 12.0f;
-constexpr float SEARCH_MIN_WIDTH = 5.0f;
-constexpr float HEADER_TILE_SIZE = 3.4f;
-constexpr float HEADER_TILE_GAP = 0.85f;
-constexpr float LIST_MIN_HEIGHT = 8.0f;
-constexpr float README_MAX_HEIGHT = 14.0f;
 constexpr int COUNTER_COUNT = 5;
 
 /// The groups the file list filters by.
@@ -49,11 +37,11 @@ struct status_group
 };
 
 constexpr status_group STATUS_GROUPS[] = {
-    {"New", widgets::COLOR_NEW},
-    {"Updates", widgets::COLOR_UPDATE},
-    {"Edited by You", widgets::COLOR_EDITED},
-    {"Clashes", widgets::COLOR_CLASH},
-    {"Other", widgets::COLOR_MUTED_PILL},
+    {"New", packages_widgets::COLOR_NEW},
+    {"Updates", packages_widgets::COLOR_UPDATE},
+    {"Edited by You", packages_widgets::COLOR_EDITED},
+    {"Clashes", packages_widgets::COLOR_CLASH},
+    {"Other", packages_widgets::COLOR_MUTED_PILL},
 };
 
 auto get_group(file_status status) -> std::size_t
@@ -80,19 +68,19 @@ auto get_status_color(file_status status) -> ImU32
     switch(status)
     {
         case file_status::added:
-            return widgets::COLOR_NEW;
+            return packages_widgets::COLOR_NEW;
         case file_status::updated:
-            return widgets::COLOR_UPDATE;
+            return packages_widgets::COLOR_UPDATE;
         case file_status::edited:
         case file_status::deleted:
-            return widgets::COLOR_EDITED;
+            return packages_widgets::COLOR_EDITED;
         case file_status::uid_clash:
         case file_status::path_clash:
-            return widgets::COLOR_CLASH;
+            return packages_widgets::COLOR_CLASH;
         case file_status::incompatible:
-            return widgets::COLOR_ERROR;
+            return packages_widgets::COLOR_ERROR;
         default:
-            return widgets::COLOR_MUTED_PILL;
+            return packages_widgets::COLOR_MUTED_PILL;
     }
 }
 
@@ -143,9 +131,6 @@ auto get_package_size_text(const packages::package_archive& archive) -> std::str
     return format_bytes(archive.get_file_size(), 1);
 }
 } // namespace
-} // namespace package_import_window
-
-using namespace package_import_window;
 
 void package_import_view::open(rtti::context& ctx, const fs::path& package_file)
 {
@@ -276,47 +261,47 @@ auto package_import_view::draw(rtti::context& ctx) -> bool
 
 void package_import_view::draw_progress(const char* title, const std::string& text)
 {
-    deploy_widgets::draw_gap(widgets::SECTION_GAP);
-    if(widgets::begin_card("##import_progress"))
+    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
+    if(packages_widgets::begin_card("##import_progress"))
     {
-        widgets::draw_title(title);
+        packages_widgets::draw_title(title);
         deploy_widgets::draw_icon_line(ICON_MDI_PROGRESS_CLOCK, imgui_style::get_muted_text_color_u32(), text.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
     }
-    widgets::end_card();
+    packages_widgets::end_card();
 }
 
 void package_import_view::draw_open_error()
 {
-    if(widgets::begin_card("##import_error"))
+    if(packages_widgets::begin_card("##import_error"))
     {
-        widgets::draw_title("This package cannot be opened");
-        deploy_widgets::draw_icon_line(ICON_MDI_ALERT_OCTAGON, widgets::COLOR_ERROR, open_error_.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
-        widgets::draw_muted_wrapped(package_file_.generic_string().c_str());
+        packages_widgets::draw_title("This package cannot be opened");
+        deploy_widgets::draw_icon_line(ICON_MDI_ALERT_OCTAGON, packages_widgets::COLOR_ERROR, open_error_.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
+        packages_widgets::draw_muted_wrapped(package_file_.generic_string().c_str());
     }
-    widgets::end_card();
+    packages_widgets::end_card();
 }
 
 void package_import_view::draw_header()
 {
     const auto& manifest = plan_.manifest;
-    if(widgets::begin_card("##import_header"))
+    if(packages_widgets::begin_card("##import_header"))
     {
-        const float tile_size = widgets::to_pixels(HEADER_TILE_SIZE);
+        const float tile_size = packages_widgets::to_pixels(packages_widgets::HEADER_TILE_SIZE);
         const ImVec2 origin = ImGui::GetCursorScreenPos();
-        widgets::draw_package_tile(ImGui::GetWindowDrawList(), origin, tile_size, manifest.name);
-        ImGui::SetCursorScreenPos(ImVec2(origin.x + tile_size + widgets::to_pixels(HEADER_TILE_GAP), origin.y));
+        packages_widgets::draw_package_tile(ImGui::GetWindowDrawList(), origin, tile_size, manifest.name);
+        ImGui::SetCursorScreenPos(ImVec2(origin.x + tile_size + packages_widgets::to_pixels(packages_widgets::HEADER_TILE_GAP), origin.y));
         ImGui::BeginGroup();
         const std::string title = plan_.is_update() && plan_.installed->version != manifest.version
                                       ? fmt::format("Update {} {} to {}", manifest.get_title(), plan_.installed->version, manifest.version)
                                       : fmt::format("Import {} {}", manifest.get_title(), manifest.version);
-        widgets::draw_title(title.c_str());
+        packages_widgets::draw_title(title.c_str());
         std::string byline = manifest.name;
         if(!manifest.author.empty())
         {
             byline += "   by " + manifest.author;
         }
         byline += "   " + get_package_size_text(*archive_) + "   made with engine " + manifest.exported_with;
-        widgets::draw_muted_wrapped(byline.c_str());
+        packages_widgets::draw_muted_wrapped(byline.c_str());
         if(!manifest.description.empty())
         {
             ImGui::PushTextWrapPos(0.0f);
@@ -327,7 +312,7 @@ void package_import_view::draw_header()
         ImGui::SetCursorScreenPos(ImVec2(origin.x, ImMax(ImGui::GetCursorScreenPos().y, origin.y + tile_size)));
         ImGui::Dummy(ImVec2(0.0f, 0.0f));
     }
-    widgets::end_card();
+    packages_widgets::end_card();
 }
 
 void package_import_view::draw_notes()
@@ -344,17 +329,17 @@ void package_import_view::draw_notes()
     {
         return;
     }
-    deploy_widgets::draw_gap(widgets::SECTION_GAP);
+    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
     for(const auto* sentences : {&plan_.problems, &plan_.clashes})
     {
         for(const auto& problem : *sentences)
         {
-            deploy_widgets::draw_icon_line(ICON_MDI_ALERT_OCTAGON, widgets::COLOR_ERROR, problem.c_str(), text_color);
+            deploy_widgets::draw_icon_line(ICON_MDI_ALERT_OCTAGON, packages_widgets::COLOR_ERROR, problem.c_str(), text_color);
         }
     }
     for(const auto& warning : plan_.warnings)
     {
-        deploy_widgets::draw_icon_line(ICON_MDI_ALERT, widgets::COLOR_EDITED, warning.c_str(), text_color);
+        deploy_widgets::draw_icon_line(ICON_MDI_ALERT, packages_widgets::COLOR_EDITED, warning.c_str(), text_color);
     }
     if(has_scripts)
     {
@@ -367,9 +352,9 @@ void package_import_view::draw_notes()
 
 void package_import_view::draw_counters()
 {
-    deploy_widgets::draw_gap(widgets::SECTION_GAP);
+    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
     const float gap = ImGui::GetFontSize() * 0.5f;
-    const float width = widgets::calc_tile_width(COUNTER_COUNT);
+    const float width = packages_widgets::calc_tile_width(COUNTER_COUNT);
     const ImU32 text_color = ImGui::GetColorU32(ImGuiCol_Text);
     const auto count_color = [text_color](std::size_t count, ImU32 color)
     {
@@ -385,20 +370,20 @@ void package_import_view::draw_counters()
                                                           {
                                                               return removal.is_removed;
                                                           }));
-    widgets::draw_tile("New Files", std::to_string(added), count_color(added, widgets::COLOR_NEW), width);
+    packages_widgets::draw_tile("New Files", std::to_string(added), count_color(added, packages_widgets::COLOR_NEW), width);
     ImGui::SameLine(0.0f, gap);
-    widgets::draw_tile("Updates", std::to_string(updated), count_color(updated, widgets::COLOR_UPDATE), width);
+    packages_widgets::draw_tile("Updates", std::to_string(updated), count_color(updated, packages_widgets::COLOR_UPDATE), width);
     ImGui::SameLine(0.0f, gap);
-    widgets::draw_tile("Edited by You", std::to_string(edited), count_color(edited, widgets::COLOR_EDITED), width);
+    packages_widgets::draw_tile("Edited by You", std::to_string(edited), count_color(edited, packages_widgets::COLOR_EDITED), width);
     ImGui::SameLine(0.0f, gap);
-    widgets::draw_tile("Clashes", std::to_string(clashes), count_color(clashes, widgets::COLOR_CLASH), width);
+    packages_widgets::draw_tile("Clashes", std::to_string(clashes), count_color(clashes, packages_widgets::COLOR_CLASH), width);
     ImGui::SameLine(0.0f, gap);
-    widgets::draw_tile("To the Trash", std::to_string(removed), count_color(removed, widgets::COLOR_ERROR), width);
+    packages_widgets::draw_tile("To the Trash", std::to_string(removed), count_color(removed, packages_widgets::COLOR_ERROR), width);
 }
 
 void package_import_view::draw_files()
 {
-    deploy_widgets::draw_gap(widgets::SECTION_GAP);
+    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
     const std::string title = fmt::format("Files ({})", plan_.files.size());
     if(!panel_section::draw_header("##import_files", ICON_MDI_FILE_TREE, title.c_str(), true).is_open)
     {
@@ -418,13 +403,13 @@ void package_import_view::draw_files()
     const float wanted = row_height * float(ImMax<std::size_t>(row_count, 1)) + ImGui::GetStyle().WindowPadding.y;
     const float reserved = ImGui::GetFrameHeightWithSpacing() * 3.0f;
     const float height = ImClamp(wanted,
-                                 widgets::to_pixels(LIST_MIN_HEIGHT),
-                                 ImMax(widgets::to_pixels(LIST_MIN_HEIGHT), ImGui::GetContentRegionAvail().y - reserved));
+                                 packages_widgets::to_pixels(packages_widgets::LIST_MIN_HEIGHT),
+                                 ImMax(packages_widgets::to_pixels(packages_widgets::LIST_MIN_HEIGHT), ImGui::GetContentRegionAvail().y - reserved));
     if(ImGui::BeginChild("##import_file_list", ImVec2(0.0f, height)))
     {
         if(shown.empty() && plan_.removals.empty())
         {
-            widgets::draw_centered_hint("Nothing to show", "No file passes the search and the filters.");
+            packages_widgets::draw_centered_hint("Nothing to show", "No file passes the search and the filters.");
         }
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
         ImGuiListClipper clipper;
@@ -456,8 +441,8 @@ void package_import_view::draw_file_filters()
         panel_toolbar::search_field(search_,
                                     ICON_MDI_MAGNIFY " Search files...",
                                     "Show the files whose path holds the text.",
-                                    font_size * SEARCH_MIN_WIDTH,
-                                    font_size * SEARCH_WIDTH);
+                                    font_size * packages_widgets::SEARCH_MIN_WIDTH,
+                                    font_size * packages_widgets::SEARCH_WIDTH);
         panel_toolbar::align_right();
         std::array<std::size_t, FILTER_COUNT> counts{};
         for(const auto& planned : plan_.files)
@@ -488,36 +473,36 @@ void package_import_view::draw_file_row(std::size_t index, int row_index)
     const ImRect rect(row_min, ImVec2(row_min.x + row_width, row_min.y + ImGui::GetFrameHeight()));
     ImGui::PushID(int(index));
     const bool is_hovered = ImGui::IsMouseHoveringRect(rect.Min, rect.Max) && ImGui::IsWindowHovered();
-    widgets::draw_row_background(rect, row_index, is_hovered, false);
+    packages_widgets::draw_row_background(rect, row_index, is_hovered, false);
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    const float padding = font_size * ROW_PADDING_X;
+    const float padding = font_size * packages_widgets::ROW_PADDING_X;
     const char* status_name = packages::get_file_status_name(planned.status);
-    const ImVec2 pill_size = widgets::calc_pill_size(status_name);
-    widgets::draw_pill(draw_list,
-                       ImVec2(rect.Min.x + padding, rect.Min.y + (rect.GetHeight() - pill_size.y) * 0.5f),
-                       status_name,
-                       get_status_color(planned.status));
+    const ImVec2 pill_size = packages_widgets::calc_pill_size(status_name);
+    packages_widgets::draw_pill(draw_list,
+                                ImVec2(rect.Min.x + padding, rect.Min.y + (rect.GetHeight() - pill_size.y) * 0.5f),
+                                status_name,
+                                get_status_color(planned.status));
     const float action_width = font_size * ACTION_COLUMN;
     const float path_x = rect.Min.x + padding + font_size * STATUS_COLUMN;
     const float path_max_x = rect.Max.x - action_width - padding * 2.0f;
     const bool is_skipped = planned.action == file_action::skip;
     const ImU32 name_color = is_skipped ? imgui_style::get_muted_text_color_u32() : ImGui::GetColorU32(ImGuiCol_Text);
-    widgets::draw_path_text(draw_list,
-                            ImVec2(path_x, ImFloor(rect.Min.y + (rect.GetHeight() - font_size) * 0.5f)),
-                            path_max_x,
-                            file.path,
-                            name_color);
+    packages_widgets::draw_path_text(draw_list,
+                                     ImVec2(path_x, ImFloor(rect.Min.y + (rect.GetHeight() - font_size) * 0.5f)),
+                                     path_max_x,
+                                     file.path,
+                                     name_color);
     ImGui::SetCursorScreenPos(rect.Min);
     ImGui::InvisibleButton("##row", ImVec2(path_max_x - rect.Min.x, rect.GetHeight()));
     if(ImGui::BeginItemTooltip())
     {
         ImGui::TextUnformatted(file.path.c_str());
         ImGui::PushTextWrapPos(font_size * 28.0f);
-        widgets::draw_muted_wrapped(describe_status(planned).c_str());
+        packages_widgets::draw_muted_wrapped(describe_status(planned).c_str());
         const auto destination = describe_destination(planned);
         if(!destination.empty())
         {
-            widgets::draw_muted_wrapped(destination.c_str());
+            packages_widgets::draw_muted_wrapped(destination.c_str());
         }
         ImGui::PopTextWrapPos();
         ImGui::EndTooltip();
@@ -560,21 +545,21 @@ void package_import_view::draw_removal_row(std::size_t index, int row_index)
     const ImRect rect(row_min, ImVec2(row_min.x + ImGui::GetContentRegionAvail().x, row_min.y + ImGui::GetFrameHeight()));
     ImGui::PushID(int(plan_.files.size() + index));
     const bool is_hovered = ImGui::IsMouseHoveringRect(rect.Min, rect.Max) && ImGui::IsWindowHovered();
-    widgets::draw_row_background(rect, row_index, is_hovered, false);
+    packages_widgets::draw_row_background(rect, row_index, is_hovered, false);
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    const float padding = font_size * ROW_PADDING_X;
+    const float padding = font_size * packages_widgets::ROW_PADDING_X;
     const char* status_name = removal.is_edited ? "Dropped, edited" : "Dropped";
-    const ImVec2 pill_size = widgets::calc_pill_size(status_name);
-    widgets::draw_pill(draw_list,
-                       ImVec2(rect.Min.x + padding, rect.Min.y + (rect.GetHeight() - pill_size.y) * 0.5f),
-                       status_name,
-                       removal.is_edited ? widgets::COLOR_EDITED : widgets::COLOR_ERROR);
+    const ImVec2 pill_size = packages_widgets::calc_pill_size(status_name);
+    packages_widgets::draw_pill(draw_list,
+                                ImVec2(rect.Min.x + padding, rect.Min.y + (rect.GetHeight() - pill_size.y) * 0.5f),
+                                status_name,
+                                removal.is_edited ? packages_widgets::COLOR_EDITED : packages_widgets::COLOR_ERROR);
     const float action_width = font_size * ACTION_COLUMN;
-    widgets::draw_path_text(draw_list,
-                            ImVec2(rect.Min.x + padding + font_size * STATUS_COLUMN, ImFloor(rect.Min.y + (rect.GetHeight() - font_size) * 0.5f)),
-                            rect.Max.x - action_width - padding * 2.0f,
-                            packages::get_data_path(removal.key),
-                            ImGui::GetColorU32(ImGuiCol_Text));
+    packages_widgets::draw_path_text(draw_list,
+                                     ImVec2(rect.Min.x + padding + font_size * STATUS_COLUMN, ImFloor(rect.Min.y + (rect.GetHeight() - font_size) * 0.5f)),
+                                     rect.Max.x - action_width - padding * 2.0f,
+                                     packages::get_data_path(removal.key),
+                                     ImGui::GetColorU32(ImGuiCol_Text));
     ImGui::SetCursorScreenPos(rect.Min);
     ImGui::InvisibleButton("##row", ImVec2(rect.GetWidth() - action_width - padding * 2.0f, rect.GetHeight()));
     ImGui::SetItemTooltipEx("%s",
@@ -613,7 +598,7 @@ void package_import_view::draw_readme()
     {
         return;
     }
-    if(ImGui::BeginChild("##import_readme_text", ImVec2(0.0f, widgets::to_pixels(README_MAX_HEIGHT)), ImGuiChildFlags_AutoResizeY))
+    if(ImGui::BeginChild("##import_readme_text", ImVec2(0.0f, packages_widgets::to_pixels(packages_widgets::README_MAX_HEIGHT)), ImGuiChildFlags_AutoResizeY))
     {
         ImGui::PushTextWrapPos(0.0f);
         ImGui::TextUnformatted(readme_.c_str());
@@ -624,9 +609,9 @@ void package_import_view::draw_readme()
 
 auto package_import_view::draw_footer(rtti::context& ctx) -> bool
 {
-    deploy_widgets::draw_gap(widgets::SECTION_GAP);
+    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
     ImGui::Separator();
-    deploy_widgets::draw_gap(widgets::SECTION_GAP * 0.5f);
+    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP * 0.5f);
     bool is_kept_open = true;
     if(deploy_widgets::draw_button("Cancel", false, !is_applying_))
     {
@@ -651,20 +636,20 @@ auto package_import_view::draw_footer(rtti::context& ctx) -> bool
 
 auto package_import_view::draw_result(rtti::context& ctx) -> bool
 {
-    if(widgets::begin_card("##import_result"))
+    if(packages_widgets::begin_card("##import_result"))
     {
         const std::string title = fmt::format("{} {} is in the project", plan_.manifest.get_title(), plan_.manifest.version);
-        widgets::draw_title(title.c_str());
+        packages_widgets::draw_title(title.c_str());
         const std::string summary =
             fmt::format("{} file(s) written, {} kept as they were, and {} moved to the project's trash.",
                         result_.written_keys.size(),
                         result_.kept_count,
                         result_.removed_keys.size());
-        deploy_widgets::draw_icon_line(ICON_MDI_CHECK_CIRCLE, widgets::COLOR_NEW, summary.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
-        widgets::draw_muted_wrapped("The editor imports the new files now. Its progress shows in the status bar.");
+        deploy_widgets::draw_icon_line(ICON_MDI_CHECK_CIRCLE, packages_widgets::COLOR_NEW, summary.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
+        packages_widgets::draw_muted_wrapped("The editor imports the new files now. Its progress shows in the status bar.");
     }
-    widgets::end_card();
-    deploy_widgets::draw_gap(widgets::SECTION_GAP);
+    packages_widgets::end_card();
+    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
     bool is_kept_open = true;
     if(deploy_widgets::draw_button(ICON_MDI_FOLDER_OPEN_OUTLINE " Show Files", false, !plan_.manifest.root.empty()))
     {

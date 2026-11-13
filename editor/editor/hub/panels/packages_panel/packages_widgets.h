@@ -15,6 +15,13 @@ constexpr float CARD_PADDING = 0.85f;
 constexpr ImU32 CARD_COLOR = IM_COL32(0, 0, 0, 46);
 constexpr float TITLE_SCALE = 1.3f;
 constexpr float SECTION_GAP = 0.6f;
+constexpr float HEADER_TILE_SIZE = 3.4f;
+constexpr float HEADER_TILE_GAP = 0.85f;
+constexpr float ROW_PADDING_X = 0.45f;
+constexpr float LIST_MIN_HEIGHT = 8.0f;
+constexpr float README_MAX_HEIGHT = 14.0f;
+constexpr float SEARCH_WIDTH = 12.0f;
+constexpr float SEARCH_MIN_WIDTH = 5.0f;
 
 constexpr ImU32 COLOR_NEW = IM_COL32(110, 190, 130, 255);
 constexpr ImU32 COLOR_UPDATE = IM_COL32(120, 170, 230, 255);

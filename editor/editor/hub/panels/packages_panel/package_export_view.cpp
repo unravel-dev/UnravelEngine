@@ -23,24 +23,13 @@
 
 namespace unravel
 {
-// A unity build merges the anonymous namespaces of the editor's sources; the view's own namespace keeps its
-// helper names from clashing.
-namespace package_export_window
-{
 namespace
 {
-namespace widgets = packages_widgets;
 using packages::export_reason;
 
 constexpr float CHECK_COLUMN = 1.9f;
 constexpr float REASON_COLUMN = 9.0f;
 constexpr float SIZE_COLUMN = 5.5f;
-constexpr float ROW_PADDING_X = 0.45f;
-constexpr float SEARCH_WIDTH = 12.0f;
-constexpr float SEARCH_MIN_WIDTH = 5.0f;
-constexpr float HEADER_TILE_SIZE = 3.4f;
-constexpr float HEADER_TILE_GAP = 0.85f;
-constexpr float LIST_MIN_HEIGHT = 8.0f;
 constexpr float DESCRIPTION_LINES = 3.0f;
 constexpr std::size_t SCRIPT_ERRORS_SHOWN = 6;
 /// How many times a failed check adds the scripts it misses and runs again.
@@ -55,13 +44,13 @@ auto get_reason_color(export_reason reason) -> ImU32
     switch(reason)
     {
         case export_reason::in_folder:
-            return widgets::COLOR_MUTED_PILL;
+            return packages_widgets::COLOR_MUTED_PILL;
         case export_reason::referenced:
-            return widgets::COLOR_UPDATE;
+            return packages_widgets::COLOR_UPDATE;
         case export_reason::script:
-            return widgets::COLOR_NEW;
+            return packages_widgets::COLOR_NEW;
     }
-    return widgets::COLOR_MUTED_PILL;
+    return packages_widgets::COLOR_MUTED_PILL;
 }
 
 /// A text field in the inspector's layout. @return True when the text changed.
@@ -78,9 +67,6 @@ auto draw_text_row(const char* label, const char* tooltip, std::string& text, co
     return true;
 }
 } // namespace
-} // namespace package_export_window
-
-using namespace package_export_window;
 
 void package_export_view::open(rtti::context& ctx, const std::string& folder_key)
 {
@@ -282,44 +268,44 @@ auto package_export_view::draw(rtti::context& ctx) -> bool
 
 void package_export_view::draw_planning()
 {
-    if(widgets::begin_card("##export_planning"))
+    if(packages_widgets::begin_card("##export_planning"))
     {
-        widgets::draw_title("Finding what the package needs");
+        packages_widgets::draw_title("Finding what the package needs");
         const std::string text = fmt::format("Following every reference from {}. This takes a moment in a large project.", folder_key_);
-        widgets::draw_muted_wrapped(text.c_str());
+        packages_widgets::draw_muted_wrapped(text.c_str());
     }
-    widgets::end_card();
+    packages_widgets::end_card();
 }
 
 void package_export_view::draw_header()
 {
-    if(widgets::begin_card("##export_header"))
+    if(packages_widgets::begin_card("##export_header"))
     {
-        const float tile_size = widgets::to_pixels(HEADER_TILE_SIZE);
+        const float tile_size = packages_widgets::to_pixels(packages_widgets::HEADER_TILE_SIZE);
         const ImVec2 origin = ImGui::GetCursorScreenPos();
-        widgets::draw_package_tile(ImGui::GetWindowDrawList(), origin, tile_size, definition_.name, ICON_MDI_PACKAGE_UP);
-        ImGui::SetCursorScreenPos(ImVec2(origin.x + tile_size + widgets::to_pixels(HEADER_TILE_GAP), origin.y));
+        packages_widgets::draw_package_tile(ImGui::GetWindowDrawList(), origin, tile_size, definition_.name, ICON_MDI_PACKAGE_UP);
+        ImGui::SetCursorScreenPos(ImVec2(origin.x + tile_size + packages_widgets::to_pixels(packages_widgets::HEADER_TILE_GAP), origin.y));
         ImGui::BeginGroup();
         const std::string title = fmt::format("Export {}", plan_.root);
-        widgets::draw_title(title.c_str());
+        packages_widgets::draw_title(title.c_str());
         const std::string summary = fmt::format("{} file(s), {}, from {}",
                                                 plan_.get_included_count(),
                                                 format_bytes(plan_.get_included_size(), 1),
                                                 plan_.folder_key);
-        widgets::draw_muted_wrapped(summary.c_str());
-        widgets::draw_muted_wrapped(plan_.has_definition ? "The folder's package.json gives the details below, and the export saves them back."
-                                                         : "The export saves the details below in the folder's package.json, so the next "
-                                                           "version keeps the same name.");
+        packages_widgets::draw_muted_wrapped(summary.c_str());
+        packages_widgets::draw_muted_wrapped(plan_.has_definition ? "The folder's package.json gives the details below, and the export saves them back."
+                                                                  : "The export saves the details below in the folder's package.json, so the next "
+                                                                    "version keeps the same name.");
         ImGui::EndGroup();
         ImGui::SetCursorScreenPos(ImVec2(origin.x, ImMax(ImGui::GetCursorScreenPos().y, origin.y + tile_size)));
         ImGui::Dummy(ImVec2(0.0f, 0.0f));
     }
-    widgets::end_card();
+    packages_widgets::end_card();
 }
 
 void package_export_view::draw_form()
 {
-    deploy_widgets::draw_gap(widgets::SECTION_GAP);
+    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
     if(!panel_section::draw_header("##export_package", ICON_MDI_TAG_OUTLINE, "Package", true).is_open)
     {
         return;
@@ -374,13 +360,13 @@ void package_export_view::draw_form()
     deploy_widgets::pop_field_colors();
     if(!name_error_.empty())
     {
-        deploy_widgets::draw_icon_line(ICON_MDI_ALERT, widgets::COLOR_EDITED, name_error_.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
+        deploy_widgets::draw_icon_line(ICON_MDI_ALERT, packages_widgets::COLOR_EDITED, name_error_.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
     }
 }
 
 void package_export_view::draw_contents()
 {
-    deploy_widgets::draw_gap(widgets::SECTION_GAP);
+    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
     const std::string title = fmt::format("Contents ({} of {})", plan_.get_included_count(), plan_.entries.size());
     if(!panel_section::draw_header("##export_contents", ICON_MDI_FILE_TREE, title.c_str(), true).is_open)
     {
@@ -398,7 +384,7 @@ void package_export_view::draw_contents()
         const std::string note = fmt::format("{} file(s) outside the folder go in because the package uses them. They install at the "
                                              "same paths in other projects.",
                                              outside);
-        deploy_widgets::draw_icon_line(ICON_MDI_INFORMATION_OUTLINE, widgets::COLOR_UPDATE, note.c_str(), muted);
+        deploy_widgets::draw_icon_line(ICON_MDI_INFORMATION_OUTLINE, packages_widgets::COLOR_UPDATE, note.c_str(), muted);
     }
     if(!plan_.engine_assets.empty())
     {
@@ -411,8 +397,8 @@ void package_export_view::draw_contents()
         panel_toolbar::search_field(search_,
                                     ICON_MDI_MAGNIFY " Search files...",
                                     "Show the files whose path holds the text.",
-                                    font_size * SEARCH_MIN_WIDTH,
-                                    font_size * SEARCH_WIDTH);
+                                    font_size * packages_widgets::SEARCH_MIN_WIDTH,
+                                    font_size * packages_widgets::SEARCH_WIDTH);
     }
     panel_toolbar::end_strip();
     std::vector<std::size_t> shown;
@@ -427,13 +413,13 @@ void package_export_view::draw_contents()
     const float wanted = row_height * float(ImMax<std::size_t>(shown.size(), 1)) + ImGui::GetStyle().WindowPadding.y;
     const float reserved = ImGui::GetFrameHeightWithSpacing() * 6.0f;
     const float height = ImClamp(wanted,
-                                 widgets::to_pixels(LIST_MIN_HEIGHT),
-                                 ImMax(widgets::to_pixels(LIST_MIN_HEIGHT), ImGui::GetContentRegionAvail().y - reserved));
+                                 packages_widgets::to_pixels(packages_widgets::LIST_MIN_HEIGHT),
+                                 ImMax(packages_widgets::to_pixels(packages_widgets::LIST_MIN_HEIGHT), ImGui::GetContentRegionAvail().y - reserved));
     if(ImGui::BeginChild("##export_file_list", ImVec2(0.0f, height)))
     {
         if(shown.empty())
         {
-            widgets::draw_centered_hint("Nothing to show", plan_.entries.empty() ? "The folder holds no asset." : "No file passes the search.");
+            packages_widgets::draw_centered_hint("Nothing to show", plan_.entries.empty() ? "The folder holds no asset." : "No file passes the search.");
         }
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
         ImGuiListClipper clipper;
@@ -458,9 +444,9 @@ void package_export_view::draw_entry_row(std::size_t index, int row_index)
     const ImRect rect(row_min, ImVec2(row_min.x + ImGui::GetContentRegionAvail().x, row_min.y + ImGui::GetFrameHeight()));
     ImGui::PushID(int(index));
     const bool is_hovered = ImGui::IsMouseHoveringRect(rect.Min, rect.Max) && ImGui::IsWindowHovered();
-    widgets::draw_row_background(rect, row_index, is_hovered, false);
+    packages_widgets::draw_row_background(rect, row_index, is_hovered, false);
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    const float padding = font_size * ROW_PADDING_X;
+    const float padding = font_size * packages_widgets::ROW_PADDING_X;
     ImGui::SetCursorScreenPos(ImVec2(rect.Min.x + padding, rect.Min.y));
     if(ImGui::Checkbox("##included", &entry.is_included) && entry.type == ".cs")
     {
@@ -473,13 +459,13 @@ void package_export_view::draw_entry_row(std::size_t index, int row_index)
     const float path_max_x = rect.Max.x - size_width - reason_width - padding * 2.0f;
     const float text_y = ImFloor(rect.Min.y + (rect.GetHeight() - font_size) * 0.5f);
     const ImU32 name_color = entry.is_included ? ImGui::GetColorU32(ImGuiCol_Text) : imgui_style::get_muted_text_color_u32();
-    widgets::draw_path_text(draw_list, ImVec2(path_x, text_y), path_max_x, entry.path, name_color);
+    packages_widgets::draw_path_text(draw_list, ImVec2(path_x, text_y), path_max_x, entry.path, name_color);
     const char* reason = packages::get_export_reason_name(entry.reason);
-    const ImVec2 pill_size = widgets::calc_pill_size(reason);
-    widgets::draw_pill(draw_list,
-                       ImVec2(path_max_x + padding, rect.Min.y + (rect.GetHeight() - pill_size.y) * 0.5f),
-                       reason,
-                       get_reason_color(entry.reason));
+    const ImVec2 pill_size = packages_widgets::calc_pill_size(reason);
+    packages_widgets::draw_pill(draw_list,
+                                ImVec2(path_max_x + padding, rect.Min.y + (rect.GetHeight() - pill_size.y) * 0.5f),
+                                reason,
+                                get_reason_color(entry.reason));
     const auto size_text = format_bytes(entry.size, 1);
     const float size_text_width = ImGui::CalcTextSize(size_text.c_str()).x;
     draw_list->AddText(ImVec2(rect.Max.x - padding - size_text_width, text_y), imgui_style::get_muted_text_color_u32(), size_text.c_str());
@@ -491,13 +477,13 @@ void package_export_view::draw_entry_row(std::size_t index, int row_index)
         ImGui::PushTextWrapPos(font_size * 28.0f);
         if(entry.reason == export_reason::in_folder)
         {
-            widgets::draw_muted_wrapped("It lies in the package's folder.");
+            packages_widgets::draw_muted_wrapped("It lies in the package's folder.");
         }
         else
         {
             const std::string used_by = fmt::format("{} uses it.", entry.used_by);
-            widgets::draw_muted_wrapped(used_by.c_str());
-            widgets::draw_muted_wrapped("It lies outside the folder and installs at the same path in other projects.");
+            packages_widgets::draw_muted_wrapped(used_by.c_str());
+            packages_widgets::draw_muted_wrapped("It lies outside the folder and installs at the same path in other projects.");
         }
         ImGui::PopTextWrapPos();
         ImGui::EndTooltip();
@@ -514,7 +500,7 @@ void package_export_view::draw_scripts()
     {
         return;
     }
-    deploy_widgets::draw_gap(widgets::SECTION_GAP);
+    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
     const std::string title = fmt::format("Scripts ({})", scripts.size());
     if(!panel_section::draw_header("##export_scripts", ICON_MDI_LANGUAGE_CSHARP, title.c_str(), true).is_open)
     {
@@ -525,7 +511,7 @@ void package_export_view::draw_scripts()
     if(added_script_count_ > 0)
     {
         const auto note = fmt::format("{} script(s) the package's scripts use went in, so they build on their own.", added_script_count_);
-        deploy_widgets::draw_icon_line(ICON_MDI_PLUS_CIRCLE_OUTLINE, widgets::COLOR_UPDATE, note.c_str(), text_color);
+        deploy_widgets::draw_icon_line(ICON_MDI_PLUS_CIRCLE_OUTLINE, packages_widgets::COLOR_UPDATE, note.c_str(), text_color);
     }
     if(!has_script_check_)
     {
@@ -533,12 +519,12 @@ void package_export_view::draw_scripts()
     }
     else if(script_check_.builds)
     {
-        deploy_widgets::draw_icon_line(ICON_MDI_CHECK_CIRCLE, widgets::COLOR_NEW, "The package's scripts build on their own.", text_color);
+        deploy_widgets::draw_icon_line(ICON_MDI_CHECK_CIRCLE, packages_widgets::COLOR_NEW, "The package's scripts build on their own.", text_color);
     }
     else
     {
         deploy_widgets::draw_icon_line(ICON_MDI_ALERT_OCTAGON,
-                                       widgets::COLOR_ERROR,
+                                       packages_widgets::COLOR_ERROR,
                                        "The package's scripts do not build on their own. They use scripts the package leaves out. "
                                        "Add those to the folder, or the package breaks in other projects.",
                                        text_color);
@@ -546,13 +532,13 @@ void package_export_view::draw_scripts()
         {
             const auto& error = script_check_.errors[index];
             const auto line = packages::format_compiler_message(error.file, error.line, error.msg);
-            widgets::draw_muted_wrapped(line.c_str());
+            packages_widgets::draw_muted_wrapped(line.c_str());
         }
     }
     for(const auto& type : plan_.unresolved_script_types)
     {
         const auto note = fmt::format("The script type {} is used, but no script of the project defines it now.", type);
-        deploy_widgets::draw_icon_line(ICON_MDI_ALERT, widgets::COLOR_EDITED, note.c_str(), text_color);
+        deploy_widgets::draw_icon_line(ICON_MDI_ALERT, packages_widgets::COLOR_EDITED, note.c_str(), text_color);
     }
     for(const auto& type : plan_.script_types)
     {
@@ -560,7 +546,7 @@ void package_export_view::draw_scripts()
         {
             const auto note =
                 fmt::format("{} has no namespace. A project with a type of the same name refuses the package.", type.full_name);
-            deploy_widgets::draw_icon_line(ICON_MDI_INFORMATION_OUTLINE, widgets::COLOR_EDITED, note.c_str(), text_color);
+            deploy_widgets::draw_icon_line(ICON_MDI_INFORMATION_OUTLINE, packages_widgets::COLOR_EDITED, note.c_str(), text_color);
         }
     }
 }
@@ -572,9 +558,9 @@ auto package_export_view::draw_footer(rtti::context& ctx) -> bool
         is_script_check_stale_ = false;
         start_script_check(ctx);
     }
-    deploy_widgets::draw_gap(widgets::SECTION_GAP);
+    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
     ImGui::Separator();
-    deploy_widgets::draw_gap(widgets::SECTION_GAP * 0.5f);
+    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP * 0.5f);
     bool is_kept_open = true;
     if(deploy_widgets::draw_button("Cancel", false, true))
     {
@@ -613,24 +599,24 @@ auto package_export_view::draw_footer(rtti::context& ctx) -> bool
                                            : reason.c_str());
     if(!export_error_.empty())
     {
-        deploy_widgets::draw_icon_line(ICON_MDI_ALERT_OCTAGON, widgets::COLOR_ERROR, export_error_.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
+        deploy_widgets::draw_icon_line(ICON_MDI_ALERT_OCTAGON, packages_widgets::COLOR_ERROR, export_error_.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
     }
     return is_kept_open;
 }
 
 auto package_export_view::draw_result() -> bool
 {
-    if(widgets::begin_card("##export_result"))
+    if(packages_widgets::begin_card("##export_result"))
     {
         const std::string title = fmt::format("{} {} is exported", exported_.get_title(), exported_.version);
-        widgets::draw_title(title.c_str());
+        packages_widgets::draw_title(title.c_str());
         const std::string summary = fmt::format("{} file(s) in {}.", exported_.files.size(), exported_file_.filename().string());
-        deploy_widgets::draw_icon_line(ICON_MDI_CHECK_CIRCLE, widgets::COLOR_NEW, summary.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
-        widgets::draw_muted_wrapped("It is in the project's .packages folder. Share the file, and any project imports it when "
-                                    "it is dropped on the Content Browser or picked with Import.");
+        deploy_widgets::draw_icon_line(ICON_MDI_CHECK_CIRCLE, packages_widgets::COLOR_NEW, summary.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
+        packages_widgets::draw_muted_wrapped("It is in the project's .packages folder. Share the file, and any project imports it when "
+                                             "it is dropped on the Content Browser or picked with Import.");
     }
-    widgets::end_card();
-    deploy_widgets::draw_gap(widgets::SECTION_GAP);
+    packages_widgets::end_card();
+    deploy_widgets::draw_gap(packages_widgets::SECTION_GAP);
     if(deploy_widgets::draw_button(ICON_MDI_FOLDER_OPEN_OUTLINE " Show in Folder", false, true))
     {
         fs::show_in_graphical_env(exported_file_);
