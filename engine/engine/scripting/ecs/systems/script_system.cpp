@@ -137,6 +137,42 @@ auto get_sources_stamp(asset_manager& am, const std::string& protocol) -> uint64
     return stamp;
 }
 
+/// Longest a scheduled build waits for script files on their way to the asset manager, so a file whose asset
+/// compile failed does not hold every later build back.
+constexpr std::chrono::seconds SOURCE_WAIT_LIMIT(10);
+
+auto is_script_source(const std::string& location) -> bool
+{
+    const auto extension = fs::path(location).extension().generic_string();
+    const auto& formats = ex::get_suported_formats<script>();
+    return std::find(formats.begin(), formats.end(), extension) != formats.end();
+}
+
+/// How many script files the protocol's asset database and the asset manager disagree on. A batch of scripts (an
+/// import, a package, a pull) enters the database at once, but each file reaches the asset manager, which a build
+/// reads its sources from, only when its own asset compile has finished, behind the compile jobs queued before it.
+/// A build in between reads part of the batch and fails on the types the rest declares.
+auto count_sources_in_flight(asset_manager& am, const std::string& protocol) -> std::size_t
+{
+    std::set<std::string> loaded;
+    for(const auto& asset : am.get_assets<script>(protocol))
+    {
+        if(asset)
+        {
+            loaded.insert(asset.id());
+        }
+    }
+    std::size_t not_loaded = 0;
+    for(const auto& location : am.get_all_assets(protocol + ":/"))
+    {
+        if(is_script_source(location) && loaded.erase(location) == 0)
+        {
+            ++not_loaded;
+        }
+    }
+    return not_loaded + loaded.size();
+}
+
 // Guards the files every build of a script library writes: the compiler output at a fixed
 // temp path (the pdb stays there, so the dll's debug entry keeps pointing at it) and the temp
 // compiled key it is copied to, which domain loads copy into place. A build holds it for its
@@ -1709,6 +1745,13 @@ void script_system::check_for_recompile(rtti::context& ctx, delta_t dt, bool emi
                     set_needs_recompile(protocol);
                     continue;
                 }
+                if(emit_callback && is_waiting_for_sources(ctx, protocol))
+                {
+                    // Checked again on the next schedule; the files still arriving queue this build anyway.
+                    set_needs_recompile(protocol);
+                    continue;
+                }
+                source_waits_.erase(protocol);
 
                 auto job = create_compilation_job(ctx, protocol, get_script_debug_mode())
                                .then(tpp::this_thread::get_id(),
@@ -1742,6 +1785,32 @@ void script_system::check_for_recompile(rtti::context& ctx, delta_t dt, bool emi
             }
         }
     }
+}
+
+auto script_system::is_waiting_for_sources(rtti::context& ctx, const std::string& protocol) -> bool
+{
+    const auto in_flight = count_sources_in_flight(ctx.get_cached<asset_manager>(), protocol);
+    if(in_flight == 0)
+    {
+        source_waits_.erase(protocol);
+        return false;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const auto [wait, is_new] = source_waits_.emplace(protocol, now);
+    if(is_new)
+    {
+        APPLOG_TRACE("The {} scripts are built once {} script file(s) still being processed have arrived.", protocol, in_flight);
+    }
+    if(now - wait->second < SOURCE_WAIT_LIMIT)
+    {
+        return true;
+    }
+    APPLOG_WARNING("The {} scripts are built while {} script file(s) are still being processed, after a wait of {} seconds.",
+                   protocol,
+                   in_flight,
+                   SOURCE_WAIT_LIMIT.count());
+    source_waits_.erase(wait);
+    return false;
 }
 
 void script_system::wait_for_jobs_to_finish(rtti::context& ctx)

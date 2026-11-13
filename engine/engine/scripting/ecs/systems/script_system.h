@@ -394,6 +394,10 @@ private:
 
     void check_for_recompile(rtti::context& ctx, delta_t dt, bool emit_callback);
 
+    /// True while a scheduled build of @p protocol's library should wait for script files that are still on their
+    /// way to the asset manager; false once they all arrived or the wait ran out.
+    auto is_waiting_for_sources(rtti::context& ctx, const std::string& protocol) -> bool;
+
     /**
      * @brief Delivers the animation events every player recorded this frame to the scripts on the
      * animated entity (or, when it has none, its nearest ancestor with scripts).
@@ -447,6 +451,9 @@ private:
     bool is_updating_{};
     ///< Last scheduled library build per protocol.
     std::map<std::string, tpp::future<void>> compilation_jobs_;
+
+    /// Since when a scheduled build of each protocol has waited for its script files. Main thread only.
+    std::map<std::string, std::chrono::steady_clock::time_point> source_waits_;
 
     /// Protocols whose successful build has been announced (on_script_recompile) and whose
     /// library has not been loaded since.
