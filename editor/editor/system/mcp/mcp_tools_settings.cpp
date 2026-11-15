@@ -47,6 +47,7 @@ auto reflected_rows() -> const std::vector<reflected_row>&
         {"graphics", "shadow_map_caching"},
         {"graphics", "render_scale"},
         {"graphics", "limits"},
+        {"graphics", "material_quality"},
         {"graphics", "particles"},
         {"graphics", "eviction"},
         {"physics", "backend", true},

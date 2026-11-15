@@ -22,15 +22,29 @@ enum class material_value_type : uint8_t
     float4,
     /// Resolved per node: the widest value linked into the node's dynamic inputs, a float1 when none is linked.
     dynamic,
+    /// A 2D texture to read (a Texture Object): what texture nodes, Custom nodes and material functions take to read
+    /// a texture the graph chooses. Never a number: it links only into inputs taking a texture.
+    texture2d,
+    /// A cube texture to read (a Cubemap Object).
+    texture_cube,
+    /// A whole surface: every channel of the Surface Output (Make Material Attributes), to blend surfaces as one.
+    attributes,
 };
 
-/// Components of a resolved type (1 to 4); 1 for dynamic.
+/// Components of a resolved type (1 to 4); 1 for dynamic, the textures and the attributes.
 auto get_material_value_width(material_value_type type) -> uint32_t;
+
+/// True for the types that are numbers (float1 to float4, dynamic); false for textures and attributes, which link only
+/// into inputs of their own type.
+auto is_material_value_numeric(material_value_type type) -> bool;
+
+/// True for texture2d and texture_cube.
+auto is_material_texture_type(material_value_type type) -> bool;
 
 /// The vector type of @p width components (1 to 4).
 auto get_material_value_type(uint32_t width) -> material_value_type;
 
-/// The type as the shader names it: "float", "vec2", "vec3", "vec4".
+/// The type as the shader names it: "float", "vec2", "vec3", "vec4", "sampler2D", "samplerCube", "MaterialSurface".
 auto get_material_value_shader_type(material_value_type type) -> const char*;
 
 /// The type as the editor shows it: "Float", "Vector 2"...
@@ -51,6 +65,8 @@ enum class material_node_category : uint8_t
     procedural,
     utility,
     function,
+    color,
+    uv,
 };
 
 auto get_material_node_category_name(material_node_category category) -> const char*;
@@ -97,7 +113,32 @@ enum class material_node_code : uint8_t
     /// The pixel is not drawn where Value is below Threshold. No output: the compiler emits every one in the pixel
     /// stage, as it emits the Surface Output.
     discard,
+    /// A colour read from a gradient at the value input: the stops are the hidden value inputs color0.. and
+    /// position0.., as many as the `count` setting says, blended as `interpolation` says.
+    color_ramp,
+    /// Its input computed per vertex and blended across the triangle for the pixels: the graph's vertex shader writes
+    /// it into a varying the pixel stage reads.
+    vertex_interpolator,
+    /// A texture of the material, not read: its value is the texture (Texture Object, Cubemap Object).
+    texture_object,
+    /// The UV a height map shows along the view (parallax occlusion mapping): its own texture or the linked one.
+    parallax_occlusion,
+    /// A tangent-space normal from the slopes of a height map: its own texture or the linked one.
+    normal_from_texture,
 };
+
+/// The input of a texture node taking a texture to read instead of its own (a Texture Object).
+inline constexpr const char* MATERIAL_TEXTURE_PIN = "texture";
+/// The Surface Output's input taking a whole surface (Make Material Attributes).
+inline constexpr const char* MATERIAL_ATTRIBUTES_PIN = "material_attributes";
+/// A texture node's sampler state: binding settings, never code. Address "texture" keeps the texture's own; filter
+/// "anisotropic" is the default reading.
+inline constexpr const char* MATERIAL_TEXTURE_ADDRESS_SETTING = "address";
+inline constexpr const char* MATERIAL_TEXTURE_ADDRESS_TEXTURE = "texture";
+inline constexpr const char* MATERIAL_TEXTURE_FILTER_SETTING = "filter";
+inline constexpr const char* MATERIAL_TEXTURE_FILTER_ANISOTROPIC = "anisotropic";
+/// A sample's mip: "auto", "bias" or "level", by its Mip input.
+inline constexpr const char* MATERIAL_TEXTURE_MIP_MODE_SETTING = "mip_mode";
 
 /**
  * @brief How the type of a node's value is found.
@@ -137,6 +178,8 @@ struct material_pin_def
     std::string default_code;
     /// Outputs only: read from the node's value with this swizzle (".rgb", ".r"); empty for the whole value.
     std::string swizzle;
+    /// Outputs only: read as this member of the node's value, a struct (Break Material Attributes); empty for none.
+    std::string member;
     /// Inputs only: edited on the node, never linked (a constant's value).
     bool is_value_only{};
     /// Edited with a colour picker.
@@ -213,6 +256,11 @@ struct material_node_def
     /// Code used instead while the dynamic inputs are floats: HLSL has no float overloads of the vector functions
     /// (normalize, length, distance, dot). Empty: the expression.
     std::string scalar_expression;
+    /// Code by the width of the first dynamic input, 1 to 4, for a node whose functions differ by width (a hash of a
+    /// float, a vec2...). An empty entry, or none: the expression (or scalar_expression for a float).
+    std::vector<std::string> width_expressions;
+    /// The node reads a pixel's neighbours (derivatives): the vertex stage cannot run it.
+    bool is_pixel_only{};
     /// The value is cheap (a constant, a built-in input): it is written where it is read instead of into a variable.
     bool is_inline{};
 };
@@ -234,8 +282,12 @@ auto find_material_setting_def(const material_node_def& def, hpp::string_view na
 /// What the editor shows for @p value of the choice @p setting: its entry in choice_labels, else @p value itself.
 auto get_material_setting_choice_label(const material_setting_def& setting, const std::string& value) -> const std::string&;
 
-/// True for a node type that reads a texture (material_graph_node::texture).
+/// True for a node type that holds a texture of its own (material_graph_node::texture): the texture nodes, which read
+/// it unless a texture is linked into their Texture input, and the Texture and Cubemap Objects.
 auto is_material_texture_node(const material_node_def& def) -> bool;
+
+/// The kind of texture a texture node holds: texture2d or texture_cube.
+auto get_material_texture_node_kind(const material_node_def& def) -> material_value_type;
 
 /// True when a pin can be split into a pin per component: a vector of fixed width that takes links (or an output).
 auto can_split_material_pin(const material_pin_def& pin) -> bool;

@@ -12,6 +12,7 @@
 #include <engine/rendering/feature_limits.h>
 #include <engine/rendering/render_scale.h>
 #include <engine/rendering/gi/gi_project_settings.h>
+#include <engine/rendering/material_graph/material_graph_quality.h>
 #include <engine/rendering/particles/ps/particle_types.h>
 #include <engine/settings/boot_config.h>
 #include <engine/settings/target_platform.h>
@@ -136,6 +137,9 @@ struct settings
         float render_scale{1.0f};
         /// The most expensive rendering features scenes may use. The renderer applies them every frame.
         feature_limits limits;
+        /// The input the graph materials' Quality Switch nodes take in a build: High, as the editor draws them, or the
+        /// cheaper Low. A deploy cooks the materials at the value of its profile; the editor draws High.
+        material_graph_quality material_quality{material_graph_quality::high};
 
         friend auto operator==(const graphics_settings& lhs, const graphics_settings& rhs) -> bool = default;
     } graphics;

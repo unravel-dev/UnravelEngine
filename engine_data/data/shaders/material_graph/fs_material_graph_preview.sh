@@ -7,7 +7,7 @@
  * returns the one u_mg_preview.x names as a colour.
  *
  * The tile stands for a flat patch facing the viewer: its UV is the mesh's, the world position spans -1..1 across it,
- * and the normal and the view look along +Z. The value is clamped to 0..1 and shown sRGB-encoded, as a colour of the
+ * the normal and the view look along +Z (the camera along -Z), and the tangent and bitangent along +X and +Y. The value is clamped to 0..1 and shown sRGB-encoded, as a colour of the
  * surface would be.
  */
 
@@ -20,11 +20,16 @@ void main()
 	i.uv0 = v_texcoord0;
 	i.world_position = vec3(v_texcoord0 * 2.0 - 1.0, 0.0);
 	i.vertex_normal = vec3(0.0, 0.0, 1.0);
+	i.tangent = vec3(1.0, 0.0, 0.0);
+	i.bitangent = vec3(0.0, 1.0, 0.0);
+	i.two_sided_sign = 1.0;
 	i.view_direction = vec3(0.0, 0.0, 1.0);
 	i.camera_position = vec3(0.0, 0.0, 2.0);
+	i.camera_direction = vec3(0.0, 0.0, -1.0);
 	i.screen_uv = v_texcoord0;
 	i.time = u_material_time.x;
 	i.mip_bias = 0.0;
+	mg_set_world_object_inputs(i);
 
 	vec4 value = evaluate_preview(i, u_mg_preview.x);
 	gl_FragColor = vec4(toGamma(saturate(value.rgb)), 1.0);

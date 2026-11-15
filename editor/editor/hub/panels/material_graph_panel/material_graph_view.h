@@ -241,6 +241,9 @@ private:
     auto get_comment_size(const material_graph_comment& comment) const -> math::vec2;
     /// Whether @p node shows a swatch of its value.
     auto has_swatch(const material_graph_node& node, const material_node_def& def) const -> bool;
+    /// Whether the node shows the picture of its own texture in place of a swatch: a 2D texture it holds and reads,
+    /// nothing linked into its Texture input.
+    static auto shows_texture_preview(const material_graph_node& node) -> bool;
     void update_geometry(const material_graph& graph, const material_graph_selection& selection);
     void update_links(const material_graph& graph);
     /// True when the compile result describes the graph drawn: no node was added or removed since.

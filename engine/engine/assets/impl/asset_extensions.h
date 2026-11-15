@@ -313,7 +313,8 @@ inline auto get_format_version<unravel::material>() -> uint64_t
     // 6: compiled graph materials keep copies of the material functions their graph calls.
     // 7: every material is a graph: a PBR material's file compiles as the Standard graph (legacy_pbr_material).
     // 8: the Standard graph's Metalness parameter and map are named Metallic and Metallic Map.
-    return 8;
+    // 9: compiled graph materials keep their binding (material_graph_binding): loading one compiles nothing.
+    return 9;
 }
 
 template<>

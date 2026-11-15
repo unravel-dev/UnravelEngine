@@ -93,6 +93,10 @@ auto describe_pin(const material_pin_def& pin, bool is_input) -> std::string
         {
             json += R"(,"color":true)";
         }
+        if(pin.is_hidden)
+        {
+            json += R"(,"hidden":true)";
+        }
     }
     if(!pin.tooltip.empty())
     {
@@ -138,11 +142,12 @@ auto describe_node_full(const material_node_def& def) -> std::string
     }
     std::string brief = describe_node_brief(def);
     brief.pop_back();
-    return fmt::format(R"({},"inputs":[{}],"outputs":[{}],"settings":[{}]}})",
+    return fmt::format(R"({},"inputs":[{}],"outputs":[{}],"settings":[{}]{}}})",
                        brief,
                        fmt::join(inputs, ","),
                        fmt::join(outputs, ","),
-                       fmt::join(settings, ","));
+                       fmt::join(settings, ","),
+                       def.is_pixel_only ? R"(,"pixel_stage_only":true)" : "");
 }
 
 /// What compiling a graph found: its problems, the parameters and textures a material instance sets by name, and the
@@ -163,9 +168,9 @@ auto describe_compile(const material_graph_compile_result& result, bool include_
                                           make_json_string(diagnostic.message)));
     }
     std::vector<std::string> parameters;
-    // A graph whose World Position Offset moves its vertices never shares a draw: its vertex shader reads the
+    // A graph whose vertex shader computes values (an offset, interpolators) never shares a draw: that shader reads the
     // material's own values.
-    const bool can_share_draw = !result.uses_world_position_offset;
+    const bool can_share_draw = !result.computes_vertex_values();
     for(const auto& parameter : result.parameters)
     {
         parameters.push_back(fmt::format(R"({{"name":{},"node":{},"type":{},"default":{},"register":{},"shares_draw":{}}})",
@@ -179,13 +184,15 @@ auto describe_compile(const material_graph_compile_result& result, bool include_
     std::vector<std::string> textures;
     for(const auto& texture : result.textures)
     {
-        textures.push_back(fmt::format(R"({{"node":{},"texture":{}}})",
+        textures.push_back(fmt::format(R"({{"node":{},"texture":{},"kind":{}}})",
                                        make_json_string(texture.name),
-                                       texture.texture ? make_json_string(texture.texture.id()) : std::string("null")));
+                                       texture.texture ? make_json_string(texture.texture.id()) : std::string("null"),
+                                       make_json_string(get_material_value_type_name(texture.kind))));
     }
     std::string json = fmt::format(R"({{"errors":{},"warnings":{},"diagnostics":[{}],"parameters":[{}],"textures":[{}],)"
                                    R"("uses_opacity_mask":{},"opacity_mask_animated":{},)"
-                                   R"("uses_world_position_offset":{},"world_position_offset_animated":{},"max_world_position_offset":{})",
+                                   R"("uses_world_position_offset":{},"world_position_offset_animated":{},"max_world_position_offset":{},)"
+                                   R"("reads_object_data":{},"vertex_interpolators":{})",
                                    errors,
                                    warnings,
                                    fmt::join(diagnostics, ","),
@@ -195,7 +202,9 @@ auto describe_compile(const material_graph_compile_result& result, bool include_
                                    bool_to_json(result.is_opacity_mask_animated),
                                    bool_to_json(result.uses_world_position_offset),
                                    bool_to_json(result.is_world_position_offset_animated),
-                                   result.max_world_position_offset);
+                                   result.max_world_position_offset,
+                                   bool_to_json(result.reads_object_data),
+                                   result.interpolator_count);
     if(include_code)
     {
         json += fmt::format(R"(,"code":{})", make_json_string(result.shader));

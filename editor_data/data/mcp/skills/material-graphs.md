@@ -82,10 +82,62 @@ result to go back.
   pulses. It is computed per vertex in a vertex shader of its own; its shadow
   and motion vectors follow. Set max_world_position_offset (Max Offset) to how
   far it moves a vertex, so meshes are not culled while moved out of their
-  bounds. A Normal Map cannot feed it (an error); Screen Position reads the
-  middle of the view there. Material instances of such a graph draw on their
-  own. The compile report says uses_world_position_offset,
-  world_position_offset_animated and max_world_position_offset.
+  bounds. A Normal Map or a node marked pixel_stage_only (derivatives: ddx,
+  ddy, fwidth, the shapes, normal_from_height, parallax_occlusion) cannot feed
+  it (an error); Screen Position reads the middle of the view there. Material
+  instances of such a graph draw on their own. The compile report says
+  uses_world_position_offset, world_position_offset_animated and
+  max_world_position_offset.
+- material_attributes takes a whole surface (make_material_attributes,
+  blend_material_attributes): it gives every channel, and only the channels
+  linked on the Surface Output besides replace its own; opacity_mask_clip,
+  camera_fade_distance and world_position_offset stay the output's.
+
+## Vertex stage and the object
+
+- object_position (the pivot in world space), object_scale and object_random
+  (Per Instance Random, 0..1 from the pivot: a tint or phase per copy, new
+  values while an object moves), and transform (settings from / to: tangent,
+  object, world, view; kind: direction, position, normal) read the object's
+  transform. In World Position Offset they cost nothing; read by pixels, the
+  graph gets a vertex shader of its own that passes them (compile report:
+  reads_object_data). Instances still share the draw.
+- vertex_interpolator: its input is computed once per vertex and blended across
+  the triangle for the pixels - cheaper for what varies smoothly. At most four
+  per graph (two with the object's transform read by pixels, to fit phones and
+  browsers); compile report: vertex_interpolators. Instances overriding
+  parameters of such a graph draw on their own.
+- rotate_about_axis (setting result offset / position) is the building block of
+  wind and spinning in World Position Offset; link object_position as its pivot.
+
+## Textures as values
+
+- texture_object (a 2D texture) and cubemap_object (a cube texture) hold a
+  texture without reading it; link their output into the texture pin of
+  texture_sample, normal_map, triplanar_sample, sample_cubemap,
+  parallax_occlusion or normal_from_texture, into a custom node's a..d (a
+  sampler2D parameter: read it with mg_texture2D(a, uv, i.mip_bias)), or into a
+  material function. With texture linked, a node reads that texture, not its
+  own. A texture never goes into a number (an error).
+- function_input type "sampler2D" / "samplerCube" takes a texture; unlinked by
+  the caller it reads the input's own texture_key. Type "MaterialSurface" takes
+  material attributes (unlinked: the default surface).
+- Texture nodes' settings: address ("texture" keeps the texture's own, "wrap",
+  "clamp", "mirror"), filter ("anisotropic", "trilinear", "point") - bound with
+  the draw, no recompile; texture_sample and sample_cubemap take mip_mode
+  ("auto", "bias", "level") with the mip input.
+- parallax_occlusion: the UV a height map (channel setting) shows along the view,
+  height_scale in UV units, min_steps / max_steps, reference_plane (1: the tops
+  stay on the surface); link its uv into the other texture reads.
+
+## Quality
+
+- quality_switch passes high on, or low where the material is compiled for low
+  quality. Each profile picks it with the project setting
+  graphics.material_quality ("high" or "low"; settings_set with profile): new
+  Android and Web profiles start at low, Desktop at high. A deploy cooks every
+  graph material at its profile's quality, the material and its shaders
+  together. The other branch is not in the shader. The editor draws High.
 
 ## Flow nodes
 
@@ -110,6 +162,16 @@ result to go back.
   with gpu:true checks it.
 - triplanar_sample: a texture read along the world axes (no UVs needed); inputs
   position (world position), normal, scale, sharpness.
+- color_ramp: the colour of a gradient at value; setting count (2 to 8 stops),
+  interpolation ("linear", "smooth", "constant"); stop k is the hidden inputs
+  color<k> (RGBA, linear) and position<k> (0..1), in any order.
+- Math, colour, UV and procedural nodes cover what shader code writes in a line:
+  trigonometry (tan, asin, acos, atan, atan2), exp / log, round / truncate / sign,
+  reflect / refract, derivatives, random (a hash of a value of any width), wave,
+  noise and noise_3d (setting type value / gradient / simplex, octaves for fBm),
+  voronoi / voronoi_3d (distance, edges, cell), the colour blend modes, HSV,
+  polar coordinates, twirl, flipbook, bump_offset, sphere_mask and the shape
+  masks. material_graph_describe_nodes lists them all.
 
 ## Material functions
 

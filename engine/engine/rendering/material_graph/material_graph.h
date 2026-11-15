@@ -161,6 +161,14 @@ inline constexpr const char* MATERIAL_FUNCTION_NAME_SETTING = "name";
 inline constexpr const char* MATERIAL_FUNCTION_KEY_SETTING = "function";
 inline constexpr uint32_t MATERIAL_FUNCTION_MAX_INPUTS = 8;
 inline constexpr uint32_t MATERIAL_FUNCTION_MAX_OUTPUTS = 4;
+/// A Color Ramp's stops: at most this many, as many as its count setting says, blended as its interpolation setting
+/// says ("linear", "smooth", "constant"). Stop k is the hidden value inputs color<k> (RGBA) and position<k> (0 to 1).
+inline constexpr uint32_t MATERIAL_COLOR_RAMP_MAX_STOPS = 8;
+inline constexpr const char* MATERIAL_COLOR_RAMP_COUNT_SETTING = "count";
+inline constexpr const char* MATERIAL_COLOR_RAMP_INTERPOLATION_SETTING = "interpolation";
+auto get_material_color_ramp_color_pin(uint32_t stop) -> std::string;
+auto get_material_color_ramp_position_pin(uint32_t stop) -> std::string;
+
 /// The extension of a function's (and any graph's) file.
 inline constexpr const char* MATERIAL_GRAPH_FILE_EXTENSION = ".mgraph";
 
@@ -279,6 +287,10 @@ auto find_material_parameter_slider(const material_graph_node& node) -> hpp::opt
 /// Sets the default of parameter node @p node_id, the value a material that sets none of its own draws with: the
 /// value of the node's first input. False when the graph has no parameter node of that id.
 auto set_material_graph_parameter_default(material_graph& graph, hpp::string_view node_id, const math::vec4& value) -> bool;
+
+/// Whether @p node holds a texture of its own (material_graph_node::texture): a texture node, a Texture or Cubemap
+/// Object, or a Function Input of a texture type (its texture while the caller links none).
+auto holds_material_graph_texture(const material_graph_node& node) -> bool;
 
 /// Sets the texture texture node @p node_id reads. False when the graph has no node of that id that reads one.
 auto set_material_graph_node_texture(material_graph& graph, hpp::string_view node_id, const asset_handle<gfx::texture>& texture)

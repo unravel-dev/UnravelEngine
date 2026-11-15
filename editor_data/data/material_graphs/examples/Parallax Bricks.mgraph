@@ -1,0 +1,19 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "link": "albedo.rgb"},
+    {"pin": "roughness", "value": [0.85]},
+    {"pin": "normal", "link": "bumps"}
+   ]},
+   {"id": "tiled", "type": "tiling_offset", "inputs": [{"pin": "tiling", "value": [3.0, 3.0]}]},
+   {"id": "height_map", "type": "texture_object", "settings": [{"name": "name", "value": "Height Map"}]},
+   {"id": "relief", "type": "parallax_occlusion", "inputs": [
+    {"pin": "uv", "link": "tiled"}, {"pin": "texture", "link": "height_map"}, {"pin": "height_scale", "value": [0.04]}
+   ]},
+   {"id": "albedo", "type": "texture_sample", "inputs": [{"pin": "uv", "link": "relief"}], "settings": [{"name": "name", "value": "Color Map"}]},
+   {"id": "bumps", "type": "normal_map", "inputs": [{"pin": "uv", "link": "relief"}], "settings": [{"name": "name", "value": "Normal Map"}]}
+  ]
+ }
+}

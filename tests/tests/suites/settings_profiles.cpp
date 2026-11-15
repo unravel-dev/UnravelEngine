@@ -351,12 +351,18 @@ void test_profile_files(const fs::path& root)
               !android.settings.is_overridden("graphics/limits/max_shadow_cascades") &&
               !android.settings.is_overridden("graphics/render_scale"),
           "and with the effects a phone cannot afford limited, at the project's render scale");
+    check(android.settings.is_overridden("graphics/material_quality") &&
+              deployment::resolve_settings(base, android).graphics.material_quality == unravel::material_graph_quality::low,
+          "and with the materials' Low quality");
     check(deployment::make_profile("Desktop", target_platform::desktop, base).settings.is_empty(), "a new Desktop profile overrides nothing");
+    check(base.graphics.material_quality == unravel::material_graph_quality::high, "so Desktop draws the materials' High quality");
     const auto web = deployment::make_profile("Web", target_platform::web, base);
     check(web.settings.is_overridden("graphics/limits/global_illumination") &&
+              web.settings.is_overridden("graphics/material_quality") &&
               !web.settings.is_overridden("graphics/limits/ambient_occlusion") &&
               !web.settings.is_overridden("assets/texture/default_max_size"),
-          "a new Web profile starts with global illumination off, which WebGPU cannot run, and nothing else");
+          "a new Web profile starts with global illumination off, which WebGPU cannot run, and the materials' Low "
+          "quality, which browsers on phones run too, and nothing else");
     android.android.application_id = "com.test.game";
     android.android.texture_compression = unravel::deploy_texture_compression::etc2;
     edit_profile_settings(android,

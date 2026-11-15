@@ -1,0 +1,34 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [{"pin": "material_attributes", "link": "layers"}]},
+   {"id": "stone_detail", "type": "noise_3d", "inputs": [{"pin": "scale", "value": [3.0]}, {"pin": "octaves", "value": [5.0]}],
+    "settings": [{"name": "type", "value": "gradient"}]},
+   {"id": "stone_rough", "type": "lerp", "inputs": [{"pin": "a", "value": [0.55]}, {"pin": "b", "value": [0.9]}, {"pin": "alpha", "link": "stone_detail"}]},
+   {"id": "stone_normal", "type": "normal_from_height", "inputs": [{"pin": "height", "link": "stone_detail"}, {"pin": "strength", "value": [0.06]}]},
+   {"id": "stone_color", "type": "vector3", "inputs": [{"pin": "value", "value": [0.42, 0.4, 0.37]}]},
+   {"id": "stone", "type": "make_material_attributes", "inputs": [
+    {"pin": "base_color", "link": "stone_color"}, {"pin": "roughness", "link": "stone_rough"}, {"pin": "normal", "link": "stone_normal"}
+   ]},
+   {"id": "moss", "type": "make_material_attributes", "inputs": [
+    {"pin": "base_color", "value": [0.12, 0.2, 0.05]}, {"pin": "roughness", "value": [0.95]},
+    {"pin": "subsurface_color", "value": [0.1, 0.2, 0.02]}, {"pin": "subsurface_opacity", "value": [0.3]}
+   ]},
+   {"id": "normal", "type": "vertex_normal"},
+   {"id": "up", "type": "vector3", "inputs": [{"pin": "value", "value": [0.0, 1.0, 0.0]}]},
+   {"id": "facing_up", "type": "dot", "inputs": [{"pin": "a", "link": "normal"}, {"pin": "b", "link": "up"}]},
+   {"id": "moss_noise", "type": "noise_3d", "inputs": [{"pin": "scale", "value": [4.0]}, {"pin": "octaves", "value": [3.0]}],
+    "settings": [{"name": "type", "value": "simplex"}]},
+   {"id": "breakup_source", "type": "quality_switch", "inputs": [{"pin": "high", "link": "moss_noise"}, {"pin": "low", "link": "stone_detail"}]},
+   {"id": "breakup", "type": "constant_bias_scale", "inputs": [
+    {"pin": "in", "link": "breakup_source"}, {"pin": "bias", "value": [-0.5]}, {"pin": "scale", "value": [0.6]}
+   ]},
+   {"id": "up_mix", "type": "add", "inputs": [{"pin": "a", "link": "facing_up"}, {"pin": "b", "link": "breakup"}]},
+   {"id": "coverage", "type": "smoothstep", "inputs": [{"pin": "min", "value": [0.35]}, {"pin": "max", "value": [0.75]}, {"pin": "in", "link": "up_mix"}]},
+   {"id": "layers", "type": "blend_material_attributes", "inputs": [
+    {"pin": "a", "link": "stone"}, {"pin": "b", "link": "moss"}, {"pin": "alpha", "link": "coverage"}
+   ]}
+  ]
+ }
+}

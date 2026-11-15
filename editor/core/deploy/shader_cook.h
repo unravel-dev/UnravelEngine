@@ -1,10 +1,13 @@
 #pragma once
 
 #include "deploy_settings.h"
+
+#include <engine/settings/settings.h>
 #include "protocol_data.h"
 #include "variant_cook.h"
 
 #include <engine/assets/asset_storage.h>
+#include <engine/rendering/material_graph/material_graph_compiler.h>
 #include <filesystem/filesystem.h>
 
 #include <set>
@@ -53,6 +56,9 @@ struct shader_cook_plan
     /// The renderer extensions graph materials are cooked for, and their left-out ones' files kept for: every one the
     /// deploy ships; none in a project without graph materials.
     std::set<std::string> graph_material_renderers;
+    /// What the graph materials' Quality Switch nodes pick: the deployed profile's Material Quality
+    /// (settings::graphics_settings::material_quality). Below High, the materials are cooked too.
+    material_graph_quality material_quality{material_graph_quality::high};
     std::vector<shader_cook_protocol> protocols;
 
     /// Whether the deploy cooks any shader.
@@ -65,6 +71,8 @@ struct shader_cook_plan
 /**
  * @brief What a deploy with `params` cooks: the engine's shaders and the project's, for the renderers the profile
  * ships and the editor does not compile for itself; nothing for a profile whose renderers it compiles.
+ * @param runtime_settings The settings the deployed game runs with (the profile's): their Material Quality picks the
+ * graph materials' code.
  * @param engine_database The engine's asset index. Every engine shader ships: the content selection decides only
  * the engine's fonts and UI files.
  * @param app_database The project's asset index.
@@ -72,6 +80,7 @@ struct shader_cook_plan
  */
 auto make_shader_cook_plan(const fs::path& project_root,
                            const deploy_settings& params,
+                           const settings& runtime_settings,
                            const asset_database::database_t& engine_database,
                            const asset_database::database_t& app_database,
                            const left_out_assets& left_out) -> shader_cook_plan;

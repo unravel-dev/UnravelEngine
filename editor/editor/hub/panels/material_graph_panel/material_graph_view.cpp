@@ -235,9 +235,13 @@ auto get_node_title(const material_graph_node& node, const material_node_def& de
     }
 }
 
-/// Width of an input's value field, in graph units.
+/// Width of an input's value field, in graph units: none for a texture or attributes input, which only takes a link.
 auto get_chip_width(const material_pin_def& pin) -> float
 {
+    if(!is_material_value_numeric(pin.type))
+    {
+        return 0.0f;
+    }
     if(pin.is_color)
     {
         return COLOR_CHIP_WIDTH;
@@ -539,7 +543,7 @@ auto material_graph_view::measure_node(const material_graph_node& node) const ->
         }
         left_width = std::max(left_width, SIDE_PADDING + label_column + CHIP_GAP + content);
     }
-    const bool has_preview = is_material_texture_node(*def) || has_swatch(node, *def);
+    const bool has_preview = shows_texture_preview(node) || has_swatch(node, *def);
     float left_height = float(left_rows) * NODE_ROW_HEIGHT;
     if(has_preview)
     {
@@ -622,7 +626,20 @@ auto material_graph_view::get_comment_size(const material_graph_comment& comment
 
 auto material_graph_view::has_swatch(const material_graph_node& node, const material_node_def& def) const -> bool
 {
-    return are_swatches_shown_ && !node.is_preview_hidden && has_material_node_preview(def);
+    return are_swatches_shown_ && !node.is_preview_hidden && has_material_node_preview(def) && !shows_texture_preview(node);
+}
+
+auto material_graph_view::shows_texture_preview(const material_graph_node& node) -> bool
+{
+    const auto* def = find_material_node_def(node.type);
+    // A cube texture has no flat picture: its swatch shows it unwrapped.
+    if(def == nullptr || !holds_material_graph_texture(node) || def->code == material_node_code::function_input ||
+       get_material_texture_node_kind(*def) == material_value_type::texture_cube)
+    {
+        return false;
+    }
+    const auto* input = find_material_graph_input(node, MATERIAL_TEXTURE_PIN);
+    return input == nullptr || input->link.empty();
 }
 
 auto material_graph_view::get_entry_name(const material_graph& graph, const pin_ref& input) const -> std::string
@@ -704,7 +721,7 @@ void material_graph_view::update_geometry(const material_graph& graph, const mat
             geometry.slots.push_back(slot);
         }
         geometry.has_swatch = has_swatch(node, *geometry.def);
-        geometry.has_preview = is_material_texture_node(*geometry.def) || geometry.has_swatch;
+        geometry.has_preview = shows_texture_preview(node) || geometry.has_swatch;
         if(geometry.has_preview)
         {
             const ImVec2 min(geometry.rect.Min.x + SIDE_PADDING * zoom_,
@@ -1281,7 +1298,7 @@ void material_graph_view::draw_node(ImDrawList* draw_list, const material_graph&
     draw_list->AddRectFilled(rect.Min, rect.Max, scale_color_alpha(COL_MATERIAL_NODE_BODY, alpha), rounding);
     draw_node_header(draw_list, graph, index, is_used);
     draw_node_slots(draw_list, graph, index, scale_color_alpha(COL_MATERIAL_TEXT, alpha));
-    if(geometry.has_preview && is_material_texture_node(*geometry.def))
+    if(geometry.has_preview && shows_texture_preview(graph.nodes[size_t(index)]))
     {
         draw_texture_preview(draw_list, graph, index);
     }
@@ -1438,6 +1455,10 @@ void material_graph_view::draw_chip(ImDrawList* draw_list, const material_graph&
 {
     const auto& def = geometry_[size_t(node)].def->inputs[size_t(slot.ref.pin)];
     const ImRect& chip = slot.chip;
+    if(chip.GetWidth() <= 0.0f)
+    {
+        return;
+    }
     const float font_size = get_base_font_size() * zoom_ * CHIP_TEXT_SCALE;
     const float text_y = chip.GetCenter().y - font_size * 0.5f;
     if(slot.ref.component < 0 && !def.default_code.empty())
@@ -1560,7 +1581,7 @@ void material_graph_view::draw_tooltip(const material_graph& graph) const
         return;
     }
     const auto& geometry = geometry_[size_t(node)];
-    if(geometry.has_preview && geometry.preview.Contains(mouse) && !is_material_texture_node(*geometry.def))
+    if(geometry.has_preview && geometry.preview.Contains(mouse) && !shows_texture_preview(graph.nodes[size_t(node)]))
     {
         show_wrapped_tooltip("The node's value over a flat patch facing you, its UV running across it: a float shows as "
                           "grey, a vector's first three components as a colour, clamped to 0..1.\nRight-click "
@@ -2168,7 +2189,7 @@ void material_graph_view::handle_drop(material_graph& graph, material_graph_sele
         out.dropped_texture_key = fs::convert_to_protocol(fs::path(absolute_path)).generic_string();
         out.drop_position = position;
         const int node = hit_node(ImGui::GetIO().MousePos);
-        if(node >= 0 && geometry_[size_t(node)].def && is_material_texture_node(*geometry_[size_t(node)].def))
+        if(node >= 0 && holds_material_graph_texture(graph.nodes[size_t(node)]))
         {
             out.drop_node = graph.nodes[size_t(node)].id;
         }

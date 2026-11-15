@@ -1,0 +1,33 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "link": "leaf_color"},
+    {"pin": "roughness", "value": [0.7]},
+    {"pin": "subsurface_color", "value": [0.15, 0.3, 0.05]},
+    {"pin": "subsurface_opacity", "value": [0.4]},
+    {"pin": "world_position_offset", "link": "sway"}
+   ], "settings": [{"name": "two_sided", "value": "on"}, {"name": "max_world_position_offset", "value": "0.5"}]},
+   {"id": "position", "type": "world_position"},
+   {"id": "pivot", "type": "object_position"},
+   {"id": "phase_seed", "type": "object_random"},
+   {"id": "phase", "type": "multiply", "inputs": [{"pin": "a", "link": "phase_seed"}, {"pin": "b", "value": [6.2832]}]},
+   {"id": "clock", "type": "time"},
+   {"id": "clock_scaled", "type": "multiply", "inputs": [{"pin": "a", "link": "clock"}, {"pin": "b", "value": [1.7]}]},
+   {"id": "wave_in", "type": "add", "inputs": [{"pin": "a", "link": "clock_scaled"}, {"pin": "b", "link": "phase"}]},
+   {"id": "swing", "type": "sine", "inputs": [{"pin": "in", "link": "wave_in"}]},
+   {"id": "height", "type": "subtract", "inputs": [{"pin": "a", "link": "position.xyz.y"}, {"pin": "b", "link": "pivot.xyz.y"}]},
+   {"id": "height_scaled", "type": "multiply", "inputs": [{"pin": "a", "link": "height"}, {"pin": "b", "value": [0.15]}]},
+   {"id": "bend", "type": "multiply", "inputs": [{"pin": "a", "link": "swing"}, {"pin": "b", "link": "height_scaled"}]},
+   {"id": "sway", "type": "rotate_about_axis", "inputs": [
+    {"pin": "position", "link": "position"}, {"pin": "axis", "value": [0.0, 0.0, 1.0]}, {"pin": "angle", "link": "bend"}, {"pin": "pivot", "link": "pivot"}
+   ], "settings": [{"name": "result", "value": "offset"}]},
+   {"id": "height_mask", "type": "saturate", "inputs": [{"pin": "in", "link": "height"}]},
+   {"id": "tip", "type": "vertex_interpolator", "inputs": [{"pin": "in", "link": "height_mask"}]},
+   {"id": "dark_green", "type": "vector3", "inputs": [{"pin": "value", "value": [0.04, 0.12, 0.02]}]},
+   {"id": "light_green", "type": "vector3", "inputs": [{"pin": "value", "value": [0.3, 0.5, 0.08]}]},
+   {"id": "leaf_color", "type": "lerp", "inputs": [{"pin": "a", "link": "dark_green"}, {"pin": "b", "link": "light_green"}, {"pin": "alpha", "link": "tip"}]}
+  ]
+ }
+}

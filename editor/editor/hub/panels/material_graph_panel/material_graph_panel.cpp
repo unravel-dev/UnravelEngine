@@ -1385,9 +1385,13 @@ void material_graph_panel::draw_node_details(rtti::context& ctx, size_t index)
     {
         ImGui::TextColored(COL_WARNING_TEXT, ICON_MDI_INFORMATION_OUTLINE " Not used: nothing it feeds reaches the Surface Output.");
     }
-    if(is_material_texture_node(*def))
+    if(holds_material_graph_texture(graph_.nodes[index]))
     {
         draw_texture_field(ctx, index);
+    }
+    if(def->code == material_node_code::color_ramp)
+    {
+        draw_color_ramp(index);
     }
     if(!def->settings.empty())
     {
@@ -1620,6 +1624,13 @@ void material_graph_panel::draw_reroute_name_setting(material_graph_node& node, 
 void material_graph_panel::draw_texture_field(rtti::context& ctx, size_t index)
 {
     ImGui::SeparatorText("Texture");
+    const auto* linked = find_material_graph_input(graph_.nodes[index], MATERIAL_TEXTURE_PIN);
+    if(linked != nullptr && !linked->link.empty())
+    {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("A texture is linked into Texture: the node reads that one, not its own below.");
+        ImGui::PopTextWrapPos();
+    }
     // The window keeps the graph's history: the field's edits are its undo steps, not the scene's.
     inspect_without_undo_scope no_undo;
     entt::meta_any texture = entt::forward_as_meta(graph_.nodes[index].texture);
@@ -1635,6 +1646,166 @@ void material_graph_panel::draw_texture_field(rtti::context& ctx, size_t index)
     {
         apply_edit(true, false);
     }
+}
+
+namespace
+{
+/// The stops of a Color Ramp node in the order of their positions: index, position and colour.
+struct ramp_stop
+{
+    uint32_t index{};
+    float position{};
+    math::vec4 color{};
+};
+
+auto read_ramp_stops(const material_graph_node& node, const material_node_def& def, uint32_t count) -> std::vector<ramp_stop>
+{
+    std::vector<ramp_stop> stops;
+    for(uint32_t k = 0; k < count; ++k)
+    {
+        const auto color_pin = get_material_color_ramp_color_pin(k);
+        const auto position_pin = get_material_color_ramp_position_pin(k);
+        const auto* color = find_material_graph_input(node, color_pin);
+        const auto* position = find_material_graph_input(node, position_pin);
+        const auto* color_def = find_material_pin_def(def.inputs, color_pin);
+        const auto* position_def = find_material_pin_def(def.inputs, position_pin);
+        stops.push_back({k,
+                         position != nullptr ? position->value.x : (position_def != nullptr ? position_def->default_value.x : 0.0f),
+                         color != nullptr ? color->value : (color_def != nullptr ? color_def->default_value : math::vec4(1.0f))});
+    }
+    std::stable_sort(stops.begin(),
+                     stops.end(),
+                     [](const ramp_stop& a, const ramp_stop& b)
+                     {
+                         return a.position < b.position;
+                     });
+    return stops;
+}
+
+/// A linear colour as the bar shows it: sRGB-encoded, opaque.
+auto to_bar_color(const math::vec4& color) -> ImU32
+{
+    const auto encode = [](float c)
+    {
+        const float clamped = std::clamp(c, 0.0f, 1.0f);
+        return clamped <= 0.0031308f ? clamped * 12.92f : 1.055f * std::pow(clamped, 1.0f / 2.4f) - 0.055f;
+    };
+    return ImGui::ColorConvertFloat4ToU32(ImVec4(encode(color.x), encode(color.y), encode(color.z), 1.0f));
+}
+} // namespace
+
+void material_graph_panel::draw_color_ramp(size_t index)
+{
+    auto& node = graph_.nodes[index];
+    const auto& def = *find_material_node_def(node.type);
+    const auto* count_setting = find_material_graph_setting(node, MATERIAL_COLOR_RAMP_COUNT_SETTING);
+    const auto count = uint32_t(std::clamp(count_setting != nullptr ? std::atoi(count_setting->c_str()) : 2, 2, int(MATERIAL_COLOR_RAMP_MAX_STOPS)));
+    const auto* interpolation = find_material_graph_setting(node, MATERIAL_COLOR_RAMP_INTERPOLATION_SETTING);
+    const bool is_constant = interpolation != nullptr && *interpolation == "constant";
+    ImGui::SeparatorText("Ramp");
+    // The bar: each span between two stops, blended as the ramp blends it (Smooth draws as Linear).
+    const auto stops = read_ramp_stops(node, def, count);
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float height = ImGui::GetFrameHeight();
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    auto* draw_list = ImGui::GetWindowDrawList();
+    const auto x_at = [&](float position)
+    {
+        return origin.x + std::clamp(position, 0.0f, 1.0f) * width;
+    };
+    draw_list->AddRectFilled(origin, ImVec2(x_at(stops.front().position), origin.y + height), to_bar_color(stops.front().color));
+    for(size_t k = 1; k < stops.size(); ++k)
+    {
+        const ImU32 left = to_bar_color(stops[k - 1].color);
+        const ImU32 right = is_constant ? left : to_bar_color(stops[k].color);
+        draw_list->AddRectFilledMultiColor(ImVec2(x_at(stops[k - 1].position), origin.y),
+                                           ImVec2(x_at(stops[k].position), origin.y + height),
+                                           left,
+                                           right,
+                                           right,
+                                           left);
+    }
+    draw_list->AddRectFilled(ImVec2(x_at(stops.back().position), origin.y), ImVec2(origin.x + width, origin.y + height), to_bar_color(stops.back().color));
+    for(const auto& stop : stops)
+    {
+        const float x = x_at(stop.position);
+        draw_list->AddTriangleFilled(ImVec2(x, origin.y + height - 6.0f), ImVec2(x - 5.0f, origin.y + height + 2.0f), ImVec2(x + 5.0f, origin.y + height + 2.0f), IM_COL32_WHITE);
+    }
+    ImGui::Dummy(ImVec2(width, height + 4.0f));
+    // A row per stop, in the order of their positions: its position and its colour.
+    ImGui::PushID("ramp");
+    for(const auto& stop : stops)
+    {
+        ImGui::PushID(int(stop.index));
+        for(const auto& pin_name : {get_material_color_ramp_position_pin(stop.index), get_material_color_ramp_color_pin(stop.index)})
+        {
+            const auto* pin_def = find_material_pin_def(def.inputs, pin_name);
+            if(pin_def == nullptr)
+            {
+                continue;
+            }
+            ImGui::PushID(pin_name.c_str());
+            const auto* input = find_material_graph_input(node, pin_name);
+            math::vec4 value = input != nullptr ? input->value : pin_def->default_value;
+            const uint32_t components = pin_def->is_color ? 4 : 1;
+            if(!pin_def->is_color)
+            {
+                ImGui::SetNextItemWidth(width * 0.3f);
+            }
+            else
+            {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+            }
+            auto style = make_node_value_style(node, *pin_def, components);
+            if(!pin_def->is_color)
+            {
+                style.min_value = 0.0f;
+                style.max_value = 1.0f;
+            }
+            const auto edit = inspect_vector_value(engine::context(), value, style);
+            if(edit.changed)
+            {
+                get_or_add_material_graph_input(node, pin_name, pin_def->default_value).value = value;
+            }
+            track_value_edit(edit.changed, edit.edit_finished);
+            ImGui::PopID();
+        }
+        ImGui::PopID();
+    }
+    ImGui::PopID();
+    ImGui::BeginDisabled(count >= MATERIAL_COLOR_RAMP_MAX_STOPS);
+    if(ImGui::SmallButton(ICON_MDI_PLUS " Stop"))
+    {
+        begin_edit();
+        // The new stop halves the widest gap between two stops, in the blend of their colours.
+        size_t widest = 1;
+        for(size_t k = 1; k < stops.size(); ++k)
+        {
+            if(stops[k].position - stops[k - 1].position > stops[widest].position - stops[widest - 1].position)
+            {
+                widest = k;
+            }
+        }
+        const auto& a = stops[widest - 1];
+        const auto& b = stops[widest];
+        get_or_add_material_graph_input(node, get_material_color_ramp_position_pin(count), {}).value = math::vec4((a.position + b.position) * 0.5f);
+        get_or_add_material_graph_input(node, get_material_color_ramp_color_pin(count), {}).value = (a.color + b.color) * 0.5f;
+        set_material_graph_setting(node, MATERIAL_COLOR_RAMP_COUNT_SETTING, std::to_string(count + 1));
+        apply_edit(true);
+    }
+    ImGui::EndDisabled();
+    set_wrapped_item_tooltip("Add a stop halfway along the widest gap between two stops.");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(count <= 2);
+    if(ImGui::SmallButton(ICON_MDI_MINUS " Stop"))
+    {
+        begin_edit();
+        set_material_graph_setting(node, MATERIAL_COLOR_RAMP_COUNT_SETTING, std::to_string(count - 1));
+        apply_edit(true);
+    }
+    ImGui::EndDisabled();
+    set_wrapped_item_tooltip("Remove the last stop added.");
 }
 
 void material_graph_panel::draw_split_toggle(size_t index, const material_pin_def& pin, bool is_output)
@@ -1706,6 +1877,11 @@ void material_graph_panel::draw_input_value(size_t index, size_t pin)
             commit_edit();
         }
         set_wrapped_item_tooltip("Break the link.");
+        return;
+    }
+    if(!is_material_value_numeric(pin_def.type))
+    {
+        ImGui::TextDisabled(is_material_texture_type(pin_def.type) ? "Unlinked: the node's own texture." : "Unlinked: the default surface.");
         return;
     }
     if(!pin_def.default_code.empty())

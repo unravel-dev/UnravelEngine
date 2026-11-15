@@ -4,6 +4,7 @@
 #include "eshader_file.h"
 #include "texture_target.h"
 #include "vorbis_encoder.h"
+#include <engine/assets/impl/asset_reader.h>
 #include <engine/assets/impl/asset_writer.h>
 #include "asset_manifest.h"
 #include "generated_asset.h"
@@ -1703,6 +1704,8 @@ struct graph_material_shader_source
     /// Empty for a graph whose World Position Offset moves nothing.
     std::string vertex_text;
     std::string code_hash;
+    /// What a draw of this code binds: the compiled material keeps it.
+    material_graph_binding binding;
 };
 
 /**
@@ -1732,12 +1735,17 @@ auto get_graph_material_includes_fingerprint() -> std::string
     return fingerprint;
 }
 
-auto make_graph_material_shader_source(const graph_material& mat) -> graph_material_shader_source
+auto make_graph_material_shader_source(const graph_material& mat, material_graph_quality quality = material_graph_quality::high)
+    -> graph_material_shader_source
 {
     graph_material_shader_source source;
     // Named after no file: materials of the same graph code (Standard materials of other values) generate the same
-    // text and hash, so they share the shader's compile and, once loaded, its programs.
-    auto compiled = compile_material_graph(mat.get_graph());
+    // text and hash, so they share the shader's compile and, once loaded, its programs. A Quality Switch is resolved
+    // into the code, so a graph without one has the same hash at every quality.
+    material_graph_compile_options options;
+    options.quality = quality;
+    auto compiled = compile_material_graph(mat.get_graph(), options);
+    source.binding = make_material_graph_binding(compiled);
     source.text = std::move(compiled.shader);
     source.vertex_text = std::move(compiled.vertex_shader);
     std::string hashed = source.text + source.vertex_text;
@@ -1921,7 +1929,7 @@ auto compile_shader_text(const fs::path& shader_name,
     return compile_eshader_variants(shader_name, file, temp_dir, renderer, get_engine_shader_folder().string(), variants, error);
 }
 
-auto compile_graph_material_shader(const fs::path& key, const fs::path& output) -> bool
+auto compile_graph_material_shader(const fs::path& key, const fs::path& output, material_graph_quality quality) -> bool
 {
     const auto mat = load_graph_material_source(key);
     if(!mat)
@@ -1930,13 +1938,47 @@ auto compile_graph_material_shader(const fs::path& key, const fs::path& output) 
         return false;
     }
     const auto material_path = resolve_input_file(key);
-    return compile_graph_material_shader_source(material_path, make_graph_material_shader_source(*mat), output);
+    return compile_graph_material_shader_source(material_path, make_graph_material_shader_source(*mat, quality), output);
 }
 
-auto is_graph_material_shader_compiled(const fs::path& key, const fs::path& output) -> bool
+auto is_graph_material_shader_compiled(const fs::path& key, const fs::path& output, material_graph_quality quality) -> bool
 {
     const auto mat = load_graph_material_source(key);
-    return mat && is_graph_material_shader_current(output, make_graph_material_shader_source(*mat).code_hash);
+    return mat && is_graph_material_shader_current(output, make_graph_material_shader_source(*mat, quality).code_hash);
+}
+
+auto cook_graph_material(const fs::path& key, const fs::path& output, material_graph_quality quality) -> bool
+{
+    // The compiled material as the editor wrote it (its base values, the copies of its functions), with the code of
+    // the cooked quality in place of the editor's.
+    const auto compiled_path = asset_reader::resolve_compiled_path(key.generic_string());
+    std::shared_ptr<material> loaded;
+    fs::error_code ec;
+    if(fs::exists(compiled_path, ec))
+    {
+        load_from_file_bin(compiled_path.string(), loaded);
+    }
+    const auto mat = safe_pointer_cast<graph_material>(loaded);
+    if(!mat)
+    {
+        APPLOG_ERROR("{0} has no compiled material graph to cook; compile it in the editor first.", key.generic_string());
+        return false;
+    }
+    auto source = make_graph_material_shader_source(*mat, quality);
+    mat->set_compiled_code(std::move(source.code_hash), std::move(source.binding));
+    fs::create_directories(output.parent_path(), ec);
+    asset_writer::atomic_write_file(output,
+                                    [&](const fs::path& temp) -> void
+                                    {
+                                        save_to_file_bin(temp.string(), loaded);
+                                    },
+                                    ec);
+    if(ec)
+    {
+        APPLOG_ERROR("Failed writing the cooked material {0}: {1}", output.string(), ec.message());
+        return false;
+    }
+    return true;
 }
 
 template<>

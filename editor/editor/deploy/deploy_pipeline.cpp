@@ -465,6 +465,7 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
                                       asset_compiler::get_editor_audio_defaults());
     plan.shaders = make_shader_cook_plan(get_project_root(),
                                          params,
+                                         plan.runtime_settings,
                                          am.get_database_snapshot("engine:/"),
                                          am.get_database_snapshot("app:/"),
                                          left_out);

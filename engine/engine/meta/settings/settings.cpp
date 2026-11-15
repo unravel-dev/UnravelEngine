@@ -738,6 +738,15 @@ REFLECT_INLINE(settings::graphics_settings)
                             "these do not allow what a camera and its volumes ask for, the effect is turned off or "
                             "lowered. Scenes themselves are not changed."},
         })
+        .data<&settings::graphics_settings::material_quality>("material_quality"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "material_quality"},
+            entt::attribute{"pretty_name", "Material Quality"},
+            entt::attribute{"tooltip",
+                            "The input the materials' Quality Switch nodes take in a build: High, or the cheaper Low "
+                            "for phones and the web. A deploy cooks the materials of its profile at this quality. "
+                            "The editor always draws High."},
+        })
         .data<&settings::graphics_settings::eviction>("eviction"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "eviction"},
@@ -762,6 +771,7 @@ SAVE_INLINE(settings::graphics_settings)
     try_save(ar, ser20::make_nvp("limits", obj.limits));
     try_save(ar, ser20::make_nvp("skinned_mesh_batching", obj.skinned_mesh_batching));
     try_save(ar, ser20::make_nvp("shadow_map_caching", obj.shadow_map_caching));
+    try_save(ar, ser20::make_nvp("material_quality", obj.material_quality));
 }
 
 LOAD_INLINE(settings::graphics_settings)
@@ -774,6 +784,27 @@ LOAD_INLINE(settings::graphics_settings)
     try_load(ar, ser20::make_nvp("limits", obj.limits));
     try_load(ar, ser20::make_nvp("skinned_mesh_batching", obj.skinned_mesh_batching));
     try_load(ar, ser20::make_nvp("shadow_map_caching", obj.shadow_map_caching));
+    try_load(ar, ser20::make_nvp("material_quality", obj.material_quality));
+}
+
+REFLECT_INLINE(material_graph_quality)
+{
+    entt::meta_factory<material_graph_quality>{}
+        .type("material_graph_quality"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "material_graph_quality"},
+            entt::attribute{"pretty_name", "Material Quality"},
+        })
+        .data<material_graph_quality::high>("high"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "high"},
+            entt::attribute{"pretty_name", "High"},
+        })
+        .data<material_graph_quality::low>("low"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "low"},
+            entt::attribute{"pretty_name", "Low"},
+        });
 }
 
 REFLECT_INLINE(gi_project_settings::atlas_size)

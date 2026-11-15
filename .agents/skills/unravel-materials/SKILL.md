@@ -55,7 +55,8 @@ draws them: skill `unravel-rendering`. Driving materials through the editor's MC
 - At most `MATERIAL_GRAPH_MAX_TEXTURES` (15) textures and `MATERIAL_GRAPH_MAX_PARAMETER_REGISTERS` (64) parameter
   registers per graph.
 - Overrides of parameters in registers 0..3 keep the shared instanced draw (`material_instance::shares_draw`);
-  textures, later registers and World Position Offset graphs draw on their own. Overrides that feed nothing
+  textures, later registers and graphs whose vertex stage computes values (World Position Offset, Vertex
+  Interpolators: `computes_vertex_values`) draw on their own. Overrides that feed nothing
   `render_interest::shadow_caster` reads cast with the shared material (`model::get_shadow_material`), so they keep
   one shadow batch.
 - World Position Offset hooks into the shared G-buffer and velocity mains (`deferred_geom/vs_deferred_geom.sh`,
@@ -70,6 +71,28 @@ draws them: skill `unravel-rendering`. Driving materials through the editor's MC
   light source.
 - A material depends on the `.sh` and `.mgraph` files it reads: editing `material_graph.sh` or a material function
   recompiles every material using it.
+- Textures and Material Attributes are values that are no numbers (`is_material_value_numeric`): they pass through
+  reroutes, Static Switches, function inputs and calls and into Custom, never into math. A texture value is a
+  sampler name written where it is read (GLSL has no sampler variables); a texture node reads the provider its
+  Texture input reaches (`find_texture_provider`), which holds the sampler. Address and Filter are bound, not
+  compiled: `has_same_material_graph_code` drops them.
+- A graph whose pixels read the object's transform (`MATERIAL_OBJECT_DATA`) or Vertex Interpolators
+  (`MATERIAL_INTERPOLATORS`) has a vertex shader of its own without any offset; its draws need it
+  (`graph_material::reads_vertex_outputs`: no fallback to `vs_deferred_geom`, whose varyings differ).
+- Shader helpers in `material_graph.sh` compile for FXC too: a loop variable stays in the enclosing scope (two
+  loops in one function need their own names), and a struct not yet whole cannot be an `inout` argument (the mains
+  fill `MaterialInputs` with macros). Derivative helpers stay inside `#if BGFX_SHADER_TYPE_FRAGMENT`.
+- Tint (WGSL) asserts on a constant that folds to infinity or NaN: a node's defaults never divide by zero or take
+  the log of 0.
+- A compiled material keeps its binding (`material_graph_binding`: parameters and registers, textures, the traits
+  of its code) beside the hash of its code, so loading it compiles nothing; `set_graph` compiles (editing), a
+  binary load takes the saved binding (`take_compiled`) and a copy takes its source's. A binding and the shader it
+  binds come from one compile: never pair a material with shader files of another code hash.
+- Quality Switch is resolved when the graph compiles (`material_graph_compile_options::quality`). The editor
+  compiles High; a profile's Material Quality (`settings::graphics_settings::material_quality`, Low on new Android
+  and Web profiles) makes a deploy cook Low for every renderer, the editor's included
+  (`is_compiled_beside_material` counts High only), and cook the material too (`cook_graph_material`: the Low
+  hash and binding), which ships in place of the editor's compiled one.
 - Editor-private scenes (the graph window's 3D preview, inspector previews) are unloaded and reloaded into new
   entities on a script recompile and at play end: code keeping entity handles into one checks them at every use
   and rebuilds (`material_graph_scene_preview`).
@@ -158,9 +181,17 @@ Material functions are `.mgraph` files of Function Input / Output nodes called b
 compiler flattens calls (`expand_function_calls`) and the compiled material keeps copies
 (`graph_material::copy_functions`), since a game ships no `.mgraph`.
 
-World Position Offset (Surface Output `world_position_offset`, setting `max_world_position_offset`): the compiler
-emits what it reads again as `evaluate_vertex` in a generated vertex shader (`result.vertex_shader`, with the
-G-buffer, `velocity_*` and `position_only*` variants for the editor's picking and outline,
+Node code: most nodes are an expression template; `width_expressions` pick a function by the width of the first
+dynamic input (Random's hashes, Sphere Mask's distance); `is_pixel_only` nodes (derivatives, shapes, Parallax
+Occlusion, Normal From Height) cannot feed the vertex stage. Color Ramp's stops are hidden value-only inputs
+`color<k>` / `position<k>` the panel's ramp edits (`draw_color_ramp`). Material Attributes are `MaterialSurface`
+values (`mg_make_attributes`, `mg_blend_attributes`); a Surface Output with Material Attributes linked starts from
+them and the channels linked besides replace theirs.
+
+World Position Offset (Surface Output `world_position_offset`, setting `max_world_position_offset`) and Vertex
+Interpolators: the compiler emits what they read again as `evaluate_vertex` (`emit_vertex_root` per target, taken
+back when it reads a node a vertex cannot run) in a generated vertex shader (`result.vertex_shader`, with the
+G-buffer and their `*_material` variants, `velocity_*` and `position_only*` variants for the editor's picking and outline,
 `graph_material_programs::get_position_only_variant`), stored as `vertex_variants` in the same compiled file and set
 with `graph_material::set_vertex_shader`. Shadows use the graph's own casters (`draws_own_shadow`); an animated
 offset keeps the shadow live and the mesh in the velocity pass; bounds grow by Max Offset

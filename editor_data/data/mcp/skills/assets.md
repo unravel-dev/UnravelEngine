@@ -95,6 +95,23 @@ inside the project).
   the project's. Use compression "none" for UI atlases and pixel art that must
   stay exact, colorspace "srgb" for color maps, "linear" for data maps.
 
+## Meshes for the global illumination
+
+- Each submesh bakes a distance field of its own, and the GI traces it as a
+  solid. A submesh that closes a shell around a space, such as the outer skin
+  of a building, makes that whole space solid: rays that start inside find no
+  cards, and the GI goes dark. Build rooms from closed slabs with thickness
+  (floor, walls and ceiling, a submesh each), as modular pieces rather than
+  one mesh.
+- A submesh bakes 64 voxels along its longest side, at most 1 m each, unless
+  sdf.target_voxel_size is set (in meters): a wall thinner than two voxels
+  leaks light. Pieces of a few meters, or a smaller target_voxel_size, keep
+  walls solid.
+- To check: viewport_set_debug_view "gi_surface_cache" marks surfaces without
+  cards in yellow. On the developer profile, gi_probe_sdf
+  {"position":[x,y,z]} lists the fields around a point: a negative distance in
+  open space means a field holds that space inside it.
+
 ## Readiness
 
 - Skinned mesh imports generate .anim clip assets next to the source (one per

@@ -1,0 +1,33 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "value": [0.0, 0.0, 0.0]},
+    {"pin": "roughness", "value": [0.4]},
+    {"pin": "emissive", "link": "glow"},
+    {"pin": "opacity_mask", "link": "alpha"}
+   ], "settings": [{"name": "translucent", "value": "on"}, {"name": "two_sided", "value": "on"}]},
+   {"id": "position", "type": "world_position"},
+   {"id": "clock", "type": "time"},
+   {"id": "scroll", "type": "multiply", "inputs": [{"pin": "a", "link": "clock"}, {"pin": "b", "value": [0.25]}]},
+   {"id": "line_coordinate", "type": "add", "inputs": [{"pin": "a", "link": "position.xyz.y"}, {"pin": "b", "link": "scroll"}]},
+   {"id": "lines", "type": "wave", "inputs": [{"pin": "in", "link": "line_coordinate"}, {"pin": "frequency", "value": [40.0]}],
+    "settings": [{"name": "shape", "value": "sine"}]},
+   {"id": "faint_lines", "type": "multiply", "inputs": [{"pin": "a", "link": "lines"}, {"pin": "b", "value": [0.35]}]},
+   {"id": "rim", "type": "fresnel", "inputs": [{"pin": "power", "value": [2.5]}]},
+   {"id": "intensity", "type": "add", "inputs": [{"pin": "a", "link": "rim"}, {"pin": "b", "link": "faint_lines"}]},
+   {"id": "fast_clock", "type": "multiply", "inputs": [{"pin": "a", "link": "clock"}, {"pin": "b", "value": [12.0]}]},
+   {"id": "flicker_step", "type": "floor", "inputs": [{"pin": "in", "link": "fast_clock"}]},
+   {"id": "flicker", "type": "random", "inputs": [
+    {"pin": "seed", "link": "flicker_step"}, {"pin": "min", "value": [0.8]}, {"pin": "max", "value": [1.0]}
+   ]},
+   {"id": "glow_amount", "type": "multiply", "inputs": [{"pin": "a", "link": "intensity"}, {"pin": "b", "link": "flicker"}]},
+   {"id": "tint", "type": "color_parameter", "inputs": [{"pin": "value", "value": [0.4, 1.6, 2.0, 1.0]}],
+    "settings": [{"name": "name", "value": "Hologram Color"}]},
+   {"id": "glow", "type": "multiply", "inputs": [{"pin": "a", "link": "tint.rgb"}, {"pin": "b", "link": "glow_amount"}]},
+   {"id": "alpha_sum", "type": "add", "inputs": [{"pin": "a", "link": "glow_amount"}, {"pin": "b", "value": [0.1]}]},
+   {"id": "alpha", "type": "saturate", "inputs": [{"pin": "in", "link": "alpha_sum"}]}
+  ]
+ }
+}

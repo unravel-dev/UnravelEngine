@@ -3,6 +3,7 @@
 #include "material_graph.h"
 
 #include <algorithm>
+#include <array>
 
 namespace unravel
 {
@@ -21,6 +22,7 @@ constexpr float DEFAULT_GREY = 0.8f;
 constexpr float DEFAULT_ROUGHNESS = 0.5f;
 constexpr float DEFAULT_CHECKER_SCALE = 8.0f;
 constexpr float DEFAULT_NOISE_SCALE = 10.0f;
+constexpr float DEFAULT_VORONOI_SCALE = 5.0f;
 constexpr float DEFAULT_FRESNEL_POWER = 5.0f;
 constexpr float DEFAULT_PANNER_SPEED = 0.1f;
 constexpr float DEFAULT_OPACITY_MASK_CLIP = 0.5f;
@@ -151,11 +153,11 @@ auto make_dynamic(const char* type,
     return def;
 }
 
-/// A math function of one value, applied to each component.
-auto make_unary(const char* type, const char* label, const char* description, const char* expression)
+/// A math function of one value, applied to each component; an unlinked input reads @p default_value.
+auto make_unary(const char* type, const char* label, const char* description, const char* expression, float default_value = 0.0f)
     -> material_node_def
 {
-    return make_dynamic(type, label, category::math, description, {in("in", "", vt::dynamic)}, expression);
+    return make_dynamic(type, label, category::math, description, {in("in", "", vt::dynamic, math::vec4(default_value))}, expression);
 }
 
 /// A math function of two values, applied to each component.
@@ -190,6 +192,59 @@ auto with_keywords(material_node_def def, const char* keywords) -> material_node
 auto as_inline(material_node_def def) -> material_node_def
 {
     def.is_inline = true;
+    return def;
+}
+
+/// @p def as a node only the pixel stage runs: it reads derivatives.
+auto as_pixel_only(material_node_def def) -> material_node_def
+{
+    def.is_pixel_only = true;
+    return def;
+}
+
+/// @p def in category @p group.
+auto in_category(material_node_def def, category group) -> material_node_def
+{
+    def.category = group;
+    return def;
+}
+
+/// A choice setting whose values are put into code ({name}), shown by @p labels.
+auto make_choice_setting(const char* name,
+                         const char* label,
+                         std::vector<std::string> choices,
+                         std::vector<std::string> labels,
+                         const char* default_value,
+                         const char* tooltip) -> material_setting_def
+{
+    material_setting_def setting;
+    setting.name = name;
+    setting.label = label;
+    setting.kind = material_setting_kind::choice;
+    setting.choices = std::move(choices);
+    setting.choice_labels = std::move(labels);
+    setting.default_value = default_value;
+    setting.tooltip = tooltip;
+    return setting;
+}
+
+/// A node of fixed type @p value_type whose dynamic inputs read at their own width (Length, Dot), its code chosen by
+/// the width of the first one.
+auto make_width_dispatch(const char* type,
+                         const char* label,
+                         category group,
+                         const char* description,
+                         std::vector<material_pin_def> inputs,
+                         std::vector<material_pin_def> outputs,
+                         vt value_type,
+                         std::vector<std::string> width_expressions) -> material_node_def
+{
+    material_node_def def = make_node(type, label, group, description);
+    def.inputs = std::move(inputs);
+    def.outputs = std::move(outputs);
+    def.value_type = value_type;
+    def.expression = width_expressions.back();
+    def.width_expressions = std::move(width_expressions);
     return def;
 }
 
@@ -247,6 +302,10 @@ auto make_output_node() -> material_node_def
                                       "value shown on it.");
     def.code = material_node_code::surface_output;
     def.inputs = {
+        with_tooltip(in(MATERIAL_ATTRIBUTES_PIN, "Material Attributes", vt::attributes),
+                     "A whole surface (Make or Blend Material Attributes): linked, it gives every channel, and only the "
+                     "channels linked here besides replace its own. Opacity Mask Clip, Camera Fade Distance and World "
+                     "Position Offset stay this node's."),
         in_color("base_color", "Base Color", vt::float3, math::vec4(DEFAULT_GREY, DEFAULT_GREY, DEFAULT_GREY, 1.0f)),
         in_unit(MATERIAL_METALLIC_PIN, "Metallic", vt::float1),
         in_unit(MATERIAL_ROUGHNESS_PIN, "Roughness", vt::float1, math::vec4(DEFAULT_ROUGHNESS)),
@@ -377,6 +436,66 @@ void add_input_nodes(std::vector<material_node_def>& nodes)
                                          {out("uv", "UV", vt::float2)},
                                          vt::float2,
                                          "i.screen_uv")));
+    nodes.push_back(as_inline(with_keywords(make_fixed("vertex_tangent",
+                                                       "Vertex Tangent",
+                                                       category::input,
+                                                       "The mesh's tangent in world space: with the bitangent and the vertex "
+                                                       "normal, the tangent space normal maps and the Normal channel are in.",
+                                                       {},
+                                                       {out("xyz", "XYZ", vt::float3)},
+                                                       vt::float3,
+                                                       "i.tangent"),
+                                            "tangent space basis")));
+    nodes.push_back(as_inline(with_keywords(make_fixed("vertex_bitangent",
+                                                       "Vertex Bitangent",
+                                                       category::input,
+                                                       "The mesh's bitangent in world space, at a right angle to the tangent "
+                                                       "and the vertex normal.",
+                                                       {},
+                                                       {out("xyz", "XYZ", vt::float3)},
+                                                       vt::float3,
+                                                       "i.bitangent"),
+                                            "binormal tangent space basis")));
+    nodes.push_back(as_inline(with_keywords(make_fixed("two_sided_sign",
+                                                       "Two Sided Sign",
+                                                       category::input,
+                                                       "1 where the surface faces the viewer, -1 on its back (a two-sided "
+                                                       "material): a different look for each side of leaves, cloth or paper. "
+                                                       "A vertex reads 1.",
+                                                       {},
+                                                       {out("sign", "Sign", vt::float1)},
+                                                       vt::float1,
+                                                       "i.two_sided_sign"),
+                                            "front face back face is front facing")));
+    nodes.push_back(as_inline(with_keywords(make_fixed("camera_direction",
+                                                       "Camera Direction",
+                                                       category::input,
+                                                       "The direction the camera looks along, in world space.",
+                                                       {},
+                                                       {out("xyz", "XYZ", vt::float3)},
+                                                       vt::float3,
+                                                       "i.camera_direction"),
+                                            "camera forward view vector look")));
+    nodes.push_back(with_keywords(make_fixed("pixel_depth",
+                                             "Pixel Depth",
+                                             category::input,
+                                             "How far in front of the camera the pixel is, along the camera's direction, in "
+                                             "world units.",
+                                             {},
+                                             {out("depth", "Depth", vt::float1)},
+                                             vt::float1,
+                                             "dot(i.world_position - i.camera_position, i.camera_direction)"),
+                                  "scene depth distance camera"));
+    nodes.push_back(as_inline(with_keywords(make_fixed("screen_size",
+                                                       "Screen Size",
+                                                       category::input,
+                                                       "The size of the view in pixels (Size), and the size of one pixel in "
+                                                       "screen position units (Texel).",
+                                                       {},
+                                                       {out("size", "Size", vt::float2, ".xy"), out("texel", "Texel", vt::float2, ".zw")},
+                                                       vt::float4,
+                                                       "vec4(u_viewRect.zw, 1.0 / max(u_viewRect.zw, vec2_splat(1.0)))"),
+                                            "resolution view size texel pixel")));
     nodes.push_back(as_inline(with_keywords(make_fixed("time",
                                                        "Time",
                                                        category::input,
@@ -493,17 +612,82 @@ void add_parameter_nodes(std::vector<material_node_def>& nodes)
     nodes.push_back(with_keywords(color, "colour tint exposed property uniform"));
 }
 
+/// The input of a texture node taking a Texture Object: linked, the node reads that texture instead of its own.
+auto make_texture_input(vt kind) -> material_pin_def
+{
+    auto pin = in(MATERIAL_TEXTURE_PIN, "Texture", kind);
+    pin.tooltip = "A Texture Object, or a texture a material function or a reroute passes on: linked, the node reads it "
+                  "instead of its own texture.";
+    return pin;
+}
+
+/// How a texture node's texture is read at its edges and between texels: binding state, never code.
+auto make_sampler_settings() -> std::vector<material_setting_def>
+{
+    return {make_choice_setting(MATERIAL_TEXTURE_ADDRESS_SETTING,
+                                "Address",
+                                {MATERIAL_TEXTURE_ADDRESS_TEXTURE, "wrap", "clamp", "mirror"},
+                                {"From Texture", "Wrap", "Clamp", "Mirror"},
+                                MATERIAL_TEXTURE_ADDRESS_TEXTURE,
+                                "What UVs outside 0..1 read. From Texture: the texture's import setting. Wrap: it repeats. "
+                                "Clamp: its edge texels stretch out (decals, gradients). Mirror: it repeats flipped."),
+            make_choice_setting(MATERIAL_TEXTURE_FILTER_SETTING,
+                                "Filter",
+                                {MATERIAL_TEXTURE_FILTER_ANISOTROPIC, "trilinear", "point"},
+                                {"Anisotropic", "Trilinear", "Point"},
+                                MATERIAL_TEXTURE_FILTER_ANISOTROPIC,
+                                "How texels blend. Anisotropic: sharp at grazing angles, the default. Trilinear: cheaper, "
+                                "blurrier at grazing angles. Point: no blending, hard pixels (pixel art, lookup "
+                                "tables); a texture imported for point sampling reads so whatever this says.")};
+}
+
+/// The settings of a node holding a texture of its own: its name and hint for instances and the inspector, and its
+/// sampler state.
+auto make_texture_settings() -> std::vector<material_setting_def>
+{
+    std::vector<material_setting_def> settings{make_parameter_name_setting(TEXTURE_NAME_TOOLTIP), make_description_setting()};
+    const auto sampler = make_sampler_settings();
+    settings.insert(settings.end(), sampler.begin(), sampler.end());
+    return settings;
+}
+
+/// The mip a sample reads: picked by the GPU (Auto), shifted (Bias) or given (Level), by the Mip input.
+auto make_mip_setting() -> material_setting_def
+{
+    return make_choice_setting(MATERIAL_TEXTURE_MIP_MODE_SETTING,
+                               "Mip",
+                               {"auto", "bias", "level"},
+                               {"Auto", "Bias", "Level"},
+                               "auto",
+                               "Auto: the mip the GPU picks for the pixel's footprint. Bias: that mip shifted by the Mip "
+                               "input (positive: blurrier). Level: the mip the Mip input gives (0: the full size), the "
+                               "same in every stage.");
+}
+
+auto make_mip_input() -> material_pin_def
+{
+    return with_tooltip(in("mip", "Mip", vt::float1), "The mip bias or level the Mip setting reads it as; unused on Auto.");
+}
+
+/// The channel a height or mask is read from.
+auto make_channel_setting() -> material_setting_def
+{
+    return make_choice_setting("channel", "Channel", {"r", "g", "b", "a"}, {"Red", "Green", "Blue", "Alpha"}, "r", "The texture's channel holding the height.");
+}
+
 void add_texture_nodes(std::vector<material_node_def>& nodes)
 {
     auto sample = make_node("texture_sample",
                             "Texture Sample",
                             category::texture,
-                            "Reads a texture at the given UV (the mesh's own while unlinked).");
+                            "Reads a texture at the given UV (the mesh's own while unlinked): its own, or the one linked "
+                            "into Texture.");
     sample.code = material_node_code::texture_sample;
     sample.value_type = vt::float4;
-    sample.inputs = {in_code("uv", "UV", vt::float2, UV_CODE)};
+    sample.inputs = {in_code("uv", "UV", vt::float2, UV_CODE), make_texture_input(vt::texture2d), make_mip_input()};
     sample.outputs = texel_outputs();
-    sample.settings = {make_parameter_name_setting(TEXTURE_NAME_TOOLTIP), make_description_setting()};
+    sample.settings = make_texture_settings();
+    sample.settings.push_back(make_mip_setting());
     nodes.push_back(with_shortcut(sample, 'T', "texture sampler image map albedo"));
     auto normal = make_node("normal_map",
                             "Normal Map",
@@ -511,9 +695,9 @@ void add_texture_nodes(std::vector<material_node_def>& nodes)
                             "Reads a normal map as a tangent-space normal for the Normal channel.");
     normal.code = material_node_code::normal_map;
     normal.value_type = vt::float3;
-    normal.inputs = {in_code("uv", "UV", vt::float2, UV_CODE), in("strength", "Strength", vt::float1, math::vec4(1.0f))};
+    normal.inputs = {in_code("uv", "UV", vt::float2, UV_CODE), in("strength", "Strength", vt::float1, math::vec4(1.0f)), make_texture_input(vt::texture2d)};
     normal.outputs = {out("normal", "Normal", vt::float3)};
-    normal.settings = {make_parameter_name_setting(TEXTURE_NAME_TOOLTIP), make_description_setting()};
+    normal.settings = make_texture_settings();
     nodes.push_back(with_shortcut(normal, 'N', "bump normalmap tangent"));
     auto triplanar = make_node("triplanar_sample",
                                "Triplanar Sample",
@@ -525,10 +709,248 @@ void add_texture_nodes(std::vector<material_node_def>& nodes)
     triplanar.inputs = {in_code("position", "Position", vt::float3, WORLD_POSITION_CODE),
                         in_code("normal", "Normal", vt::float3, VERTEX_NORMAL_CODE),
                         in("scale", "Scale", vt::float1, math::vec4(1.0f)),
-                        in("sharpness", "Sharpness", vt::float1, math::vec4(DEFAULT_TRIPLANAR_SHARPNESS))};
+                        in("sharpness", "Sharpness", vt::float1, math::vec4(DEFAULT_TRIPLANAR_SHARPNESS)),
+                        make_texture_input(vt::texture2d)};
     triplanar.outputs = texel_outputs();
-    triplanar.settings = {make_parameter_name_setting(TEXTURE_NAME_TOOLTIP), make_description_setting()};
+    triplanar.settings = make_texture_settings();
     nodes.push_back(with_keywords(triplanar, "world projection box mapping cube projection"));
+    auto cube = make_node("sample_cubemap",
+                          "Sample Cubemap",
+                          category::texture,
+                          "Reads a cube texture along Direction (unlinked, the view reflected about the vertex normal: "
+                          "a cheap mirror of an environment).");
+    cube.code = material_node_code::texture_sample;
+    cube.value_type = vt::float4;
+    cube.inputs = {in_code("direction", "Direction", vt::float3, "reflect(-i.view_direction, i.vertex_normal)"),
+                   make_texture_input(vt::texture_cube),
+                   make_mip_input()};
+    cube.outputs = texel_outputs();
+    cube.settings = make_texture_settings();
+    cube.settings.push_back(make_mip_setting());
+    nodes.push_back(with_keywords(cube, "cubemap environment reflection skybox texture cube"));
+    auto object = make_node("texture_object",
+                            "Texture Object",
+                            category::texture,
+                            "A texture, not yet read: link it into a texture node's Texture, a Custom node or a material "
+                            "function to read it there. Instances and scripts set it by name, as a Texture Sample's.");
+    object.code = material_node_code::texture_object;
+    object.value_type = vt::texture2d;
+    object.outputs = {out("texture", "Texture", vt::texture2d)};
+    object.settings = make_texture_settings();
+    nodes.push_back(with_keywords(object, "texture asset reference object parameter sampler"));
+    auto cube_object = make_node("cubemap_object",
+                                 "Cubemap Object",
+                                 category::texture,
+                                 "A cube texture, not yet read: link it into a Sample Cubemap, a Custom node or a material "
+                                 "function.");
+    cube_object.code = material_node_code::texture_object;
+    cube_object.value_type = vt::texture_cube;
+    cube_object.outputs = {out("texture", "Texture", vt::texture_cube)};
+    cube_object.settings = make_texture_settings();
+    nodes.push_back(with_keywords(cube_object, "cubemap environment texture cube object reference"));
+    auto parallax = make_node("parallax_occlusion",
+                              "Parallax Occlusion",
+                              category::texture,
+                              "The UV a height map shows at the pixel when its bumps rise up to Height Scale above the "
+                              "surface (in UV units): steps through the height map along the view, so bumps hide what lies "
+                              "behind them. Link the UV into the material's texture reads. The pixel stage only.");
+    parallax.code = material_node_code::parallax_occlusion;
+    parallax.value_type = vt::float2;
+    parallax.is_pixel_only = true;
+    parallax.inputs = {in_code("uv", "UV", vt::float2, UV_CODE),
+                       make_texture_input(vt::texture2d),
+                       in("height_scale", "Height Scale", vt::float1, math::vec4(0.05f)),
+                       with_tooltip(in("min_steps", "Min Steps", vt::float1, math::vec4(8.0f)), "Steps where the surface faces the view."),
+                       with_tooltip(in("max_steps", "Max Steps", vt::float1, math::vec4(32.0f)),
+                                    "Steps at grazing angles, where the bumps cover more; at most 64."),
+                       with_tooltip(in_unit("reference_plane", "Reference Plane", vt::float1, math::vec4(1.0f)),
+                                    "The height that stays where the mesh is: 1 keeps the tops on the surface and sinks "
+                                    "the rest, 0 raises everything above it.")};
+    parallax.outputs = {out("uv", "UV", vt::float2)};
+    parallax.settings = make_texture_settings();
+    parallax.settings.push_back(make_channel_setting());
+    nodes.push_back(with_keywords(parallax, "pom parallax occlusion mapping height displacement depth relief"));
+    auto from_texture = make_node("normal_from_texture",
+                                  "Normal From Texture",
+                                  category::texture,
+                                  "A tangent-space normal from a height map: its slopes read Offset UV units apart, times "
+                                  "Strength.");
+    from_texture.code = material_node_code::normal_from_texture;
+    from_texture.value_type = vt::float3;
+    from_texture.inputs = {in_code("uv", "UV", vt::float2, UV_CODE),
+                           make_texture_input(vt::texture2d),
+                           in("offset", "Offset", vt::float1, math::vec4(0.002f)),
+                           in("strength", "Strength", vt::float1, math::vec4(1.0f))};
+    from_texture.outputs = {out("normal", "Normal", vt::float3)};
+    from_texture.settings = make_texture_settings();
+    from_texture.settings.push_back(make_channel_setting());
+    nodes.push_back(with_keywords(from_texture, "height bump normal map from height texture"));
+}
+
+/// The channels of a whole surface, as the Surface Output has them (Make Material Attributes takes them in this order,
+/// mg_make_attributes reads them so).
+auto make_attribute_channels() -> std::vector<material_pin_def>
+{
+    return {in_color("base_color", "Base Color", vt::float3, math::vec4(DEFAULT_GREY, DEFAULT_GREY, DEFAULT_GREY, 1.0f)),
+            in_unit(MATERIAL_METALLIC_PIN, "Metallic", vt::float1),
+            in_unit(MATERIAL_ROUGHNESS_PIN, "Roughness", vt::float1, math::vec4(DEFAULT_ROUGHNESS)),
+            in_color(MATERIAL_SPECULAR_PIN, "Specular", vt::float3, math::vec4(0.0f, 0.0f, 0.0f, 1.0f)),
+            in_unit(MATERIAL_GLOSSINESS_PIN, "Glossiness", vt::float1, math::vec4(1.0f - DEFAULT_ROUGHNESS)),
+            in("normal", "Normal", vt::float3, math::vec4(0.0f, 0.0f, 1.0f, 0.0f)),
+            in_color("emissive", "Emissive", vt::float3, math::vec4(0.0f, 0.0f, 0.0f, 1.0f)),
+            in_unit("ambient_occlusion", "Ambient Occlusion", vt::float1, math::vec4(1.0f)),
+            in_unit("opacity_mask", "Opacity Mask", vt::float1, math::vec4(1.0f)),
+            in_color("subsurface_color", "Subsurface Color", vt::float3, math::vec4(0.0f, 0.0f, 0.0f, 1.0f)),
+            in_unit("subsurface_opacity", "Subsurface Opacity", vt::float1)};
+}
+
+void add_attribute_nodes(std::vector<material_node_def>& nodes)
+{
+    auto make = make_fixed("make_material_attributes",
+                           "Make Material Attributes",
+                           category::utility,
+                           "A whole surface from its channels: blend it with another one (Blend Material Attributes), "
+                           "pass it through a material function as one value, or link it into the Surface Output's "
+                           "Material Attributes.",
+                           make_attribute_channels(),
+                           {out("attributes", "Attributes", vt::attributes)},
+                           vt::attributes,
+                           "mg_make_attributes({base_color}, {metallic}, {roughness}, {specular}, {glossiness}, {normal}, "
+                           "{emissive}, {ambient_occlusion}, {opacity_mask}, {subsurface_color}, {subsurface_opacity})");
+    nodes.push_back(with_keywords(make, "material attributes layer surface make struct"));
+    auto blend = make_fixed("blend_material_attributes",
+                            "Blend Material Attributes",
+                            category::utility,
+                            "Two whole surfaces blended by Alpha (A at 0, B at 1), every channel at once, the normals "
+                            "turned between them: wet over dry, snow or moss over rock, layers by a painted mask.",
+                            {in("a", "A", vt::attributes), in("b", "B", vt::attributes), in_unit("alpha", "Alpha", vt::float1, math::vec4(0.5f))},
+                            {out("attributes", "Attributes", vt::attributes)},
+                            vt::attributes,
+                            "mg_blend_attributes({a}, {b}, {alpha})");
+    nodes.push_back(with_keywords(blend, "material attributes layer blend mix lerp surfaces"));
+    auto split = make_fixed("break_material_attributes",
+                            "Break Material Attributes",
+                            category::utility,
+                            "The channels of a whole surface, each on its own output.",
+                            {in("attributes", "Attributes", vt::attributes)},
+                            {},
+                            vt::attributes,
+                            "{attributes}");
+    for(const auto& channel : make_attribute_channels())
+    {
+        auto output = out("", "", channel.type);
+        output.name = channel.name;
+        output.label = channel.label;
+        output.member = channel.name;
+        split.outputs.push_back(output);
+    }
+    nodes.push_back(with_keywords(split, "material attributes break split channels struct"));
+}
+
+/// Trigonometry, exponents, rounding, derivatives and the small conveniences shader code writes in a line.
+void add_more_math_nodes(std::vector<material_node_def>& nodes)
+{
+    nodes.push_back(with_keywords(make_unary("tan", "Tangent", "The tangent of the value, in radians.", "tan({in})"), "tan trigonometry"));
+    nodes.push_back(with_keywords(make_unary("asin", "Arcsine", "The angle, in radians, whose sine is the value (-1 to 1).", "asin({in})"),
+                                  "asin arcsin inverse sine trigonometry"));
+    nodes.push_back(with_keywords(make_unary("acos", "Arccosine", "The angle, in radians, whose cosine is the value (-1 to 1).", "acos({in})"),
+                                  "acos arccos inverse cosine trigonometry"));
+    nodes.push_back(with_keywords(make_unary("atan", "Arctangent", "The angle, in radians, whose tangent is the value.", "atan({in})"),
+                                  "atan arctan inverse tangent trigonometry"));
+    auto atan2 = make_binary("atan2",
+                             "Arctangent2",
+                             "The angle, in radians from -pi to pi, of the direction (X, Y): the angle around a point, for "
+                             "radial patterns.",
+                             "atan2({a}, {b})",
+                             0.0f,
+                             1.0f);
+    atan2.inputs[0].label = "Y";
+    atan2.inputs[1].label = "X";
+    nodes.push_back(with_keywords(atan2, "atan2 angle polar direction trigonometry"));
+    nodes.push_back(with_keywords(make_unary("exp", "Exp", "e raised to the value.", "exp({in})"), "exponent exponential e"));
+    nodes.push_back(with_keywords(make_unary("exp2", "Exp2", "2 raised to the value.", "exp2({in})"), "exponent power of two"));
+    nodes.push_back(with_keywords(make_unary("log", "Log", "The natural logarithm of the value (above 0).", "log({in})", 1.0f), "ln logarithm natural"));
+    nodes.push_back(with_keywords(make_unary("log2", "Log2", "The base-2 logarithm of the value (above 0).", "log2({in})", 1.0f), "logarithm binary"));
+    nodes.push_back(with_keywords(make_unary("round", "Round", "The nearest whole number to the value.", "round({in})"), "nearest integer"));
+    nodes.push_back(with_keywords(make_unary("truncate", "Truncate", "The whole part of the value: its fraction dropped, toward 0.", "trunc({in})"),
+                                  "trunc integer whole"));
+    nodes.push_back(with_keywords(make_unary("sign", "Sign", "1 for a positive value, -1 for a negative one, 0 for 0.", "sign({in})"),
+                                  "signum direction"));
+    nodes.push_back(with_keywords(make_unary("reciprocal", "Reciprocal", "1 divided by the value.", "(1.0 / {in})", 1.0f), "inverse 1/x rcp"));
+    nodes.push_back(with_keywords(make_unary("radians_to_degrees", "Radians To Degrees", "The angle in degrees.", "degrees({in})"),
+                                  "degrees angle convert"));
+    nodes.push_back(with_keywords(make_unary("degrees_to_radians", "Degrees To Radians", "The angle in radians.", "radians({in})"),
+                                  "radians angle convert"));
+    nodes.push_back(with_keywords(make_dynamic("inverse_lerp",
+                                               "Inverse Lerp",
+                                               category::math,
+                                               "Where Value lies between A and B: 0 at A, 1 at B. The inverse of Lerp.",
+                                               {in("a", "A", vt::dynamic),
+                                                in("b", "B", vt::dynamic, math::vec4(1.0f)),
+                                                in("value", "Value", vt::dynamic, math::vec4(0.5f))},
+                                               "(({value} - {a}) / ({b} - {a}))"),
+                                  "unlerp inverse interpolate fraction"));
+    nodes.push_back(with_keywords(make_dynamic("constant_bias_scale",
+                                               "Constant Bias Scale",
+                                               category::math,
+                                               "The value plus Bias, times Scale: -1..1 into 0..1 with the defaults.",
+                                               {in("in", "", vt::dynamic),
+                                                in("bias", "Bias", vt::float1, math::vec4(1.0f)),
+                                                in("scale", "Scale", vt::float1, math::vec4(0.5f))},
+                                               "(({in} + {bias}) * {scale})"),
+                                  "bias scale signed unsigned range"));
+    auto constant = make_fixed("math_constant",
+                               "Math Constant",
+                               category::constant,
+                               "A constant of mathematics: pi, tau (2 pi), pi / 2, e, the golden ratio or the square root of 2.",
+                               {},
+                               {out("value", "", vt::float1)},
+                               vt::float1,
+                               "mg_const_{constant}");
+    constant.settings = {make_choice_setting("constant",
+                                             "Constant",
+                                             {"pi", "tau", "half_pi", "e", "golden_ratio", "sqrt2"},
+                                             {"Pi", "Tau", "Half Pi", "E", "Golden Ratio", "Square Root Of 2"},
+                                             "pi",
+                                             "The constant.")};
+    nodes.push_back(as_inline(with_keywords(constant, "pi tau e golden ratio sqrt2 number")));
+    auto reflect = make_fixed("reflect",
+                              "Reflect",
+                              category::vector,
+                              "In mirrored about Normal, as light bounces. Unlinked, the view mirrored about the vertex normal: "
+                              "the reflection vector.",
+                              {in_code("in", "In", vt::float3, "(-i.view_direction)"), in_code("normal", "Normal", vt::float3, VERTEX_NORMAL_CODE)},
+                              {out("out", "", vt::float3)},
+                              vt::float3,
+                              "reflect({in}, normalize({normal}))");
+    nodes.push_back(with_keywords(reflect, "reflection vector mirror bounce"));
+    auto refract = make_fixed("refract",
+                              "Refract",
+                              category::vector,
+                              "In bent through a surface of Normal, as light entering glass or water bends; Ratio is the "
+                              "outside's index of refraction over the inside's (1 / 1.33 into water). Unlinked, the view "
+                              "through the vertex normal.",
+                              {in_code("in", "In", vt::float3, "(-i.view_direction)"),
+                               in_code("normal", "Normal", vt::float3, VERTEX_NORMAL_CODE),
+                               in("ratio", "Ratio", vt::float1, math::vec4(0.75f))},
+                              {out("out", "", vt::float3)},
+                              vt::float3,
+                              "refract(normalize({in}), normalize({normal}), {ratio})");
+    nodes.push_back(with_keywords(refract, "refraction bend glass water ior"));
+    // The float forms cast: DXC reads a bare literal as a double, and DXIL has no double derivative.
+    auto ddx = make_unary("ddx", "DDX", "How much the value changes from this pixel to the next one across the screen. The pixel stage only.", "dFdx({in})");
+    ddx.scalar_expression = "dFdx(float({in}))";
+    nodes.push_back(as_pixel_only(with_keywords(ddx, "derivative dfdx partial screen space")));
+    auto ddy = make_unary("ddy", "DDY", "How much the value changes from this pixel to the next one down the screen. The pixel stage only.", "dFdy({in})");
+    ddy.scalar_expression = "dFdy(float({in}))";
+    nodes.push_back(as_pixel_only(with_keywords(ddy, "derivative dfdy partial screen space")));
+    auto width = make_unary("fwidth",
+                            "FWidth",
+                            "How much the value changes over one pixel (DDX and DDY added without their signs): the width to "
+                            "smooth a procedural edge over. The pixel stage only.",
+                            "fwidth({in})");
+    width.scalar_expression = "fwidth(float({in}))";
+    nodes.push_back(as_pixel_only(with_keywords(width, "derivative antialias filter width")));
 }
 
 void add_math_nodes(std::vector<material_node_def>& nodes)
@@ -655,6 +1077,7 @@ void add_math_nodes(std::vector<material_node_def>& nodes)
                                              vt::float3,
                                              "cross({a}, {b})"),
                                   "cross product perpendicular"));
+    add_more_math_nodes(nodes);
 }
 
 void add_vector_nodes(std::vector<material_node_def>& nodes)
@@ -705,6 +1128,78 @@ void add_vector_nodes(std::vector<material_node_def>& nodes)
     nodes.push_back(with_keywords(swizzle, "component mask channels shuffle"));
 }
 
+/// The inputs of a Noise node reading @p coordinates.
+auto make_noise_inputs(material_pin_def coordinates, float scale) -> std::vector<material_pin_def>
+{
+    return {std::move(coordinates),
+            in("scale", "Scale", vt::float1, math::vec4(scale)),
+            with_tooltip(in("octaves", "Octaves", vt::float1, math::vec4(1.0f)), "How many layers of noise, 1 to 8."),
+            with_tooltip(in("lacunarity", "Lacunarity", vt::float1, math::vec4(2.0f)), "How much finer each layer is than the one before."),
+            with_tooltip(in("gain", "Gain", vt::float1, math::vec4(0.5f)), "How much weaker each layer is than the one before.")};
+}
+
+auto make_noise_type_setting() -> material_setting_def
+{
+    return make_choice_setting("type",
+                               "Type",
+                               {"value", "gradient", "simplex"},
+                               {"Value", "Gradient", "Simplex"},
+                               "value",
+                               "Value: soft blobs, the cheapest. Gradient (Perlin): smooth hills and valleys. Simplex: like "
+                               "gradient, without its square grid.");
+}
+
+/// A shape node: an anti-aliased mask over the UV square, read with derivatives.
+auto make_shape(const char* type, const char* label, const char* description, std::vector<material_pin_def> sizes, const char* expression, const char* keywords)
+    -> material_node_def
+{
+    std::vector<material_pin_def> inputs{in_code("uv", "UV", vt::float2, UV_CODE)};
+    inputs.insert(inputs.end(), sizes.begin(), sizes.end());
+    return as_pixel_only(with_keywords(make_fixed(type, label, category::procedural, description, std::move(inputs), {out("out", "", vt::float1)}, vt::float1, expression),
+                                       keywords));
+}
+
+/// Ellipse, Rectangle, Rounded Rectangle and Polygon: anti-aliased masks of a shape over the UV square.
+void add_shape_nodes(std::vector<material_node_def>& nodes)
+{
+    const auto width = []
+    {
+        return in("width", "Width", vt::float1, math::vec4(0.5f));
+    };
+    const auto height = []
+    {
+        return in("height", "Height", vt::float1, math::vec4(0.5f));
+    };
+    nodes.push_back(make_shape("ellipse",
+                               "Ellipse",
+                               "1 inside an ellipse Width by Height (1 fills the UV square), 0 outside, with a smooth "
+                               "one-pixel edge. The pixel stage only.",
+                               {width(), height()},
+                               "mg_ellipse({uv}, {width}, {height})",
+                               "circle shape disc mask sdf"));
+    nodes.push_back(make_shape("rectangle",
+                               "Rectangle",
+                               "1 inside a rectangle Width by Height (1 fills the UV square), 0 outside, with a smooth "
+                               "one-pixel edge. The pixel stage only.",
+                               {width(), height()},
+                               "mg_rectangle({uv}, {width}, {height})",
+                               "square box shape mask sdf"));
+    nodes.push_back(make_shape("rounded_rectangle",
+                               "Rounded Rectangle",
+                               "1 inside a rectangle with corners rounded by Radius, 0 outside, with a smooth one-pixel "
+                               "edge. The pixel stage only.",
+                               {width(), height(), in("radius", "Radius", vt::float1, math::vec4(0.1f))},
+                               "mg_rounded_rectangle({uv}, {width}, {height}, {radius})",
+                               "rounded box button shape mask sdf"));
+    nodes.push_back(make_shape("polygon",
+                               "Polygon",
+                               "1 inside a regular polygon of Sides sides, Width by Height, 0 outside, with a smooth "
+                               "one-pixel edge. The pixel stage only.",
+                               {in("sides", "Sides", vt::float1, math::vec4(6.0f)), width(), height()},
+                               "mg_polygon({uv}, {sides}, {width}, {height})",
+                               "hexagon triangle shape mask sdf"));
+}
+
 void add_procedural_nodes(std::vector<material_node_def>& nodes)
 {
     nodes.push_back(with_keywords(make_fixed("checker",
@@ -717,16 +1212,60 @@ void add_procedural_nodes(std::vector<material_node_def>& nodes)
                                              vt::float1,
                                              "mg_checker({uv}, {scale})"),
                                   "checkerboard grid tiles pattern"));
-    nodes.push_back(with_keywords(make_fixed("noise",
-                                             "Noise",
+    auto noise = make_fixed("noise",
+                            "Noise",
+                            category::procedural,
+                            "Smooth noise between 0 and 1 over the UV: Octaves layers of it, each Lacunarity times finer "
+                            "and Gain times weaker (fractal noise, fBm).",
+                            make_noise_inputs(in_code("uv", "UV", vt::float2, UV_CODE), DEFAULT_NOISE_SCALE),
+                            {out("out", "", vt::float1)},
+                            vt::float1,
+                            "mg_noise_{type}2({uv} * {scale}, {octaves}, {lacunarity}, {gain})");
+    noise.settings = {make_noise_type_setting()};
+    nodes.push_back(with_keywords(noise, "value gradient perlin simplex fbm fractal octaves random clouds"));
+    auto noise_3d = make_fixed("noise_3d",
+                               "Noise 3D",
+                               category::procedural,
+                               "Smooth noise between 0 and 1 through space, at Position (the pixel's world position while "
+                               "unlinked): no UV seams. Octaves layer it as Noise does.",
+                               make_noise_inputs(in_code("position", "Position", vt::float3, WORLD_POSITION_CODE), 1.0f),
+                               {out("out", "", vt::float1)},
+                               vt::float1,
+                               "mg_noise_{type}3({position} * {scale}, {octaves}, {lacunarity}, {gain})");
+    noise_3d.settings = {make_noise_type_setting()};
+    nodes.push_back(with_keywords(noise_3d, "value gradient perlin simplex fbm fractal octaves volume world solid"));
+    const auto voronoi_outputs = []
+    {
+        return std::vector<material_pin_def>{with_tooltip(out("distance", "Distance", vt::float1, ".x"), "The distance to the cell's point."),
+                                             with_tooltip(out("edges", "Edges", vt::float1, ".y"),
+                                                          "The distance to the nearest border between cells: 0 on the borders."),
+                                             with_tooltip(out("cell", "Cell", vt::float1, ".z"), "A random value of the cell, 0 to 1.")};
+    };
+    nodes.push_back(with_keywords(make_fixed("voronoi",
+                                             "Voronoi",
                                              category::procedural,
-                                             "Smooth value noise between 0 and 1.",
+                                             "Cells around points scattered over the UV, Scale cells per UV unit: the "
+                                             "distance to the cell's point, to its border, and a random value per cell. "
+                                             "Randomness 0 lines the points up in a grid.",
                                              {in_code("uv", "UV", vt::float2, UV_CODE),
-                                              in("scale", "Scale", vt::float1, math::vec4(DEFAULT_NOISE_SCALE))},
-                                             {out("out", "", vt::float1)},
-                                             vt::float1,
-                                             "mg_value_noise({uv} * {scale})"),
-                                  "value noise random perlin clouds"));
+                                              in("scale", "Scale", vt::float1, math::vec4(DEFAULT_VORONOI_SCALE)),
+                                              in_unit("randomness", "Randomness", vt::float1, math::vec4(1.0f))},
+                                             voronoi_outputs(),
+                                             vt::float3,
+                                             "mg_voronoi({uv} * {scale}, {randomness})"),
+                                  "cellular worley cells cracks caustics tiles stones"));
+    nodes.push_back(with_keywords(make_fixed("voronoi_3d",
+                                             "Voronoi 3D",
+                                             category::procedural,
+                                             "Cells around points scattered through space, at Position (the world position "
+                                             "while unlinked): no UV seams.",
+                                             {in_code("position", "Position", vt::float3, WORLD_POSITION_CODE),
+                                              in("scale", "Scale", vt::float1, math::vec4(1.0f)),
+                                              in_unit("randomness", "Randomness", vt::float1, math::vec4(1.0f))},
+                                             voronoi_outputs(),
+                                             vt::float3,
+                                             "mg_voronoi3({position} * {scale}, {randomness})"),
+                                  "cellular worley cells cracks volume world solid"));
     nodes.push_back(with_keywords(make_fixed("fresnel",
                                              "Fresnel",
                                              category::procedural,
@@ -737,6 +1276,50 @@ void add_procedural_nodes(std::vector<material_node_def>& nodes)
                                              vt::float1,
                                              "mg_fresnel({normal}, i.view_direction, {power})"),
                                   "rim edge glow facing"));
+    add_shape_nodes(nodes);
+    auto random = make_width_dispatch("random",
+                                      "Random",
+                                      category::procedural,
+                                      "A random number between Min and Max for each value of Seed: the same seed gives the "
+                                      "same number on every GPU. Link a cell, a position or an id.",
+                                      {in("seed", "Seed", vt::dynamic), in("min", "Min", vt::float1), in("max", "Max", vt::float1, math::vec4(1.0f))},
+                                      {out("out", "", vt::float1)},
+                                      vt::float1,
+                                      {"mix({min}, {max}, mg_hash11({seed}))",
+                                       "mix({min}, {max}, mg_hash12({seed}))",
+                                       "mix({min}, {max}, mg_hash13({seed}))",
+                                       "mix({min}, {max}, mg_hash14({seed}))"});
+    nodes.push_back(with_keywords(random, "hash rand white noise seed"));
+    auto sphere_mask = make_width_dispatch("sphere_mask",
+                                           "Sphere Mask",
+                                           category::procedural,
+                                           "1 within Radius of Center, falling to 0 at Radius: Hardness 1 cuts it off, 0 "
+                                           "fades it over the whole radius.",
+                                           {in("position", "Position", vt::dynamic),
+                                            in("center", "Center", vt::dynamic),
+                                            in("radius", "Radius", vt::float1, math::vec4(1.0f)),
+                                            in_unit("hardness", "Hardness", vt::float1, math::vec4(0.5f))},
+                                           {out("out", "", vt::float1)},
+                                           vt::float1,
+                                           {"mg_sphere_mask(abs({position} - {center}), {radius}, {hardness})",
+                                            "mg_sphere_mask(distance({position}, {center}), {radius}, {hardness})"});
+    nodes.push_back(with_keywords(sphere_mask, "radial falloff circle distance mask"));
+    auto wave = make_dynamic("wave",
+                             "Wave",
+                             category::procedural,
+                             "A wave between 0 and 1 repeating Frequency times per unit of the input (the time while "
+                             "unlinked): a sine, a square, a triangle or a sawtooth.",
+                             {in_code("in", "In", vt::dynamic, TIME_CODE),
+                              in("frequency", "Frequency", vt::dynamic, math::vec4(1.0f)),
+                              in("phase", "Phase", vt::dynamic)},
+                             "mg_wave_{shape}({in} * {frequency} + {phase})");
+    wave.settings = {make_choice_setting("shape",
+                                         "Shape",
+                                         {"sine", "square", "triangle", "sawtooth"},
+                                         {"Sine", "Square", "Triangle", "Sawtooth"},
+                                         "sine",
+                                         "The shape of each repeat.")};
+    nodes.push_back(with_keywords(wave, "oscillate pulse sawtooth square triangle sine periodic"));
 }
 
 /// The setting naming a Named Reroute: the declaration's name, or the declaration a usage reads.
@@ -773,6 +1356,17 @@ void add_flow_nodes(std::vector<material_node_def>& nodes)
     value.tooltip = "Which input the material uses.";
     static_switch.settings = {value, make_parameter_name_setting(SWITCH_NAME_TOOLTIP), make_description_setting()};
     nodes.push_back(with_keywords(static_switch, "branch if toggle feature compile time bool"));
+    auto quality = make_node("quality_switch",
+                             "Quality Switch",
+                             category::utility,
+                             "Passes High on, or Low where the material is compiled for low quality (a deploy profile's "
+                             "Material Quality: phones, the web): the other branch is not in the shader and costs nothing.");
+    quality.code = material_node_code::static_switch;
+    quality.type_rule = material_type_rule::chosen_input;
+    quality.value_type = vt::dynamic;
+    quality.inputs = {in("high", "High", vt::dynamic), in("low", "Low", vt::dynamic)};
+    quality.outputs = {out("out", "", vt::dynamic)};
+    nodes.push_back(with_keywords(quality, "quality level feature mobile web platform lod cheap switch"));
     auto declaration = make_node("named_reroute_declaration",
                                  "Named Reroute",
                                  category::utility,
@@ -881,13 +1475,52 @@ void add_condition_nodes(std::vector<material_node_def>& nodes)
     discard.inputs = {in("value", "Value", vt::float1, math::vec4(1.0f)),
                       in_unit("threshold", "Threshold", vt::float1, math::vec4(DEFAULT_OPACITY_MASK_CLIP))};
     nodes.push_back(with_keywords(discard, "clip kill cut out alpha test hole"));
+    nodes.push_back(with_keywords(make_fixed("and",
+                                             "And",
+                                             category::utility,
+                                             "1 where A and B are both true (above 0.5), else 0.",
+                                             {in("a", "A", vt::float1), in("b", "B", vt::float1)},
+                                             {out("out", "", vt::float1)},
+                                             vt::float1,
+                                             "(({a} > 0.5 && {b} > 0.5) ? 1.0 : 0.0)"),
+                                  "logic boolean both &&"));
+    nodes.push_back(with_keywords(make_fixed("or",
+                                             "Or",
+                                             category::utility,
+                                             "1 where A or B is true (above 0.5), else 0.",
+                                             {in("a", "A", vt::float1), in("b", "B", vt::float1)},
+                                             {out("out", "", vt::float1)},
+                                             vt::float1,
+                                             "(({a} > 0.5 || {b} > 0.5) ? 1.0 : 0.0)"),
+                                  "logic boolean either ||"));
+    nodes.push_back(with_keywords(make_fixed("not",
+                                             "Not",
+                                             category::utility,
+                                             "1 where the value is false (0.5 or less), else 0.",
+                                             {in("in", "", vt::float1)},
+                                             {out("out", "", vt::float1)},
+                                             vt::float1,
+                                             "({in} > 0.5 ? 0.0 : 1.0)"),
+                                  "logic boolean negate invert !"));
+    nodes.push_back(with_keywords(make_dynamic("select",
+                                               "Select",
+                                               category::utility,
+                                               "One of four inputs, by Index rounded to the nearest whole number (0 to 3). "
+                                               "Every pixel computes all four.",
+                                               {in("index", "Index", vt::float1),
+                                                in("in0", "0", vt::dynamic),
+                                                in("in1", "1", vt::dynamic),
+                                                in("in2", "2", vt::dynamic),
+                                                in("in3", "3", vt::dynamic)},
+                                               "({index} < 0.5 ? {in0} : ({index} < 1.5 ? {in1} : ({index} < 2.5 ? {in2} : {in3})))"),
+                                  "switch choose case index pick"));
 }
 
 void add_utility_nodes(std::vector<material_node_def>& nodes)
 {
     nodes.push_back(with_shortcut(make_fixed("panner",
                                              "Panner",
-                                             category::utility,
+                                             category::uv,
                                              "Moves UVs over time at Speed (UV units per second).",
                                              {in_code("uv", "UV", vt::float2, UV_CODE),
                                               in("speed", "Speed", vt::float2, math::vec4(DEFAULT_PANNER_SPEED, 0.0f, 0.0f, 0.0f)),
@@ -899,7 +1532,7 @@ void add_utility_nodes(std::vector<material_node_def>& nodes)
                                   "scroll move flow animate"));
     nodes.push_back(with_keywords(make_fixed("tiling_offset",
                                              "Tiling And Offset",
-                                             category::utility,
+                                             category::uv,
                                              "UVs scaled by Tiling, then moved by Offset.",
                                              {in_code("uv", "UV", vt::float2, UV_CODE),
                                               in("tiling", "Tiling", vt::float2, math::vec4(1.0f)),
@@ -910,7 +1543,7 @@ void add_utility_nodes(std::vector<material_node_def>& nodes)
                                   "tile repeat scale uv"));
     nodes.push_back(with_keywords(make_fixed("rotate_uv",
                                              "Rotate UV",
-                                             category::utility,
+                                             category::uv,
                                              "UVs turned around Center by Angle (radians).",
                                              {in_code("uv", "UV", vt::float2, UV_CODE),
                                               in("center", "Center", vt::float2, math::vec4(0.5f)),
@@ -921,7 +1554,7 @@ void add_utility_nodes(std::vector<material_node_def>& nodes)
                                   "rotator spin turn"));
     nodes.push_back(with_keywords(make_fixed("desaturate",
                                              "Desaturate",
-                                             category::utility,
+                                             category::color,
                                              "Moves a colour toward its grey by Amount (1: fully grey).",
                                              {in("color", "Color", vt::float3, math::vec4(1.0f)), in("amount", "Amount", vt::float1, math::vec4(1.0f))},
                                              {out("rgb", "", vt::float3)},
@@ -963,10 +1596,11 @@ void add_function_nodes(std::vector<material_node_def>& nodes)
     type.name = "type";
     type.label = "Type";
     type.kind = material_setting_kind::choice;
-    type.choices = {"float", "vec2", "vec3", "vec4"};
-    type.choice_labels = {"Float", "Vector 2", "Vector 3", "Vector 4"};
+    type.choices = {"float", "vec2", "vec3", "vec4", "sampler2D", "samplerCube", "MaterialSurface"};
+    type.choice_labels = {"Float", "Vector 2", "Vector 3", "Vector 4", "Texture 2D", "Texture Cube", "Material Attributes"};
     type.default_value = "vec3";
-    type.tooltip = "The value the caller's pin takes.";
+    type.tooltip = "The value the caller's pin takes. A texture input the caller links nothing into reads the node's "
+                   "own texture; an attributes input, the default surface.";
     input.settings = {name, type};
     nodes.push_back(with_keywords(input, "function parameter argument"));
     auto output = make_node(MATERIAL_FUNCTION_OUTPUT_TYPE,
@@ -1015,6 +1649,391 @@ void add_function_nodes(std::vector<material_node_def>& nodes)
     nodes.push_back(with_keywords(call, "function subgraph call reuse"));
 }
 
+/// The object's transform, the Transform node and the Vertex Interpolator: what reads the graph's vertex stage.
+void add_object_nodes(std::vector<material_node_def>& nodes)
+{
+    nodes.push_back(as_inline(with_keywords(make_fixed("object_position",
+                                                       "Object Position",
+                                                       category::input,
+                                                       "The pivot of the object drawn, in world space: the same for every "
+                                                       "pixel and vertex of it. For wind or variation around each object's "
+                                                       "own pivot.",
+                                                       {},
+                                                       {out("xyz", "XYZ", vt::float3)},
+                                                       vt::float3,
+                                                       "i.object_position"),
+                                            "pivot origin actor instance location")));
+    nodes.push_back(with_keywords(make_fixed("object_scale",
+                                             "Object Scale",
+                                             category::input,
+                                             "How much the object drawn is scaled along each of its axes.",
+                                             {},
+                                             {out("xyz", "XYZ", vt::float3), out("x", "X", vt::float1, ".x"), out("y", "Y", vt::float1, ".y"), out("z", "Z", vt::float1, ".z")},
+                                             vt::float3,
+                                             "mg_object_scale(i)"),
+                                  "size bounds instance"));
+    nodes.push_back(with_keywords(make_fixed("object_random",
+                                             "Per Instance Random",
+                                             category::input,
+                                             "A random number between 0 and 1 for each object drawn, from its pivot: copies "
+                                             "of one model, instanced or not, each get their own tint or phase. An object "
+                                             "that moves takes new numbers as it moves.",
+                                             {},
+                                             {out("out", "", vt::float1)},
+                                             vt::float1,
+                                             "mg_hash13(i.object_position)"),
+                                  "instance random variation seed object id"));
+    auto transform = make_fixed("transform",
+                                "Transform",
+                                category::vector,
+                                "A direction, position or normal moved from one space to another: tangent, object, world "
+                                "or view (the camera's).",
+                                {in("in", "", vt::float3)},
+                                {out("out", "", vt::float3)},
+                                vt::float3,
+                                "mg_world_to_{to}_{kind}(i, mg_{from}_to_world_{kind}(i, {in}))");
+    const std::vector<std::string> spaces{"tangent", "object", "world", "view"};
+    const std::vector<std::string> space_labels{"Tangent", "Object", "World", "View"};
+    transform.settings = {make_choice_setting("from", "From", spaces, space_labels, "tangent", "The space the input is in."),
+                          make_choice_setting("to", "To", spaces, space_labels, "world", "The space the output is in."),
+                          make_choice_setting("kind",
+                                              "Kind",
+                                              {"direction", "position", "normal"},
+                                              {"Direction", "Position", "Normal"},
+                                              "direction",
+                                              "Direction: turned and scaled, never moved. Position: moved too (a tangent "
+                                              "space position is a direction). Normal: kept at right angles to the "
+                                              "surface under a squashing scale, unit length.")};
+    nodes.push_back(with_keywords(transform, "space convert tangent object local world view camera matrix"));
+    auto interpolator = make_node("vertex_interpolator",
+                                  "Vertex Interpolator",
+                                  category::utility,
+                                  "Computes its input once per vertex and blends it across the triangle for the pixels: "
+                                  "cheaper than per pixel for what varies smoothly. A graph reads at most four.");
+    interpolator.code = material_node_code::vertex_interpolator;
+    interpolator.type_rule = material_type_rule::dynamic;
+    interpolator.value_type = vt::dynamic;
+    interpolator.inputs = {in("in", "", vt::dynamic)};
+    interpolator.outputs = {out("out", "", vt::dynamic)};
+    nodes.push_back(with_keywords(interpolator, "varying vertex per vertex interpolate custom interpolator"));
+}
+
+/// Polar Coordinates, Twirl, Spherize, Flipbook and Bump Offset: UVs reshaped.
+void add_uv_nodes(std::vector<material_node_def>& nodes)
+{
+    nodes.push_back(with_keywords(make_fixed("polar_coordinates",
+                                             "Polar Coordinates",
+                                             category::uv,
+                                             "The UV around Center as distance (X, 1 at half a UV unit, times Radial Scale) "
+                                             "and angle (Y, 0 to 1 once around, times Angle Scale): radial and spiral patterns.",
+                                             {in_code("uv", "UV", vt::float2, UV_CODE),
+                                              in("center", "Center", vt::float2, math::vec4(0.5f)),
+                                              in("radial_scale", "Radial Scale", vt::float1, math::vec4(1.0f)),
+                                              in("angle_scale", "Angle Scale", vt::float1, math::vec4(1.0f))},
+                                             {out("uv", "UV", vt::float2), out("distance", "Distance", vt::float1, ".x"), out("angle", "Angle", vt::float1, ".y")},
+                                             vt::float2,
+                                             "mg_polar_coordinates({uv}, {center}, {radial_scale}, {angle_scale})"),
+                                  "radial angle circular spiral"));
+    nodes.push_back(with_keywords(make_fixed("twirl",
+                                             "Twirl",
+                                             category::uv,
+                                             "The UV turned around Center by Strength radians per UV unit away from it: a "
+                                             "whirlpool. Then moved by Offset.",
+                                             {in_code("uv", "UV", vt::float2, UV_CODE),
+                                              in("center", "Center", vt::float2, math::vec4(0.5f)),
+                                              in("strength", "Strength", vt::float1, math::vec4(10.0f)),
+                                              in("offset", "Offset", vt::float2)},
+                                             {out("uv", "UV", vt::float2)},
+                                             vt::float2,
+                                             "mg_twirl({uv}, {center}, {strength}, {offset})"),
+                                  "swirl whirl vortex spiral"));
+    nodes.push_back(with_keywords(make_fixed("spherize",
+                                             "Spherize",
+                                             category::uv,
+                                             "The UV bulged around Center as if wrapped on a sphere, by Strength. Then moved "
+                                             "by Offset.",
+                                             {in_code("uv", "UV", vt::float2, UV_CODE),
+                                              in("center", "Center", vt::float2, math::vec4(0.5f)),
+                                              in("strength", "Strength", vt::float1, math::vec4(10.0f)),
+                                              in("offset", "Offset", vt::float2)},
+                                             {out("uv", "UV", vt::float2)},
+                                             vt::float2,
+                                             "mg_spherize({uv}, {center}, {strength}, {offset})"),
+                                  "bulge fisheye lens sphere"));
+    auto flipbook = make_fixed("flipbook",
+                               "Flipbook",
+                               category::uv,
+                               "The UV of one frame of a sheet of Columns by Rows frames, read left to right: link the time "
+                               "times a frame rate into Frame to play it. The frame wraps around the sheet.",
+                               {in_code("uv", "UV", vt::float2, UV_CODE),
+                                in("columns", "Columns", vt::float1, math::vec4(4.0f)),
+                                in("rows", "Rows", vt::float1, math::vec4(4.0f)),
+                                in("frame", "Frame", vt::float1)},
+                               {out("uv", "UV", vt::float2)},
+                               vt::float2,
+                               "mg_flipbook({uv}, {columns}, {rows}, {frame}, mg_flipbook_from_{start})");
+    flipbook.settings = {make_choice_setting("start",
+                                             "Start",
+                                             {"top", "bottom"},
+                                             {"Top Row", "Bottom Row"},
+                                             "top",
+                                             "Which row of the sheet the first frame is on.")};
+    nodes.push_back(with_keywords(flipbook, "sprite sheet atlas animation frames subuv"));
+    nodes.push_back(with_keywords(make_fixed("bump_offset",
+                                             "Bump Offset",
+                                             category::uv,
+                                             "The UV moved along the view by Height above Reference Plane, times Ratio: a "
+                                             "cheap parallax that gives a height map depth. Link the shifted UV into the "
+                                             "material's texture reads.",
+                                             {in_code("uv", "UV", vt::float2, UV_CODE),
+                                              in("height", "Height", vt::float1, math::vec4(0.5f)),
+                                              in("ratio", "Ratio", vt::float1, math::vec4(0.05f)),
+                                              in_unit("reference_plane", "Reference Plane", vt::float1, math::vec4(0.5f))},
+                                             {out("uv", "UV", vt::float2)},
+                                             vt::float2,
+                                             "mg_bump_offset({uv}, {height}, {ratio}, {reference_plane}, "
+                                             "mg_tangent_view_direction(i.view_direction, i.tangent, i.bitangent, i.vertex_normal))"),
+                                  "parallax height offset depth"));
+}
+
+/// Rotate About Axis and the normal tools.
+void add_more_vector_nodes(std::vector<material_node_def>& nodes)
+{
+    auto rotate = make_fixed("rotate_about_axis",
+                             "Rotate About Axis",
+                             category::vector,
+                             "Position turned by Angle (radians) around Axis through Pivot. Result Offset gives the move, for "
+                             "World Position Offset (wind, spinning); Position gives the turned position.",
+                             {in_code("position", "Position", vt::float3, WORLD_POSITION_CODE),
+                              in("axis", "Axis", vt::float3, math::vec4(0.0f, 1.0f, 0.0f, 0.0f)),
+                              in("angle", "Angle", vt::float1),
+                              in("pivot", "Pivot", vt::float3)},
+                             {out("out", "", vt::float3)},
+                             vt::float3,
+                             "mg_rotate_about_axis_{result}({position}, {axis}, {angle}, {pivot})");
+    rotate.settings = {make_choice_setting("result",
+                                           "Result",
+                                           {"offset", "position"},
+                                           {"Offset", "Position"},
+                                           "offset",
+                                           "Offset: the turned position minus Position, what World Position Offset takes. "
+                                           "Position: the turned position.")};
+    nodes.push_back(with_keywords(rotate, "rotator rotation wind spin axis angle"));
+    auto blend = make_fixed("blend_normals",
+                            "Blend Normals",
+                            category::vector,
+                            "Detail laid over Base, both tangent-space normals: a detail normal map over the surface's own.",
+                            {in("base", "Base", vt::float3, math::vec4(0.0f, 0.0f, 1.0f, 0.0f)), in("detail", "Detail", vt::float3, math::vec4(0.0f, 0.0f, 1.0f, 0.0f))},
+                            {out("normal", "Normal", vt::float3)},
+                            vt::float3,
+                            "mg_blend_normals_{mode}({base}, {detail})");
+    blend.settings = {make_choice_setting("mode",
+                                          "Mode",
+                                          {"reoriented", "whiteout", "linear"},
+                                          {"Reoriented", "Whiteout", "Linear"},
+                                          "reoriented",
+                                          "Reoriented: the detail turned as the base turns the surface, the most faithful. "
+                                          "Whiteout: the slopes added, cheaper. Linear: the two averaged, flattens both.")};
+    nodes.push_back(with_keywords(blend, "detail normal rnm combine layer"));
+    nodes.push_back(as_pixel_only(with_keywords(make_fixed("normal_from_height",
+                                                           "Normal From Height",
+                                                           category::vector,
+                                                           "The tangent-space normal of the surface raised by Height (in "
+                                                           "world units, times Strength): bumps from a height map or a "
+                                                           "procedural pattern. The pixel stage only.",
+                                                           {in("height", "Height", vt::float1), in("strength", "Strength", vt::float1, math::vec4(1.0f))},
+                                                           {out("normal", "Normal", vt::float3)},
+                                                           vt::float3,
+                                                           "mg_normal_from_height({height}, {strength}, i.world_position, i.vertex_normal, "
+                                                           "i.tangent, i.bitangent)"),
+                                                "bump height map derivative")));
+    nodes.push_back(with_keywords(make_fixed("normal_strength",
+                                             "Normal Strength",
+                                             category::vector,
+                                             "A tangent-space normal's slopes scaled by Strength: 0 flattens it, above 1 deepens it.",
+                                             {in("normal", "Normal", vt::float3, math::vec4(0.0f, 0.0f, 1.0f, 0.0f)), in("strength", "Strength", vt::float1, math::vec4(1.0f))},
+                                             {out("normal", "Normal", vt::float3)},
+                                             vt::float3,
+                                             "mg_normal_strength({normal}, {strength})"),
+                                  "flatten intensity bumpiness"));
+    nodes.push_back(with_keywords(make_fixed("normal_reconstruct_z",
+                                             "Normal Reconstruct Z",
+                                             category::vector,
+                                             "A unit tangent-space normal from its X and Y, as two-channel normal maps store it.",
+                                             {in("xy", "XY", vt::float2)},
+                                             {out("normal", "Normal", vt::float3)},
+                                             vt::float3,
+                                             "mg_normal_reconstruct_z({xy})"),
+                                  "derive z two channel bc5"));
+}
+
+/// The stops of a Color Ramp: hidden inputs the editor's ramp edits.
+void add_color_ramp_pins(material_node_def& def)
+{
+    for(uint32_t stop = 0; stop < MATERIAL_COLOR_RAMP_MAX_STOPS; ++stop)
+    {
+        const float position = stop == 0 ? 0.0f : 1.0f;
+        const float shade = stop == 0 ? 0.0f : 1.0f;
+        auto color = in_value("", "", vt::float4, math::vec4(shade, shade, shade, 1.0f), true);
+        color.name = get_material_color_ramp_color_pin(stop);
+        color.label = "Color " + std::to_string(stop + 1);
+        color.is_hidden = true;
+        auto place = in_value("", "", vt::float1, math::vec4(position));
+        place.name = get_material_color_ramp_position_pin(stop);
+        place.label = "Position " + std::to_string(stop + 1);
+        place.is_hidden = true;
+        def.inputs.push_back(color);
+        def.inputs.push_back(place);
+    }
+}
+
+void add_color_nodes(std::vector<material_node_def>& nodes)
+{
+    nodes.push_back(with_keywords(make_fixed("rgb_to_hsv",
+                                             "RGB To HSV",
+                                             category::color,
+                                             "A colour as hue (0 to 1 around the colour wheel), saturation and value.",
+                                             {in("in", "", vt::float3)},
+                                             {out("hsv", "HSV", vt::float3), out("h", "H", vt::float1, ".x"), out("s", "S", vt::float1, ".y"), out("v", "V", vt::float1, ".z")},
+                                             vt::float3,
+                                             "mg_rgb_to_hsv({in})"),
+                                  "hue saturation value convert"));
+    nodes.push_back(with_keywords(make_fixed("hsv_to_rgb",
+                                             "HSV To RGB",
+                                             category::color,
+                                             "The colour of a hue (0 to 1 around the colour wheel), saturation and value.",
+                                             {in("in", "", vt::float3)},
+                                             {out("rgb", "RGB", vt::float3)},
+                                             vt::float3,
+                                             "mg_hsv_to_rgb({in})"),
+                                  "hue saturation value convert rainbow"));
+    nodes.push_back(with_keywords(make_fixed("hue_saturation_value",
+                                             "Hue Saturation Value",
+                                             category::color,
+                                             "A colour with its hue turned by Hue Shift (1: once around), its saturation and "
+                                             "its value scaled.",
+                                             {in_color("color", "Color", vt::float3, math::vec4(1.0f)),
+                                              in("hue_shift", "Hue Shift", vt::float1),
+                                              in("saturation", "Saturation", vt::float1, math::vec4(1.0f)),
+                                              in("value", "Value", vt::float1, math::vec4(1.0f))},
+                                             {out("rgb", "", vt::float3)},
+                                             vt::float3,
+                                             "mg_hsv_adjust({color}, {hue_shift}, {saturation}, {value})"),
+                                  "hue shift saturation brightness adjust tint"));
+    nodes.push_back(with_keywords(make_fixed("contrast",
+                                             "Contrast",
+                                             category::color,
+                                             "A colour's distance from Pivot scaled by Contrast: above 1 sharpens light against "
+                                             "dark, below 1 flattens it. The pivot is mid grey in linear colour.",
+                                             {in_color("color", "Color", vt::float3, math::vec4(1.0f)),
+                                              in("contrast", "Contrast", vt::float1, math::vec4(1.0f)),
+                                              in("pivot", "Pivot", vt::float1, math::vec4(0.2176f))},
+                                             {out("rgb", "", vt::float3)},
+                                             vt::float3,
+                                             "max(({color} - {pivot}) * {contrast} + {pivot}, vec3_splat(0.0))"),
+                                  "levels punch"));
+    nodes.push_back(with_keywords(make_dynamic("posterize",
+                                               "Posterize",
+                                               category::color,
+                                               "The value cut into Steps flat bands: a toon or retro look.",
+                                               {in("in", "", vt::dynamic), in("steps", "Steps", vt::float1, math::vec4(4.0f))},
+                                               "(floor({in} * {steps}) / {steps})"),
+                                  "quantize bands toon cel steps"));
+    auto blend = make_fixed("blend",
+                            "Blend",
+                            category::color,
+                            "Blend laid over Base by Mode, as image editors combine layers, then mixed in by Opacity.",
+                            {in_color("base", "Base", vt::float3, math::vec4(0.5f)),
+                             in_color("blend", "Blend", vt::float3, math::vec4(0.5f)),
+                             in_unit("opacity", "Opacity", vt::float1, math::vec4(1.0f))},
+                            {out("rgb", "", vt::float3)},
+                            vt::float3,
+                            "mix({base}, mg_blend_{mode}({base}, {blend}), {opacity})");
+    blend.settings = {make_choice_setting("mode",
+                                          "Mode",
+                                          {"normal",
+                                           "multiply",
+                                           "screen",
+                                           "overlay",
+                                           "soft_light",
+                                           "hard_light",
+                                           "add",
+                                           "subtract",
+                                           "difference",
+                                           "darken",
+                                           "lighten",
+                                           "color_dodge",
+                                           "color_burn",
+                                           "linear_light"},
+                                          {"Normal",
+                                           "Multiply",
+                                           "Screen",
+                                           "Overlay",
+                                           "Soft Light",
+                                           "Hard Light",
+                                           "Add",
+                                           "Subtract",
+                                           "Difference",
+                                           "Darken",
+                                           "Lighten",
+                                           "Color Dodge",
+                                           "Color Burn",
+                                           "Linear Light"},
+                                          "overlay",
+                                          "How Blend combines with Base.")};
+    nodes.push_back(with_keywords(blend, "blend mode overlay screen multiply soft light layer photoshop"));
+    nodes.push_back(with_keywords(make_fixed("luminance",
+                                             "Luminance",
+                                             category::color,
+                                             "How bright a linear colour looks, as one number (Rec. 709 weights).",
+                                             {in_color("color", "Color", vt::float3, math::vec4(1.0f))},
+                                             {out("out", "", vt::float1)},
+                                             vt::float1,
+                                             "mg_luminance({color})"),
+                                  "brightness grey intensity luma"));
+    auto space = make_fixed("color_space",
+                            "Color Space Conversion",
+                            category::color,
+                            "A colour moved between sRGB and linear: for colours read from a texture or a value in the "
+                            "other space.",
+                            {in_color("in", "", vt::float3, math::vec4(1.0f))},
+                            {out("rgb", "", vt::float3)},
+                            vt::float3,
+                            "mg_{conversion}({in})");
+    space.settings = {make_choice_setting("conversion",
+                                          "Conversion",
+                                          {"srgb_to_linear", "linear_to_srgb"},
+                                          {"sRGB To Linear", "Linear To sRGB"},
+                                          "srgb_to_linear",
+                                          "The direction of the conversion.")};
+    nodes.push_back(with_keywords(space, "gamma srgb linear convert"));
+    auto ramp = make_node("color_ramp",
+                          "Color Ramp",
+                          category::color,
+                          "The colour of a gradient at Value (0 to 1): stops placed along it, blended as Interpolation "
+                          "says. Edit the stops in the node's details.");
+    ramp.code = material_node_code::color_ramp;
+    ramp.value_type = vt::float4;
+    ramp.inputs = {in("value", "Value", vt::float1, math::vec4(0.5f))};
+    add_color_ramp_pins(ramp);
+    ramp.outputs = color_outputs();
+    material_setting_def count;
+    count.name = MATERIAL_COLOR_RAMP_COUNT_SETTING;
+    count.label = "Stops";
+    count.kind = material_setting_kind::number;
+    count.default_value = "2";
+    count.tooltip = "How many stops the ramp has, 2 to 8.";
+    ramp.settings = {count,
+                     make_choice_setting(MATERIAL_COLOR_RAMP_INTERPOLATION_SETTING,
+                                         "Interpolation",
+                                         {"linear", "smooth", "constant"},
+                                         {"Linear", "Smooth", "Constant"},
+                                         "linear",
+                                         "Linear: straight blends between stops. Smooth: eased blends. Constant: each stop's "
+                                         "colour until the next, in hard bands.")};
+    nodes.push_back(with_keywords(ramp, "gradient color ramp curve lut stylize toon map"));
+}
+
 auto build_library() -> std::vector<material_node_def>
 {
     std::vector<material_node_def> nodes;
@@ -1025,9 +2044,37 @@ auto build_library() -> std::vector<material_node_def>
     add_texture_nodes(nodes);
     add_math_nodes(nodes);
     add_vector_nodes(nodes);
+    add_more_vector_nodes(nodes);
+    add_object_nodes(nodes);
+    add_attribute_nodes(nodes);
+    add_color_nodes(nodes);
+    add_uv_nodes(nodes);
     add_procedural_nodes(nodes);
     add_utility_nodes(nodes);
     add_function_nodes(nodes);
+    // The editor lists the nodes by category, each category's together, in this order.
+    constexpr std::array<category, 12> order = {category::output,
+                                                category::input,
+                                                category::constant,
+                                                category::parameter,
+                                                category::texture,
+                                                category::math,
+                                                category::vector,
+                                                category::color,
+                                                category::uv,
+                                                category::procedural,
+                                                category::utility,
+                                                category::function};
+    const auto rank = [&order](category group)
+    {
+        return std::distance(order.begin(), std::find(order.begin(), order.end(), group));
+    };
+    std::stable_sort(nodes.begin(),
+                     nodes.end(),
+                     [&rank](const material_node_def& a, const material_node_def& b)
+                     {
+                         return rank(a.category) < rank(b.category);
+                     });
     return nodes;
 }
 } // namespace
@@ -1044,9 +2091,22 @@ auto get_material_value_width(material_value_type type) -> uint32_t
             return 4;
         case material_value_type::float1:
         case material_value_type::dynamic:
+        case material_value_type::texture2d:
+        case material_value_type::texture_cube:
+        case material_value_type::attributes:
             break;
     }
     return 1;
+}
+
+auto is_material_value_numeric(material_value_type type) -> bool
+{
+    return type != material_value_type::texture2d && type != material_value_type::texture_cube && type != material_value_type::attributes;
+}
+
+auto is_material_texture_type(material_value_type type) -> bool
+{
+    return type == material_value_type::texture2d || type == material_value_type::texture_cube;
 }
 
 auto get_material_value_type(uint32_t width) -> material_value_type
@@ -1067,6 +2127,17 @@ auto get_material_value_type(uint32_t width) -> material_value_type
 
 auto get_material_value_shader_type(material_value_type type) -> const char*
 {
+    switch(type)
+    {
+        case material_value_type::texture2d:
+            return "sampler2D";
+        case material_value_type::texture_cube:
+            return "samplerCube";
+        case material_value_type::attributes:
+            return "MaterialSurface";
+        default:
+            break;
+    }
     switch(get_material_value_width(type))
     {
         case 2:
@@ -1093,6 +2164,12 @@ auto get_material_value_type_name(material_value_type type) -> const char*
             return "Vector 3";
         case material_value_type::float4:
             return "Vector 4";
+        case material_value_type::texture2d:
+            return "Texture 2D";
+        case material_value_type::texture_cube:
+            return "Texture Cube";
+        case material_value_type::attributes:
+            return "Material Attributes";
         case material_value_type::dynamic:
             break;
     }
@@ -1121,6 +2198,10 @@ auto get_material_node_category_name(material_node_category category) -> const c
             return "Procedural";
         case material_node_category::function:
             return "Functions";
+        case material_node_category::color:
+            return "Color";
+        case material_node_category::uv:
+            return "UV";
         case material_node_category::utility:
             break;
     }
@@ -1159,12 +2240,24 @@ auto find_material_pin_def(const std::vector<material_pin_def>& pins, hpp::strin
 auto is_material_texture_node(const material_node_def& def) -> bool
 {
     return def.code == material_node_code::texture_sample || def.code == material_node_code::normal_map ||
-           def.code == material_node_code::triplanar_sample;
+           def.code == material_node_code::triplanar_sample || def.code == material_node_code::texture_object ||
+           def.code == material_node_code::parallax_occlusion || def.code == material_node_code::normal_from_texture;
+}
+
+auto get_material_texture_node_kind(const material_node_def& def) -> material_value_type
+{
+    const auto* texture = find_material_pin_def(def.inputs, MATERIAL_TEXTURE_PIN);
+    if(texture != nullptr)
+    {
+        return texture->type;
+    }
+    return def.outputs.empty() ? material_value_type::texture2d : def.outputs.front().type;
 }
 
 auto can_split_material_pin(const material_pin_def& pin) -> bool
 {
-    return !pin.is_value_only && pin.type != material_value_type::dynamic && get_material_value_width(pin.type) > 1;
+    return !pin.is_value_only && is_material_value_numeric(pin.type) && pin.type != material_value_type::dynamic &&
+           get_material_value_width(pin.type) > 1;
 }
 
 auto get_material_component_letters(const material_pin_def& pin) -> const char*

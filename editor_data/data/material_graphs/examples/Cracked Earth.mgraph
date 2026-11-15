@@ -1,0 +1,34 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "link": "ramp.rgb"},
+    {"pin": "roughness", "link": "rough"},
+    {"pin": "normal", "link": "bumps"},
+    {"pin": "ambient_occlusion", "link": "cavity"}
+   ]},
+   {"id": "cells", "type": "voronoi", "inputs": [{"pin": "scale", "value": [6.0]}, {"pin": "randomness", "value": [0.9]}]},
+   {"id": "crack", "type": "smoothstep", "inputs": [
+    {"pin": "min", "value": [0.0]}, {"pin": "max", "value": [0.06]}, {"pin": "in", "link": "cells.edges"}
+   ]},
+   {"id": "plate_tint", "type": "random", "inputs": [
+    {"pin": "seed", "link": "cells.cell"}, {"pin": "min", "value": [0.75]}, {"pin": "max", "value": [1.0]}
+   ]},
+   {"id": "dirt", "type": "noise", "inputs": [
+    {"pin": "scale", "value": [24.0]}, {"pin": "octaves", "value": [4.0]}
+   ], "settings": [{"name": "type", "value": "gradient"}]},
+   {"id": "shade", "type": "multiply", "inputs": [{"pin": "a", "link": "crack"}, {"pin": "b", "link": "plate_tint"}]},
+   {"id": "ramp", "type": "color_ramp", "inputs": [
+    {"pin": "value", "link": "shade"},
+    {"pin": "color0", "value": [0.03, 0.02, 0.015, 1.0]}, {"pin": "position0", "value": [0.0]},
+    {"pin": "color1", "value": [0.52, 0.38, 0.26, 1.0]}, {"pin": "position1", "value": [1.0]},
+    {"pin": "color2", "value": [0.3, 0.2, 0.13, 1.0]}, {"pin": "position2", "value": [0.55]}
+   ], "settings": [{"name": "count", "value": "3"}, {"name": "interpolation", "value": "smooth"}]},
+   {"id": "height", "type": "multiply", "inputs": [{"pin": "a", "link": "crack"}, {"pin": "b", "link": "dirt"}]},
+   {"id": "bumps", "type": "normal_from_height", "inputs": [{"pin": "height", "link": "height"}, {"pin": "strength", "value": [0.03]}]},
+   {"id": "rough", "type": "lerp", "inputs": [{"pin": "a", "value": [0.98]}, {"pin": "b", "value": [0.82]}, {"pin": "alpha", "link": "crack"}]},
+   {"id": "cavity", "type": "lerp", "inputs": [{"pin": "a", "value": [0.25]}, {"pin": "b", "value": [1.0]}, {"pin": "alpha", "link": "crack"}]}
+  ]
+ }
+}

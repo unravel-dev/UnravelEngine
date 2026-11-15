@@ -182,6 +182,8 @@ private:
     void save_function_as();
     /// A texture node's texture, edited with the inspector's asset field and picker.
     void draw_texture_field(rtti::context& ctx, size_t index);
+    /// A Color Ramp's stops: the ramp as a bar, a row per stop, and buttons that add and remove stops.
+    void draw_color_ramp(size_t index);
     /// Gives a texture dropped on the canvas to the node it landed on, or to a new Texture Sample.
     void apply_texture_drop(rtti::context& ctx, const material_graph_view::result& result);
     void draw_inputs(size_t index);

@@ -1,0 +1,22 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "link": "coat"},
+    {"pin": "metallic", "value": [0.9]},
+    {"pin": "roughness", "value": [0.18]}
+   ]},
+   {"id": "rim", "type": "fresnel", "inputs": [{"pin": "power", "value": [1.5]}]},
+   {"id": "hue", "type": "multiply", "inputs": [{"pin": "a", "link": "rim"}, {"pin": "b", "value": [0.8]}]},
+   {"id": "saturation_value", "type": "vector2", "inputs": [{"pin": "value", "value": [0.75, 1.0]}]},
+   {"id": "hsv", "type": "append", "inputs": [{"pin": "a", "link": "hue"}, {"pin": "b", "link": "saturation_value"}]},
+   {"id": "film", "type": "hsv_to_rgb", "inputs": [{"pin": "in", "link": "hsv"}]},
+   {"id": "base", "type": "color_parameter", "inputs": [{"pin": "value", "value": [0.05, 0.05, 0.08, 1.0]}],
+    "settings": [{"name": "name", "value": "Base Color"}]},
+   {"id": "coat", "type": "blend", "inputs": [
+    {"pin": "base", "link": "base.rgb"}, {"pin": "blend", "link": "film"}, {"pin": "opacity", "link": "rim"}
+   ], "settings": [{"name": "mode", "value": "screen"}]}
+  ]
+ }
+}

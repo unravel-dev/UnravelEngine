@@ -25,6 +25,10 @@ Trees and targets
 - `--target editor` (or `game`, `tests`) copies no data. `engine_data`, `editor_data`,
   `web_player` and `android_player` are in the default build: a plain
   `cmake --build build/<Config>` or the target's name builds them.
+- A desktop deploy ships `<bin>/unravel-player.exe` as it was last built, and `--target editor`
+  does not rebuild it. After an engine change, build `game` before a deploy: an older player
+  compiles graph materials differently from the editor that cooked their shaders (surfaces
+  drawn black, "do not make a valid program" in the game's log).
 - `engine_data` copies the whole `engine_data/` folder, the committed `engine_data/compiled/`
   included, over `<bin>/data/engine/`, replacing local compiles there. Built while an editor
   runs from that bin, it makes the editor recompile every asset and can leave it broken (no

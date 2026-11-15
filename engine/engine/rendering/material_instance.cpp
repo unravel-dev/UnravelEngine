@@ -708,10 +708,10 @@ auto material_instance::has_graph_overrides() const -> bool
 auto material_instance::shares_graph_draw() const -> bool
 {
     const auto shared = get_shared_graph(false);
-    // A vertex shader reads the material's own values. A masked graph's shadow does too, but the shadow casters are
-    // keyed by the material they cast with (model::get_shadow_material), so they clip by the instance's values while
-    // the G-buffer draw stays shared.
-    if(!shared || !graph_textures_.empty() || shared->uses_world_position_offset())
+    // A vertex shader computing values reads the material's own values. A masked graph's shadow does too, but the shadow
+    // casters are keyed by the material they cast with (model::get_shadow_material), so they clip by the instance's
+    // values while the G-buffer draw stays shared.
+    if(!shared || !graph_textures_.empty() || shared->computes_vertex_values())
     {
         return false;
     }

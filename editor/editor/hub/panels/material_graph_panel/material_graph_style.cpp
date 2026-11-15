@@ -21,6 +21,8 @@ const ImU32 COL_CATEGORY_VECTOR = IM_COL32(112, 72, 142, 255);
 const ImU32 COL_CATEGORY_PROCEDURAL = IM_COL32(162, 102, 42, 255);
 const ImU32 COL_CATEGORY_UTILITY = IM_COL32(92, 94, 100, 255);
 const ImU32 COL_CATEGORY_FUNCTION = IM_COL32(138, 70, 100, 255);
+const ImU32 COL_CATEGORY_COLOR = IM_COL32(150, 84, 128, 255);
+const ImU32 COL_CATEGORY_UV = IM_COL32(60, 120, 100, 255);
 
 /// Tooltips wrap at this many font heights, as the editor's other wrapped tooltips (ImGui::ItemTooltipEx).
 constexpr float TOOLTIP_WRAP_EM = 35.0f;
@@ -31,6 +33,9 @@ const ImU32 COL_TYPE_FLOAT2 = IM_COL32(154, 239, 146, 255);
 const ImU32 COL_TYPE_FLOAT3 = IM_COL32(246, 255, 154, 255);
 const ImU32 COL_TYPE_FLOAT4 = IM_COL32(251, 203, 244, 255);
 const ImU32 COL_TYPE_DYNAMIC = IM_COL32(200, 202, 208, 255);
+const ImU32 COL_TYPE_TEXTURE = IM_COL32(255, 140, 90, 255);
+const ImU32 COL_TYPE_TEXTURE_CUBE = IM_COL32(255, 186, 96, 255);
+const ImU32 COL_TYPE_ATTRIBUTES = IM_COL32(176, 150, 255, 255);
 } // namespace
 
 auto make_lowercase(hpp::string_view text) -> std::string
@@ -142,6 +147,10 @@ auto get_material_category_color(material_node_category category) -> ImU32
             return COL_CATEGORY_PROCEDURAL;
         case material_node_category::function:
             return COL_CATEGORY_FUNCTION;
+        case material_node_category::color:
+            return COL_CATEGORY_COLOR;
+        case material_node_category::uv:
+            return COL_CATEGORY_UV;
         case material_node_category::utility:
             break;
     }
@@ -170,6 +179,10 @@ auto get_material_category_icon(material_node_category category) -> const char*
             return ICON_MDI_CHECKERBOARD;
         case material_node_category::function:
             return ICON_MDI_FUNCTION_VARIANT;
+        case material_node_category::color:
+            return ICON_MDI_PALETTE;
+        case material_node_category::uv:
+            return ICON_MDI_AXIS_ARROW;
         case material_node_category::utility:
             break;
     }
@@ -188,6 +201,12 @@ auto get_material_type_color(material_value_type type) -> ImU32
             return COL_TYPE_FLOAT3;
         case material_value_type::float4:
             return COL_TYPE_FLOAT4;
+        case material_value_type::texture2d:
+            return COL_TYPE_TEXTURE;
+        case material_value_type::texture_cube:
+            return COL_TYPE_TEXTURE_CUBE;
+        case material_value_type::attributes:
+            return COL_TYPE_ATTRIBUTES;
         case material_value_type::dynamic:
             break;
     }

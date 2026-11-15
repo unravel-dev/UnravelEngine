@@ -1109,10 +1109,26 @@ auto make_graph_of_every_node() -> material_graph
         {
             set_material_graph_setting(node, "name", "named_reroute_declaration");
         }
-        // A Discard node has no output to read: it acts as it is.
+        // A Discard node has no output to read: it acts as it is. A texture or a surface is read through a node
+        // taking it: a sample, Break Material Attributes.
         if(!def.outputs.empty())
         {
-            add_read(id);
+            const auto output_type = def.outputs.front().type;
+            const char* consumer_type = output_type == material_value_type::texture2d      ? "texture_sample"
+                                        : output_type == material_value_type::texture_cube ? "sample_cubemap"
+                                        : output_type == material_value_type::attributes   ? "break_material_attributes"
+                                                                                           : nullptr;
+            if(consumer_type == nullptr)
+            {
+                add_read(id);
+            }
+            else
+            {
+                const std::string consumer = make_unique_material_graph_node_id(graph, id + "_reader");
+                add_node(graph, consumer, consumer_type);
+                link(graph, consumer, output_type == material_value_type::attributes ? "attributes" : MATERIAL_TEXTURE_PIN, id);
+                add_read(consumer);
+            }
         }
         const auto first_dynamic = std::find_if(def.inputs.begin(),
                                                 def.inputs.end(),
@@ -1135,6 +1151,303 @@ auto make_graph_of_every_node() -> material_graph
     return graph;
 }
 
+/// Random's code follows the width of its seed; a pixel-only node cannot feed the offset; a Color Ramp blends its
+/// stops in the order of their positions; Math Constant and Wave name their choices.
+void test_node_code_choices()
+{
+    std::printf("test_node_code_choices\n");
+    auto graph = make_graph_with_output();
+    add_node(graph, "seed", "world_position");
+    add_node(graph, "random_vector", "random");
+    link(graph, "random_vector", "seed", "seed");
+    add_node(graph, "random_float", "random");
+    add_node(graph, "sum", "add");
+    link(graph, "sum", "a", "random_vector");
+    link(graph, "sum", "b", "random_float");
+    link(graph, "output", "roughness", "sum");
+    const auto result = compile_material_graph(graph);
+    check(!result.has_errors() && contains(result.shader, "mg_hash13(") && contains(result.shader, "mg_hash11("),
+          "Random hashes its seed by the seed's width" + describe(result));
+
+    auto offset = make_graph_with_output();
+    add_node(offset, "slope", "ddx");
+    add_node(offset, "position", "world_position");
+    link(offset, "slope", "in", "position");
+    link(offset, "output", "world_position_offset", "slope");
+    const auto derived = compile_material_graph(offset);
+    check(has_diagnostic(derived, material_graph_severity::error, "slope") && !derived.uses_world_position_offset &&
+              !contains(derived.vertex_shader, "dFdx"),
+          "a pixel-only node cannot feed World Position Offset: an error, and nothing moves");
+
+    auto ramp = make_graph_with_output();
+    auto& ramp_node = add_node(ramp, "ramp", "color_ramp");
+    set_material_graph_setting(ramp_node, MATERIAL_COLOR_RAMP_COUNT_SETTING, "3");
+    set_value(ramp, "ramp", get_material_color_ramp_position_pin(2), math::vec4(0.5f));
+    set_value(ramp, "ramp", get_material_color_ramp_color_pin(2), math::vec4(1.0f, 0.0f, 0.0f, 1.0f));
+    link(ramp, "output", "base_color", "ramp.rgb");
+    const auto ramped = compile_material_graph(ramp);
+    const auto red = ramped.shader.find("vec4(1.0, 0.0, 0.0, 1.0)");
+    const auto white = ramped.shader.find("vec4_splat(1.0)");
+    check(!ramped.has_errors() && red != std::string::npos && white != std::string::npos && red < white,
+          "a Color Ramp blends its stops in the order of their positions, the red one at 0.5 before the white one at 1" +
+              describe(ramped));
+    set_material_graph_setting(ramp.nodes[size_t(find_material_graph_node(ramp, "ramp"))], MATERIAL_COLOR_RAMP_INTERPOLATION_SETTING, "constant");
+    check(contains(compile_material_graph(ramp).shader, "step(0.5, "), "Constant interpolation steps at each stop");
+
+    auto shapes = make_graph_with_output();
+    auto& constant = add_node(shapes, "pi", "math_constant");
+    set_material_graph_setting(constant, "constant", "tau");
+    auto& wave = add_node(shapes, "wave", "wave");
+    set_material_graph_setting(wave, "shape", "triangle");
+    add_node(shapes, "both", "multiply");
+    link(shapes, "both", "a", "pi");
+    link(shapes, "both", "b", "wave");
+    link(shapes, "output", "metallic", "both");
+    const auto shaped = compile_material_graph(shapes);
+    check(!shaped.has_errors() && contains(shaped.shader, "mg_const_tau") && contains(shaped.shader, "mg_wave_triangle(i.time"),
+          "Math Constant and Wave put their choices into the code" + describe(shaped));
+}
+
+/// Object inputs, Transform and Vertex Interpolators give a graph a vertex stage of its own.
+void test_vertex_stage_outputs()
+{
+    std::printf("test_vertex_stage_outputs\n");
+    auto object = make_graph_with_output();
+    add_node(object, "pivot", "object_position");
+    add_node(object, "tint", "object_random");
+    add_node(object, "both", "multiply");
+    link(object, "both", "a", "pivot");
+    link(object, "both", "b", "tint");
+    link(object, "output", "base_color", "both");
+    const auto read = compile_material_graph(object);
+    check(!read.has_errors() && read.reads_object_data && !read.uses_world_position_offset && !read.computes_vertex_values(),
+          "a graph reading the object's pivot reads object data and computes nothing per vertex" + describe(read));
+    check(contains(read.shader, "#define MATERIAL_OBJECT_DATA 1") && contains(read.shader, "flat vec4 v_object0") &&
+              contains(read.vertex_shader, "flat vec4 v_object2 = vec4(0.0, 0.0, 1.0, 0.0)") &&
+              contains(read.vertex_shader, "INSTANCED INSTANCE_MATERIAL\n"),
+          "its pixels read the object's transform from varyings its own vertex shader writes, which has the instanced material "
+          "variants so instances keep sharing the draw");
+
+    auto transform = make_graph_with_output();
+    auto& to_object = add_node(transform, "local", "transform");
+    set_material_graph_setting(to_object, "from", "world");
+    set_material_graph_setting(to_object, "to", "object");
+    set_material_graph_setting(to_object, "kind", "position");
+    add_node(transform, "position", "world_position");
+    link(transform, "local", "in", "position");
+    link(transform, "output", "emissive", "local");
+    const auto local = compile_material_graph(transform);
+    check(!local.has_errors() && local.reads_object_data && contains(local.shader, "mg_world_to_object_position(i, "),
+          "Transform into object space reads the object's transform" + describe(local));
+    auto& tangent = transform.nodes[size_t(find_material_graph_node(transform, "local"))];
+    set_material_graph_setting(tangent, "to", "tangent");
+    check(!compile_material_graph(transform).reads_object_data, "Transform between world and tangent space reads no object data");
+
+    auto interpolated = make_graph_with_output();
+    add_node(interpolated, "clock", "time");
+    add_node(interpolated, "wave", "sine");
+    link(interpolated, "wave", "in", "clock");
+    add_node(interpolated, "per_vertex", "vertex_interpolator");
+    link(interpolated, "per_vertex", "in", "wave");
+    link(interpolated, "output", "metallic", "per_vertex");
+    add_node(interpolated, "mask", "vertex_interpolator");
+    add_node(interpolated, "uv", "texcoord");
+    link(interpolated, "mask", "in", "uv");
+    link(interpolated, "output", "opacity_mask", "mask.out.x");
+    const auto vertex = compile_material_graph(interpolated);
+    check(!vertex.has_errors() && vertex.interpolator_count == 2 && vertex.computes_vertex_values() && !vertex.uses_world_position_offset,
+          "two Vertex Interpolators take two varyings, and the vertex shader computes them" + describe(vertex));
+    check(contains(vertex.shader, "#define MATERIAL_INTERPOLATORS 2") && contains(vertex.shader, "i.interpolator0") &&
+              !contains(vertex.shader, "sin(i.time)") && contains(vertex.vertex_shader, "\ts.interpolator0 = vec4(") &&
+              contains(vertex.vertex_shader, "sin(i.time)"),
+          "the pixels read the varyings, the vertex shader computes what feeds them");
+    check(vertex.is_opacity_mask_animated == false && vertex.uses_opacity_mask, "a mask read through an interpolator of the UV holds still");
+    link(interpolated, "output", "opacity_mask", "per_vertex");
+    check(compile_material_graph(interpolated).is_opacity_mask_animated, "a mask read through an interpolator of the time animates");
+    auto pixel_only = make_graph_with_output();
+    add_node(pixel_only, "slope", "fwidth");
+    add_node(pixel_only, "per_vertex", "vertex_interpolator");
+    link(pixel_only, "per_vertex", "in", "slope");
+    link(pixel_only, "output", "metallic", "per_vertex");
+    check(has_diagnostic(compile_material_graph(pixel_only), material_graph_severity::error, "slope"),
+          "a pixel-only node cannot feed a Vertex Interpolator");
+}
+
+/// Texture Objects feed texture nodes, Custom nodes and material functions; cube textures read along a direction.
+void test_texture_objects()
+{
+    std::printf("test_texture_objects\n");
+    auto graph = make_graph_with_output();
+    add_node(graph, "albedo", "texture_object");
+    add_node(graph, "read", "texture_sample");
+    link(graph, "read", MATERIAL_TEXTURE_PIN, "albedo");
+    add_node(graph, "bumps", "texture_object");
+    add_node(graph, "normal", "normal_map");
+    link(graph, "normal", MATERIAL_TEXTURE_PIN, "bumps");
+    link(graph, "output", "base_color", "read.rgb");
+    link(graph, "output", "normal", "normal");
+    const auto result = compile_material_graph(graph);
+    check(!result.has_errors() && result.textures.size() == 2 && result.textures[0].node_id == "albedo" &&
+              !result.textures[0].is_normal_map && result.textures[1].is_normal_map,
+          "the objects hold the samplers, the nodes reading them none; the one a Normal Map reads binds as a normal map" +
+              describe(result));
+    check(contains(result.shader, "mg_texture2D(" + result.textures[0].sampler + ", i.uv0"),
+          "the sample reads the object's sampler");
+
+    auto custom = make_graph_with_output();
+    add_node(custom, "albedo", "texture_object");
+    auto& code = add_node(custom, "code", "custom");
+    set_material_graph_setting(code, "code", "return mg_texture2D(a, i.uv0, i.mip_bias).rgb;");
+    link(custom, "code", "a", "albedo");
+    link(custom, "output", "base_color", "code");
+    const auto customized = compile_material_graph(custom);
+    check(!customized.has_errors() && contains(customized.shader, "sampler2D a"), "a Custom node takes a texture as a sampler2D" + describe(customized));
+
+    auto wrong = make_graph_with_output();
+    add_node(wrong, "albedo", "texture_object");
+    add_node(wrong, "sum", "add");
+    link(wrong, "sum", "a", "albedo");
+    link(wrong, "output", "metallic", "sum");
+    check(has_diagnostic(compile_material_graph(wrong), material_graph_severity::error, "sum", "a"), "a texture never goes into a number");
+
+    material_graph function;
+    auto& input = add_node(function, "tex", MATERIAL_FUNCTION_INPUT_TYPE);
+    set_material_graph_setting(input, "type", "sampler2D");
+    add_node(function, "read", "texture_sample");
+    link(function, "read", MATERIAL_TEXTURE_PIN, "tex");
+    add_node(function, "result", MATERIAL_FUNCTION_OUTPUT_TYPE);
+    link(function, "result", "in", "read.rgb");
+    auto caller = make_graph_with_output();
+    add_node(caller, "albedo", "texture_object");
+    auto& call = add_node(caller, "call", MATERIAL_FUNCTION_CALL_TYPE);
+    set_material_graph_setting(call, MATERIAL_FUNCTION_KEY_SETTING, "app:/data/functions/read.mgraph");
+    link(caller, "call", get_material_function_input_pin(0), "albedo");
+    link(caller, "output", "base_color", "call." + get_material_function_output_pin(0));
+    material_graph_compile_options options;
+    const auto shared_function = std::make_shared<const material_graph>(function);
+    options.resolve_function = [shared_function](const std::string&)
+    {
+        return shared_function;
+    };
+    const auto called = compile_material_graph(caller, options);
+    check(!called.has_errors() && called.textures.size() == 1 && called.textures[0].node_id == "albedo" &&
+              contains(called.shader, "mg_texture2D(" + called.textures[0].sampler),
+          "a material function reads the texture its caller links in" + describe(called));
+    caller.nodes[size_t(find_material_graph_node(caller, "call"))].inputs.clear();
+    const auto own = compile_material_graph(caller, options);
+    check(!own.has_errors() && own.textures.size() == 1 && own.textures[0].node_id != "albedo",
+          "unlinked, the function's texture input reads its own texture" + describe(own));
+
+    auto cube = make_graph_with_output();
+    add_node(cube, "sky", "cubemap_object");
+    add_node(cube, "mirror", "sample_cubemap");
+    link(cube, "mirror", MATERIAL_TEXTURE_PIN, "sky");
+    link(cube, "output", "emissive", "mirror.rgb");
+    const auto reflected = compile_material_graph(cube);
+    check(!reflected.has_errors() && reflected.textures.size() == 1 && reflected.textures[0].kind == material_value_type::texture_cube &&
+              contains(reflected.shader, "SAMPLERCUBE(") && contains(reflected.shader, "mg_textureCube("),
+          "a cube texture is a cube sampler read along a direction" + describe(reflected));
+
+    auto mip = make_graph_with_output();
+    auto& level = add_node(mip, "read", "texture_sample");
+    set_material_graph_setting(level, MATERIAL_TEXTURE_MIP_MODE_SETTING, "level");
+    set_value(mip, "read", "mip", math::vec4(2.0f));
+    link(mip, "output", "base_color", "read.rgb");
+    check(contains(compile_material_graph(mip).shader, "mg_texture2D_level("), "Mip Level reads the given mip");
+    auto addressed = mip;
+    set_material_graph_setting(addressed.nodes[size_t(find_material_graph_node(addressed, "read"))], MATERIAL_TEXTURE_ADDRESS_SETTING, "clamp");
+    set_material_graph_setting(addressed.nodes[size_t(find_material_graph_node(addressed, "read"))], MATERIAL_TEXTURE_FILTER_SETTING, "point");
+    const auto clamped = compile_material_graph(addressed);
+    check(has_same_material_graph_code(mip, addressed) && !clamped.textures.empty() &&
+              clamped.textures[0].address == material_texture_address::clamp && clamped.textures[0].filter == material_texture_filter::point,
+          "a sampler state is bound, not compiled: the code stays");
+}
+
+/// Material Attributes blend whole surfaces; the Surface Output takes them, channels linked besides replace theirs.
+void test_material_attributes()
+{
+    std::printf("test_material_attributes\n");
+    auto graph = make_graph_with_output();
+    add_node(graph, "dry", "make_material_attributes");
+    set_value(graph, "dry", "base_color", math::vec4(0.6f, 0.4f, 0.2f, 1.0f));
+    add_node(graph, "wet", "make_material_attributes");
+    set_value(graph, "wet", "roughness", math::vec4(0.05f));
+    add_node(graph, "blend", "blend_material_attributes");
+    link(graph, "blend", "a", "dry");
+    link(graph, "blend", "b", "wet");
+    link(graph, "output", MATERIAL_ATTRIBUTES_PIN, "blend");
+    add_node(graph, "glow", "color");
+    link(graph, "output", "emissive", "glow.rgb");
+    const auto result = compile_material_graph(graph);
+    check(!result.has_errors() && contains(result.shader, "MaterialSurface n_blend = mg_blend_attributes(n_dry, n_wet") &&
+              contains(result.shader, "\ts = n_blend;") && contains(result.shader, "\ts.emissive = ") &&
+              !contains(result.shader, "\ts.base_color = ") && contains(result.shader, "\ts.opacity_mask_clip = "),
+          "the surface starts from the attributes, the channels linked besides replace theirs, the clip stays the output's" +
+              describe(result));
+    check(!result.uses_opacity_mask, "attributes without a mask leave the material opaque");
+    set_value(graph, "wet", "opacity_mask", math::vec4(0.3f));
+    check(compile_material_graph(graph).uses_opacity_mask, "attributes with a mask below 1 make the material masked");
+    add_node(graph, "split", "break_material_attributes");
+    link(graph, "split", "attributes", "dry");
+    link(graph, "output", "metallic", "split.metallic");
+    check(contains(compile_material_graph(graph).shader, "n_split.metallic"), "Break Material Attributes reads a channel");
+}
+
+/// Quality Switch: the compile option picks the branch, as a Static Switch's value does.
+void test_quality_switch()
+{
+    std::printf("test_quality_switch\n");
+    auto graph = make_graph_with_output();
+    add_node(graph, "rich", "noise_3d");
+    add_node(graph, "cheap", "constant");
+    set_value(graph, "cheap", "value", math::vec4(0.25f));
+    add_node(graph, "quality", "quality_switch");
+    link(graph, "quality", "high", "rich");
+    link(graph, "quality", "low", "cheap");
+    link(graph, "output", "roughness", "quality");
+    const auto high = compile_material_graph(graph);
+    material_graph_compile_options options;
+    options.quality = material_graph_quality::low;
+    const auto low = compile_material_graph(graph, options);
+    check(!high.has_errors() && contains(high.shader, "mg_noise_value3") && !low.has_errors() && !contains(low.shader, "mg_noise_value3(") &&
+              contains(low.shader, "s.roughness = 0.25;"),
+          "High compiles the noise, Low the constant alone" + describe(low));
+}
+
+/// A graph of every node a vertex can run, its sum the World Position Offset: the vertex stage compiles each.
+auto make_vertex_graph_of_every_node() -> material_graph
+{
+    auto graph = make_graph_of_every_node();
+    std::vector<std::string> removed;
+    for(const auto& node : graph.nodes)
+    {
+        const auto* def = find_material_node_def(node.type);
+        if(def != nullptr && (def->is_pixel_only || def->code == material_node_code::normal_map || def->code == material_node_code::discard))
+        {
+            removed.push_back(node.id);
+        }
+    }
+    for(const auto& id : removed)
+    {
+        remove_material_graph_node(graph, id);
+    }
+    auto& output = graph.nodes[size_t(find_material_graph_output(graph))];
+    // The Normal Map's link went with it: its entry would read a zero normal.
+    std::erase_if(output.inputs,
+                  [](const material_graph_input& input)
+                  {
+                      return input.link.empty();
+                  });
+    for(auto& input : output.inputs)
+    {
+        if(input.pin == "emissive")
+        {
+            input.pin = "world_position_offset";
+        }
+    }
+    return graph;
+}
+
 auto is_shaderc_present() -> bool
 {
     fs::error_code ec;
@@ -1142,12 +1455,12 @@ auto is_shaderc_present() -> bool
 }
 
 /// The variants of a generated shader: default, card_capture and instance_material, and the four shadow casters of a
-/// graph that clips or moves its vertices; a preview shader has one; the vertex shader of World Position Offset has
-/// nine G-buffer variants, eight velocity ones and three that write the position alone.
+/// graph that clips or moves its vertices; a preview shader has one; the vertex shader of a graph with a vertex stage
+/// has twelve G-buffer variants, eight velocity ones and three that write the position alone.
 constexpr size_t PLAIN_VARIANT_COUNT = 3;
 constexpr size_t MASKED_VARIANT_COUNT = 7;
 constexpr size_t PREVIEW_VARIANT_COUNT = 1;
-constexpr size_t VERTEX_VARIANT_COUNT = 20;
+constexpr size_t VERTEX_VARIANT_COUNT = 23;
 
 /// A variant WebGL 2 leaves without code: it reads the skinning palettes from storage buffers, which need OpenGL ES
 /// 3.1, and its *_textures twin draws there instead (compile_eshader_variants).
@@ -1327,6 +1640,13 @@ void test_examples(asset_manager* am, const fs::path& output_folder)
     {
         check_shader_compiles(*am, "every_node", result, output_folder);
         check_shader_compiles(*am, "every_node_preview", preview, output_folder);
+        const auto vertex_every_node = compile_material_graph(make_vertex_graph_of_every_node());
+        check(!vertex_every_node.has_errors() && vertex_every_node.uses_world_position_offset,
+              "a graph of every node a vertex runs moves the vertices without errors" + describe(vertex_every_node));
+        check_shader_compiles(*am, "vertex_every_node", vertex_every_node, output_folder);
+        material_graph_compile_options low;
+        low.quality = material_graph_quality::low;
+        check_shader_compiles(*am, "every_node_low", compile_material_graph(every_node, low), output_folder);
         check_shader_compiles(*am, "wave_offset", compile_material_graph(make_wave_offset_graph()), output_folder);
         check_shader_compiles(*am, "standard_mapped", compile_material_graph(make_mapped_standard_graph()), output_folder);
         check_shader_compiles(*am, "standard_specular", compile_material_graph(make_specular_standard_graph()), output_folder);
@@ -1411,6 +1731,57 @@ auto make_binding_graph() -> material_graph
     link(graph, "output", "roughness", "shine");
     link(graph, "output", "metallic", "metal");
     return graph;
+}
+
+/// A compiled material binds what the compile of its code laid out: loading one compiles nothing, and a material cooked
+/// at Low loads with the Low binding, which a compile at High could not give. A copy (an instance) takes it too.
+void test_compiled_quality_binding()
+{
+    std::printf("test_compiled_quality_binding\n");
+    auto graph = make_binding_graph();
+    add_node(graph, "detail", "scalar_parameter");
+    set_value(graph, "detail", "value", math::vec4(0.5f));
+    add_node(graph, "grain", "texture_sample");
+    add_node(graph, "quality", "quality_switch");
+    link(graph, "quality", "high", "grain.r");
+    link(graph, "quality", "low", "detail");
+    link(graph, "output", "ambient_occlusion", "quality");
+    material_graph_compile_options low_options;
+    low_options.quality = material_graph_quality::low;
+    const auto low = compile_material_graph(graph, low_options);
+    const auto high = compile_material_graph(graph);
+    check(!low.has_errors() && !high.has_errors() && high.textures.size() == 1 && low.textures.empty() &&
+              low.parameters.size() == high.parameters.size() + 1,
+          "the Low branch reads a parameter and no texture, the High branch a texture" + describe(low));
+
+    auto cooked = std::make_shared<graph_material>();
+    cooked->set_graph(graph);
+    cooked->set_compiled_code("low code", make_material_graph_binding(low));
+    check(cooked->find_parameter("detail") != nullptr && cooked->get_textures().empty(), "the cooked material binds the Low layout");
+    const fs::path file = fs::temp_directory_path() / "unravel_compiled_quality_binding.mat";
+    std::shared_ptr<material> saved = cooked;
+    save_to_file_bin(file.string(), saved);
+    std::shared_ptr<material> loaded;
+    load_from_file_bin(file.string(), loaded);
+    fs::error_code ec;
+    fs::remove(file, ec);
+    const auto loaded_graph = safe_pointer_cast<graph_material>(loaded);
+    check(loaded_graph && loaded_graph->get_shader_hash() == "low code" && loaded_graph->get_graph() == graph,
+          "the compiled file keeps the graph and the hash of the code it was cooked with");
+    check(loaded_graph && loaded_graph->find_parameter("detail") != nullptr && loaded_graph->get_textures().empty() &&
+              loaded_graph->get_parameter_registers() == make_material_graph_parameter_registers(low),
+          "loading it binds the Low layout it was saved with, not a compile of the graph at High");
+
+    graph_material instance;
+    instance.set_graph(make_graph_with_output());
+    if(loaded_graph)
+    {
+        copy_material_values(*loaded_graph, instance);
+    }
+    check(instance.get_shader_hash() == "low code" && instance.find_parameter("detail") != nullptr && instance.get_textures().empty(),
+          "a copy of it binds the same Low layout");
+    check(instance.set_parameter("detail", math::vec4(0.9f)) && !instance.set_parameter("missing", math::vec4(0.0f)),
+          "so values set by name reach the Low code's parameters");
 }
 
 void test_opacity_mask_shadows()
@@ -2086,6 +2457,12 @@ auto run_material_graph_suite(rtti::context& ctx) -> int
     test_graph_material_values();
     test_graph_material_copy();
     test_graph_material_instances(ctx.get_cached<asset_manager>());
+    test_node_code_choices();
+    test_vertex_stage_outputs();
+    test_texture_objects();
+    test_material_attributes();
+    test_quality_switch();
+    test_compiled_quality_binding();
     const fs::path output_folder = fs::temp_directory_path() / "unravel-tests-material-graphs";
     fs::error_code ec;
     fs::create_directories(output_folder, ec);

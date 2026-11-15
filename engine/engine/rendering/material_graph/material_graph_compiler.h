@@ -3,6 +3,7 @@
 
 #include "material_graph.h"
 #include "material_graph_library.h"
+#include "material_graph_quality.h"
 
 #include <engine/rendering/render_change.h>
 
@@ -90,6 +91,24 @@ struct material_graph_parameter
     render_change::mask changes{render_change::material_aspects};
 };
 
+/// What a texture node's texture reads outside 0..1 (MATERIAL_TEXTURE_ADDRESS_SETTING): the texture's own, or the
+/// node's.
+enum class material_texture_address : uint8_t
+{
+    texture,
+    wrap,
+    clamp,
+    mirror,
+};
+
+/// How a texture node's texture blends its texels (MATERIAL_TEXTURE_FILTER_SETTING).
+enum class material_texture_filter : uint8_t
+{
+    anisotropic,
+    trilinear,
+    point,
+};
+
 /**
  * @brief A texture node's sampler.
  */
@@ -107,6 +126,10 @@ struct material_graph_texture
     /// The texture stage (get_material_graph_texture_stage).
     uint32_t stage{};
     bool is_normal_map{};
+    /// texture2d, or texture_cube for a cube sampler (a texture of another kind binds the default of this one).
+    material_value_type kind{material_value_type::texture2d};
+    material_texture_address address{material_texture_address::texture};
+    material_texture_filter filter{material_texture_filter::anisotropic};
     /// The render_change aspects the texture feeds, as material_graph_parameter::changes.
     render_change::mask changes{render_change::material_aspects};
 };
@@ -157,6 +180,8 @@ struct material_graph_node_info
 
 struct material_graph_compile_options
 {
+    /// What Quality Switch nodes pass on: their High input, or their Low one.
+    material_graph_quality quality{material_graph_quality::high};
     /// Named in the shader's header comment, usually the graph's asset key.
     std::string source_name;
     /// Finds the material functions the graph calls; empty: their files (load_material_function).
@@ -210,6 +235,18 @@ struct material_graph_compile_result
     /// How far World Position Offset moves a vertex at most, in world units (the Surface Output's setting): what the
     /// bounds of the meshes drawn with it grow by, so the culling keeps what moved out of them.
     float max_world_position_offset{};
+    /// The pixel stage reads the object's transform (Object Position, Object Scale, Per Instance Random, Transform from
+    /// or to object space): the vertex shader passes it (MATERIAL_OBJECT_DATA).
+    bool reads_object_data{};
+    /// How many Vertex Interpolators the pixel stage reads (MATERIAL_INTERPOLATORS): values the vertex shader computes.
+    uint32_t interpolator_count{};
+
+    /// The pixel stage reads what only the graph's own vertex shader writes: draws need that vertex shader, never the
+    /// renderer's.
+    auto reads_vertex_outputs() const -> bool;
+    /// The vertex shader computes something from the graph: an offset or interpolators, which read the material's own
+    /// parameter values (never an instance's).
+    auto computes_vertex_values() const -> bool;
 
     auto has_errors() const -> bool;
     /// The diagnostics of one node, worst first.
@@ -233,6 +270,38 @@ auto compile_material_graph(const material_graph& graph, const material_graph_co
 
 /// The u_mg_params registers of a compiled graph: every parameter's default value in its place.
 auto make_material_graph_parameter_registers(const material_graph_compile_result& result) -> std::vector<math::vec4>;
+
+/**
+ * @brief What a draw of a graph material binds, as one compile of its graph laid it out: the parameters with their
+ * defaults and registers, the textures and their samplers, the named switches, the emissive estimate and the traits of
+ * the code. A compiled material keeps the binding of each quality it has code for (graph_material_code), so loading it
+ * compiles nothing.
+ */
+struct material_graph_binding
+{
+    std::vector<material_graph_parameter> parameters;
+    /// The vec4 registers the parameters take (material_graph_compile_result::parameter_registers).
+    uint32_t parameter_registers{};
+    std::vector<material_graph_texture> textures;
+    std::vector<material_graph_static_switch> static_switches;
+    material_graph_emissive_estimate emissive;
+    bool uses_opacity_mask{};
+    bool is_opacity_mask_animated{};
+    bool is_translucent{};
+    bool uses_world_position_offset{};
+    bool is_world_position_offset_animated{};
+    float max_world_position_offset{};
+    /// material_graph_compile_result::reads_vertex_outputs.
+    bool reads_vertex_outputs{};
+    /// material_graph_compile_result::computes_vertex_values.
+    bool computes_vertex_values{};
+};
+
+/// The binding of a compiled graph.
+auto make_material_graph_binding(const material_graph_compile_result& result) -> material_graph_binding;
+
+/// The u_mg_params registers of a binding: every parameter's default value in its place.
+auto make_material_graph_parameter_registers(const material_graph_binding& binding) -> std::vector<math::vec4>;
 
 /// Whether nodes of type @p def have a preview swatch: every node with a value of its own.
 auto has_material_node_preview(const material_node_def& def) -> bool;

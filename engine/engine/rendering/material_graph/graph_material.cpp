@@ -109,8 +109,9 @@ auto graph_material::has_animated_shadows() -> bool
 
 graph_material::graph_material()
 {
+    // A graph of the Surface Output alone binds nothing: there is nothing to compile.
     ensure_material_graph_output(graph_);
-    update_binding();
+    apply_binding({});
 }
 
 auto graph_material::clone() const -> std::shared_ptr<material>
@@ -125,17 +126,19 @@ void graph_material::copy_unreflected_values(const material& source)
     {
         return;
     }
-    // A new graph compiles again; new values alone are written over the compiled defaults.
+    // A new graph takes the source's binding, which matches the source's shader; new values alone are written over
+    // the binding's defaults.
     const bool are_functions_changed = functions_ != other->functions_;
     if(are_functions_changed)
     {
         functions_ = other->functions_;
     }
     const bool are_values_changed = take_values(*other);
-    if(are_functions_changed || !(graph_ == other->graph_))
+    const bool is_code_changed = are_functions_changed || shader_hash_ != other->shader_hash_;
+    if(is_code_changed || !(graph_ == other->graph_))
     {
-        // New copies of the functions it calls are new code.
-        bind_graph(other->graph_, !are_functions_changed);
+        // New copies of the functions it calls, or a shader of other code, are new code.
+        bind_graph(other->graph_, other->binding_, !is_code_changed);
     }
     else if(are_values_changed)
     {
@@ -201,17 +204,39 @@ auto graph_material::get_graph() const -> const material_graph&
 void graph_material::set_graph(material_graph graph)
 {
     ensure_material_graph_output(graph);
-    bind_graph(std::move(graph), true);
+    auto binding = compile_binding(graph);
+    bind_graph(std::move(graph), std::move(binding), true);
 }
 
-void graph_material::bind_graph(material_graph graph, bool is_code_kept)
+auto graph_material::get_binding() const -> const material_graph_binding&
+{
+    return binding_;
+}
+
+void graph_material::set_compiled_code(std::string shader_hash, material_graph_binding binding)
+{
+    shader_hash_ = std::move(shader_hash);
+    apply_binding(std::move(binding));
+    mark_changed(material_property_id::graph);
+}
+
+void graph_material::take_compiled(material_graph graph, std::string shader_hash, material_graph_binding binding)
+{
+    ensure_material_graph_output(graph);
+    graph_ = std::move(graph);
+    shader_hash_ = std::move(shader_hash);
+    apply_binding(std::move(binding));
+    mark_changed(material_property_id::graph);
+}
+
+void graph_material::bind_graph(material_graph graph, material_graph_binding binding, bool is_code_kept)
 {
     const bool is_value_edit = is_code_kept && has_same_material_graph_code(graph_, graph);
     // Of the same code the compile lays the parameters and textures out as before: they compare in place.
-    const auto previous_parameters = is_value_edit ? parameters_ : std::vector<material_graph_parameter>{};
-    const auto previous_textures = is_value_edit ? default_textures_ : std::vector<material_graph_texture>{};
+    const auto previous_parameters = is_value_edit ? binding_.parameters : std::vector<material_graph_parameter>{};
+    const auto previous_textures = is_value_edit ? binding_.textures : std::vector<material_graph_texture>{};
     graph_ = std::move(graph);
-    update_binding();
+    apply_binding(std::move(binding));
     if(!is_value_edit)
     {
         mark_changed(material_property_id::graph);
@@ -219,14 +244,14 @@ void graph_material::bind_graph(material_graph graph, bool is_code_kept)
     }
     mark_changed(material_property_id::graph_parameter,
                  get_changed_value_aspects(previous_parameters,
-                                           parameters_,
+                                           binding_.parameters,
                                            [](const material_graph_parameter& parameter)
                                            {
                                                return parameter.default_value;
                                            }));
     mark_changed(material_property_id::graph_texture,
                  get_changed_value_aspects(previous_textures,
-                                           default_textures_,
+                                           binding_.textures,
                                            [](const material_graph_texture& texture)
                                            {
                                                return texture.texture;
@@ -252,7 +277,7 @@ auto is_asset_loaded_or_absent(const asset_handle<T>& handle) -> bool
 
 auto graph_material::is_ready_to_draw() const -> bool
 {
-    if(!is_asset_loaded(get_shader()) || (uses_world_position_offset() && !is_asset_loaded(get_vertex_shader())))
+    if(!is_asset_loaded(get_shader()) || (has_vertex_stage() && !is_asset_loaded(get_vertex_shader())))
     {
         return false;
     }
@@ -307,7 +332,7 @@ auto graph_material::get_functions() const -> const function_copies&
 void graph_material::set_functions(function_copies functions)
 {
     functions_ = std::move(functions);
-    update_binding();
+    apply_binding(compile_binding(graph_));
     mark_changed(material_property_id::graph);
 }
 
@@ -340,18 +365,19 @@ auto graph_material::resolve_function(const std::string& key) const -> std::shar
 
 auto graph_material::get_parameters() const -> const std::vector<material_graph_parameter>&
 {
-    return parameters_;
+    return binding_.parameters;
 }
 
 auto graph_material::find_parameter(hpp::string_view name) const -> const material_graph_parameter*
 {
-    const auto found = std::find_if(parameters_.begin(),
-                                    parameters_.end(),
+    const auto& parameters = binding_.parameters;
+    const auto found = std::find_if(parameters.begin(),
+                                    parameters.end(),
                                     [&](const material_graph_parameter& parameter)
                                     {
                                         return parameter.name == name;
                                     });
-    return found == parameters_.end() ? nullptr : &*found;
+    return found == parameters.end() ? nullptr : &*found;
 }
 
 auto graph_material::get_parameter(hpp::string_view name) const -> hpp::optional<math::vec4>
@@ -466,17 +492,18 @@ auto graph_material::get_textures() const -> const std::vector<material_graph_te
 
 auto graph_material::get_static_switches() const -> const std::vector<material_graph_static_switch>&
 {
-    return static_switches_;
+    return binding_.static_switches;
 }
 
 auto graph_material::get_emissive_estimate() const -> math::vec3
 {
-    if(!emissive_estimate_.is_known)
+    const auto& estimate = binding_.emissive;
+    if(!estimate.is_known)
     {
         return math::vec3(0.0f);
     }
-    math::vec3 emissive = emissive_estimate_.constant;
-    for(const auto& name : emissive_estimate_.parameters)
+    math::vec3 emissive = estimate.constant;
+    for(const auto& name : estimate.parameters)
     {
         const auto* parameter = find_parameter(name);
         const auto value = get_parameter(name);
@@ -491,47 +518,62 @@ auto graph_material::get_emissive_estimate() const -> math::vec3
 
 auto graph_material::uses_opacity_mask() const -> bool
 {
-    return uses_opacity_mask_;
+    return binding_.uses_opacity_mask;
 }
 
 auto graph_material::is_opacity_mask_animated() const -> bool
 {
-    return is_opacity_mask_animated_;
+    return binding_.is_opacity_mask_animated;
 }
 
 auto graph_material::uses_world_position_offset() const -> bool
 {
-    return uses_world_position_offset_;
+    return binding_.uses_world_position_offset;
+}
+
+auto graph_material::reads_vertex_outputs() const -> bool
+{
+    return binding_.reads_vertex_outputs;
+}
+
+auto graph_material::has_vertex_stage() const -> bool
+{
+    return binding_.uses_world_position_offset || binding_.reads_vertex_outputs;
+}
+
+auto graph_material::computes_vertex_values() const -> bool
+{
+    return binding_.computes_vertex_values;
 }
 
 auto graph_material::is_world_position_offset_animated() const -> bool
 {
-    return is_world_position_offset_animated_;
+    return binding_.is_world_position_offset_animated;
 }
 
 auto graph_material::get_max_world_position_offset() const -> float
 {
-    return max_world_position_offset_;
+    return binding_.max_world_position_offset;
 }
 
 auto graph_material::draws_own_shadow() const -> bool
 {
-    return uses_opacity_mask_ || uses_world_position_offset_;
+    return binding_.uses_opacity_mask || binding_.uses_world_position_offset;
 }
 
 auto graph_material::is_translucent() const -> bool
 {
-    return is_translucent_;
+    return binding_.is_translucent;
 }
 
 auto graph_material::casts_shadow() const -> bool
 {
-    return !is_translucent_;
+    return !binding_.is_translucent;
 }
 
 auto graph_material::is_shadow_animated() const -> bool
 {
-    return (uses_opacity_mask_ && is_opacity_mask_animated_) || is_world_position_offset_animated_;
+    return (binding_.uses_opacity_mask && binding_.is_opacity_mask_animated) || binding_.is_world_position_offset_animated;
 }
 
 auto graph_material::write_instance_constants(math::vec4* out) const -> uint32_t
@@ -551,26 +593,21 @@ void graph_material::add_content_versions(render_change_values& keys) const
     add_identity_key(keys, render_change::material_aspects, vertex_shader_.version());
 }
 
-void graph_material::update_binding()
+auto graph_material::compile_binding(const material_graph& graph) const -> material_graph_binding
 {
     material_graph_compile_options options;
     options.resolve_function = [this](const std::string& key)
     {
         return resolve_function(key);
     };
-    const auto compiled = compile_material_graph(graph_, options);
-    parameters_ = compiled.parameters;
-    default_registers_ = make_material_graph_parameter_registers(compiled);
-    default_textures_ = compiled.textures;
-    static_switches_ = compiled.static_switches;
-    emissive_estimate_ = compiled.emissive;
-    uses_opacity_mask_ = compiled.uses_opacity_mask;
-    is_opacity_mask_animated_ = compiled.is_opacity_mask_animated;
-    is_translucent_ = compiled.is_translucent;
-    uses_world_position_offset_ = compiled.uses_world_position_offset;
-    is_world_position_offset_animated_ = compiled.is_world_position_offset_animated;
-    max_world_position_offset_ = compiled.max_world_position_offset;
-    offset_bounds_registration_.set_counted(uses_world_position_offset_ && max_world_position_offset_ > 0.0f);
+    return make_material_graph_binding(compile_material_graph(graph, options));
+}
+
+void graph_material::apply_binding(material_graph_binding binding)
+{
+    binding_ = std::move(binding);
+    default_registers_ = make_material_graph_parameter_registers(binding_);
+    offset_bounds_registration_.set_counted(binding_.uses_world_position_offset && binding_.max_world_position_offset > 0.0f);
     animated_shadow_registration_.set_counted(is_shadow_animated());
     cull_type_ = get_graph_cull_type(graph_);
     apply_values();
@@ -579,7 +616,7 @@ void graph_material::update_binding()
 void graph_material::apply_values()
 {
     parameter_registers_ = default_registers_;
-    textures_ = default_textures_;
+    textures_ = binding_.textures;
     for(const auto& set : parameter_values_)
     {
         if(const auto* parameter = find_parameter(set.name))

@@ -23,8 +23,10 @@ class graph_material;
 class material;
 
 /// The sampler state a material texture is read with: its own (wrap, border...) with anisotropic filtering, unless it
-/// asks for point sampling.
-auto get_material_sampler_flags(const gfx::texture::ptr& texture) -> std::uint32_t;
+/// asks for point sampling; a texture node's Address and Filter settings replace the texture's own.
+auto get_material_sampler_flags(const gfx::texture::ptr& texture,
+                                material_texture_address address = material_texture_address::texture,
+                                material_texture_filter filter = material_texture_filter::anisotropic) -> std::uint32_t;
 
 /// The seconds graph materials animate with this render frame (u_material_time.x) and the frame before (.y): real time
 /// since the first call, read once per frame so every pass of a frame draws the same moment. The frame before is the
@@ -47,7 +49,8 @@ auto get_material_graph_time() -> float;
  * editor's selection outline and picking - draw such a graph with its vertex shader too (begin_moved_vertices).
  *
  * init() registers every uniform a graph shader can declare before any of these programs exists (the uniforms_cache
- * order contract): the samplers are named by index for that.
+ * order contract): the samplers are named by index for that. A graph whose pixels read what only its own vertex shader
+ * writes draws nothing until that shader is loaded.
  */
 class graph_material_programs : public uniforms_cache
 {

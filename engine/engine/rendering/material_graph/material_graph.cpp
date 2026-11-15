@@ -224,13 +224,27 @@ auto set_material_graph_node_texture(material_graph& graph, hpp::string_view nod
 {
     const int index = find_material_graph_node(graph, node_id);
     auto* node = index >= 0 ? &graph.nodes[size_t(index)] : nullptr;
-    const auto* def = node != nullptr ? find_material_node_def(node->type) : nullptr;
-    if(def == nullptr || !is_material_texture_node(*def))
+    if(node == nullptr || !holds_material_graph_texture(*node))
     {
         return false;
     }
     node->texture = texture;
     return true;
+}
+
+auto holds_material_graph_texture(const material_graph_node& node) -> bool
+{
+    const auto* def = find_material_node_def(node.type);
+    if(def == nullptr)
+    {
+        return false;
+    }
+    if(def->code == material_node_code::function_input)
+    {
+        const auto* type = find_material_graph_setting(node, "type");
+        return type != nullptr && (*type == "sampler2D" || *type == "samplerCube");
+    }
+    return is_material_texture_node(*def);
 }
 
 auto set_material_graph_static_switch(material_graph& graph, hpp::string_view node_id, bool value) -> bool
@@ -355,6 +369,12 @@ auto strip_material_graph_to_code(material_graph graph) -> material_graph
         node.split_outputs.clear();
         node.is_preview_hidden = false;
         node.texture = {};
+        // A texture's sampler state is bound with the draw, never written into code.
+        std::erase_if(node.settings,
+                      [](const material_graph_setting& setting)
+                      {
+                          return setting.name == MATERIAL_TEXTURE_ADDRESS_SETTING || setting.name == MATERIAL_TEXTURE_FILTER_SETTING;
+                      });
         const auto* def = find_material_node_def(node.type);
         if(def == nullptr || def->code != material_node_code::parameter || def->inputs.empty())
         {
@@ -368,6 +388,16 @@ auto strip_material_graph_to_code(material_graph graph) -> material_graph
     return graph;
 }
 } // namespace
+
+auto get_material_color_ramp_color_pin(uint32_t stop) -> std::string
+{
+    return "color" + std::to_string(stop);
+}
+
+auto get_material_color_ramp_position_pin(uint32_t stop) -> std::string
+{
+    return "position" + std::to_string(stop);
+}
 
 auto has_same_material_graph_code(const material_graph& a, const material_graph& b) -> bool
 {

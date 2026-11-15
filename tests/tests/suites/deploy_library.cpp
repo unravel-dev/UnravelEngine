@@ -864,7 +864,10 @@ void test_graph_material_cook_plan(const fs::path& root)
     deploy_settings params;
     params.profile = "Desktop";
     params.deploy_target = unravel::deploy_platform::desktop;
-    const auto desktop = deployment::make_shader_cook_plan(root, params, engine, app, left_out);
+    unravel::settings runtime;
+    const auto desktop = deployment::make_shader_cook_plan(root, params, runtime, engine, app, left_out);
+    check(desktop.material_quality == unravel::material_graph_quality::high,
+          "the graph materials cook at the profile's Material Quality, High by default");
     const auto& platform = gfx::get_renderer_platform_supported_filename_extensions();
     check(desktop.has_work() && desktop.renderers.empty() &&
               desktop.graph_material_renderers == std::set<std::string>(platform.begin(), platform.end()),
@@ -876,12 +879,14 @@ void test_graph_material_cook_plan(const fs::path& root)
           "the materials it ships, a PBR one's file included, and not the one left out");
     params.profile = "Web";
     params.deploy_target = unravel::deploy_platform::web;
-    const auto web = deployment::make_shader_cook_plan(root, params, engine, app, left_out);
+    runtime.graphics.material_quality = unravel::material_graph_quality::low;
+    const auto web = deployment::make_shader_cook_plan(root, params, runtime, engine, app, left_out);
     check(web.graph_material_renderers == std::set<std::string>{".wgsl"}, "a web deploy cooks graph materials for WebGPU");
+    check(web.material_quality == unravel::material_graph_quality::low, "a profile of Low Material Quality cooks them Low");
     const deployment::left_out_assets all_left_out{"app:/data/deploy_graph_material_tests/Glow.mat",
                                                    "app:/data/deploy_graph_material_tests/Hidden.mat",
                                                    "app:/data/deploy_graph_material_tests/Plain.mat"};
-    const auto none_shipped = deployment::make_shader_cook_plan(root, params, engine, app, all_left_out);
+    const auto none_shipped = deployment::make_shader_cook_plan(root, params, runtime, engine, app, all_left_out);
     check(none_shipped.protocols.size() == 2 && none_shipped.protocols[1].graph_materials.shipped.empty() &&
               none_shipped.graph_material_renderers == std::set<std::string>{".wgsl"},
           "with every graph material left out, the sweep still keeps their cooked shaders for the renderers it ships");
@@ -902,7 +907,7 @@ void test_shader_cook_plan(const fs::path& root)
     deploy_settings params;
     params.profile = "Web";
     params.deploy_target = unravel::deploy_platform::web;
-    const auto plan = deployment::make_shader_cook_plan(root, params, engine, app, left_out);
+    const auto plan = deployment::make_shader_cook_plan(root, params, unravel::settings{}, engine, app, left_out);
     check(plan.has_work() && plan.renderers == std::set<std::string>{".wgsl"} && plan.protocols.size() == 2,
           "a web deploy cooks WGSL for the engine and the project");
     check(plan.protocols.size() == 2 && plan.protocols[0].variants == deployment::get_profile_shaders_folder(root, "Web", "engine") &&
@@ -913,7 +918,7 @@ void test_shader_cook_plan(const fs::path& root)
               plan.protocols[1].shaders.left_out == std::vector<std::string>{"app:/data/shaders/fs_c.eshader"},
           "the project's shaders the content selection leaves out are not cooked");
     params.deploy_target = unravel::deploy_platform::desktop;
-    const auto desktop = deployment::make_shader_cook_plan(root, params, engine, app, left_out);
+    const auto desktop = deployment::make_shader_cook_plan(root, params, unravel::settings{}, engine, app, left_out);
     check(!desktop.has_work() && desktop.protocols.empty(), "a desktop deploy cooks no shader");
     test_graph_material_cook_plan(root);
 }

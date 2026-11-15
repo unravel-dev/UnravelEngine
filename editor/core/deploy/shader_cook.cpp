@@ -37,9 +37,10 @@ auto get_cooked_relative_path(const fs::path& relative, const std::string& rende
 
 /// Whether the editor's own compile of graph material @p key's shader for @p renderer, beside the compiled material, is
 /// current: the deploy ships that one and cooks none.
-auto is_compiled_beside_material(const std::string& key, const std::string& renderer) -> bool
+auto is_compiled_beside_material(const std::string& key, const std::string& renderer, material_graph_quality quality) -> bool
 {
-    if(renderer != gfx::get_current_renderer_filename_extension())
+    // The editor compiles high quality alone.
+    if(renderer != gfx::get_current_renderer_filename_extension() || quality != material_graph_quality::high)
     {
         return false;
     }
@@ -59,11 +60,20 @@ auto cook_shader(const shader_cook_plan& plan, const shader_job& job) -> cook_ou
         return outcome;
     }
     const auto& renderers = job.is_graph_material ? plan.graph_material_renderers : plan.renderers;
-    const auto is_compiled = job.is_graph_material ? asset_compiler::is_graph_material_shader_compiled : asset_compiler::is_shader_compiled;
-    const auto compile = job.is_graph_material ? asset_compiler::compile_graph_material_shader : asset_compiler::compile_shader;
+    const auto quality = plan.material_quality;
+    const auto is_compiled = [&job, quality](const fs::path& key, const fs::path& output)
+    {
+        return job.is_graph_material ? asset_compiler::is_graph_material_shader_compiled(key, output, quality)
+                                     : asset_compiler::is_shader_compiled(key, output);
+    };
+    const auto compile = [&job, quality](const fs::path& key, const fs::path& output)
+    {
+        return job.is_graph_material ? asset_compiler::compile_graph_material_shader(key, output, quality)
+                                     : asset_compiler::compile_shader(key, output);
+    };
     for(const auto& renderer : renderers)
     {
-        if(job.is_graph_material && is_compiled_beside_material(job.key, renderer))
+        if(job.is_graph_material && is_compiled_beside_material(job.key, renderer, quality))
         {
             continue;
         }
@@ -82,6 +92,16 @@ auto cook_shader(const shader_cook_plan& plan, const shader_job& job) -> cook_ou
             ++outcome.compiled;
         }
         else
+        {
+            outcome.has_failed = true;
+        }
+    }
+    if(job.is_graph_material && quality != material_graph_quality::high)
+    {
+        // The material ships cooked too, with the hash and binding of the cooked code: the editor's compiled one
+        // names the High code. Written every deploy, as a value edit changes it without changing the code.
+        outcome.files.push_back(get_cache_file_key(relative));
+        if(!asset_compiler::cook_graph_material(job.key, job.protocol->variants / relative, quality))
         {
             outcome.has_failed = true;
         }
@@ -250,12 +270,14 @@ auto get_cooked_shader_variants(const std::set<std::string>& shipped) -> std::se
 
 auto make_shader_cook_plan(const fs::path& project_root,
                            const deploy_settings& params,
+                           const settings& runtime_settings,
                            const asset_database::database_t& engine_database,
                            const asset_database::database_t& app_database,
                            const left_out_assets& left_out) -> shader_cook_plan
 {
     shader_cook_plan plan;
     plan.profile = params.profile;
+    plan.material_quality = runtime_settings.graphics.material_quality;
     plan.renderers = get_cooked_shader_variants(get_shader_variants(params));
     plan.protocols.push_back(
         make_shader_cook_protocol(get_profile_shaders_folder(project_root, params.profile, ENGINE_PROTOCOL), engine_database, {}));

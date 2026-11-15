@@ -1,6 +1,7 @@
 #include "graph_material_programs.h"
 #include "graph_material.h"
 
+#include <engine/rendering/default_textures.h>
 #include <engine/rendering/material.h>
 
 #include <graphics/graphics.h>
@@ -35,11 +36,11 @@ auto get_loaded_shader(const asset_handle<gfx::shader>& shader) -> std::shared_p
     return loaded && !asset_handle<gfx::shader>::is_empty(loaded) ? loaded : nullptr;
 }
 
-/// The vertex shader of @p mat's draws with @p vertex_variant: its own where its World Position Offset moves the
-/// vertices and it has the variant, else none.
-auto find_offset_vertex_shader(const graph_material& mat, const std::string& vertex_variant) -> std::shared_ptr<gfx::shader>
+/// The vertex shader of @p mat's draws with @p vertex_variant: its own where it has a vertex stage, it is loaded and has
+/// the variant, else none.
+auto find_own_vertex_shader(const graph_material& mat, const std::string& vertex_variant) -> std::shared_ptr<gfx::shader>
 {
-    auto loaded = mat.uses_world_position_offset() ? get_loaded_shader(mat.get_vertex_shader()) : nullptr;
+    auto loaded = mat.has_vertex_stage() ? get_loaded_shader(mat.get_vertex_shader()) : nullptr;
     return loaded && loaded->find_variant(vertex_variant) ? loaded : nullptr;
 }
 
@@ -66,16 +67,34 @@ auto read_material_graph_times(uint32_t frame) -> math::vec2
 }
 } // namespace
 
-auto get_material_sampler_flags(const gfx::texture::ptr& texture) -> std::uint32_t
+auto get_material_sampler_flags(const gfx::texture::ptr& texture, material_texture_address address, material_texture_filter filter)
+    -> std::uint32_t
 {
-    if(!texture)
+    auto flags = texture ? static_cast<std::uint32_t>(texture->flags & BGFX_SAMPLER_BITS_MASK) : 0u;
+    if(address != material_texture_address::texture)
     {
-        return MATERIAL_ANISOTROPIC_SAMPLER_FLAGS;
+        flags &= ~std::uint32_t(BGFX_SAMPLER_U_MASK | BGFX_SAMPLER_V_MASK | BGFX_SAMPLER_W_MASK);
+        flags |= address == material_texture_address::clamp    ? std::uint32_t(BGFX_SAMPLER_UVW_CLAMP)
+                 : address == material_texture_address::mirror ? std::uint32_t(BGFX_SAMPLER_UVW_MIRROR)
+                                                                : 0u;
     }
-    const auto own_flags = static_cast<std::uint32_t>(texture->flags & BGFX_SAMPLER_BITS_MASK);
-    const bool is_point = (own_flags & (BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT)) != 0u;
-    return is_point ? own_flags : own_flags | MATERIAL_ANISOTROPIC_SAMPLER_FLAGS;
+    const bool is_point = (flags & (BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT)) != 0u || filter == material_texture_filter::point;
+    if(is_point)
+    {
+        flags &= ~std::uint32_t(BGFX_SAMPLER_MIN_MASK | BGFX_SAMPLER_MAG_MASK | BGFX_SAMPLER_MIP_MASK);
+        return flags | std::uint32_t(BGFX_SAMPLER_POINT);
+    }
+    return filter == material_texture_filter::anisotropic ? flags | MATERIAL_ANISOTROPIC_SAMPLER_FLAGS : flags;
 }
+
+namespace
+{
+/// Whether @p texture is of the kind a sampler declared as @p kind reads: a cube for a cube sampler, a 2D one else.
+auto is_material_texture_kind(const gfx::texture& texture, material_value_type kind) -> bool
+{
+    return texture.info.cubeMap == (kind == material_value_type::texture_cube);
+}
+} // namespace
 
 auto get_material_graph_times() -> math::vec2
 {
@@ -134,9 +153,14 @@ auto graph_material_programs::begin(const graph_material& mat,
     {
         return nullptr;
     }
-    const auto offset_shader = find_offset_vertex_shader(mat, vertex_variant);
-    const auto& vertex_shader = offset_shader ? mat.get_vertex_shader() : vertex_shader_;
-    const program_key_view key{shader_object.get(), offset_shader.get(), shader_object.get(), vertex_variant, fragment_variant};
+    const auto own_shader = find_own_vertex_shader(mat, vertex_variant);
+    // Pixels reading what only the graph's vertex shader writes cannot pair with the renderer's.
+    if(!own_shader && mat.reads_vertex_outputs())
+    {
+        return nullptr;
+    }
+    const auto& vertex_shader = own_shader ? mat.get_vertex_shader() : vertex_shader_;
+    const program_key_view key{shader_object.get(), own_shader.get(), shader_object.get(), vertex_variant, fragment_variant};
     return begin_entry(key, vertex_shader, shader);
 }
 
@@ -146,7 +170,8 @@ auto graph_material_programs::begin_moved_vertices(const material& mat,
                                                    const math::vec3& camera_position) -> gpu_program*
 {
     const auto* graph = mat.safe_cast<graph_material>();
-    const auto offset_shader = graph != nullptr ? find_offset_vertex_shader(*graph, vertex_variant) : nullptr;
+    const bool moves_vertices = graph != nullptr && graph->uses_world_position_offset();
+    const auto offset_shader = moves_vertices ? find_own_vertex_shader(*graph, vertex_variant) : nullptr;
     const auto shader_object = graph != nullptr ? get_loaded_shader(graph->get_shader()) : nullptr;
     const auto fragment_object = get_loaded_shader(fragment_shader);
     if(!offset_shader || !shader_object || !fragment_object)
@@ -209,11 +234,19 @@ void graph_material_programs::submit_values(const std::vector<math::vec4>& regis
         const auto& texture = textures[i];
         // A texture still loading reads the default, as one the node names none: the draw never waits for it.
         auto loaded = texture.texture ? texture.texture.try_get() : nullptr;
-        if(!loaded || asset_handle<gfx::texture>::is_empty(loaded))
+        // A texture of the other kind than the sampler's (a 2D one picked for a cube) reads the default too.
+        if(!loaded || asset_handle<gfx::texture>::is_empty(loaded) || !is_material_texture_kind(*loaded, texture.kind))
         {
-            loaded = (texture.is_normal_map ? material::default_normal_map() : material::default_color_map()).get();
+            if(texture.kind == material_value_type::texture_cube)
+            {
+                loaded = default_textures::get().black_cube_texture();
+            }
+            else
+            {
+                loaded = (texture.is_normal_map ? material::default_normal_map() : material::default_color_map()).get();
+            }
         }
-        gfx::set_texture(samplers_[i], uint8_t(texture.stage), loaded, get_material_sampler_flags(loaded));
+        gfx::set_texture(samplers_[i], uint8_t(texture.stage), loaded, get_material_sampler_flags(loaded, texture.address, texture.filter));
         if(texture.is_normal_map && loaded)
         {
             normal_channels[i / REGISTER_COMPONENTS][int(i % REGISTER_COMPONENTS)] = float(loaded->get_normal_map_channels());

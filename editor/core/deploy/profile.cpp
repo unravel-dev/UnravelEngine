@@ -251,6 +251,8 @@ void set_android_starting_values(settings& resolved)
     limits.full_precision_light_targets = false;
     limits.max_bloom_mips = std::min(limits.max_bloom_mips, ANDROID_MAX_BLOOM_MIPS);
     limits.per_frame_exposure_metering = false;
+    // The cheaper input of every Quality Switch.
+    resolved.graphics.material_quality = material_graph_quality::low;
 }
 
 /// The values a new Web profile starts with. Global illumination is off: it runs only where the browser's GPU has
@@ -260,6 +262,8 @@ void set_android_starting_values(settings& resolved)
 void set_web_starting_values(settings& resolved)
 {
     resolved.graphics.limits.global_illumination = false;
+    // Browsers on phones run the build too: the cheaper input of every Quality Switch.
+    resolved.graphics.material_quality = material_graph_quality::low;
 }
 
 /// The values a new profile of `platform` starts with, set on `resolved`, which holds the base.

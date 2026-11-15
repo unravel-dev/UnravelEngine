@@ -25,12 +25,39 @@ void main()
 	i.uv0 = v_texcoord0;
 	i.world_position = v_wpos;
 	i.vertex_normal = normalize(vertex_normal);
+	i.tangent = normalize(v_wtangent);
+	i.bitangent = normalize(v_wbitangent);
+	i.two_sided_sign = mg_two_sided_sign(v_wpos, v_wnormal, view_direction);
 	i.view_direction = normalize(view_direction);
 	i.camera_position = u_camera_wpos.xyz;
+	i.camera_direction = mg_camera_direction();
 	// A shadow map is not the view: the middle of it stands in.
 	i.screen_uv = vec2_splat(0.5);
 	i.time = u_material_time.x;
 	i.mip_bias = 0.0;
+#if MATERIAL_OBJECT_DATA
+	mg_set_object_inputs_packed(i, v_object0, v_object1, v_object2);
+#else
+	mg_set_world_object_inputs(i);
+#endif
+#if MATERIAL_INTERPOLATORS
+	i.interpolator0 = vec4_splat(0.0);
+	i.interpolator1 = vec4_splat(0.0);
+	i.interpolator2 = vec4_splat(0.0);
+	i.interpolator3 = vec4_splat(0.0);
+#endif
+#if MATERIAL_INTERPOLATORS > 0
+	i.interpolator0 = v_interpolator0;
+#endif
+#if MATERIAL_INTERPOLATORS > 1
+	i.interpolator1 = v_interpolator1;
+#endif
+#if MATERIAL_INTERPOLATORS > 2
+	i.interpolator2 = v_interpolator2;
+#endif
+#if MATERIAL_INTERPOLATORS > 3
+	i.interpolator3 = v_interpolator3;
+#endif
 
 	MaterialSurface s = mg_default_surface();
 	evaluate_material(i, s);

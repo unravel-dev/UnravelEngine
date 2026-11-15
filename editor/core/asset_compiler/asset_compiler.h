@@ -1,6 +1,7 @@
 #pragma once
 #include <engine/assets/asset_manager.h>
 #include <engine/meta/rendering/shader_variants.hpp>
+#include <engine/rendering/material_graph/material_graph_compiler.h>
 #include <filesystem/filesystem.h>
 
 #include <bgfx/bgfx.h>
@@ -51,16 +52,28 @@ auto compile_shader_text(const fs::path& shader_name,
                          std::string* error = nullptr) -> bool;
 
 /**
- * @brief Compiles the shader the graph material at `key` generates, for the renderer `output`'s extension names, into
- *        `output`: the file beside the compiled material (get_graph_material_shader_file). Leaves an `output` that
- *        holds it already as it is.
+ * @brief Compiles the shader the graph material at `key` generates for `quality` (what its Quality Switch nodes pick),
+ *        for the renderer `output`'s extension names, into `output`: the file beside the compiled material
+ *        (get_graph_material_shader_file), or a deploy's cooked one. Leaves an `output` that holds it already as it is.
  * @return False when it did not compile; the log says why.
  */
-auto compile_graph_material_shader(const fs::path& key, const fs::path& output) -> bool;
+auto compile_graph_material_shader(const fs::path& key,
+                                   const fs::path& output,
+                                   material_graph_quality quality = material_graph_quality::high) -> bool;
 
-/// Whether `output` holds the shader the graph material at `key` generates now, compiled for its renderer as
-/// compile_graph_material_shader would compile it.
-auto is_graph_material_shader_compiled(const fs::path& key, const fs::path& output) -> bool;
+/// Whether `output` holds the shader the graph material at `key` generates now for `quality`, compiled for its renderer
+/// as compile_graph_material_shader would compile it.
+auto is_graph_material_shader_compiled(const fs::path& key,
+                                       const fs::path& output,
+                                       material_graph_quality quality = material_graph_quality::high) -> bool;
+
+/**
+ * @brief Writes to `output` the compiled graph material at `key` as a build of `quality` loads it: the hash and the
+ *        binding of its graph compiled at that quality, which match the shader files a deploy cooks for that quality.
+ * @return False when the material has no compiled file, is no material graph, or the file could not be written; the
+ *         log says which.
+ */
+auto cook_graph_material(const fs::path& key, const fs::path& output, material_graph_quality quality) -> bool;
 
 /**
  * @brief The import settings a source starts with, by the type its extension names; null for a type without any.

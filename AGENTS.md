@@ -56,6 +56,9 @@ where each kind of knowledge goes: `.agents/README.md`.
   `engine/core/filesystem/` that every caller uses, not a workaround in the feature.
 - Slow derived data (distance fields, tables, shader programs) is computed when an asset
   is compiled or deployed, never on first use at run time.
+- A deploy cooks every asset it ships for its profile (textures, audio, shaders, and graph
+  materials at the profile's Material Quality) and ships those alone: the game never
+  compiles a graph or picks among variants at load.
 - A compile's by-products stay in the compiled cache beside the compiled file; `data/`
   folders hold only files people write.
 - Engine version comparisons use all four parts: `1.2.0-320` is newer than `1.2.0-319`.

@@ -41,17 +41,19 @@ struct graph_texture_value
  *
  * The shader is part of the compiled material: compiling the asset generates the code and compiles it, once per
  * renderer, into files beside the compiled material (get_graph_material_shader_file), each marked with the hash of the
- * code (get_shader_hash). Loading the material reads its renderer's file and gives it the shader (get_shader). What a
- * draw binds follows the graph at once: set_graph compiles it for the parameters' default values, packed as the
- * shader's u_mg_params registers, the textures and the sidedness. Its code reaches the GPU with the next compile of
- * the asset.
+ * code (get_shader_hash). The compiled material keeps what that compile laid out (get_binding): the parameters' default
+ * values packed as the shader's u_mg_params registers, the textures and the traits of the code, so loading it compiles
+ * nothing; the loader gives it its renderer's shader (get_shader). A deploy that cooks another quality cooks the
+ * material too, with that quality's hash and binding (set_compiled_code). Editing follows the graph at once: set_graph
+ * compiles it for what a draw binds, and its code reaches the GPU with the next compile of the asset.
  *
  * Parameters and textures take values by name over the graph's (set_parameter, set_texture): what scripts set at run
  * time and material instances override. They are not saved with the material: the graph holds its defaults.
  *
- * A graph whose World Position Offset moves its vertices has a vertex shader too (get_vertex_shader), compiled into the
- * same files: every geometry pass draws it with that one, the velocity pass with its velocity variants, and its shadow
- * with the shader's own casters (draws_own_shadow).
+ * A graph with a vertex stage has a vertex shader too (get_vertex_shader), compiled into the same files: its World
+ * Position Offset moves the vertices, or its pixels read what that shader writes (the object's transform, Vertex
+ * Interpolators). Every geometry pass draws it with that one; where the offset moves the vertices, the velocity pass
+ * with its velocity variants, and its shadow with the shader's own casters (draws_own_shadow).
  */
 class graph_material : public crtp_meta_type<graph_material, material>
 {
@@ -71,9 +73,16 @@ public:
     /// The graph the material is made of.
     auto get_graph() const -> const material_graph&;
 
-    /// Replaces the graph, and with it what a draw binds; the graph gets a surface output when it has none. Values
-    /// set by name stay, for the parameters and textures the new graph still has.
+    /// Replaces the graph and compiles it for what a draw binds; the graph gets a surface output when it has none.
+    /// Values set by name stay, for the parameters and textures the new graph still has.
     void set_graph(material_graph graph);
+
+    /// What a draw binds, as the compile of the graph's code laid it out, before the values set by name.
+    auto get_binding() const -> const material_graph_binding&;
+
+    /// Takes the hash and the binding of the graph compiled at another quality (a deploy's cook): the code its
+    /// shader files hold, and what a draw of that code binds.
+    void set_compiled_code(std::string shader_hash, material_graph_binding binding);
 
     /// The shader generated from the graph, for the renderer that draws; empty until the asset compiled it for that
     /// renderer. Set when the material loads, never saved.
@@ -170,6 +179,17 @@ public:
     /// The graph's World Position Offset moves the vertices: draws take the vertex shader (get_vertex_shader).
     auto uses_world_position_offset() const -> bool;
 
+    /// The graph's pixels read what only its own vertex shader writes (the object's transform, Vertex Interpolators):
+    /// draws need that vertex shader, and wait for it.
+    auto reads_vertex_outputs() const -> bool;
+
+    /// The graph has a vertex shader of its own (an offset, or pixels that read its outputs): geometry draws take it.
+    auto has_vertex_stage() const -> bool;
+
+    /// The vertex shader computes values from the material's parameters (an offset, interpolators): an instance's own
+    /// values would not reach it, so instances overriding parameters draw on their own.
+    auto computes_vertex_values() const -> bool;
+
     /// World Position Offset reads the time or the camera: the vertices move every frame without an edit.
     auto is_world_position_offset_animated() const -> bool;
 
@@ -207,14 +227,18 @@ protected:
 
 private:
     /**
-     * @brief Takes @p graph and compiles it for what a draw binds. What changed is marked: everything for new code
+     * @brief Takes @p graph with @p binding, what a draw of it binds. What changed is marked: everything for new code
      * (or new @p is_code_kept false), else the aspects of the parameters and textures whose defaults changed, as
      * set_parameter and set_texture mark them.
      */
-    void bind_graph(material_graph graph, bool is_code_kept);
-    /// Compiles the graph for what a draw binds, and puts the values set by name over its defaults (apply_values).
-    void update_binding();
-    /// Puts the values set by name over the defaults of the last compile, without compiling again.
+    void bind_graph(material_graph graph, material_graph_binding binding, bool is_code_kept);
+    /// Compiles @p graph, with the functions the material has, for what a draw binds.
+    auto compile_binding(const material_graph& graph) const -> material_graph_binding;
+    /// Takes @p binding and puts the values set by name over its defaults (apply_values).
+    void apply_binding(material_graph_binding binding);
+    /// Takes the graph, hash and binding of a compiled material as they were saved, compiling nothing.
+    void take_compiled(material_graph graph, std::string shader_hash, material_graph_binding binding);
+    /// Puts the values set by name over the binding's defaults.
     void apply_values();
     /// Takes @p source's values set by name, marking what they feed changed; false when they were these already. The
     /// caller applies them (apply_values, or a compile).
@@ -258,22 +282,13 @@ private:
     asset_handle<gfx::shader> shader_;
     asset_handle<gfx::shader> vertex_shader_;
     std::string shader_hash_;
-    std::vector<material_graph_parameter> parameters_;
-    /// The registers and textures of the last compile, before the values set by name.
+    material_graph_binding binding_;
+    /// The binding's registers, before the values set by name.
     std::vector<math::vec4> default_registers_;
-    std::vector<material_graph_texture> default_textures_;
-    std::vector<material_graph_static_switch> static_switches_;
-    material_graph_emissive_estimate emissive_estimate_;
     std::vector<math::vec4> parameter_registers_;
     std::vector<material_graph_texture> textures_;
     std::vector<graph_parameter_value> parameter_values_;
     std::vector<graph_texture_value> texture_values_;
-    bool uses_opacity_mask_{};
-    bool is_opacity_mask_animated_{};
-    bool is_translucent_{};
-    bool uses_world_position_offset_{};
-    bool is_world_position_offset_animated_{};
-    float max_world_position_offset_{};
     live_count_registration offset_bounds_registration_{live_count_kind::offset_bounds};
     live_count_registration animated_shadow_registration_{live_count_kind::animated_shadow};
 };

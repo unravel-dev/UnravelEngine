@@ -48,6 +48,9 @@ constexpr const char* SUBSURFACE_OPACITY_PIN = "subsurface_opacity";
 constexpr const char* CAMERA_FADE_DISTANCE_PIN = "camera_fade_distance";
 /// The node type whose value the emissive estimate multiplies (estimate_emissive).
 constexpr const char* MULTIPLY_TYPE = "multiply";
+/// The attributes node types the emissive estimate and the mask follow.
+constexpr const char* MAKE_ATTRIBUTES_TYPE = "make_material_attributes";
+constexpr const char* BLEND_ATTRIBUTES_TYPE = "blend_material_attributes";
 /// The expression of a constant node: its value input as it is.
 constexpr const char* CONSTANT_EXPRESSION = "{value}";
 /// How many nodes deep the emissive estimate follows a link before it gives up.
@@ -57,6 +60,8 @@ constexpr const char* MAX_WORLD_POSITION_OFFSET_SETTING = "max_world_position_of
 /// The node type whose value a vertex does not have: World Position Offset reads the middle of the view for it.
 constexpr const char* SCREEN_POSITION_TYPE = "screen_position";
 constexpr const char* SWITCH_VALUE_SETTING = MATERIAL_STATIC_SWITCH_VALUE_SETTING;
+/// The switch the compile option picks the input of (material_graph_compile_options::quality).
+constexpr const char* QUALITY_SWITCH_TYPE = "quality_switch";
 constexpr const char* SWITCH_FALSE_VALUE = MATERIAL_STATIC_SWITCH_FALSE;
 constexpr const char* REROUTE_NAME_SETTING = "name";
 constexpr const char* CUSTOM_OUTPUT_SETTING = "output";
@@ -90,20 +95,23 @@ constexpr const char* SHADER_SHADOW_VARIANTS = "// shadow*: the shadow casters, 
                                                "shadow_vsm          SHADOW_CASTER PACK_VSM\n"
                                                "shadow_vsm_linear   SHADOW_CASTER PACK_VSM LINEAR";
 
-/// The variants of the vertex shader of a graph whose World Position Offset moves its vertices: the G-buffer ones of
-/// vs_deferred_geom.eshader, but its *_material ones (such a graph's instances never share a draw), the ones of
-/// vs_velocity.eshader as velocity_*, and position_only*, which write the moved position alone for the fragment shaders
-/// that read nothing (the editor's picking and selection outline): bgfx makes a program only of stages whose varyings
-/// match.
+/// The variants of the vertex shader of a graph with a vertex stage: the G-buffer ones of vs_deferred_geom.eshader
+/// (*_material for the batches of instances sharing the draw, which only a graph whose vertex stage computes nothing of
+/// its parameters has), the ones of vs_velocity.eshader as velocity_*, and position_only*, which write the moved
+/// position alone for the fragment shaders that read nothing (the editor's picking and selection outline): bgfx makes a
+/// program only of stages whose varyings match.
 constexpr const char* VERTEX_SHADER_VARIANTS = "[variants]\n"
                                                "default\n"
                                                "card_capture                              DEFERRED_GEOM_CARD_CAPTURE\n"
                                                "skinned                                   SKINNED\n"
                                                "instanced                                 INSTANCED\n"
+                                               "instanced_material                        INSTANCED INSTANCE_MATERIAL\n"
                                                "skinned_instanced                         SKINNED_INSTANCED\n"
+                                               "skinned_instanced_material                SKINNED_INSTANCED INSTANCE_MATERIAL\n"
                                                "skinned_baked_instanced                   SKINNED_BAKED_INSTANCED\n"
                                                "skinned_textures                          SKINNED SHADER_BUFFER_TEXTURES\n"
                                                "skinned_instanced_textures                SKINNED_INSTANCED SHADER_BUFFER_TEXTURES\n"
+                                               "skinned_instanced_material_textures       SKINNED_INSTANCED INSTANCE_MATERIAL SHADER_BUFFER_TEXTURES\n"
                                                "skinned_baked_instanced_textures          SKINNED_BAKED_INSTANCED SHADER_BUFFER_TEXTURES\n"
                                                "velocity                                  VELOCITY\n"
                                                "velocity_skinned                          VELOCITY SKINNED\n"
@@ -117,16 +125,15 @@ constexpr const char* VERTEX_SHADER_VARIANTS = "[variants]\n"
                                                "position_only_skinned                     POSITION_ONLY SKINNED\n"
                                                "position_only_skinned_textures            POSITION_ONLY SKINNED SHADER_BUFFER_TEXTURES";
 
-/// What the vertex shader's variants read and write: vs_deferred_geom.eshader's, vs_velocity.eshader's with the normal
-/// and texture coordinates the offset reads, and the position alone (POSITION_ONLY).
+/// What the vertex shader's variants read and write: vs_deferred_geom.eshader's, vs_velocity.eshader's with the normal,
+/// tangent, bitangent and texture coordinates the vertex stage reads, and the position alone (POSITION_ONLY). The
+/// G-buffer variants write what the graph's pixels read besides (add_vertex_output_lines), then the code.
 constexpr const char* VERTEX_SHADER_INTERFACE = "[inputs]\n"
                                                 "vec3 a_position\n"
                                                 "vec4 a_normal\n"
-                                                "vec2 a_texcoord0\n"
-                                                "#if !VELOCITY && !POSITION_ONLY\n"
                                                 "vec4 a_tangent\n"
                                                 "vec4 a_bitangent\n"
-                                                "#endif\n"
+                                                "vec2 a_texcoord0\n"
                                                 "#if SKINNED || SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED\n"
                                                 "vec4 a_weight\n"
                                                 "vec4 a_indices\n"
@@ -134,17 +141,19 @@ constexpr const char* VERTEX_SHADER_INTERFACE = "[inputs]\n"
                                                 "#if INSTANCED || SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED\n"
                                                 "vec4 i_data0\n"
                                                 "#endif\n"
-                                                "#if INSTANCED || SKINNED_BAKED_INSTANCED\n"
+                                                "#if INSTANCED || SKINNED_BAKED_INSTANCED || INSTANCE_MATERIAL\n"
                                                 "vec4 i_data1\n"
                                                 "vec4 i_data2\n"
                                                 "vec4 i_data3\n"
                                                 "#endif\n"
-                                                "#if VELOCITY && (INSTANCED || SKINNED_BAKED_INSTANCED)\n"
+                                                "#if (VELOCITY && (INSTANCED || SKINNED_BAKED_INSTANCED)) || INSTANCE_MATERIAL\n"
                                                 "vec4 i_data4\n"
+                                                "#endif\n"
+                                                "#if (VELOCITY && (INSTANCED || SKINNED_BAKED_INSTANCED)) || (INSTANCED && INSTANCE_MATERIAL)\n"
                                                 "vec4 i_data5\n"
                                                 "vec4 i_data6\n"
                                                 "#endif\n"
-                                                "#if VELOCITY && INSTANCED\n"
+                                                "#if (VELOCITY && INSTANCED) || (INSTANCED && INSTANCE_MATERIAL)\n"
                                                 "vec4 i_data7\n"
                                                 "#endif\n"
                                                 "\n"
@@ -161,9 +170,12 @@ constexpr const char* VERTEX_SHADER_INTERFACE = "[inputs]\n"
                                                 "vec3 v_wbitangent = vec3(0.0, 1.0, 0.0)\n"
                                                 "vec2 v_texcoord0\n"
                                                 "vec2 v_lod_params\n"
-                                                "#endif\n"
-                                                "\n"
-                                                "[code]";
+                                                "#if INSTANCE_MATERIAL\n"
+                                                "flat vec4 v_material0 = vec4(1.0, 1.0, 1.0, 1.0)\n"
+                                                "flat vec4 v_material1\n"
+                                                "flat vec4 v_material2\n"
+                                                "flat vec4 v_material3\n"
+                                                "#endif";
 
 /// The engine shader files the vertex shader includes before its code, from engine:/data/shaders, and the skinning
 /// palettes for its skinned variants; then the file defining the offset's call, and the main() of each kind of variant.
@@ -173,7 +185,8 @@ constexpr const char* VERTEX_OFFSET_INCLUDE = "material_graph/vs_material_graph.
 constexpr const char* VERTEX_MAIN_INCLUDE = "deferred_geom/vs_deferred_geom.sh";
 constexpr const char* VERTEX_VELOCITY_MAIN_INCLUDE = "velocity/vs_velocity.sh";
 
-/// What every variant reads: what vs_deferred_geom.eshader writes.
+/// What every variant reads: what vs_deferred_geom.eshader writes. A graph with a vertex stage reads what its own
+/// vertex shader writes besides (add_vertex_output_lines), then the code.
 constexpr const char* SHADER_INPUTS = "[inputs]\n"
                                       "vec3 v_wpos\n"
                                       "vec3 v_pos\n"
@@ -187,12 +200,18 @@ constexpr const char* SHADER_INPUTS = "[inputs]\n"
                                       "flat vec4 v_material1\n"
                                       "flat vec4 v_material2\n"
                                       "flat vec4 v_material3\n"
-                                      "#endif\n"
-                                      "\n"
-                                      "[code]";
+                                      "#endif";
+
+/// The most Vertex Interpolators a graph reads (MaterialInputs::interpolator0..3).
+constexpr uint32_t MAX_INTERPOLATORS = 4;
+/// The Vertex Interpolators a graph that also reads the object's transform keeps to: its three varyings and the
+/// instance's four leave this many of the 15 that phones and browsers guarantee.
+constexpr uint32_t MAX_INTERPOLATORS_WITH_OBJECT_DATA = 2;
+/// What code reads of the object's transform (MATERIAL_OBJECT_DATA): its inputs and the functions reading them.
+constexpr std::array<const char*, 4> OBJECT_DATA_CODES = {"i.object_", "mg_object_to_world_", "mg_world_to_object_", "mg_object_scale"};
 
 /// What generated code reads that changes without an edit: the time, the camera and the screen (MaterialInputs).
-constexpr std::array<const char*, 4> CHANGING_INPUT_CODES = {"i.time", "i.view_direction", "i.camera_position", "i.screen_uv"};
+constexpr std::array<const char*, 5> CHANGING_INPUT_CODES = {"i.time", "i.view_direction", "i.camera_position", "i.screen_uv", "i.camera_direction"};
 
 /// The engine shader files every generated shader includes before its code, from engine:/data/shaders.
 constexpr std::array<const char*, 3> SHADER_HEADER_INCLUDES = {"common.sh", "lighting.sh", "material_graph/material_graph.sh"};
@@ -524,6 +543,7 @@ private:
             return;
         }
         emit_surface();
+        collect_vertex_outputs();
         estimate_emissive();
         emit_vertex();
         assemble_shader();
@@ -874,11 +894,31 @@ private:
             }
         }
         auto& info = get_info(index);
+        // Textures and attributes are no numbers: they widen nothing, and pass on through the nodes that keep a type.
+        std::vector<material_value_type> source_types(def.inputs.size(), material_value_type::dynamic);
+        for(size_t pin = 0; pin < def.inputs.size(); ++pin)
+        {
+            if(state.sources[pin].is_linked() && !is_material_value_numeric(get_source_type(state.sources[pin])))
+            {
+                source_types[pin] = get_source_type(state.sources[pin]);
+                source_widths[pin] = 0;
+            }
+        }
         const uint32_t dynamic_width = find_dynamic_width(def, source_widths);
         info.type = find_node_type(state, source_widths, dynamic_width);
+        if(const auto kept = find_kept_type(state, source_types); kept != material_value_type::dynamic)
+        {
+            info.type = kept;
+        }
         for(size_t pin = 0; pin < def.inputs.size(); ++pin)
         {
             info.input_types[pin] = find_input_type(def, def.inputs[pin], dynamic_width, source_widths[pin]);
+            const bool keeps_type = def.inputs[pin].type == material_value_type::dynamic && source_types[pin] != material_value_type::dynamic &&
+                                    (keeps_own_input_width(def) || is_pass_through(def.code));
+            if(keeps_type)
+            {
+                info.input_types[pin] = source_types[pin];
+            }
         }
         // A function input gives the caller's value as the type it declares.
         if(def.type_rule == material_type_rule::declared)
@@ -913,11 +953,48 @@ private:
         {
             return pin.type;
         }
-        // Append, Swizzle, Static Switch and Custom read each input at its own width.
-        const bool keeps_own_width = def.type_rule == material_type_rule::append || def.type_rule == material_type_rule::swizzle ||
-                                     def.type_rule == material_type_rule::chosen_input || def.type_rule == material_type_rule::custom ||
-                                     def.type_rule == material_type_rule::function_call;
-        return get_material_value_type(keeps_own_width ? std::max(source_width, 1u) : dynamic_width);
+        return get_material_value_type(keeps_own_input_width(def) ? std::max(source_width, 1u) : dynamic_width);
+    }
+
+    /// Append, Swizzle, Static Switch, Custom and calls read each input at its own width (and type).
+    static auto keeps_own_input_width(const material_node_def& def) -> bool
+    {
+        return def.type_rule == material_type_rule::append || def.type_rule == material_type_rule::swizzle ||
+               def.type_rule == material_type_rule::chosen_input || def.type_rule == material_type_rule::custom ||
+               def.type_rule == material_type_rule::function_call;
+    }
+
+    /// The texture or attributes type a node passes on from what is linked into it (a reroute, a Static Switch, a
+    /// function's output, a call); dynamic for every other node.
+    auto find_kept_type(const node_state& state, const std::vector<material_value_type>& source_types) -> material_value_type
+    {
+        const auto& def = *state.def;
+        const auto code = def.code;
+        const bool passes_first = code == material_node_code::reroute || code == material_node_code::named_reroute_declaration ||
+                                  code == material_node_code::named_reroute || code == material_node_code::function_output;
+        if(passes_first && !source_types.empty())
+        {
+            return source_types[0];
+        }
+        if(def.type_rule == material_type_rule::chosen_input)
+        {
+            return source_types[get_chosen_input(state)];
+        }
+        if(def.type_rule == material_type_rule::function_call && source_types.size() > MATERIAL_FUNCTION_MAX_INPUTS)
+        {
+            return source_types[MATERIAL_FUNCTION_MAX_INPUTS];
+        }
+        return material_value_type::dynamic;
+    }
+
+    /// The type @p source reads: its output's, or as many numbers as the components it picks.
+    auto get_source_type(const link_source& source) -> material_value_type
+    {
+        if(!source.components.empty())
+        {
+            return get_material_value_type(uint32_t(source.components.size()));
+        }
+        return get_output_type(size_t(source.node), *source.output);
     }
 
     auto find_node_type(const node_state& state, const std::vector<uint32_t>& source_widths, uint32_t dynamic_width)
@@ -949,8 +1026,14 @@ private:
     }
 
     /// The input a Static Switch passes on.
-    static auto get_chosen_input(const node_state& state) -> size_t
+    /// The input a Static Switch passes on: the one its Value names, or for a Quality Switch the one of the quality
+    /// the material compiles for.
+    auto get_chosen_input(const node_state& state) const -> size_t
     {
+        if(state.def != nullptr && state.def->type == QUALITY_SWITCH_TYPE)
+        {
+            return options_.quality == material_graph_quality::low ? 1 : 0;
+        }
         return get_setting(state, SWITCH_VALUE_SETTING) == SWITCH_FALSE_VALUE ? 1 : 0;
     }
 
@@ -964,7 +1047,7 @@ private:
         return get_named_type(get_setting(state, CUSTOM_OUTPUT_SETTING));
     }
 
-    /// The type a shader type name names ("vec2"); a Vector 3 for any other name.
+    /// The type a shader type name names ("vec2", "sampler2D", "MaterialSurface"); a Vector 3 for any other name.
     static auto get_named_type(const std::string& output) -> material_value_type
     {
         for(uint32_t width = 1; width <= MAX_WIDTH; ++width)
@@ -972,6 +1055,13 @@ private:
             if(output == get_material_value_shader_type(get_material_value_type(width)))
             {
                 return get_material_value_type(width);
+            }
+        }
+        for(const auto type : {material_value_type::texture2d, material_value_type::texture_cube, material_value_type::attributes})
+        {
+            if(output == get_material_value_shader_type(type))
+            {
+                return type;
             }
         }
         return material_value_type::float3;
@@ -1347,17 +1437,57 @@ private:
         return true;
     }
 
+    /// Whether node @p index holds a texture of its own the shader reads: a used texture node with nothing linked into
+    /// its Texture input, a Texture or Cubemap Object, or a texture function input the caller links nothing into.
+    auto holds_read_texture(size_t index) -> bool
+    {
+        const auto& state = states_[index];
+        if(state.def == nullptr || !get_info(index).is_used)
+        {
+            return false;
+        }
+        if(state.def->code == material_node_code::function_input)
+        {
+            return is_material_texture_type(get_info(index).type) && !state.sources[FUNCTION_INPUT_CALLER_PIN].is_linked();
+        }
+        return is_material_texture_node(*state.def) && find_texture_provider(index) == -1;
+    }
+
+    /// The kind of texture node @p index holds.
+    auto get_held_texture_kind(size_t index) -> material_value_type
+    {
+        const auto& def = *states_[index].def;
+        return def.code == material_node_code::function_input ? get_info(index).type : get_material_texture_node_kind(def);
+    }
+
+    /// Marks the textures Normal Map nodes read through their Texture input as normal maps: the draw binds the flat
+    /// normal for an empty one and tells the shader its channel layout.
+    void mark_linked_normal_maps()
+    {
+        for(size_t i = 0; i < states_.size(); ++i)
+        {
+            if(!is_used_kind(i, material_node_code::normal_map))
+            {
+                continue;
+            }
+            const int provider = find_texture_provider(i);
+            const auto it = provider >= 0 ? texture_indices_.find(size_t(provider)) : texture_indices_.end();
+            if(it != texture_indices_.end())
+            {
+                result_.textures[it->second].is_normal_map = true;
+            }
+        }
+    }
+
     void allocate_textures()
     {
         for(size_t i = 0; i < states_.size(); ++i)
         {
-            const bool is_sample = is_used_kind(i, material_node_code::texture_sample) ||
-                                   is_used_kind(i, material_node_code::triplanar_sample);
-            const bool is_normal = is_used_kind(i, material_node_code::normal_map);
-            if(!is_sample && !is_normal)
+            if(!holds_read_texture(i))
             {
                 continue;
             }
+            const bool is_normal = is_used_kind(i, material_node_code::normal_map);
             const auto& node = *states_[i].node;
             if(result_.textures.size() >= MATERIAL_GRAPH_MAX_TEXTURES)
             {
@@ -1378,6 +1508,9 @@ private:
             texture.sampler = get_material_graph_sampler_name(texture_index);
             texture.stage = get_material_graph_texture_stage(texture_index);
             texture.is_normal_map = is_normal;
+            texture.kind = get_held_texture_kind(i);
+            texture.address = get_texture_address(states_[i]);
+            texture.filter = get_texture_filter(states_[i]);
             if(!texture.texture)
             {
                 // As a PBR material's empty map: the default texture the draw binds.
@@ -1389,6 +1522,31 @@ private:
             texture_indices_[i] = result_.textures.size();
             result_.textures.push_back(texture);
         }
+        mark_linked_normal_maps();
+    }
+
+    static auto get_texture_address(const node_state& state) -> material_texture_address
+    {
+        const std::string value = get_setting(state, MATERIAL_TEXTURE_ADDRESS_SETTING);
+        if(value == "wrap")
+        {
+            return material_texture_address::wrap;
+        }
+        if(value == "clamp")
+        {
+            return material_texture_address::clamp;
+        }
+        return value == "mirror" ? material_texture_address::mirror : material_texture_address::texture;
+    }
+
+    static auto get_texture_filter(const node_state& state) -> material_texture_filter
+    {
+        const std::string value = get_setting(state, MATERIAL_TEXTURE_FILTER_SETTING);
+        if(value == "trilinear")
+        {
+            return material_texture_filter::trilinear;
+        }
+        return value == "point" ? material_texture_filter::point : material_texture_filter::anisotropic;
     }
 
     /// The named Static Switches of the graph's own nodes in the shader: what the material's inspector shows.
@@ -1432,6 +1590,10 @@ private:
         if(const int result = get_call_result_pin(index, output); result >= 0)
         {
             return state.output_codes[size_t(result) - MATERIAL_FUNCTION_MAX_INPUTS];
+        }
+        if(!output.member.empty())
+        {
+            return fmt::format("{}.{}", make_postfix_safe(state.value_code), output.member);
         }
         const uint32_t width = get_material_value_width(get_info(index).type);
         return apply_components(state.value_code, width, parse_swizzle(output.swizzle));
@@ -1524,15 +1686,42 @@ private:
             return make_composed_code(index, pin);
         }
         const auto& source = state.sources[pin];
+        const auto input_type = get_info(index).input_types[pin];
         if(source.is_linked())
         {
-            return convert(read_source(source), get_source_width(source), width, state, pin_def.name);
+            const auto source_type = get_source_type(source);
+            if(is_material_value_numeric(source_type) && is_material_value_numeric(input_type))
+            {
+                return convert(read_source(source), get_source_width(source), width, state, pin_def.name);
+            }
+            if(source_type == input_type)
+            {
+                return read_source(source);
+            }
+            report(material_graph_severity::error,
+                   state.node->id,
+                   pin_def.name,
+                   fmt::format("A {} cannot go into a {}: the link is ignored.",
+                               get_material_value_type_name(source_type),
+                               get_material_value_type_name(input_type)));
+            return get_unlinked_code(input_type);
+        }
+        if(!is_material_value_numeric(input_type))
+        {
+            return get_unlinked_code(input_type);
         }
         if(!pin_def.default_code.empty())
         {
             return pin_def.default_code;
         }
         return format_literal(get_value(state, pin), width, pin_def.type == material_value_type::dynamic);
+    }
+
+    /// What an unlinked input of a type that is no number reads: the default surface for attributes, nothing for a
+    /// texture (a texture node reads its own then, others report it).
+    static auto get_unlinked_code(material_value_type type) -> std::string
+    {
+        return type == material_value_type::attributes ? std::string("mg_default_surface()") : std::string{};
     }
 
     /// @p expression with each {pin} replaced by the input's code and each {setting} by its checked value.
@@ -1639,7 +1828,8 @@ private:
         }
         state.is_emitted = true;
         const std::string code = make_node_code(index);
-        if(state.def->is_inline || is_pass_through(state.def->code))
+        // A texture is never a variable: GLSL has no sampler variables, so its name is written where it is read.
+        if(state.def->is_inline || is_pass_through(state.def->code) || is_material_texture_type(get_info(index).type))
         {
             state.value_code = code;
             return;
@@ -1657,7 +1847,7 @@ private:
         switch(def.code)
         {
             case material_node_code::expression:
-                return expand_expression(index, is_scalar_form(index) ? def.scalar_expression : def.expression);
+                return expand_expression(index, get_expression(index));
             case material_node_code::parameter:
                 return make_parameter_code(index);
             case material_node_code::texture_sample:
@@ -1684,6 +1874,16 @@ private:
                 return get_input_code(index, 0);
             case material_node_code::function_call:
                 return make_function_call_code(index);
+            case material_node_code::color_ramp:
+                return make_color_ramp_code(index);
+            case material_node_code::vertex_interpolator:
+                return make_interpolator_code(index);
+            case material_node_code::texture_object:
+                return get_own_sampler(index);
+            case material_node_code::parallax_occlusion:
+                return make_parallax_code(index);
+            case material_node_code::normal_from_texture:
+                return make_normal_from_texture_code(index);
             case material_node_code::surface_output:
             case material_node_code::discard:
                 break;
@@ -1697,7 +1897,76 @@ private:
         return code == material_node_code::reroute || code == material_node_code::named_reroute_declaration ||
                code == material_node_code::named_reroute || code == material_node_code::static_switch ||
                code == material_node_code::function_input || code == material_node_code::function_output ||
-               code == material_node_code::function_call;
+               code == material_node_code::function_call || code == material_node_code::vertex_interpolator;
+    }
+
+    /// A Vertex Interpolator: in the vertex stage (and a preview, which has none) its input itself; in the pixel stage
+    /// the varying the vertex shader writes it into, past the last one a graph has, its input computed per pixel.
+    auto make_interpolator_code(size_t index) -> std::string
+    {
+        if(options_.is_preview || is_emitting_vertex_)
+        {
+            return get_input_code(index, 0);
+        }
+        const auto found = interpolator_slots_.find(index);
+        uint32_t slot = 0;
+        if(found != interpolator_slots_.end())
+        {
+            slot = found->second;
+        }
+        else
+        {
+            if(interpolator_slots_.size() >= MAX_INTERPOLATORS)
+            {
+                report(material_graph_severity::error,
+                       states_[index].node->id,
+                       {},
+                       fmt::format("A graph reads at most {} Vertex Interpolators: this one is computed per pixel.", MAX_INTERPOLATORS));
+                return get_input_code(index, 0);
+            }
+            slot = uint32_t(interpolator_slots_.size());
+            interpolator_slots_[index] = slot;
+        }
+        states_[index].reads_changing_input = reads_changing_code(index, 0);
+        const uint32_t width = get_material_value_width(get_info(index).type);
+        const std::string varying = fmt::format("i.interpolator{}", slot);
+        return width == MAX_WIDTH ? varying : apply_components(varying, MAX_WIDTH, make_first_components(width));
+    }
+
+    /// Whether the code of what input @p pin of node @p index reads names the time, the camera or the screen, by the
+    /// node types' code: for a value the pixel stage reads from the vertex stage, whose lines it does not have.
+    auto reads_changing_code(size_t index, size_t pin) const -> bool
+    {
+        const auto names_changing = [](const std::string& code)
+        {
+            return std::any_of(CHANGING_INPUT_CODES.begin(),
+                               CHANGING_INPUT_CODES.end(),
+                               [&code](const char* changing)
+                               {
+                                   return code.find(changing) != std::string::npos;
+                               });
+        };
+        std::set<size_t> nodes;
+        collect_input_nodes(index, pin, nodes);
+        return std::any_of(nodes.begin(),
+                           nodes.end(),
+                           [&](size_t node)
+                           {
+                               const auto& state = states_[node];
+                               if(state.def == nullptr)
+                               {
+                                   return false;
+                               }
+                               const bool reads_default = std::any_of(state.def->inputs.begin(),
+                                                                      state.def->inputs.end(),
+                                                                      [&](const material_pin_def& input)
+                                                                      {
+                                                                          return names_changing(input.default_code);
+                                                                      });
+                               const bool reads_custom = state.def->code == material_node_code::custom &&
+                                                         names_changing(get_setting(state, CUSTOM_CODE_SETTING));
+                               return names_changing(state.def->expression) || reads_default || reads_custom;
+                           });
     }
 
     /// What the caller links into the input, as its declared type; its default while nothing is.
@@ -1707,6 +1976,15 @@ private:
         if(state.sources[FUNCTION_INPUT_CALLER_PIN].is_linked())
         {
             return get_input_code(index, FUNCTION_INPUT_CALLER_PIN);
+        }
+        // An unlinked texture input reads its own texture, an attributes input the default surface.
+        if(is_material_texture_type(get_info(index).type))
+        {
+            return get_own_sampler(index);
+        }
+        if(get_info(index).type == material_value_type::attributes)
+        {
+            return get_unlinked_code(material_value_type::attributes);
         }
         return format_literal(get_value(state, FUNCTION_INPUT_DEFAULT_PIN), get_material_value_width(get_info(index).type), false);
     }
@@ -1766,16 +2044,256 @@ private:
 
     auto make_triplanar_code(size_t index) -> std::string
     {
-        const auto it = texture_indices_.find(index);
         const std::string position = get_input_code(index, 0);
         const std::string normal = get_input_code(index, 1);
         const std::string scale = get_input_code(index, 2);
         const std::string sharpness = get_input_code(index, 3);
-        if(it == texture_indices_.end())
+        const std::string sampler = get_texture_sampler(index);
+        if(sampler.empty())
         {
             return format_literal(math::vec4(1.0f), MAX_WIDTH, true);
         }
-        return fmt::format("mg_triplanar({}, {} * {}, {}, {}, i.mip_bias)", result_.textures[it->second].sampler, position, scale, normal, sharpness);
+        return fmt::format("mg_triplanar({}, {} * {}, {}, {}, i.mip_bias)", sampler, position, scale, normal, sharpness);
+    }
+
+    /// The sampler texture node @p index reads: what is linked into its Texture input, else its own. Empty when it has
+    /// neither (no sampler left, or the link reads no texture): it reads its default value.
+    auto get_texture_sampler(size_t index) -> std::string
+    {
+        const auto* pin = find_material_pin_def(states_[index].def->inputs, MATERIAL_TEXTURE_PIN);
+        if(pin != nullptr)
+        {
+            const auto pin_index = size_t(pin - states_[index].def->inputs.data());
+            if(states_[index].sources[pin_index].is_linked())
+            {
+                return get_input_code(index, pin_index);
+            }
+        }
+        return get_own_sampler(index);
+    }
+
+    /// The sampler of the texture node @p index holds itself; empty when it got none.
+    auto get_own_sampler(size_t index) const -> std::string
+    {
+        const auto it = texture_indices_.find(index);
+        return it == texture_indices_.end() ? std::string{} : result_.textures[it->second].sampler;
+    }
+
+    /// The index among the textures of what texture node @p index reads (its own, or the provider linked into its Texture
+    /// input); -1 when there is none.
+    auto find_read_texture(size_t index) const -> int
+    {
+        const int provider = find_texture_provider(index);
+        const auto it = texture_indices_.find(size_t(provider >= 0 ? provider : int(index)));
+        return provider == -2 || it == texture_indices_.end() ? -1 : int(it->second);
+    }
+
+    /// The node holding the texture node @p index reads through its Texture input, following reroutes, Static Switches,
+    /// function inputs and calls; -1 while the input is unlinked (it reads its own), -2 when the link reaches no texture.
+    auto find_texture_provider(size_t index) const -> int
+    {
+        const auto* pin = find_material_pin_def(states_[index].def->inputs, MATERIAL_TEXTURE_PIN);
+        if(pin == nullptr)
+        {
+            return -1;
+        }
+        const auto& source = states_[index].sources[size_t(pin - states_[index].def->inputs.data())];
+        return source.is_linked() ? trace_texture(source, 0) : -1;
+    }
+
+    auto trace_texture(const link_source& source, int depth) const -> int
+    {
+        if(!source.is_linked() || depth > MAX_ESTIMATE_DEPTH)
+        {
+            return -2;
+        }
+        const auto node = size_t(source.node);
+        const auto& state = states_[node];
+        if(state.def == nullptr)
+        {
+            return -2;
+        }
+        switch(state.def->code)
+        {
+            case material_node_code::texture_object:
+                return int(node);
+            case material_node_code::function_input:
+                return state.sources[FUNCTION_INPUT_CALLER_PIN].is_linked() ? trace_texture(state.sources[FUNCTION_INPUT_CALLER_PIN], depth + 1)
+                                                                             : int(node);
+            case material_node_code::reroute:
+            case material_node_code::named_reroute_declaration:
+            case material_node_code::named_reroute:
+            case material_node_code::function_output:
+                return trace_texture(state.sources[0], depth + 1);
+            case material_node_code::static_switch:
+                return trace_texture(state.sources[get_chosen_input(state)], depth + 1);
+            case material_node_code::function_call:
+            {
+                const int result = get_call_result_pin(node, *source.output);
+                return result < 0 ? -2 : trace_texture(state.sources[size_t(result)], depth + 1);
+            }
+            default:
+                break;
+        }
+        return -2;
+    }
+
+    /// The Mip setting's read of @p sampler at @p coordinates: auto, biased or at a level by the Mip input. @p is_cube
+    /// reads a cube texture along a direction.
+    auto make_sample_read(size_t index, const std::string& sampler, const std::string& coordinates, bool is_cube) -> std::string
+    {
+        const auto& state = states_[index];
+        const auto* mode_setting = find_material_setting_def(*state.def, MATERIAL_TEXTURE_MIP_MODE_SETTING);
+        const std::string mode = mode_setting != nullptr ? get_checked_setting(index, *mode_setting) : std::string("auto");
+        const char* read = is_cube ? "mg_textureCube" : "mg_texture2D";
+        if(mode == "auto")
+        {
+            return fmt::format("{}({}, {}, i.mip_bias)", read, sampler, coordinates);
+        }
+        const auto mip_pin = find_input_pin(*state.def, "mip");
+        const std::string mip = get_input_code(index, mip_pin);
+        if(mode == "bias")
+        {
+            return fmt::format("{}({}, {}, i.mip_bias + {})", read, sampler, coordinates, mip);
+        }
+        return fmt::format("{}_level({}, {}, {})", read, sampler, coordinates, mip);
+    }
+
+    /// Parallax Occlusion: the UV its height map shows along the view.
+    auto make_parallax_code(size_t index) -> std::string
+    {
+        const auto& def = *states_[index].def;
+        const std::string uv = get_input_code(index, 0);
+        const std::string scale = get_input_code(index, find_input_pin(def, "height_scale"));
+        const std::string min_steps = get_input_code(index, find_input_pin(def, "min_steps"));
+        const std::string max_steps = get_input_code(index, find_input_pin(def, "max_steps"));
+        const std::string reference = get_input_code(index, find_input_pin(def, "reference_plane"));
+        const std::string sampler = get_texture_sampler(index);
+        if(sampler.empty())
+        {
+            return uv;
+        }
+        return fmt::format("mg_parallax_occlusion({}, {}, mg_tangent_view_direction(i.view_direction, i.tangent, i.bitangent, i.vertex_normal), "
+                           "{}, {}, {}, {}, {})",
+                           sampler,
+                           uv,
+                           scale,
+                           min_steps,
+                           max_steps,
+                           reference,
+                           get_channel_code(index));
+    }
+
+    /// Normal From Texture: the normal of its height map's slopes.
+    auto make_normal_from_texture_code(size_t index) -> std::string
+    {
+        const auto& def = *states_[index].def;
+        const std::string uv = get_input_code(index, 0);
+        const std::string offset = get_input_code(index, find_input_pin(def, "offset"));
+        const std::string strength = get_input_code(index, find_input_pin(def, "strength"));
+        const std::string sampler = get_texture_sampler(index);
+        if(sampler.empty())
+        {
+            return "vec3(0.0, 0.0, 1.0)";
+        }
+        return fmt::format("mg_normal_from_texture({}, {}, {}, {}, {}, i.mip_bias)", sampler, uv, offset, strength, get_channel_code(index));
+    }
+
+    /// The mask of the channel node @p index reads its height from (mg_channel_r..a).
+    auto get_channel_code(size_t index) -> std::string
+    {
+        const auto* setting = find_material_setting_def(*states_[index].def, "channel");
+        return fmt::format("mg_channel_{}", setting != nullptr ? get_checked_setting(index, *setting) : std::string("r"));
+    }
+
+    /// The expression of an expression node: the one for the width of its first dynamic input where the node has one,
+    /// its float form while that input reads a float, else its expression.
+    auto get_expression(size_t index) -> const std::string&
+    {
+        const auto& def = *states_[index].def;
+        if(!def.width_expressions.empty())
+        {
+            const size_t width = get_material_value_width(get_first_dynamic_input_type(index));
+            if(width <= def.width_expressions.size() && !def.width_expressions[width - 1].empty())
+            {
+                return def.width_expressions[width - 1];
+            }
+        }
+        return is_scalar_form(index) ? def.scalar_expression : def.expression;
+    }
+
+    /// The type input @p index's first dynamic input reads; a float for a node without one.
+    auto get_first_dynamic_input_type(size_t index) -> material_value_type
+    {
+        const auto& def = *states_[index].def;
+        for(size_t pin = 0; pin < def.inputs.size(); ++pin)
+        {
+            if(def.inputs[pin].type == material_value_type::dynamic)
+            {
+                return get_info(index).input_types[pin];
+            }
+        }
+        return material_value_type::float1;
+    }
+
+    /// A Color Ramp: the first stop's colour, blended stop by stop toward each next one as Value passes between their
+    /// positions. The stops are sorted by position here, so the editor may list them in any order.
+    auto make_color_ramp_code(size_t index) -> std::string
+    {
+        const auto& state = states_[index];
+        const std::string value = get_input_code(index, 0);
+        const auto& count_setting = *find_material_setting_def(*state.def, MATERIAL_COLOR_RAMP_COUNT_SETTING);
+        const float count_value = parse_number(index, count_setting, get_setting(state, count_setting.name));
+        const auto count = uint32_t(std::clamp(count_value, 2.0f, float(MATERIAL_COLOR_RAMP_MAX_STOPS)));
+        const std::string interpolation =
+            get_checked_setting(index, *find_material_setting_def(*state.def, MATERIAL_COLOR_RAMP_INTERPOLATION_SETTING));
+        struct stop
+        {
+            float position{};
+            math::vec4 color{};
+        };
+        std::vector<stop> stops;
+        for(uint32_t k = 0; k < count; ++k)
+        {
+            const auto color = find_input_pin(*state.def, get_material_color_ramp_color_pin(k));
+            const auto position = find_input_pin(*state.def, get_material_color_ramp_position_pin(k));
+            stops.push_back({get_value(state, position).x, get_value(state, color)});
+        }
+        std::stable_sort(stops.begin(),
+                         stops.end(),
+                         [](const stop& a, const stop& b)
+                         {
+                             return a.position < b.position;
+                         });
+        std::string code = format_literal(stops.front().color, MAX_WIDTH, false);
+        for(size_t k = 1; k < stops.size(); ++k)
+        {
+            const std::string from = format_scalar(stops[k - 1].position);
+            const std::string to = format_scalar(stops[k].position);
+            std::string weight;
+            if(interpolation == "constant")
+            {
+                weight = fmt::format("step({}, {})", to, value);
+            }
+            else
+            {
+                const std::string span = format_scalar(std::max(stops[k].position - stops[k - 1].position, 0.00001f));
+                weight = fmt::format("saturate(({} - {}) / {})", value, from, span);
+                if(interpolation == "smooth")
+                {
+                    weight = fmt::format("mg_smooth_weight({})", weight);
+                }
+            }
+            code = fmt::format("mix({}, {}, {})", code, format_literal(stops[k].color, MAX_WIDTH, false), weight);
+        }
+        return code;
+    }
+
+    /// The index of input @p name of @p def; its first input when it has none of that name.
+    static auto find_input_pin(const material_node_def& def, const std::string& name) -> size_t
+    {
+        const auto* pin = find_material_pin_def(def.inputs, name);
+        return pin == nullptr ? 0 : size_t(pin - def.inputs.data());
     }
 
     /// True when the node has a float form and its dynamic inputs read floats.
@@ -1823,28 +2341,32 @@ private:
 
     auto make_texture_sample_code(size_t index) -> std::string
     {
-        const auto it = texture_indices_.find(index);
-        const std::string uv = get_input_code(index, 0);
-        if(it == texture_indices_.end())
+        const std::string coordinates = get_input_code(index, 0);
+        const std::string sampler = get_texture_sampler(index);
+        if(sampler.empty())
         {
-            return format_literal(math::vec4(1.0f), MAX_WIDTH, true);
+            // No texture: what an empty cube reads (black), or an empty 2D slot (white).
+            const bool is_cube = get_material_texture_node_kind(*states_[index].def) == material_value_type::texture_cube;
+            return format_literal(is_cube ? math::vec4(0.0f, 0.0f, 0.0f, 1.0f) : math::vec4(1.0f), MAX_WIDTH, !is_cube);
         }
-        return fmt::format("mg_texture2D({}, {}, i.mip_bias)", result_.textures[it->second].sampler, uv);
+        const bool is_cube = get_material_texture_node_kind(*states_[index].def) == material_value_type::texture_cube;
+        return make_sample_read(index, sampler, coordinates, is_cube);
     }
 
     auto make_normal_map_code(size_t index) -> std::string
     {
-        const auto it = texture_indices_.find(index);
         const std::string uv = get_input_code(index, 0);
         const std::string strength = get_input_code(index, 1);
-        if(it == texture_indices_.end())
+        const std::string sampler = get_texture_sampler(index);
+        const int texture = find_read_texture(index);
+        if(sampler.empty() || texture < 0)
         {
             return "vec3(0.0, 0.0, 1.0)";
         }
         // getTangentSpaceNormal (shaderlib.sh) reads the layout of the texture the draw binds.
-        const std::string layout_code =
-            fmt::format("{}[{}].{}", NORMAL_CHANNELS_UNIFORM, it->second / MAX_WIDTH, COMPONENTS_XYZW[it->second % MAX_WIDTH]);
-        return fmt::format("getTangentSpaceNormal({}, {}, {}, {}, i.mip_bias)", result_.textures[it->second].sampler, uv, strength, layout_code);
+        const auto slot = uint32_t(texture);
+        const std::string layout_code = fmt::format("{}[{}].{}", NORMAL_CHANNELS_UNIFORM, slot / MAX_WIDTH, COMPONENTS_XYZW[slot % MAX_WIDTH]);
+        return fmt::format("getTangentSpaceNormal({}, {}, {}, {}, i.mip_bias)", sampler, uv, strength, layout_code);
     }
 
     auto make_append_code(size_t index) -> std::string
@@ -1903,14 +2425,28 @@ private:
         const auto& state = states_[index];
         const auto& def = *state.def;
         std::vector<std::string> assignments;
+        // Linked Material Attributes give every channel; then only the channels linked besides, and the Surface Output's
+        // own (the clip and the fade), replace theirs.
+        const size_t attributes_pin = find_input_pin(def, MATERIAL_ATTRIBUTES_PIN);
+        const bool uses_attributes = is_input_linked(state, attributes_pin);
+        if(uses_attributes)
+        {
+            assignments.push_back(fmt::format("{}s = {};", INDENT, get_input_code(index, attributes_pin)));
+        }
         for(size_t pin = 0; pin < def.inputs.size(); ++pin)
         {
+            const auto& name = def.inputs[pin].name;
             // The vertex stage's (emit_vertex); the other workflow's channels are not written.
-            if(def.inputs[pin].name == WORLD_POSITION_OFFSET_PIN || !is_output_pin_used(index, pin))
+            if(pin == attributes_pin || name == WORLD_POSITION_OFFSET_PIN || !is_output_pin_used(index, pin))
             {
                 continue;
             }
-            assignments.push_back(fmt::format("{}s.{} = {};", INDENT, def.inputs[pin].name, get_input_code(index, pin)));
+            const bool is_own_channel = name == MATERIAL_OPACITY_MASK_CLIP_PIN || name == CAMERA_FADE_DISTANCE_PIN;
+            if(uses_attributes && !is_own_channel && !is_input_linked(state, pin))
+            {
+                continue;
+            }
+            assignments.push_back(fmt::format("{}s.{} = {};", INDENT, name, get_input_code(index, pin)));
         }
         const size_t first_line = body_.size();
         body_.push_back(fmt::format("{}// {}: {}", INDENT, make_comment_text(state.node->id), def.label));
@@ -1928,12 +2464,94 @@ private:
             return;
         }
         const size_t index = size_t(output_);
-        const auto& def = *states_[index].def;
+        const auto& state = states_[index];
+        const auto& def = *state.def;
         const auto* pin = find_material_pin_def(def.inputs, EMISSIVE_PIN);
-        if(pin != nullptr)
+        if(pin == nullptr)
         {
-            result_.emissive = estimate_input(index, size_t(pin - def.inputs.data()), 0);
+            return;
         }
+        const auto emissive_pin = size_t(pin - def.inputs.data());
+        const size_t attributes_pin = find_input_pin(def, MATERIAL_ATTRIBUTES_PIN);
+        if(is_input_linked(state, attributes_pin) && !is_input_linked(state, emissive_pin))
+        {
+            result_.emissive = estimate_attributes_emissive(state.sources[attributes_pin], 0);
+            return;
+        }
+        result_.emissive = estimate_input(index, emissive_pin, 0);
+    }
+
+    /// The Emissive of the attributes @p source reads, as the GI estimates it: a Make Material Attributes' input,
+    /// through the nodes passing it on; unknown for a blend of two and anything else.
+    auto estimate_attributes_emissive(const link_source& source, int depth) const -> material_graph_emissive_estimate
+    {
+        if(!source.is_linked() || depth > MAX_ESTIMATE_DEPTH)
+        {
+            return {};
+        }
+        const auto node = size_t(source.node);
+        const auto& state = states_[node];
+        if(state.def == nullptr)
+        {
+            return {};
+        }
+        if(state.def->type == MAKE_ATTRIBUTES_TYPE)
+        {
+            return estimate_input(node, find_input_pin(*state.def, EMISSIVE_PIN), depth + 1);
+        }
+        const auto code = state.def->code;
+        if(code == material_node_code::reroute || code == material_node_code::named_reroute_declaration ||
+           code == material_node_code::named_reroute)
+        {
+            return estimate_attributes_emissive(state.sources[0], depth + 1);
+        }
+        if(code == material_node_code::static_switch)
+        {
+            return estimate_attributes_emissive(state.sources[get_chosen_input(state)], depth + 1);
+        }
+        return {};
+    }
+
+    /// Whether the attributes @p source reads may be cut out: a Make Material Attributes whose Opacity Mask is linked or
+    /// below 1, a blend of such, through the nodes passing them on; a function's attributes may be.
+    auto attributes_use_mask(const link_source& source, int depth) const -> bool
+    {
+        if(!source.is_linked() || depth > MAX_ESTIMATE_DEPTH)
+        {
+            return false;
+        }
+        const auto node = size_t(source.node);
+        const auto& state = states_[node];
+        if(state.def == nullptr)
+        {
+            return false;
+        }
+        if(state.def->type == MAKE_ATTRIBUTES_TYPE)
+        {
+            const size_t mask = find_input_pin(*state.def, OPACITY_MASK_PIN);
+            return is_input_linked(state, mask) || get_value(state, mask).x < 1.0f;
+        }
+        if(state.def->type == BLEND_ATTRIBUTES_TYPE)
+        {
+            return attributes_use_mask(state.sources[0], depth + 1) || attributes_use_mask(state.sources[1], depth + 1);
+        }
+        const auto code = state.def->code;
+        if(code == material_node_code::reroute || code == material_node_code::named_reroute_declaration ||
+           code == material_node_code::named_reroute)
+        {
+            return attributes_use_mask(state.sources[0], depth + 1);
+        }
+        if(code == material_node_code::static_switch)
+        {
+            return attributes_use_mask(state.sources[get_chosen_input(state)], depth + 1);
+        }
+        return true;
+    }
+
+    /// Whether input @p pin of @p state is linked, as a whole or by a component.
+    static auto is_input_linked(const node_state& state, size_t pin) -> bool
+    {
+        return pin < state.sources.size() && (state.sources[pin].is_linked() || state.is_composed[pin]);
     }
 
     /// The estimate of input @p pin of node @p index: its own value while unlinked.
@@ -2081,8 +2699,11 @@ private:
         const auto* mask_pin = find_material_pin_def(def.inputs, OPACITY_MASK_PIN);
         const size_t mask_index = size_t(mask_pin - def.inputs.data());
         const size_t clip_index = size_t(find_material_pin_def(def.inputs, MATERIAL_OPACITY_MASK_CLIP_PIN) - def.inputs.data());
+        const size_t attributes_index = find_input_pin(def, MATERIAL_ATTRIBUTES_PIN);
+        const bool attributes_mask = is_input_linked(state, attributes_index) && !is_input_linked(state, mask_index) &&
+                                     attributes_use_mask(state.sources[attributes_index], 0);
         const bool uses_mask = state.sources[mask_index].is_linked() || state.is_composed[mask_index] ||
-                               get_value(state, mask_index).x < mask_pin->default_value.x;
+                               get_value(state, mask_index).x < mask_pin->default_value.x || attributes_mask;
         // A translucent surface is dithered by its mask, not clipped.
         result_.is_translucent =
             get_checked_setting(index, *find_material_setting_def(def, MATERIAL_TRANSLUCENT_SETTING)) == MATERIAL_TRANSLUCENT_ON;
@@ -2098,7 +2719,8 @@ private:
             defines_.push_back("#define MATERIAL_OPACITY_MASK 1");
             result_.uses_opacity_mask = true;
             result_.is_opacity_mask_animated =
-                (clips_by_mask && (is_input_changing(index, mask_index) || is_input_changing(index, clip_index))) ||
+                (clips_by_mask && (is_input_changing(index, mask_index) || is_input_changing(index, clip_index) ||
+                                   (attributes_mask && is_input_changing(index, attributes_index)))) ||
                 is_discard_animated;
         }
         const size_t offset_index = get_offset_pin(def);
@@ -2114,16 +2736,58 @@ private:
         return size_t(find_material_pin_def(def.inputs, WORLD_POSITION_OFFSET_PIN) - def.inputs.data());
     }
 
-    /// Emits what World Position Offset reads as the vertex shader's code: the nodes again, as the two stages share no
-    /// variables, and the Custom functions they call alone, as code a vertex cannot run must stay out of its shader.
+    /// What the pixel stage read of the vertex stage, once the surface is emitted: the object's transform and the
+    /// Vertex Interpolators, which the vertex shader writes; the shader's defines for them.
+    void collect_vertex_outputs()
+    {
+        const auto reads_object = [](const std::string& line)
+        {
+            return std::any_of(OBJECT_DATA_CODES.begin(),
+                               OBJECT_DATA_CODES.end(),
+                               [&line](const char* code)
+                               {
+                                   return line.find(code) != std::string::npos;
+                               });
+        };
+        result_.reads_object_data = std::any_of(body_.begin(), body_.end(), reads_object) ||
+                                    std::any_of(functions_.begin(), functions_.end(), reads_object);
+        result_.interpolator_count = uint32_t(interpolator_slots_.size());
+        if(result_.reads_object_data)
+        {
+            defines_.push_back("#define MATERIAL_OBJECT_DATA 1");
+        }
+        if(result_.interpolator_count > 0)
+        {
+            defines_.push_back(fmt::format("#define MATERIAL_INTERPOLATORS {}", result_.interpolator_count));
+        }
+        if(result_.reads_object_data && result_.interpolator_count > MAX_INTERPOLATORS_WITH_OBJECT_DATA)
+        {
+            for(const auto& [node, slot] : interpolator_slots_)
+            {
+                if(slot >= MAX_INTERPOLATORS_WITH_OBJECT_DATA)
+                {
+                    report(material_graph_severity::warning,
+                           states_[node].node->id,
+                           {},
+                           fmt::format("With the object's transform the graph reads, more than {} Vertex Interpolators may not "
+                                       "fit the 15 varyings phones and browsers guarantee.",
+                                       MAX_INTERPOLATORS_WITH_OBJECT_DATA));
+                }
+            }
+        }
+    }
+
+    /// Emits the vertex shader's code: World Position Offset and each Vertex Interpolator the pixel stage reads. The
+    /// nodes are emitted again, as the two stages share no variables, and the Custom functions they call alone, as code
+    /// a vertex cannot run must stay out of its shader. A graph whose pixels read the object's transform alone gets a
+    /// vertex shader that computes nothing.
     void emit_vertex()
     {
-        if(!result_.uses_world_position_offset)
+        const bool has_vertex_stage = result_.uses_world_position_offset || result_.reads_vertex_outputs();
+        if(!has_vertex_stage)
         {
             return;
         }
-        const size_t index = size_t(output_);
-        const size_t pin = get_offset_pin(*states_[index].def);
         auto fragment_body = std::exchange(body_, {});
         auto fragment_lines = std::exchange(node_lines_, {});
         auto fragment_functions = std::exchange(functions_, {});
@@ -2131,32 +2795,91 @@ private:
         {
             state.is_emitted = false;
         }
-        const std::string offset = get_input_code(index, pin);
-        body_.push_back(fmt::format("{}s.{} = {};", INDENT, WORLD_POSITION_OFFSET_PIN, offset));
-        result_.is_world_position_offset_animated = is_input_changing(index, pin);
-        if(check_vertex_nodes())
+        is_emitting_vertex_ = true;
+        if(result_.uses_world_position_offset)
         {
-            vertex_body_ = std::move(body_);
-            vertex_functions_ = std::move(functions_);
+            const size_t index = size_t(output_);
+            const size_t pin = get_offset_pin(*states_[index].def);
+            if(emit_vertex_root(WORLD_POSITION_OFFSET_PIN, index, pin))
+            {
+                result_.is_world_position_offset_animated = is_input_changing(index, pin);
+            }
+            else
+            {
+                result_.uses_world_position_offset = false;
+                result_.is_world_position_offset_animated = false;
+            }
         }
-        else
+        for(const auto& [node, slot] : interpolator_slots_)
         {
-            result_.uses_world_position_offset = false;
-            result_.is_world_position_offset_animated = false;
+            emit_vertex_root(fmt::format("interpolator{}", slot), node, 0);
         }
+        is_emitting_vertex_ = false;
+        vertex_body_ = std::move(body_);
+        vertex_functions_ = std::move(functions_);
         body_ = std::move(fragment_body);
         node_lines_ = std::move(fragment_lines);
         functions_ = std::move(fragment_functions);
     }
 
-    /// Reports the nodes the vertex stage emitted that a vertex cannot run. False when one cannot: the offset is
-    /// dropped, as a graph with errors still compiles.
-    auto check_vertex_nodes() -> bool
+    /// Emits `s.<target> = <input pin of node index>;` into the vertex stage, what it reads before it. False, with
+    /// everything it emitted taken back, when it reads a node a vertex cannot run: the target keeps its zero.
+    auto emit_vertex_root(const std::string& target, size_t index, size_t pin) -> bool
     {
-        bool can_run = true;
+        const size_t body_size = body_.size();
+        const size_t lines_size = node_lines_.size();
+        const size_t functions_size = functions_.size();
+        std::vector<bool> was_emitted;
+        was_emitted.reserve(states_.size());
         for(const auto& state : states_)
         {
-            if(!state.is_emitted || !state.def)
+            was_emitted.push_back(state.is_emitted);
+        }
+        std::string code = get_input_code(index, pin);
+        if(check_vertex_nodes(was_emitted))
+        {
+            if(target != WORLD_POSITION_OFFSET_PIN)
+            {
+                code = pad_to_vec4(code, get_material_value_width(get_info(index).input_types[pin]));
+            }
+            body_.push_back(fmt::format("{}s.{} = {};", INDENT, target, code));
+            return true;
+        }
+        body_.resize(body_size);
+        node_lines_.resize(lines_size);
+        functions_.resize(functions_size);
+        for(size_t i = 0; i < states_.size(); ++i)
+        {
+            states_[i].is_emitted = was_emitted[i];
+        }
+        return false;
+    }
+
+    /// @p code of @p width components as a vec4, the missing ones 0.
+    static auto pad_to_vec4(const std::string& code, uint32_t width) -> std::string
+    {
+        switch(width)
+        {
+            case 1:
+                return fmt::format("vec4({}, 0.0, 0.0, 0.0)", code);
+            case 2:
+                return fmt::format("vec4({}, 0.0, 0.0)", code);
+            case 3:
+                return fmt::format("vec4({}, 0.0)", code);
+            default:
+                return code;
+        }
+    }
+
+    /// Reports the nodes the vertex stage emitted since @p was_emitted that a vertex cannot run. False when one cannot:
+    /// what reads it is dropped, as a graph with errors still compiles.
+    auto check_vertex_nodes(const std::vector<bool>& was_emitted) -> bool
+    {
+        bool can_run = true;
+        for(size_t i = 0; i < states_.size(); ++i)
+        {
+            const auto& state = states_[i];
+            if(!state.is_emitted || was_emitted[i] || !state.def)
             {
                 continue;
             }
@@ -2165,7 +2888,19 @@ private:
                 report(material_graph_severity::error,
                        state.node->id,
                        {},
-                       "A Normal Map gives a pixel's normal: World Position Offset cannot read one, so it moves nothing.");
+                       "A Normal Map gives a pixel's normal: the vertex stage (World Position Offset, Vertex Interpolators) "
+                       "cannot read one, so what reads it there stays 0.");
+                can_run = false;
+            }
+            else if(state.def->is_pixel_only)
+            {
+                report(material_graph_severity::error,
+                       state.node->id,
+                       {},
+                       fmt::format("A {} reads how values change between pixels, which a vertex does not have: the vertex "
+                                   "stage (World Position Offset, Vertex Interpolators) cannot read one, so what reads it "
+                                   "there stays 0.",
+                                   state.def->label));
                 can_run = false;
             }
             else if(state.node->type == SCREEN_POSITION_TYPE)
@@ -2173,7 +2908,7 @@ private:
                 report(material_graph_severity::warning,
                        state.node->id,
                        {},
-                       "A vertex has no pixel: World Position Offset reads the middle of the view as the Screen Position.");
+                       "A vertex has no pixel: the vertex stage reads the middle of the view as the Screen Position.");
             }
         }
         return can_run;
@@ -2276,7 +3011,8 @@ private:
         // and the shader compiled from it, as they are.
         for(const auto& texture : result_.textures)
         {
-            lines.push_back(fmt::format("SAMPLER2D({}, {}); // {}", texture.sampler, texture.stage, make_comment_text(texture.node_id)));
+            const char* declaration = texture.kind == material_value_type::texture_cube ? "SAMPLERCUBE" : "SAMPLER2D";
+            lines.push_back(fmt::format("{}({}, {}); // {}", declaration, texture.sampler, texture.stage, make_comment_text(texture.node_id)));
         }
         const bool reads_normal_map = std::any_of(result_.textures.begin(),
                                                   result_.textures.end(),
@@ -2357,6 +3093,20 @@ private:
     /// The value of node @p index as an opaque colour: a float grey, a vector's first components.
     auto make_preview_color(size_t index) const -> std::string
     {
+        switch(result_.nodes[index].type)
+        {
+            case material_value_type::texture2d:
+                return states_[index].value_code.empty() ? std::string("vec4_splat(1.0)")
+                                                         : fmt::format("mg_texture2D({}, i.uv0, 0.0)", states_[index].value_code);
+            case material_value_type::texture_cube:
+                return states_[index].value_code.empty()
+                           ? std::string("vec4(0.0, 0.0, 0.0, 1.0)")
+                           : fmt::format("textureCubeLod({}, mg_preview_direction(i.uv0), 0.0)", states_[index].value_code);
+            case material_value_type::attributes:
+                return fmt::format("vec4(({}).base_color, 1.0)", states_[index].value_code);
+            default:
+                break;
+        }
         const std::string value = fmt::format("({})", states_[index].value_code);
         switch(get_material_value_width(result_.nodes[index].type))
         {
@@ -2412,6 +3162,9 @@ private:
         }
         lines.emplace_back();
         add_lines(lines, SHADER_INPUTS);
+        add_vertex_output_lines(lines, false);
+        lines.emplace_back();
+        lines.emplace_back("[code]");
         add_defines(lines);
         for(const auto* include : SHADER_HEADER_INCLUDES)
         {
@@ -2451,10 +3204,26 @@ private:
         }
     }
 
-    /// The vertex shader of a graph whose World Position Offset moves its vertices; none for another.
+    /// The varyings only the graph's own vertex shader writes and its pixels read: the object's transform and the
+    /// Vertex Interpolators. @p is_vertex: as the vertex shader's outputs, with defaults.
+    void add_vertex_output_lines(std::vector<std::string>& lines, bool is_vertex) const
+    {
+        if(result_.reads_object_data)
+        {
+            lines.emplace_back(is_vertex ? "flat vec4 v_object0 = vec4(1.0, 0.0, 0.0, 0.0)" : "flat vec4 v_object0");
+            lines.emplace_back(is_vertex ? "flat vec4 v_object1 = vec4(0.0, 1.0, 0.0, 0.0)" : "flat vec4 v_object1");
+            lines.emplace_back(is_vertex ? "flat vec4 v_object2 = vec4(0.0, 0.0, 1.0, 0.0)" : "flat vec4 v_object2");
+        }
+        for(uint32_t slot = 0; slot < result_.interpolator_count; ++slot)
+        {
+            lines.push_back(fmt::format("vec4 v_interpolator{}", slot));
+        }
+    }
+
+    /// The vertex shader of a graph with a vertex stage (emit_vertex); none for another.
     void assemble_vertex_shader()
     {
-        if(!result_.uses_world_position_offset)
+        if(!result_.uses_world_position_offset && !result_.reads_vertex_outputs())
         {
             return;
         }
@@ -2466,6 +3235,10 @@ private:
         add_lines(lines, VERTEX_SHADER_VARIANTS);
         lines.emplace_back();
         add_lines(lines, VERTEX_SHADER_INTERFACE);
+        add_vertex_output_lines(lines, true);
+        lines.emplace_back("#endif");
+        lines.emplace_back();
+        lines.emplace_back("[code]");
         add_defines(lines);
         lines.push_back(make_include_line(VERTEX_HEADER_INCLUDES[0]));
         lines.emplace_back("#if SKINNED || SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED");
@@ -2720,6 +3493,10 @@ private:
     /// The vertex shader's code and Custom functions (emit_vertex).
     std::vector<std::string> vertex_body_;
     std::vector<std::string> vertex_functions_;
+    /// The Vertex Interpolators the pixel stage reads, by node, and the varying each takes.
+    std::map<size_t, uint32_t> interpolator_slots_;
+    /// emit_vertex is emitting: Vertex Interpolators give their input itself.
+    bool is_emitting_vertex_{};
 };
 
 /// Identifies a problem across two compiles of a graph.
@@ -2779,6 +3556,16 @@ auto reads_node(const material_graph& graph, size_t from, hpp::string_view targe
 }
 } // namespace
 
+auto material_graph_compile_result::reads_vertex_outputs() const -> bool
+{
+    return reads_object_data || interpolator_count > 0;
+}
+
+auto material_graph_compile_result::computes_vertex_values() const -> bool
+{
+    return uses_world_position_offset || interpolator_count > 0;
+}
+
 auto material_graph_compile_result::has_errors() const -> bool
 {
     return std::any_of(diagnostics.begin(),
@@ -2810,8 +3597,32 @@ auto material_graph_compile_result::get_node_diagnostics(hpp::string_view node_i
 
 auto make_material_graph_parameter_registers(const material_graph_compile_result& result) -> std::vector<math::vec4>
 {
-    std::vector<math::vec4> registers(result.parameter_registers, math::vec4(0.0f));
-    for(const auto& parameter : result.parameters)
+    return make_material_graph_parameter_registers(make_material_graph_binding(result));
+}
+
+auto make_material_graph_binding(const material_graph_compile_result& result) -> material_graph_binding
+{
+    material_graph_binding binding;
+    binding.parameters = result.parameters;
+    binding.parameter_registers = result.parameter_registers;
+    binding.textures = result.textures;
+    binding.static_switches = result.static_switches;
+    binding.emissive = result.emissive;
+    binding.uses_opacity_mask = result.uses_opacity_mask;
+    binding.is_opacity_mask_animated = result.is_opacity_mask_animated;
+    binding.is_translucent = result.is_translucent;
+    binding.uses_world_position_offset = result.uses_world_position_offset;
+    binding.is_world_position_offset_animated = result.is_world_position_offset_animated;
+    binding.max_world_position_offset = result.max_world_position_offset;
+    binding.reads_vertex_outputs = result.reads_vertex_outputs();
+    binding.computes_vertex_values = result.computes_vertex_values();
+    return binding;
+}
+
+auto make_material_graph_parameter_registers(const material_graph_binding& binding) -> std::vector<math::vec4>
+{
+    std::vector<math::vec4> registers(binding.parameter_registers, math::vec4(0.0f));
+    for(const auto& parameter : binding.parameters)
     {
         auto& value = registers[parameter.register_index];
         if(get_material_value_width(parameter.type) == 1)
