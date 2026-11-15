@@ -22,7 +22,7 @@
  * getNodeName(). Readers skip fields without consuming them - a suppressed prefab
  * override, a component should_load_component declines to read - which leaves the cursor
  * behind the name being asked for. A cursor comparison would report those as absent and
- * silently drop every field after the first skip. See tasks/serialization_prefab_audit.md.
+ * silently drop every field after the first skip.
  */
 
 #include <serialization/serialization.h>

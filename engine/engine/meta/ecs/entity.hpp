@@ -201,9 +201,8 @@ struct load_context
      * second instance's entities would resolve to the first instance's handles. Scoping
      * the map to the instance being loaded is what makes the identity well-defined.
      *
-     * Nothing pushes more than one frame today; nested prefabs are what will
-     * (tasks/nested_prefabs_design.md). The scoping is separated out first because it is
-     * the part that has to be correct before anything can nest.
+     * Each prefab load pushes a frame (load_from_prefab_out), so expanding nested
+     * instances stacks one frame per level of nesting.
      */
     struct instance_frame
     {

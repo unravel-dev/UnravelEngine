@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-/// The on-disk layout of a pack (tasks/pack_v1_plan.md): entry data, then the table of contents (one
+/// The on-disk layout of a pack: entry data, then the table of contents (one
 /// record per entry), then a fixed-size footer. Internal to the pack implementation.
 namespace fs::pack_detail
 {

@@ -17,7 +17,7 @@ if(WIN32)
 endif()
 
 # The GI constants parity test parses the shader mirror from the source tree, so the suite
-# fails when gi_constants.h and gi_constants.sh drift (tasks/gi_rewrite_plan.md, R9), and the
+# fails when gi_constants.h and gi_constants.sh drift, and the
 # shader-compile test runs shaderc from the build's binary directory over every GI shader - a
 # shader that fails to compile in the editor silently keeps its stale binary, which presents
 # as wrong rendering rather than as an error.

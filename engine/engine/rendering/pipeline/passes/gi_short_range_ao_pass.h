@@ -18,8 +18,7 @@ namespace unravel
  * GI views composite it in place of the screen-space AO, which does not apply while the short-range AO is on. A
  * horizon search at the tier's downsample factor (every pixel at the epic tier, half resolution at the high tier)
  * here, then the gather's integrate accumulates it at full resolution over its own reprojection taps and history
- * length (cs_gi_integrate.eshader#ao). The constants are in engine/rendering/gi/gi_pass_constants.h; the measurements in
- * tasks/gi_transform.
+ * length (cs_gi_integrate.eshader#ao). The constants are in engine/rendering/gi/gi_pass_constants.h.
  */
 class gi_short_range_ao_pass
 {

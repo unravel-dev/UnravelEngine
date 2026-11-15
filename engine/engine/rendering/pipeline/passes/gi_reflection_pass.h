@@ -19,7 +19,7 @@ namespace unravel
  * buffers, in place of SSR and the reflection probes (no other specular is composited under the traced one). The
  * reflection quality (gi_settings::reflection_settings::quality) sets the rays the resolve reuses and, at its
  * lowest, traces one pixel of each 2 x 2 block (gi_pass_common.h). The constants are in
- * engine/rendering/gi/gi_pass_constants.h; the plan and the measurements in tasks/gi_transform.
+ * engine/rendering/gi/gi_pass_constants.h.
  */
 class gi_reflection_pass
 {

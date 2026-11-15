@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * CPU reference path tracer over baked mesh SDFs (plan: tasks/gi_rewrite_plan.md, section 9.2).
+ * CPU reference path tracer over baked mesh SDFs.
  *
  * This is the harness's ground-truth oracle. It traces the EXACT per-instance fields the bake
  * produced - brute force over every instance, no clipmap, no instance grid, no budget - so the

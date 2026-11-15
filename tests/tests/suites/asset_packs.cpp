@@ -68,7 +68,7 @@ constexpr std::streamoff SEEK_PROBE_OFFSET = 70000;
 constexpr int PARALLEL_READERS = 4;
 constexpr int PARALLEL_MOUNT_ROUNDS = 200;
 constexpr auto PARALLEL_ROUND_TIMEOUT = std::chrono::milliseconds(200);
-// The format's layout, as the tests that edit a pack by hand need it (tasks/pack_v1_plan.md).
+// The format's layout, as the tests that edit a pack by hand need it (filesystem/pack_format.h).
 constexpr std::size_t PACK_TEST_BLOCK_SIZE = 64 * 1024;
 constexpr std::size_t PACK_TEST_FOOTER_SIZE = 48;
 constexpr std::size_t PACK_TEST_FOOTER_VERSION = 8;

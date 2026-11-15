@@ -10,12 +10,12 @@
  * Purpose: pin the CURRENT behaviour of the system before it is changed, so that a
  * refactor of the save/load path can be shown not to have altered semantics. Where the
  * current behaviour is believed to be a defect, the expectation is written the way it
- * SHOULD read and marked with check_xfail(), naming the entry in
- * tasks/serialization_prefab_audit.md. Those report as XFAIL today and turn into a loud
- * XPASS the moment a fix lands, at which point they should be promoted to check().
+ * SHOULD read and marked with check_xfail(), naming the defect. Those report as XFAIL
+ * today and turn into a loud XPASS the moment a fix lands, at which point they should be
+ * promoted to check().
  *
  * Two behaviours that look asymmetric are deliberate and are pinned as such
- * (see tasks/lessons.md):
+ * (is_nested_root_placement_path in engine/engine/meta/ecs/entity.cpp):
  *   - a prefab instance root's local position and rotation are implicit overrides and
  *     always survive a resync;
  *   - its local scale is NOT, and keeps following the prefab until explicitly overridden.
@@ -1500,8 +1500,8 @@ void test_resync_root_scale_follows_the_prefab()
 
     fix.republish_and_sync();
 
-    // Deliberate asymmetry with position/rotation - see tasks/lessons.md. An authored
-    // scale change is meant to reach existing instances.
+    // Deliberate asymmetry with position/rotation (is_nested_root_placement_path): an
+    // authored scale change is meant to reach existing instances.
     check_near(fix.instance.get<transform_component>().get_scale_local(),
                {5.0f, 5.0f, 5.0f},
                "an authored scale change reaches the instance");
@@ -6088,8 +6088,7 @@ void test_two_instances_of_one_prefab_are_independent()
 // A LOAD must leave a property alone when the document does not mention it. That already
 // happens on a suppressed prefab override, and it is the precondition for nested prefabs:
 // an instance would be stored as its asset reference plus only the properties the user
-// changed, so every LOAD would routinely see records with most of their fields missing
-// (tasks/nested_prefabs_design.md, stage 0).
+// changed, so every LOAD would routinely see records with most of their fields missing.
 //
 // The failure mode is a LOAD that reads into a fresh local and applies it regardless, so a
 // field the document never carried lands as a default. Suppressing the property through

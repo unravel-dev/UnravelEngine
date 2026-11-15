@@ -5,7 +5,7 @@
  *   cmake --build <build-dir> --target tests
  *   <build-dir>/bin/unravel-tests --suite physics
  *
- * These pin the 2026-08 contact-exit-on-destroy work (tasks/contact_exit_on_destroy_plan.md):
+ * These pin the contact exits of a destroyed body:
  *   - a body destroyed inside a sensor produced no OnSensorExit, because exit was
  *     inferred a step later from a vanished manifold and then dropped when both
  *     entt::handles turned out to be dead;
@@ -623,7 +623,7 @@ void test_contact_end_reason_mirror()
 // These are not tests of our code. They pin the entt guarantees that decide why the
 // pre-destroy phase has to live in scene::destroy_entity rather than in a hook or a
 // marker component. If a future entt changes any of them, the right response is to
-// revisit tasks/contact_exit_on_destroy_plan.md section 2, not to edit these.
+// revisit where the pre-destroy phase lives, not to edit these.
 // ---------------------------------------------------------------------------------
 
 std::vector<int> g_destroy_order;

@@ -48,9 +48,8 @@ auto create_or_resize_hiz_buffer(gfx::render_view& rview, const usize32_t& rende
 //    SAMPLES the G-buffer depth. Rendering that sub-pass with DEPTH attached made the
 //    same texture SRV and DSV of one draw - D3D11 silently unbinds the SRV and every
 //    depth sample returns 0 (the NEAR PLANE), inflating the written camera velocity by
-//    the near-plane parallax while keeping its direction plausible. That corruption
-//    masqueraded as a cross-pass "previous view-projection mismatch" for three debugging
-//    rounds (see tasks/velocity_buffer_plan.md).
+//    the near-plane parallax while keeping its direction plausible, which reads like a
+//    cross-pass "previous view-projection mismatch".
 //  - "VELOCITY_FBO" carries the shared DEPTH attachment for the movers sub-pass, which
 //    depth-tests EQUAL and never samples depth - no conflict there.
 auto create_or_resize_v_buffer(gfx::render_view& rview, const usize32_t& render_size)

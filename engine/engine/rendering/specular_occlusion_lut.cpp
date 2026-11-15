@@ -14,7 +14,7 @@ namespace unravel
 {
 
 // File-local helpers live in their own namespace: the non-Debug unity build merges every
-// source's unravel::(anonymous) (tasks/lessons.md).
+// source's unravel::(anonymous).
 namespace gtso
 {
 namespace

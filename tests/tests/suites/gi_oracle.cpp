@@ -1,5 +1,5 @@
 ﻿/*
- * GI Phase 0: the validation suite itself (plan: tasks/gi_rewrite_plan.md, sections 9-10).
+ * The GI validation suite.
  *
  * Runs inside the unravel-tests runner:
  *   cmake --build <build-dir> --target tests

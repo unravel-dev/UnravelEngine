@@ -28,8 +28,7 @@ namespace unravel
  * to the radiance cache (gi_radiance_cache) past a near field the probes trace themselves, and global distance
  * field hits read the surface cache (gi_surface_cache_pass). The final gather quality
  * (gi_settings::diffuse_settings::quality) sets the rays per probe, the probe spacing and the full-resolution jitter
- * (gi_pass_common.h). The constants are in engine/rendering/gi/gi_pass_constants.h; the plan and the measurements
- * in tasks/gi_transform.
+ * (gi_pass_common.h). The constants are in engine/rendering/gi/gi_pass_constants.h.
  */
 class gi_gather_pass
 {
