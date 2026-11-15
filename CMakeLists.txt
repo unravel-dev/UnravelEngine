@@ -247,6 +247,11 @@ else()
 endif()
 
 add_subdirectory(deps)
+# shaderc's WGSL backend (tint) recurses deeply: with the 1 MB default its Debug build overflowed the stack on the
+# largest compute shaders (gi/cs_gi_visualize_rc_stats.eshader).
+if(TARGET shaderc)
+  unravel_set_default_thread_stack(shaderc)
+endif()
 #add_subdirectory(version)
 # The Windows API level of the engine's own targets (engine, editor, game, tests): Windows 10, which the
 # code is written against. Left undefined, base/platform/config.hpp and bx/platform.h default to Windows 7
