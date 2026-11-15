@@ -82,7 +82,7 @@ void render_window::prepare_surface()
 
 auto render_window::get_swap_chain_flags() -> uint32_t
 {
-    return BGFX_SWAP_CHAIN_HIDPI | BGFX_SWAP_CHAIN_HDR10;
+    return BGFX_SWAP_CHAIN_HIDPI;
 }
 
 auto render_window::get_window() -> os::window&
