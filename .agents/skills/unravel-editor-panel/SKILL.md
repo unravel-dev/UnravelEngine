@@ -1,210 +1,194 @@
 ---
 name: unravel-editor-panel
 description: >-
-  Develops UnravelEngine editor UI: ImGui panels, menu bars, dockspace, gizmos,
-  inspectors, undo/redo, and viewport overlays. Use for editor panels, hub
-  integration, selection, editing actions, or ImGui layout bugs.
+  UnravelEngine editor UI in ImGui: panels, docking, toolbars, the start page, inspectors,
+  property rows, gizmos, selection, editing actions and undo. Use when adding or changing a
+  panel, toolbar, inspector, meta attribute for the inspector, gizmo or undoable edit, fixing
+  ImGui layout, input, focus or ID bugs, or writing editor UI text.
 ---
 
-# Unravel Editor Panel
+# Unravel editor panels
 
-## Start here
+The editor's ImGui layer and its editing model. Owns `editor/editor/hub/` (hub, start page,
+panels), `editor/editor/imgui/` (ImGui integration, theme, loading page) and
+`editor/editor/editing/` (`editing_manager`, actions, picking, thumbnails). Inside those
+folders other skills own their areas: the material graph panel (`unravel-materials`), the
+animation panel (`unravel-animation`), the profiler panel (`unravel-debugging`), the MCP
+window (`unravel-editor-mcp`), prefab editing and override paths (`unravel-prefabs`).
 
-| Purpose | Path |
-|---------|------|
-| Editor entry | `editor/editor/editor.h` |
-| Hub orchestrator | `editor/editor/hub/hub.cpp` |
-| Start page (no project open) | `editor/editor/hub/start_page/` |
-| Loading screen | `editor/editor/imgui/loading_page.h` |
-| Backdrop + card of both | `editor/editor/imgui/screen_card.h` |
-| Panel definitions | `editor/editor/hub/panels/panels_defs.h` |
-| Scene viewport | `editor/editor/hub/panels/scene_panel/` |
-| Game view | `editor/editor/hub/panels/game_panel/` |
-| Inspector | `editor/editor/hub/panels/inspector_panel/` |
-| Hierarchy | `editor/editor/hub/panels/hierarchy_panel/` |
-| Content browser | `editor/editor/hub/panels/content_browser_panel/` |
-| Profiler | `editor/editor/hub/panels/profiler_panel/` |
-| Header / play controls | `editor/editor/hub/panels/header_panel/` |
-| ImGui integration | `editor/editor/imgui/integration/` |
-| Editing core | `editor/editor/editing/editing_manager.h` |
-| Undo/redo | `editor/editor/editing/undo_redo_stack.h` |
+## Gotchas
 
-## Panel lifecycle
+### Editing and undo
 
-1. Panels registered in hub / `imgui_panels`
-2. View names from `panels_defs.h` (e.g. `SCENE_VIEW`, `INSPECTOR_VIEW`)
-3. Frame callbacks: `on_frame_ui_render` in editor mirrors engine `events`
-4. Docking via ImGui dockspace; layouts in `layout_panel/`, `layout_manager`
+- An action that changes only editor state (opens a project or prefab, selects, starts a
+  rename, moves the editor camera, writes a file) is an `untracked_editor_state_action_t` or
+  `tracked_editor_state_action_t`, or overrides `modifies_scene_content()` to return false:
+  the default true marks the scene or prefab unsaved.
+- An inspector edits the value it is handed and returns `inspect_result`; `inspect_property`
+  writes it through the proxy and records the undo step and the prefab override. Writing the
+  live object from inside an inspector bypasses both. Edits that must stay out of undo run in
+  `inspect_without_undo_scope`.
+- Undo steps are named after their proxy; undo and redo highlight and scroll to the row whose
+  proxy carries the same name (`make_property_proxy_name`).
+- A drag is one undo step: actions merge while the `merge_session` epoch in
+  `editing_manager.cpp` is unchanged (it advances on mouse press, release and focus loss),
+  through `is_mergeable` / `merge_with`. A merge keeps the earliest undo state.
+- Editor code that rewrites scene content returns while `play_mode::is_active()`: at play end
+  the game scene reloads from its play-start checkpoint, and every scene reloads after a
+  script recompile, so handles kept into any scene go stale (`unravel-ecs-component`).
+- Editor timers, highlights and ImGui's `DeltaTime` use `frame_times::real`; the game clocks
+  stop while paused and scale with the time scale.
 
-## Selection and editing
+### Inspectors
 
-- `editing_manager` - active selection, snap settings, grid, gizmo state
-- Selection is `entt::handle` based
-- Undo via `editing_action_t` derivatives in `editor/editor/editing/actions/`
-- Property changes should go through undo actions when user-visible
+- A walk over reflected properties (search, filters, counts) stops where drawing stops: at a
+  type with its own inspector and at enums. EnTT registers an enum's enumerators as data of
+  the enum type, each a value of the enum again, so recursing into them fans out.
+- A row's override gutter is drawn in `property_layout::pop_layout`: pop the layout before
+  popping the prefab override segment, or the row loses its mark.
+- Asset fields and asset inspectors read with `try_get()`; `is_ready()` never starts a load.
+  A thumbnail request (`asset_picker::make_preview`) is what starts loading an asset nothing
+  else uses.
+- `asset_manager::get_assets_with_predicate` returns the empty handle first: that is the
+  picker's None tile; do not add another.
+- `flattable` is read as a `bool`; the string `"true"` is ignored. The attribute list:
+  [add-inspector.md](add-inspector.md).
+- A value that does not survive save and reload is usually missing from the component's
+  `SAVE` body; read it before changing the inspector.
 
-## Inspector system
+### ImGui conventions
 
-- `inspector_registry` auto-discovers `inspector` subclasses
-- Component icons in `inspector_entity.cpp` -> `get_component_icon<T>()`
-- Property drawing uses EnTT meta reflection
-- Prefab overrides: recorded as statements on the nearest instance root's `local`
-  list (`prefab_property_override_data`, pretty + component paths) - see
-  `unravel-prefabs`
+- Colors come from the theme: the accent from `imgui_style::get_accent_color()`, muted text
+  from `imgui_style::get_muted_text_color()`. `ImGuiCol_TabSelected` is the theme's window
+  color, not the accent.
+- Icon glyphs are merged into the Regular, SemiBold, Bold and ExtraBold fonts only
+  (`editor/editor/imgui/integration/imgui.cpp`); an icon drawn in Medium, Light, Black or Mono
+  shows `?`.
+- An icon-only button is a label-less `ImGui::Button("##id", ImVec2(side, side))` with
+  `side = ImGui::GetFrameHeight()`, or `container_widgets::draw_icon_button`, and the glyph is
+  drawn by `ImGui::RenderIconCentered` at the item rect's center. As a button label an MDI
+  glyph sits off center: ImGui centers its advance, which is wider than its ink. Look for the
+  helper the editor already uses for a widget before drawing one.
+- A button narrower than its label plus `2 * FramePadding.x` needs `FramePadding.x` pushed to
+  0, or ImGui draws the label from the left of the remaining room.
+- Icons at a pixel size: `ImGui::PushWindowFontScale(size / ImGui::GetFontSize())`, never
+  `PushFont(font, pixels)`, which applies the UI scale a second time.
+- A child with `ImGuiChildFlags_Borders` gets `WindowPadding` only while the theme's
+  `ChildBorderSize` is not 0. Size its content from inside (`GetContentRegionAvail`), never
+  from the parent's width, or push the padding the layout assumes before `BeginChild`.
+  Sizes are in font units, not pixels.
+- A fixed-height host of stacked children (the header: menu bar and toolbar strip) counts
+  `ItemSpacing.y` between them or pulls the cursor back by it; otherwise the last child is
+  pushed down and cropped.
+- Style pushed for a `Begin` / `BeginChild` is popped right after it: left on the stack, every
+  tooltip, popup and child of the content inherits it. A push inside a `Begin` / `End` scope
+  popped after the `End` fails ImGui's stack check, shown as a red outline around the window.
+- Never test a raw rectangle for input without checking `HoveredWindow`: it reaches through
+  popups. Dropdowns open on a press only ([panel-toolbars.md](panel-toolbars.md)).
+- An item laid over a tree node with `ImGuiTreeNodeFlags_AllowOverlap` gets the hover only
+  when it is submitted after the node (`TableSetColumnIndex` can go back to an earlier
+  column).
+- A tool that uses Alt claims it with `ImGui::SetKeyOwner(ImGuiMod_Alt, id)` while active:
+  with keyboard navigation on, an Alt release otherwise toggles the menu layer
+  (`scene_panel.cpp`, orbit).
+- `ImStricmp` returns `str2 - str1`, the opposite sign of `strcmp`; sort case-insensitively
+  with `std::lexicographical_compare` over lowered characters.
+- The view name in `panels_defs.h` is the ImGui window name: `imgui.ini` and the saved layouts
+  key the panel's dock place by it, so renaming it loses that place everywhere.
+- Release and RelWithDebInfo build `editor/editor` as unity batches: file-local names that
+  another file may also use get a feature prefix (`CONSOLE_*`, `CONTENT_*`,
+  `SCENE_TOOLBAR_*`), and helpers of new files in `editor/editor/imgui/` and
+  `editor/editor/system/` sit in a `<file>_detail` namespace. A wrapper namespace with a
+  `using namespace` at `unravel` scope isolates nothing.
 
-Use `unravel-add-inspector` for custom type inspectors.
+### UI text
 
-## Gizmos
+- The full-sentence rule (AGENTS.md) covers ImGui tooltips (`ImGui::SetItemTooltipEx`),
+  notes, the meta `"tooltip"` attribute (the inspector row's tooltip), problems and log lines
+  users read. MCP tool descriptions are for agents and keep their own style.
+- A field reads as label plus value: the value names the choice in a word or two
+  (`Default Desktop`, `Copy of Android`); the explanation goes in a note under the field or a
+  tooltip.
 
-`editor/editor/hub/panels/scene_panel/gizmos/`:
+### Windows, loading, pages
 
-- Transform, physics shape, character controller gizmos
-- ImGuizmo integration in scene panel
-- Gizmo shaders in `editor_data/data/shaders/`
+- Renderer state derived from the window (surface size, backbuffer) is polled every frame,
+  loading frames included (`imgui_interface::render_loading_frame` calls
+  `renderer::sync_main_surface`): hosts consume window events before the renderer sees them.
+- Every full-window ImGui window pins itself to the main viewport with
+  `ImGui::SetNextWindowViewport` (`dockspace.cpp`), or it can open as an OS window of its own.
+- New full-window pages draw on `screen_card`; start page views go in their own
+  `editor/editor/hub/start_page/start_page_*.cpp`.
+- The Game panel sets `rendering_system`'s game view device only while it shows a device
+  preset (`game_panel::apply_view_size`); the UI dp ratio and the scripts' screen follow that
+  device, otherwise the editor window's display scale.
 
-## ImGui conventions
+## How it works
 
-- Custom widgets: `deps/3rdparty/imgui/imgui_widgets/`, `editor/editor/imgui/`
-- Icons: Material Design Icons via `icons_material_design_icons.h`
-- `ImGui::AlignedItem()` for horizontal alignment - include `FramePadding` in item width for buttons/menu items
-- `ImGui::SetItemTooltipEx()` for tooltips (project wrapper)
-- Menu bar items: account for `FramePadding` and `ItemSpacing` when right-aligning
-- Theme: the startup theme is `imgui_style::set_theme(imgui_style::theme::unravel_dark)`
-  (`editor/editor/imgui/integration/imgui_style.cpp`, where each theme is a name, a palette and
-  the sizes it changes from Unravel Dark's). The accent of self-drawn widgets comes from
-  `imgui_style::get_accent_color()`, never from `ImGuiCol_TabSelected` (grey in that theme)
-- Icon glyphs are merged into the Regular, Bold and Black fonts only: a label with an icon drawn
-  in SemiBold / Medium shows `?`
-- A child with `ImGuiChildFlags_Borders` takes `WindowPadding` only while the theme's
-  `ChildBorderSize` is not 0. Never size its content from the parent's width: measure inside the
-  child (`GetContentRegionAvail`), or push the padding the layout assumes before `BeginChild`
-  (the profiler timeline rules it out). Sizes in font units, not pixels
+- `imgui_panels` (`editor/editor/hub/panels/panel.h`) constructs every panel, calls their
+  `init` / `deinit`, forwards the frame events to the viewport panels and draws all of them
+  from `on_frame_ui_render` (the editor's `ui_events`, `editor/editor/events.h`). `hub` shows
+  the start page while no project is open and the panels once one is.
+- Most panels derive from `panel_base`: `render_panel` opens the window with
+  `get_window_flags()` (a menu bar by default) and calls `draw_ui`; `set_visible_force` /
+  `hold_visible_force` keep a hidden view rendering for captures. Default docking is in
+  `dockspace.cpp`; saved layouts in `layout_manager`.
+- The viewports drive scenes: `scene_panel` updates its own scene (editor camera and
+  editor-only entities) and the prefab scene while visible; `game_panel` updates the game
+  scene every frame and renders it while visible or forced.
+- `editing_manager` holds the selection (`entt::meta_any` objects: entities, assets), focus,
+  gizmo, snap and grid settings, prefab mode and the `undo_redo_stack`. `do_action` runs an
+  action now; `queue_action` runs it at `execute_actions` during the frame update.
+- Inspectors: `inspector_registry` maps each type registered with `REFLECT_INSPECTOR` /
+  `REFLECT_INSPECTOR_INLINE` to its inspector. A type without one is drawn property by
+  property (`inspect_var_properties`), each property a `property_layout` row: one label
+  column divider per window, labels stacked over values below 20 font units, the override
+  gutter at the window's edge. Arrays and maps: `inspector_array.cpp`,
+  `inspector_associative.cpp`. Gizmos use the same pattern (`GIZMO_REFLECT`).
+- Theme: `imgui_style::set_theme(imgui_style::theme::unravel_dark)` at startup
+  (`editor/editor/imgui/imgui_interface.cpp`); each theme in `imgui_style.cpp` is a name, a
+  palette and the sizes it changes from Unravel Dark's.
 
-## Panel toolbars
+## Procedures
 
-One module gives every panel toolbar the same look: `panel_toolbar`
-(`editor/editor/hub/panels/panel_toolbar.h`). Two containers, one set of items:
+- New inspector, attribute reference, gizmo: [add-inspector.md](add-inspector.md).
+- Toolbar items, bars, strips, the header and the viewport overlays:
+  [panel-toolbars.md](panel-toolbars.md).
+- New panel:
+  1. A class in its own folder under `editor/editor/hub/panels/`, deriving from `panel_base`
+     with `draw_ui` (or a window class drawn with its view name, like `mcp_panel`).
+  2. Its view name in `panels_defs.h`; a member in `imgui_panels`, constructed, initialized
+     and drawn in `panel.cpp`.
+  3. A default dock spot in `dockspace.cpp` if it opens docked, and a Windows menu entry in
+     `header_panel.cpp`.
+  4. If agents should reach it, `panel_focus` support (`unravel-editor-mcp`).
+- New gizmo flag or icon type: [panel-toolbars.md](panel-toolbars.md), "Floating bars".
 
-- **bar** (`begin_bar` / `end_bar`): floats over a viewport - scene, game
-- **strip** (`begin_strip` / `end_strip`): docked at the top of a panel - content, console,
-  inspector - or of the editor itself (header, `strip_style::flat`: no card, the host is the
-  band). `align_center()` / `align_right()` send the following items to the middle / the right
-  end; `begin_field(width)` / `end_field()` wrap one framed ImGui widget (search input,
-  slider); `calc_flexible_width(min, max)` lets a search field give way in a narrow dock;
-  `begin_group()` / `end_group()` make several items one ImGui item (one tooltip, one
-  `BeginDisabled`); `begin_segment()` / `end_segment()` do the same on a rounded fill of their
-  own - a segmented control (the header's play / pause / step)
+## Verify
 
-Dropdowns (`begin_dropdown`) open on a press and on nothing else - never on hover. An open popup
-shields what lies under it. A press on ANOTHER dropdown while one is open switches in one click:
-the popup blocks that button's hover, so `take_press_blocked_by_dropdown` hands the press over and
-claims the hover with `SetHoveredID` (unclaimed, the bar's click blocker and the end-of-frame
-click on empty space take the same press and close the new popup). Never test a raw rectangle for
-input without checking `HoveredWindow`: it reaches through popups.
+- Build the `editor` target; build RelWithDebInfo as well when a `.cpp` was added (unity
+  batches, re-configure first: `unravel-build-verify`).
+- In the editor (driven through `unravel-editor-mcp`, captured per attempt):
+  - the panel docks, survives a layout save and restore, and works in a narrow dock;
+  - every edit undoes and redoes and marks the scene unsaved only when it changed content;
+  - selection stays in sync across scene, hierarchy and inspector;
+  - entering and leaving play keeps the panel's state;
+  - no red outline (ImGui error) and no ID collisions (hidden ids with `##`);
+  - icons look centered in a zoomed capture.
+- Window or surface changes: open a project from the start page, with `-p`, with `--window`
+  geometry, and run the deployed player.
 
-The scene, game, content, console and inspector panels have NO menu bar (`get_window_flags()`
-returns no `MenuBar`).
+## Entry points
 
-### Floating bars (scene, game)
-
-- `scene_panel.cpp` -> `draw_toolbar`: tools bar (left), view bar (right), prefab bar (centered,
-  own row, prefab mode only)
-- `scene_panel/gizmos_menu` -> the gizmos split button: `editing_manager::show_gizmos` is the master
-  over every icon and gizmo (not the transform handles, not the grid). The popup is a table of object
-  types against Icons (every object) and Gizmos (the selection); a new gizmo flag is a `ROWS` entry or
-  a detail of one, and gets a line in the serialize of `meta/project/project_editor_settings.cpp`; a new
-  icon type is added to `billboard_components`, `billboard_gizmos::is_shown` and `ROWS`. The settings
-  (`editing/gizmo_settings.h`) live in `editing_manager` while a project is open. A change on the toolbar
-  also goes to the project's settings, saved in `app:/editor/editor.cfg`; `viewport_set_overlays` changes
-  only the live values, so a capture is never saved
-- `game_panel.cpp` -> `draw_toolbar`: one bar on the right. While the game plays it fades out
-  and is NOT submitted (an invisible bar would eat the game's clicks); the pointer at the top
-  edge or an open dropdown brings it back (`update_toolbar_visibility`). The frame rate stays:
-  `viewport_stats_overlay::draw_toolbar_readout` draws it as a passive
-  `panel_toolbar::draw_readout` (draw list only, clicks pass through) in the exact place the
-  statistics toggle shows it, so the two cross-fade
-- Every bar is a child window, so clicks never reach picking / drag selection / ImGuizmo below;
-  `end_bar()` hands the keyboard focus back to the panel so viewport shortcuts keep working
-- Items: `button`, `toggle` (optional `active_color` for a state with its own color: playing,
-  paused), `filter_toggle` (own color, dimmed when off - for rows of filters),
-  `begin_dropdown` / `end_dropdown` (null text = caret half of a split button),
-  `separator`, `path_separator` (breadcrumb), `label`; pass `width_text` for a label that
-  changes (FPS, state names) or an anchored bar jitters
-- Layout falls back full -> compact (icons only) -> stacked (view bar on row 2) from the
-  measured bar widths (`panel_toolbar::layout_state` + `update_layout`); overlays that share
-  the top edge (view cube, `viewport_stats_overlay::draw` `top_offset`) start below
-  `panel_toolbar::get_rows_extent(rows)`
-- Items shared by both panels live in their own module: `viewport_resolution::draw_toolbar_dropdown`,
-  `visualization_menu::draw_toolbar_dropdown`, `viewport_stats_overlay::draw_toolbar_toggle`
-- A popup whose content fills its height (entity inspector) needs an explicit size, not
-  auto-resize; a `SetNextWindowSize*` right before `begin_dropdown` reaches the popup
-- Overlay cards: `begin_overlay(id, top_right, width, max_height)` auto-sizes its height (a frame
-  late); `begin_overlay(id, rect)` takes an exact rectangle, for a card anchored to a bottom
-  corner. The selected camera's preview (`scene_panel/camera_preview_overlay`, drawn from
-  `scene_panel::draw_selected_camera`) is one: title row with align-with-view (Shift+F) and
-  collapse, output fitted to its aspect, resolution / projection badge; hidden when the view is
-  too small for it
-
-### Docked strips (content, console)
-
-- `content_browser_panel.cpp` -> `draw_explorer` = `draw_toolbar` (Add dropdown reusing the
-  context menu's create / import entries, breadcrumb of buttons that are drop targets, search)
-  + `draw_assets` + `draw_status_bar` (item count, icon scale)
-- `console_log_panel.cpp` -> `draw_toolbar` (Clear + auto-clear options, search, level filters
-  with counts), `draw_log_list` (single-line rows through `draw_log_line`, which the status bar
-  reuses for the last log), `draw_details`
-- `header_panel.cpp` -> `draw_play_toolbar`: flat strip - play options dropdown (script mode +
-  splash, locked while playing), preview profile dropdown (`draw_preview_profile`: the settings
-  the editor runs with, the project's or a settings profile's; locked while playing) | play / pause / step (one segment, disabled by compile errors),
-  then Deploy and Run (its own segment; shows progress while deploying and a click opens the
-  Deploy window; the Deploy menu opens it too) | time scale dropdown, frame pacing dropdown (VSync + max FPS).
-  The dropdown faces show the current value (`width_text` keeps them steady while a slider in
-  the popup drags). `draw_title` centers project / scene on the menu bar and yields to the
-  menus; `draw_play_state_line` tints the bottom edge while playing / paused.
-  `header_panel::calc_height()` tells `panel.cpp` how tall the header is
-- `inspector_panel.cpp` -> `draw_toolbar` (lock, debug view); component headers come from
-  `draw_component_header` in `inspector_entity.cpp` (a `CollapsingHeader("##...")` for the
-  behaviour, title and flat settings button drawn over it - no space-padded labels)
-- Unity builds merge anonymous namespaces: prefix file-local constants and helpers by feature
-  (`CONSOLE_*`, `CONTENT_*`, `SCENE_TOOLBAR_*`), or a shifted batch boundary breaks the build
-
-Other panels (inspector, hierarchy, ...) keep classic menu bars: horizontal `MenuItem` layout -
-width exceeds `CalcTextSize` label.
-
-## Play mode UI
-
-- Header panel play controls: `header_panel.cpp`
-- Game panel visibility toggled from scene panel
-- Editor chrome remains during play; game view shows runtime output
-- Use `unravel-play-mode-change` when behavior differs edit vs play
-
-## Verification checklist
-
-- [ ] Panel docks and persists in saved layout
-- [ ] Selection syncs across scene/hierarchy/inspector
-- [ ] Undo/redo works for the change
-- [ ] Play mode enter/exit preserves panel state
-- [ ] No ImGui ID collisions (use `##` prefixes for hidden IDs)
-- [ ] Tooltips and icons match surrounding panels
-- [ ] Right-aligned menu items not clipped at viewport edge
-
-## Common mistakes
-
-- Raw ImGui IDs causing state bleed between panels
-- Editing without undo action (user cannot revert)
-- Engine code in editor target only - keep editor logic in `editor/`
-- Forgetting `ImGui::SameLine()` spacing when aligning items
-- Using label text width only for `AlignedItem` on interactive widgets
-- Sizing the content of a bordered child from outside of it (breaks when a theme changes
-  `ChildBorderSize`, see ImGui conventions)
-- A fixed-height host made of stacked children (the header: menu bar + toolbar strip) must
-  either count `ItemSpacing.y` between them or pull the cursor back by it; otherwise the last
-  child is pushed down and cropped
-- `PushStyleVar` / `PushStyleColor` inside a `Begin` / `End` (or child) scope with the pop after
-  the `End`: ImGui's stack check reports it (red outline around the window + error tooltip)
-- Style pushed for a `Begin` / `BeginChild` and left on the stack while the content is drawn: every
-  tooltip, popup and child opened from that content inherits it. Pop right after the `Begin`
-
-## Deep reference
-
-See [reference.md](reference.md) for panel map and editing patterns.
+| File | Why |
+|------|-----|
+| `editor/editor/hub/panels/panel.cpp` | panel construction, frame dispatch |
+| `editor/editor/hub/panels/panel_base.h` | panel window base |
+| `editor/editor/hub/panels/panel_toolbar.h` | toolbars, strips, dropdowns, overlays |
+| `editor/editor/editing/editing_manager.h` | selection, actions, undo, play transitions |
+| `editor/editor/editing/actions/editing_action.h` | action contract |
+| `editor/editor/hub/panels/inspector_panel/inspectors/inspector.h` | inspector base, `property_layout` |
+| `editor/editor/hub/panels/inspector_panel/inspectors/inspectors.cpp` | property drawing, attributes, registry |
+| `editor/editor/hub/panels/inspector_panel/inspectors/inspector_entity.cpp` | component headers, icons, Add Component |
+| `editor/editor/imgui/integration/imgui_style.cpp` | themes and theme colors |
+| `editor/editor/imgui/integration/imgui.h` | fonts and editor ImGui helpers |

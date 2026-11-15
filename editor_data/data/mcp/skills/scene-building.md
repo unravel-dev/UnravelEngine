@@ -14,7 +14,9 @@ center; non-uniform scale is its size in meters. plane is 10x10 in XZ, sphere is
 1m diameter, cylinder is 2m tall with 0.5m radius, capsule_1m / capsule_2m are
 named by height. assets_list_embedded_primitives lists every built-in shape;
 each is the mesh asset engine:/data/meshes/<name>.emesh, whose text holds its
-numbers.
+numbers. Measure the first shape of a kind you place with scene_get_bounds_batch
+before placing many: a wrong size assumption buries or floats everything built
+on it.
 
 ## WORLD vs LOCAL (the number one source of broken layouts)
 
@@ -22,10 +24,16 @@ numbers.
   unless the item passes space:"local".
 - scene_set_transforms_batch defaults to WORLD; pass space:"local" for
   parent-relative poses. Its undo restores only the channels it set.
+- Reads give both: scene_get_entities_batch reports position, rotation_euler
+  and scale in WORLD space and position_local, rotation_euler_local and
+  scale_local relative to the parent. Pass a local value back only with
+  space:"local".
 - Recipe: create a parent entity at the area's world position, then create
   children with space:"local" poses. When the parent is rotated, always set
   the child's rotation_euler explicitly in local space - omitting it keeps a
-  world rotation that cancels the parent.
+  world rotation that cancels the parent. A door under a house:
+  scene_set_transforms_batch {"items":[{"entity_id":"<door>","space":"local",
+  "position":[0,0.85,1.6],"rotation_euler":[0,0,0],"scale":[0.7,1.7,0.12]}]}
 - scene_set_parents_batch reparents while KEEPING world pose (omit parent_id
   to detach); set a local pose afterwards if you want a clean local offset.
   A parent inside the entity's own subtree is refused.

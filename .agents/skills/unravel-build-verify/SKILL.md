@@ -1,224 +1,168 @@
 ---
 name: unravel-build-verify
 description: >-
-  Builds and verifies UnravelEngine: CMake targets, the unravel-tests runner,
-  engine_data/editor_data copy, shaderc validation, .NET SDK / CoreCLR scripting
-  dependency, sanitizers, and CI workflows. Use after code changes, before marking
-  work complete, or when fixing build/CI failures.
+  Builds and verifies UnravelEngine: the configured CMake trees, engine_data and
+  editor_data, the unravel-tests runner and its suites, the web and Android player
+  templates, first-party library suites, bgfx pin moves and patches, the GitHub workflows
+  and packages. Use after a code or data change, before calling work done, or for a
+  configure, compile, link, test or CI failure.
 ---
 
-# Build Verify Workflow
+# Build and verify
 
-## Project structure
+Building the configured trees, the data targets, the test runner, the player templates, the
+first-party library suites and the GitHub workflows. Owns `CMakeLists.txt`,
+`CMakePresets.json`, `cmake/`, `.github/` and `tests/`. AGENTS.md ("Build and test") holds the
+tree, target and job-count rules; this skill holds the detail behind them. Shader compile
+checks belong to `unravel-rendering`, editor smoke checks over MCP to `unravel-editor-mcp`,
+measurements and A/B runs to `unravel-debugging`.
 
-```
-deps -> engine (lib) -> editor (exe)
-                   -> game (exe)
-                   -> tests (exe, output name unravel-tests)
-```
+## Gotchas
 
-Custom data targets: `engine_data`, `editor_data`
+Trees and targets
 
-## Rule 1: build in the already-configured tree
+- The test runner's CMake target is `tests`; `unravel-tests` is only its output name.
+- `--target editor` (or `game`, `tests`) copies no data. `engine_data`, `editor_data`,
+  `web_player` and `android_player` are in the default build: a plain
+  `cmake --build build/<Config>` or the target's name builds them.
+- `engine_data` copies the whole `engine_data/` folder, the committed `engine_data/compiled/`
+  included, over `<bin>/data/engine/`, replacing local compiles there. Built while an editor
+  runs from that bin, it makes the editor recompile every asset and can leave it broken (no
+  Scene panel camera): stop that editor first, or copy only the changed file (shader edits:
+  `unravel-rendering`, shader-change.md).
+- `engine_data` copies bgfx's `bgfx_shader.sh` and `bgfx_compute.sh` into
+  `engine_data/data/shaders/` in the source tree on every build; edits to those two files
+  vanish.
+- Undefined symbols for every member of a new class mean the tree was not re-configured after
+  adding the file; that failed link also removes the old executable from `<bin>`. A host
+  configure re-configures the web and Android player sub-builds as well.
+- Unity batches (CMake's default of 8 files, `UNITY_BUILD_UNIQUE_ID ANONYMOUS`) merge the
+  anonymous namespaces of their files, and an added file shifts every later batch, so old
+  pairs can meet. A wrapper namespace plus `using namespace` does not isolate names; give
+  file-local names a feature-specific spelling or keep them in the feature's header. The core
+  libraries `engine/core/graphics`, `engine/core/math`, `engine/core/seq` and
+  `engine/core/serialization` are unity builds in Debug too.
+- Windows trees build with clang++ in GNU-driver mode against the Microsoft STL (the release
+  preset `windows-x64-clang-msvc-gnu` does the same): CMake's `MSVC` is false there. Test the
+  capability (`check_cxx_source_compiles`) instead of `if(MSVC)`.
+- With clang and the Microsoft STL, `std::find`, `count`, `remove` or `replace` on a type with a
+  defaulted `operator==` whose size is not 1, 2, 4 or 8 bytes fails the `static_assert`
+  "unexpected size" in `_Find_vectorized`; use the `_if` form with a lambda.
+- The desktop and Android player templates are built in the editor's configuration; the web
+  player sub-build is always Release. Do not pin another configuration for speed; state the
+  cost and let the user choose.
+- An editor started with `DOTNET_ROOT` set looks for its .NET runtime only there: start it
+  from a shell without the web SDK's `DOTNET_ROOT`.
+- A shaderc run that fails with no error text crashed: run `<bin>/shaderc` on that file and
+  read the exit code (0xC00000FD is a stack overflow; shaderc links with the 8 MB reserve of
+  `unravel_set_default_thread_stack` in `CMakeLists.txt`).
+- An out-of-memory build: look at what else was running before lowering the job count, and
+  ask first. The player sub-builds have their own job counts (`UNRAVEL_WEB_PLAYER_JOBS`,
+  `UNRAVEL_ANDROID_PLAYER_JOBS`).
 
-**Locate existing configured trees first - never configure a scratch dir:**
+Running and testing
 
-```bash
-ls build/*/CMakeCache.txt
-```
+- Build in the foreground, or wait for the build's own notification, and confirm the link
+  line and the executable's time stamp before any run that depends on the change. A build
+  chained into a background run hides its failure, and the run measures the old binary.
+- The runner exits with 1 when any check fails; its last log line counts them
+  ("N failing check(s)").
+- A runner whose own CPU time stays flat while `shaderc` children run is working, not hung.
+- A test that asserts a duration waits on the clock it checks (loop on `steady_clock::now()`
+  with short sleeps); one `sleep_for` can end early by part of a timer tick (15.6 ms on
+  Windows).
+- Shipped editors are always Release; Debug and RelWithDebInfo trees exist only to develop
+  the engine. Deploy and store safeguards cover what users of a shipped editor can reach, not
+  states only engine developers are in.
 
-Typical local layout: single-config Ninja trees at `build/Debug` and
-`build/RelWithDebInfo` (there is **no** CMakeCache at `build/` itself). The user
-iterates from those trees; artifacts written elsewhere prove nothing about what the
-running editor loads, and a second configure wastes time. Build the tree(s) the user
-actually runs - often both Debug and RelWithDebInfo.
+CI and tools
 
-```bash
-# Build a target in a configured tree
-cmake --build build/Debug --target editor
+- Run a workflow only when the user asks (runner minutes):
+  `gh workflow run <file> --ref <branch>`. Fix what a run does, never when it runs: the
+  commented `#on: [push, pull_request]` line records that choice. When a subagent touched a
+  workflow, diff its `on:` block against HEAD.
+- A comment or a CI pin is not proof of a tool limit: run that tool version before writing a
+  limit into docs, or call it unverified.
+- Version safety checks stay strict during A/B and bisect work; ask before relaxing one to
+  stop its prompts.
 
-# Data copy only (see shader note below)
-cmake --build build/Debug --target engine_data
-cmake --build build/Debug --target editor_data
-```
+Shell ([shell.md](shell.md) has the recipes)
 
-Only if no configured tree exists, configure one: `cmake -B build/Debug -G Ninja -DCMAKE_BUILD_TYPE=Debug`.
+- The sources mix CRLF and LF files; `sed -i` rewrites a CRLF file as LF. Edit with the Edit
+  tool or Python on bytes.
+- Backslashes in Bash heredocs and non-raw Python strings are unescaped before they reach the
+  file; patch scripts use raw strings in a file written with the Write tool.
+- Long drivers start with the Bash tool's `run_in_background`, never a trailing `&`.
 
-This extends to throwaway diagnostics: do not compile scratch repros with ad-hoc
-g++/clang++ outside the tree. Put the probe in a test suite or a debug log in the real
-code, built through the configured pipeline.
+## How it works
 
-## Output directories
+- Targets: `deps` -> `engine` (static) -> `editor` (`unravel-editor`), `game`
+  (`unravel-player`; `main` on Android) and `tests` (`unravel-tests`, which also links the
+  editor libraries `deploy`, `asset_compiler`, `packages` and `update_check`). The default
+  build also builds the data targets and, when their tools are found, the player templates,
+  after the editor while `UNRAVEL_PLAYERS_AFTER_EDITOR` is on.
+- The runtime folder is `<tree>/bin` (`<tree>/bin/<Config>` with a multi-config generator):
+  the executables, `shaderc` / `texturec` / `geometryc`, `data/engine`, `data/editor`,
+  `clrpp/`, `players/web`, `players/android-arm64`, `Log.txt` (rewritten at each start) and
+  `CrashLog.txt` / `CrashLog.dmp`.
+- `engine/engine`, `editor/editor` and `tests/tests` glob their sources when CMake configures
+  (`file(GLOB_RECURSE)`).
+- The runner boots the engine as a service (`tests/tests/tests.cpp`) with threading and the
+  asset manager only: no window, renderer, audio, scripting or ECS systems; a suite that needs
+  a renderer starts bgfx's Noop one. Test assets live under `<bin>/data/tests` (protocol
+  `app:`). Shader and data suites read the source tree through compile definitions
+  (`GI_TESTS_SHADER_DIR`, `ENGINE_DATA_DIR`, `EDITOR_DATA_DIR` in `tests/tests/CMakeLists.txt`)
+  and run the `shaderc` beside the runner.
+- bgfx is fetched with FetchContent at the pin of the bgfx.cmake fork and patched at every
+  configure ([dependencies.md](dependencies.md)).
 
-Two layouts exist - **locate, don't assume**:
+## Procedures
 
-| Generator | Runtime dir |
-|-----------|-------------|
-| Single-config Ninja tree (typical local) | `build/<Config>/bin/` (e.g. `build/Debug/bin/`) |
-| Multi-config (Visual Studio) | `build/bin/<Config>/` |
+Build and check a change:
 
-Within the runtime dir: executables, `data/engine/` (via `engine_data`),
-`data/editor/` (via `editor_data`), `clrpp/` managed payload, `lib/` alongside.
-Do not assume the just-linked exe directory is launchable - launch from a bin that
-has `data/` and `clrpp/`.
+1. `ls build/*/CMakeCache.txt` lists the configured trees.
+2. A source file was added or removed: `cmake build/<Config>` first.
+3. `cmake --build build/<Config> --target <targets>`, with `engine_data` / `editor_data`
+   when files under those folders changed. New engine or editor files: build
+   `build/RelWithDebInfo` too (unity batches).
+4. Run the suites of the touched area ([test-suites.md](test-suites.md)).
+5. Launch from the runtime folder that holds `data/` and `clrpp/`, with it as the working
+   directory. When a fresh executable was linked elsewhere, copy it into that folder.
 
-## Tests (unravel-tests)
+Reference files:
 
-ALL validation suites live in the `tests` target (exe name `unravel-tests`). It boots
-the real engine headlessly (threading + assets, no renderer/audio), so asset handles
-and prefab sources actually resolve. Exit code = number of failing checks.
+- [test-suites.md](test-suites.md) - runner options and every suite with what it covers
+- [players-and-ci.md](players-and-ci.md) - player templates, the browser page's Node tests,
+  workflows, release packages
+- [dependencies.md](dependencies.md) - first-party library suites, bgfx pin moves and patches
+- [shell.md](shell.md) - Git Bash on this tree: line endings, escapes, background jobs,
+  processes
 
-```bash
-cmake --build build/Debug --target tests
-build/Debug/bin/unravel-tests.exe                              # all suites
-build/Debug/bin/unravel-tests.exe --suite serialization        # substring match
-build/Debug/bin/unravel-tests.exe --single-threaded --suite asset  # the browser's threading
-```
+## Verify
 
-`--single-threaded` (an engine option, also taken by the editor and the player) runs every
-job, parallel loop, physics step and frame on the main thread, as the browser build does
-(`engine/core/concurrency/threading_mode.h`). Suites that compile every shader or bake
-offline (`eshader files`, `gi bake`, `gi constants`, `raytracing backends`) take hours that
-way; run the rest suite by suite.
+| Changed | Build | Check |
+|---------|-------|-------|
+| engine code | `engine` and its users (`editor`, `game`, `tests`) | the area's suites |
+| editor code | `editor`; `tests` when `editor/core/` changed | the area's suites, a clean editor start |
+| a new `.cpp` or `.h` | re-configure, then RelWithDebInfo as well | the unity batches compile |
+| `engine_data/`, `editor_data/` | `engine_data` / `editor_data` | the editor imports them without errors |
+| `game/web/wwwroot/` scripts | none | `node --test game/web/tests/*.mjs` |
+| CMake files | re-configure both trees | `cmake -DRUNTIME_DIR=build/<Config>/bin -P cmake/check_package.cmake` |
+| a first-party library | the library alone ([dependencies.md](dependencies.md)) | its `<lib>_test` |
+| skills, `AGENTS.md` | `tests` | `unravel-tests --suite "agent docs"` |
 
-The browser player template web deploys copy (`<bin>/players/web`) is the `web_player`
-target (`cmake/web_player.cmake`): an Emscripten sub-build in `<build>/web` with the
-Emscripten of a .NET SDK that has the wasm-tools workload (`UNRAVEL_WEB_DOTNET`, default the
-build's dotnet), then the .NET browser relink, which links the objects and libraries the
-sub-build lists as the game's (`<build>/web/web_link_inputs.txt`). It skips the relink while
-its inputs are unchanged. Start the editor from a shell without that SDK's `DOTNET_ROOT`: the
-editor would look for its runtime there. Emscripten runs on the workload's Python and Node.js
-(Windows) or the PATH's; `-DUNRAVEL_WEB_PYTHON=<python>` and `-DUNRAVEL_WEB_NODE=<node>` name
-others, on every platform. Its Python must be 3.10 or newer (the configure says so when it is
-older), which is why the release workflow names a prebuilt standalone Python on Ubuntu 20.04. Both player sub-builds (`web_player`, `android_player`) wait for the editor
-so their compiles do not compete for memory; `-DUNRAVEL_PLAYERS_AFTER_EDITOR=OFF` builds one
-alone without the editor, as the release workflow's shared players do.
+A clean editor start: `<bin>/Log.txt` holds no `[error]` or `[critical]` line; how to start
+and stop an editor and read its log is in `unravel-editor-mcp`.
 
-| Suite name | Covers | Run when touching |
-|------------|--------|-------------------|
-| `ecs serialization / prefabs / cloning` | Save/load, prefab statements, cloning (`--bench` adds timings) | Serialization, meta, prefabs, components |
-| `physics contacts / destroy funnel` | Contact events, entity-destroy funnel | Physics, entity lifecycle |
-| `ik solvers` | IK correctness | Animation/IK |
-| `thread cpu time` | Thread CPU time never exceeds wall time; sleeps are not busy; no `profile_begin`/`profile_end` scope is busier than its wall time (clock read order) | `platform::get_thread_cpu_time_ns`, profiler timing |
-| `animation` | Blend spaces, root motion, replay | Animation |
-| `gi constants / reference oracle` | GI constants parity (C++ vs shader mirror), reference tracer | GI code or GI shaders |
-| `gi bake / sdf / clipmap` | Bake pipeline; also **compiles every GI shader via shaderc** | GI shaders / SDF |
-| `fs protocols` | `convert_to_protocol` with a root in another letter case, `..` / trailing-separator roots, whole-folder matching, longest root; `fs::make_extended_length_path` (the form Windows takes at any length, and a folder with paths past 260 characters made and removed through it); a folder's size (`fs::get_folder_size`); paths outside the system code page | `engine/core/filesystem/filesystem.cpp`, asset keys |
-| `ui system lifecycle` | Releasing UI resources while RmlUi is not initialised (failed editor start-up) | `ui_system`, RmlUi backend |
-| `asset packs` | Pack write/mount/read (stored and compressed, absolute and protocol paths, Windows letter case), disk fallback, later mount wins, damaged/truncated/foreign packs refused, deterministic output, stream seek, entry reuse from an earlier pack (same bytes as a fresh write; none across compression settings), patches (unchanged left to the base, deleted entries hide base and disk, mount only over their base and only on top, never a patch base); mixed and exact block sizes, lifetime after unmount, whole reads while other threads mount and unmount, crafted TOCs refused, reuse verified by content hash, lookup status (found / deleted / damaged); the compression wrapper round trip; a pack's layout (`read_pack_layout`), packs adopted from memory (`fs::add_memory_file`) and the list a host names them with | `engine/core/filesystem/pack*`, `mapped_file.*`, `engine/core/compression/`, deploy packing |
-| `asset references` | The reference scan a deploy walks scenes with: quoted uuids under any key (once each, nil and malformed skipped), quoted protocol paths (other protocols and unquoted mentions skipped), UI document / style sheet links (href, src, url(), image(), @import; fragments, data: and web addresses skipped) | `engine/engine/assets/impl/asset_references.*`, deploy content selection |
-| `fs mirror` | `fs::mirror_directory` / `copy_file_if_changed`: first copy, unchanged skip, changed copy keeps the source write time, vanished and stray files removed with empty folders, filter, rename in letter case, a stale file that cannot be removed fails the mirror, missing source, a source with no file to mirror (no target is created); files of the same content; files an older list named removed; a file read while a deploy replaces it (`fs::shared_read_file`, `fs::rename_over`) | `engine/core/filesystem/mirror.*`, `shared_file.*`, incremental deploy |
-| `settings profiles` | Settings profiles (`editor/core/deploy/profile*`, `project_profiles`, `texture_variants`, `core/serialization/document_paths`): leaf paths of a document, sparse overrides (save only what differs, resolve, revert, stale paths), profile files, the migration of a project from before profiles, create / rename / delete with their releases and caches, per-platform texture parameters, the texture variant cook (ASTC / ETC2 formats, blocks that keep a texture's size, in-place recompiles on changed defaults, the sweep of stale variants) | Profiles, Project Settings overrides, the deploy's texture cook, `settings_*` / `settings_profiles_*` MCP tools |
-| `deploy library` | The `deploy` library (`editor/core/deploy`): key normalization, rule precedence and set_shipped / normalize / orphan rules, the content walk over a temp project (uids, paths, UI links, generated assets, settings, script literals incl. interpolated, binary files skipped, missing scenes), the content tree (counts, rows, search, filter), file classification and pack inputs, a protocol shipped packed / loose / as a patch (a script library the deploy built in place of the editor's, a protocol without a script library), a build's stamp (started, finished) and what refuses an unfinished build, a cancelled deploy's cooks, an Android build folder's owner and the folders no deploy needs any more, `subprocess::call` ended by its stop check, releases, dependency parsing and failed scans, folder checks, the desktop player's stamp, `process::spawn_detached`; a build's platform in its stamp and executable names; web builds (data cut into content-named chunks at pack entry boundaries, the manifest, a trimmed build's runtime files); Android (Java versions, device answers, additions, the manifest merged, version codes); extra files and the post-deploy command; a desktop profile's graphics APIs | `editor/core/deploy/`, `editor/editor/deploy/`, the Deploy window and deploy MCP tools |
-| `assembly references` | The deploy's .NET assembly reader and framework trim (`editor/core/deploy/assembly_references`): an assembly's name and references from a library and from the module a browser build wraps it in, files that are no assembly (cut short anywhere, native, other modules), a folder's assemblies by name, the assemblies nothing reaches (cycles, kept names, missing roots), a build's trimmed files, typed name lists; the real script bridge and browser runtime when they are beside the runner | Trim .NET Framework, `find_trimmed_files`, the three platforms' framework copies |
-| `permission requests` | The game's run-time permission requests (`engine/permissions`): manifest names, pending / granted / denied per request, answers on another thread, forgotten requests, platforms without run-time permissions | `Permissions.RequestAsync`, ospp `os::permission` |
-| `engine version` | The version text (`engine/core/version`): the forms git describe gives (tag, commits since it, commit, the `-dirty` marker), text that is no version, the order by commits since the tag (1.2.0-320 is newer than 1.2.0-319; commit and marker ignored), writing back, this build's own version | `version::parse` / `compare`, project engine checks, update checks, player stamps |
-| `mesh shapes` | The built-in shapes as assets (`engine_data/data/meshes/*.emesh`, `mesh_shape`): kind names, each file builds the geometry its generator call built at startup, each `.meta` holds the id scenes hold and the bake settings, a key in the earlier spelling (`engine:/embedded/cube`) loads the file, a compiled shape carries the field chain a bake of the generated mesh gives and cards, the plane keeps its GI triangles, a mesh built in code gets a field only when asked. `--bench` compiles every shape instead of a few | `engine/engine/rendering/mesh_shape`, the `.emesh` branch of the mesh importer, `engine_asset_keys.h`, `asset_manager` key resolution, `defaults::init_assets` |
-| `audio clip encoding` | Compiled clips keep the source codec and decode at load (`decode_sound`, mono, bad codec/bytes, old-format file refused); `asset_manager::save_database` filter | Audio import/load, deploy asset index |
-| `eshader files` | The `.eshader` parser and its errors, vertex input names and what they map to, generated tags and interface lines, the format (the `.sh` trap, deploy paths), `gfx::shader::find_variant`, dependencies, a compiled file read from a pack, each variant's binary equal to a file that defines the same in its code on every renderer, a failed variant changing nothing, and **compiles every `.eshader` the engine and editor ship**, failing on variants that are the same binary everywhere | `editor/core/asset_compiler/`, `gfx::shader`, `gpu_program`, any `.eshader` |
-| `third party notices` | The notices compiled into the engine (`THIRD_PARTY_NOTICES.txt`, `get_third_party_notices`): the LGPL libraries with their license texts and source addresses, and none of it in a build without them; libraries a build does not link left out; this binary's engine version filled in, ASCII only | `THIRD_PARTY_NOTICES.txt`, adding or updating a shipped dependency, an option that leaves a library out |
-| `threading mode` | The single-threaded mode: the job pool has no workers exactly in it and a job runs on the waiting thread or in the threader's frame pump; parallel loops and background work run inline and start no pool; a frame longer than the minimum fps allows counts as the longest it allows | `engine/core/concurrency/`, `threader`, `simulation`, threadpp |
-| `fs watcher` | Created / modified / removed / renamed reporting, non-atomic moves and safe saves pairing up, pause / resume, unwatch during a callback, per-format filters on one listener (`--bench` adds latency and fan-out timings; ~50 s) | `engine/core/filesystem/watchers/`, syncer, asset watcher |
+## Entry points
 
-Suites self-register (`REGISTER_TEST_SUITE` in `tests/tests/suites/`); adding one is
-adding a file.
-
-The browser page's own code (`game/web/wwwroot/*.js`) has Node tests, which need no build:
-
-```bash
-node --test game/web/tests/*.mjs
-```
-
-Run them after changing `data.js`, `graphics.js`, `audio.js` or what `main.js` takes from them.
-
-### Launching the editor/game
-
-1. Prefer a directory that already has `data/` and `clrpp/Clrpp.Managed.dll`.
-2. If CMake wrote a newer exe to a different dir than the populated runtime bin,
-   copy the exe into the populated bin and launch from there (or rebuild
-   `engine_data` / `editor_data` into that output dir).
-3. Set the process working directory to that bin folder.
-
-## Requirements
-
-- **CMake 3.16+**
-- **C++20** compiler
-- **.NET 9 SDK** for C# scripting (`dotnet` on `PATH`; CoreCLR via dotnetpp)
-- **Git LFS** for large assets
-
-## Build options (CMakeLists.txt)
-
-- `UNRAVEL_UNITY_BUILD` - unity builds in Release
-- `BUILD_ENGINE_SHARED` - static by default
-- Sanitizers via `ECMEnableSanitizers`
-- `compile_commands.json` exported for clang tooling
-
-## CI workflows
-
-`.github/workflows/`:
-
-- `windows.yml`
-- `linux.yml`
-- `macos.yml`
-
-When fixing CI: reproduce platform locally or read workflow logs via `gh` CLI.
-
-## Verification checklist
-
-After code changes:
-
-- [ ] `engine` target compiles
-- [ ] `editor` target compiles (if editor code touched)
-- [ ] `game` target compiles (if runtime-only code)
-- [ ] `tests` target compiles and the relevant `unravel-tests` suites pass
-- [ ] No new warnings in touched files
-- [ ] `engine_data` copied if shaders/assets changed (+ shaderc validation, see below)
-- [ ] `editor_data` copied if editor shaders changed
-- [ ] Editor launches without crash
-- [ ] Game runner launches (if applicable)
-
-## Shader rebuild
-
-The `engine_data` target only **COPIES** `.eshader`/`.sh` sources into
-`<runtime dir>/data/engine/` (and syncs `bgfx_shader.sh` / `bgfx_compute.sh`) - it does
-**not** compile shaders. The editor's asset importer invokes `shaderc` at import time,
-so a shader syntax error shows up only as a runtime import failure, and a failed
-compile silently keeps the stale binary (presents as wrong rendering, not an error).
-
-After a shader change:
-
-1. `cmake --build build/<Config> --target engine_data` in each active tree.
-2. Validate offline: run the in-tree `build/<Config>/bin/shaderc.exe` against the
-   copied tree for `s_5_0` and `spirv`, writing output inside the build tree - or run
-   the `gi bake` test suite, whose shader-compile test does this for all GI shaders.
-3. Launch the editor and confirm the import produced no errors.
-
-## Scripting / .NET verify
-
-If scripting touched:
-
-- [ ] `dotnet --info` reports an SDK (not only a runtime)
-- [ ] Project scripts compile from editor Recompile menu
-- [ ] Hot-reload succeeds
-- [ ] No managed assembly load errors in console
-- [ ] `clrpp/` bridge payload present next to the exe when using CoreCLR
-
-## Packaging
-
-CPack configured for Windows/Linux/macOS ZIP. Test packaging only when release-related.
-
-## Common build failures
-
-| Error | Check |
-|-------|-------|
-| Missing meta symbol | Forgot to add `.cpp` to CMake |
-| Shader compile fail | `.eshader` syntax; rebuild engine_data |
-| `dotnet` not found | Install .NET 9 SDK; ensure it is on `PATH` |
-| Script compile fails | `dotnet --info` must show an SDK |
-| Stale shader binary | Clean engine_data compiled output |
-| LFS pointer file | `git lfs pull` |
-
-## Done criteria
-
-Clean build of affected targets in the configured tree(s) + relevant `unravel-tests`
-suites green + smoke test (editor opens, scene loads).
+| File | What it holds |
+|------|---------------|
+| `CMakeLists.txt` | options, data targets, shaderc stack, install layout |
+| `engine/engine/CMakeLists.txt`, `editor/editor/CMakeLists.txt` | source globs, unity settings |
+| `tests/tests/tests.cpp`, `tests/tests/tests.h` | runner boot, options, suite registration |
+| `tests/tests/CMakeLists.txt` | runner libraries, source-tree paths |
+| `cmake/web_player.cmake`, `cmake/android_player.cmake` | player sub-builds and their options |
+| `cmake/check_package.cmake` | what a runtime folder or a package must hold |
+| `deps/3rdparty/bgfx/CMakeLists.txt` | bgfx pin, patch step, build options |
+| `.github/workflows/release.yml` | release packages, Linux images and compilers |

@@ -56,3 +56,7 @@ the top source of broken scenes.
 - Do not iterate the full hierarchy to find one entity - that is what
   scene_find_entities is for.
 - Do not cache names as identity; names can repeat. Ids are the identity.
+- Do not pick the entities to change by name_contains alone: "Main" also
+  matches the Main Camera, a group's name also matches its parent. Narrow with
+  parent_id or name_exact, and after a bulk change list what carries it
+  (scene_find_entities {"component":...}) to compare with the set you meant.

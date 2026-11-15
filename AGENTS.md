@@ -1,296 +1,135 @@
-# UnravelEngine - Agent Instructions
+# UnravelEngine
 
-Cross-tool project guide for any coding agent. Domain workflows live in **on-demand
-skills** under `.agents/skills/` - do not load them all at once.
+C++20 game engine with an ImGui editor, a bgfx renderer and C# scripting (CoreCLR through
+dotnetpp). Targets: Windows, Linux, macOS, Android and the browser (WebGPU / WebGL 2).
+
+<!-- Maintainers: keep this file under ~150 lines. A line belongs here only if it holds for
+all code and an agent would not learn it by reading the code. Area rules go to the owning
+skill or a directory AGENTS.md; see .agents/README.md. -->
 
 ## Layout
 
 | Path | Role |
 |------|------|
-| `AGENTS.md` | Always-on project instructions (this file) |
-| `.agents/skills/` | Portable skills (`*/SKILL.md`) - source of truth |
-| `CLAUDE.md` | Optional one-line import of this file for Claude Code |
-| `.cursor/skills`, `.claude/skills` | Optional junctions to `.agents/skills` (see `.agents/README.md`) |
-
-## Precedence
-
-1. Explicit user instructions in the current chat  
-2. This file (`AGENTS.md`)  
-3. On-demand skills under `.agents/skills/`  
-
-Skills add procedures and domain checklists. They do not override hard rules here
-unless the user says so.
-
-## Repository map
-
-| Path | Role |
-|------|------|
-| `engine/` | Runtime library: ECS, rendering, assets, scripting, physics, audio |
-| `editor/` | Editor executable and ImGui hub (must not be required at game runtime) |
-| `game/` | Game / player runner |
-| `engine_data/`, `editor_data/` | Shipped data (shaders, scripts, UI); rebuild `engine_data` / `editor_data` when changed |
-| `deps/` | Third-party; use, almost never modify (`deps/3rdparty/` especially) |
-| `cmake/`, `CMakeLists.txt`, `CMakePresets.json` | Build system |
-| `.agents/skills/` | Domain and workflow skills |
-| `tasks/` | Optional agent notes (`todo.md`, `lessons.md`) |
-
-Bootstrap order and system list: see skill `unravel-triage`.
-
-## Agent behavior
-
-- Act as a principal C++ / engine engineer with many years of experience.
-- Keep going until the user's query is completely resolved. Only stop when the
-  problem is solved.
-- If unsure about file content or codebase structure, use tools to read and gather
-  information. Do not guess or invent answers.
-- Plan extensively before each tool call, and reflect on outcomes before the next.
-  Do not solve the problem with tool calls alone - think between steps.
-- Prefer minimal diffs. Touch only what the task requires.
-- Never modify `deps/3rdparty/` unless there is no alternative.
-- After a user correction, capture the pattern in `tasks/lessons.md` (see skill
-  `unravel-lessons`).
-
-## Start here on non-trivial work
-
-Skip triage for trivial one-file edits with an obvious touch point.
-
-1. Read skill **`unravel-triage`** (`.agents/skills/unravel-triage/SKILL.md`).
-2. Classify domain, list files to read, then open the matching domain / workflow skill.
-3. For large or cross-cutting design, use **`unravel-architect`**.
-4. Before calling done, use **`unravel-build-verify`** when code or data targets changed.
-
-Skill catalog: `.agents/skills/README.md`.
-
-## Hard project rules
-
-- Match existing naming: `snake_case` for types, files, and functions in this codebase.
-- Engine vs editor: code under `editor/` must not be required at game runtime.
-- Play mode: respect `play_mode` phases; do not run edit-only mutations while playing.
-- Serialization / meta / prefabs / C# parity: check the triage skill's cross-cutting
-  list before adding components or reflected fields.
-- Prefer English in code and comments; ASCII only in source.
-- Do not create git commits, amend, push, or open PRs unless the user explicitly asks.
-- Commit messages and PR texts never name an agent, a model or an email: no `Co-Authored-By`
-  trailers and no "Generated with" lines. Keep messages short and clear.
-- Never update git config; never force-push `main`/`master`; avoid destructive git
-  commands unless the user explicitly requests them.
-
-## Code quality
-
-- Verify information before presenting it. Do not assume or speculate without evidence.
-- Make changes file by file when that helps review.
-- Never use apologies.
-- Do not add "understanding" feedback in comments or documentation.
-- Do not suggest whitespace-only changes.
-- Do not invent changes beyond what was requested.
-- Do not ask for confirmation of information already in context.
-- Preserve unrelated code and existing structure.
-- Prefer a single coherent edit per file over multi-step rewrite instructions.
-- Do not ask the user to verify implementations that are already visible in context.
-- Do not suggest updates when no modification is needed.
-- Link to real project files, not placeholder docs.
-- Do not show or discuss the current implementation unless asked.
-- Prefer root-cause fixes over temporary hacks.
-- Keep changes simple and local; avoid drive-by refactors.
-
-## Clean code
-
-- Named constants over magic numbers; keep constants near the top of the file or
-  in a dedicated constants location.
-- Names reveal purpose; avoid unclear abbreviations.
-- Comments explain *why*, not *what*; document APIs, complex algorithms, and
-  non-obvious side effects.
-- Single responsibility; small focused functions.
-- DRY: extract repeated logic; keep a single source of truth.
-- Keep related code together; consistent file and folder naming.
-- Hide implementation details; expose clear interfaces.
-- Refactor continuously; leave touched code cleaner than you found it.
-- Write tests before fixing bugs when practical; cover edge cases.
-- Clear commit messages; small focused commits; meaningful branch names.
-
-## Workflow orchestration
-
-### Plan first
-
-- Enter a planning mindset for any non-trivial task (3+ steps or architectural decisions).
-- If something goes sideways, stop and re-plan - do not keep pushing a failing approach.
-- Use planning for verification steps, not only for building.
-- Write clear specs upfront to reduce ambiguity.
-
-### Subagents
-
-Use only when the tool supports them and context isolation helps.
-
-**Do use for:** broad or parallel codebase research, noisy shell/build logs,
-independent verification. One clear goal per subagent. The prompt must be
-self-contained (paths, constraints, definition of done) - subagents do not see
-the parent chat history.
-
-**Do not use for:** single-file edits, work that needs the full conversation,
-or short procedures a skill already covers end-to-end. Prefer skills over
-subagents for repeatable checklists.
-
-**Model class (not product names):**
-
-| Role | Model class |
-|------|-------------|
-| Explore / search | Fast / cheap |
-| Shell / log-heavy | Fast / cheap |
-| Implement / multi-file refactor | Inherit parent (or stronger if parent is light) |
-| Review / verify | Inherit or strong; separate context from the implementer |
-
-Omit an explicit model unless the user requests one. Prefer inherit / tool
-defaults so user Settings are not overridden. Do not hardcode vendor model IDs
-in prompts or in this file - they change often.
-
-### Self-improvement
-
-- After any correction from the user: update `tasks/lessons.md` with the pattern.
-- Write rules that prevent the same mistake.
-- Review lessons at session start when relevant.
-
-### Verification before done
-
-- Never mark a task complete without proving it works.
-- Diff behavior against the baseline when relevant.
-- Ask: would a staff engineer approve this?
-- For UnravelEngine, prefer concrete checks:
-  - Compile the touched target (`engine`, `editor`, and/or `game`).
-  - Manual or MCP smoke when editor/scene behavior changed.
-- Details: skill `unravel-build-verify`.
-
-### Elegance (balanced)
-
-- For non-trivial changes, pause and ask if there is a more elegant way.
-- If a fix feels hacky, prefer the elegant solution once you understand the root cause.
-- Skip this for simple, obvious fixes - do not over-engineer.
-
-### Autonomous bug fixing
-
-- When given a bug report: fix it. Point at logs, errors, or failing tests, then resolve them.
-- Fix failing CI when it is in scope, without waiting for step-by-step instructions.
-
-### Task tracking
-
-1. Plan first: write a plan to `tasks/todo.md` with checkable items when helpful.
-2. Verify the plan before large implementation when stakes are high.
-3. Track progress; mark items complete as you go.
-4. Explain changes at a high level as you proceed.
-5. Document results in `tasks/todo.md` when useful.
-6. Capture lessons in `tasks/lessons.md` after corrections.
-
-### Core principles
-
-- Simplicity first: smallest change that solves the problem.
-- No laziness: find root causes; senior-developer standards.
-- Minimal impact: touch only what is necessary.
-
-## Build
-
-- Prefer CMake commands.
-- First check whether an existing configured build directory is available.
-- Reuse the existing generator and configuration where possible.
-- CMake default runtime dir is `build/bin/` (multi-config: `build/bin/<Config>/`).
-  Some local/VS trees still use `build/<Config>/bin/` — both may exist.
-- When launching editor/game, use the directory that contains a complete runtime
-  (`data/`, `clrpp/`), not merely where a fresh `.exe` was linked. Prefer the
-  user's known working bin if it has those assets; copy the new exe there if needed.
-- Details and checklists: skill `unravel-build-verify`.
-
-## C++ guidelines
-
-Apply when editing C/C++ or CMake.
-
-### Basic principles
-
-- Use English for all code and documentation.
-- Always declare the type of each variable and function (parameters and return value).
-- Create necessary types and classes.
-- Use Doxygen-style comments for public classes and methods.
-- Do not leave blank lines within a function.
-- Follow the one-definition rule (ODR).
-- Use only ASCII in code and comments.
-
-### Nomenclature
-
-- Use the case already existent in the file.
-- Use `snake_case` for classes, structures, variables, functions, methods, and file names.
-- Use `ALL_CAPS` for constants and macros.
-- Use `UPPERCASE` for environment variables.
-- Avoid magic numbers; define named constants.
-- Start each function with a verb.
-- Use verb-style booleans: `is_loading`, `has_error`, `can_delete`, etc.
-- Prefer complete words over abbreviations, except standard ones (API, URL, etc.) and
-  well-known locals (`i`, `j`, `k`, `err`, `ctx`, `req`, `res`).
-
-### Functions
-
-- Short, single-purpose functions (aim under ~20 instructions).
-- Name with a verb plus object.
-- Booleans: `is_x` / `has_x` / `can_x`. Side-effecting void: `execute_x` / `save_x`, etc.
-- Avoid nesting via early returns and extraction to helpers.
-- Prefer standard algorithms (`std::for_each`, `std::transform`, `std::find`, ...) over
-  hand-rolled nesting.
-- Lambdas for simple ops; named functions for non-trivial ops.
-- Prefer default arguments over null checks where appropriate.
-- Reduce parameter lists with structs/classes for inputs and outputs.
-- Keep a single level of abstraction per function.
-
-### Data
-
-- Prefer composite types over abusing primitives.
-- Prefer validation inside types over scattered checks.
-- Prefer immutability; use `const` and `constexpr` appropriately.
-- Use `std::optional` (or project `hpp::optional`) for possibly absent values.
-
-### Classes
-
-- SOLID; prefer composition over inheritance.
-- Interfaces as abstract classes or concepts.
-- Small classes: aim under ~200 instructions, ~10 public methods, ~10 properties.
-- Rule of Five or Rule of Zero for resource management.
-- Private members; const-correct methods.
-
-### Exceptions and errors
-
-- Exceptions for unexpected failures.
-- When catching: fix, add context, or rethrow to a global handler.
-- Prefer `hpp::optional` or error codes for expected failures.
-
-### Memory
-
-- Prefer smart pointers over raw pointers.
-- RAII; prefer `std::vector` and standard containers over C arrays.
-
-### Testing
-
-- Arrange-Act-Assert; clear names (`input_x`, `mock_x`, `actual_x`, `expected_x`).
-- Unit tests for public functions; integration tests per module.
-- Test doubles for expensive dependencies; Given-When-Then where useful.
-
-### Project structure
-
-- Modular architecture; separate `.h` / `.cpp`.
-- Organize with namespaces; foundational pieces in core-style namespaces as existing code does.
-- `deps/` holds third-party libraries - use them, almost never modify them.
-
-### Standard library and concurrency
-
-- Prefer the C++ standard library (`std::string`, containers, `std::filesystem` as `fs`,
-  `std::chrono`, etc.).
-- Use project helpers where established (`hpp::optional`, `hpp::variant`, `hpp::string_view`).
-- Prefer task-based parallelism; synchronize with mutexes/atomics; avoid data races.
-
-## Skills discovery
-
-After clone, if your tool expects skills under `.cursor/skills` or `.claude/skills`, run:
-
-```powershell
-powershell -File tasks/link-agent-dirs.ps1
-```
-
-```bash
-bash tasks/link-agent-dirs.sh
-```
-
-Edit skills only under `.agents/skills/`.
+| `engine/` | runtime library: `core/` utilities, `engine/` systems (ECS, rendering, assets, physics, audio, scripting, UI) |
+| `editor/` | editor executable: `core/` (asset compiler, deploy, packages), `editor/` (hub, panels, MCP server) |
+| `game/` | player runner (desktop, Android, browser) |
+| `engine_data/`, `editor_data/` | shipped data: shaders, C# scripts, UI documents, MCP guides |
+| `deps/` | first-party libraries (`ospp`, `threadpp`, `audiopp`, `dotnetpp`, `hpp`) and `deps/3rdparty/` |
+| `tests/` | `unravel-tests`: every validation suite in one runner |
+
+Skills in `.agents/skills/` hold each area's contracts, traps and procedures; area owners and
+where each kind of knowledge goes: `.agents/README.md`.
+
+## Build and test
+
+- Build in the configured single-config Ninja trees `build/Debug` and `build/RelWithDebInfo`
+  (there is no cache at `build/`). Never configure a new tree or compile outside them; the two
+  exceptions (a first-party library's own suite, an A/B build of another commit) are in
+  skill `unravel-build-verify`.
+- `cmake --build build/<Config> --target <editor|game|tests|engine_data|editor_data>`; the
+  `tests` target builds `bin/unravel-tests`.
+  Ninja already uses all cores; pass no `-j`.
+- Changed files under `engine_data/` or `editor_data/` reach the runtime only through their
+  data target. A new `.cpp` needs a re-configure (sources are globbed).
+- Outside Debug, `engine/engine` and `editor/editor` build as unity batches: names in
+  anonymous namespaces must be unique across files. Check a RelWithDebInfo build.
+- Run from `build/<Config>/bin/`, which holds `data/` and `clrpp/`.
+- Tests: `build/<Config>/bin/unravel-tests --suite "<name>"` (substring match). Never run a
+  suite beside a build or a busy editor, and put no hard timeout on shader suites.
+- Details, suite list and CI: skill `unravel-build-verify`.
+
+## Hard rules
+
+- Code under `editor/` is never required at game runtime: `engine/` and `game/` never
+  include from `editor/`.
+- `deps/3rdparty/` is not edited (see `deps/AGENTS.md`).
+- No new third-party library (submodule, FetchContent, vendored copy, package) unless the
+  user names it. Ask first, naming the library and its license.
+- Play mode: edit-only mutations never run while playing; respect the `play_mode` phases.
+- ASCII only in every file written in the repository: code, comments, markdown, data.
+- SDL is called only through `ospp` (`deps/ospp/`): add an ospp function when the engine
+  needs something SDL offers.
+- `try_load` (`engine/core/serialization/serialization.h`) is the one load API. When it
+  misbehaves, fix it in place; never add a parallel load function.
+- A platform quirk (long paths, file system behavior) gets one helper in
+  `engine/core/filesystem/` that every caller uses, not a workaround in the feature.
+- Slow derived data (distance fields, tables, shader programs) is computed when an asset
+  is compiled or deployed, never on first use at run time.
+- A compile's by-products stay in the compiled cache beside the compiled file; `data/`
+  folders hold only files people write.
+- Engine version comparisons use all four parts: `1.2.0-320` is newer than `1.2.0-319`.
+- Thread hand-overs never make either side wait. Use the project's concurrent queues
+  (`engine/core/concurrency/`) before writing a new one.
+
+## C++ conventions
+
+- `snake_case` for types, functions, variables and files. Constants and macros: follow the
+  file (`ALL_CAPS` or `k_` prefix).
+- Use the `hpp::` types: `hpp::string_view` (`<hpp/string_view.hpp>`), `hpp::optional`,
+  `hpp::variant`. The code builds on older standard libraries (Ubuntu 20.04: no
+  `std::bit_cast`).
+- Reflected types (`crtp_meta_type`) cast with `is<>`, `safe_cast<>` and
+  `safe_pointer_cast<>` (`engine/core/reflection/registration.h`), never with
+  `dynamic_cast`, `dynamic_pointer_cast` or an unchecked `static_pointer_cast`.
+- A function that drives a sequence reads as a list of named steps: a long bool chain
+  becomes a predicate named for its question, a lookup becomes a helper.
+- Fix a missing operator or a wrong contract on the type or in the library, not around it
+  at each call site. Fix a lifetime by sharing ownership, not by copying.
+- Comments say what the code does and why, now: no history, no audit references, no
+  measurements from past sessions, no other engine's names. Nothing that changes behavior
+  goes into a comment.
+- File formats use real directives and plain lists, not rule languages.
+- Doxygen comments on public classes and functions.
+
+## User-visible text
+
+- Tooltips, meta `tooltip` attributes, inspector text, deploy problems and log lines a user
+  reads are full sentences ending with a period; never "x; y".
+- Never "Lumen", "Unreal", "UE" or another engine's name in anything a user can read:
+  labels, pass and profiler names, log tags (use `[GI]`), MCP tool descriptions, commits.
+- A field's value does not repeat its label.
+
+## Changing a shared contract
+
+When adding a component, reflected field, asset type or file format, check each:
+
+- Serialization: ser20 SAVE/LOAD and `all_serializeable_components` in
+  `engine/engine/meta/ecs/components/all_components.h`; a format change needs a version or a
+  backward-compatible LOAD.
+- Meta and inspector: `REFLECT` under `engine/engine/meta/`; inspectors under
+  `editor/editor/hub/panels/inspector_panel/inspectors/`.
+- Play mode: what runs in edit mode only, in play only, and what resets at play end.
+- Prefab overrides: property paths through `serialization::path_context`.
+- C# parity: `engine_data/data/scripts/` mirrors what scripts can reach, enums included.
+- Assets: `.meta` uids stay stable; importers live in `editor/core/asset_compiler/importers/`.
+- Editor MCP tools: they call the editor's own functions (`editor/AGENTS.md`).
+
+Designs that span several areas: skill `unravel-architect`.
+
+## Git and commits
+
+- Change repository state (commit, merge, pull, push, stash, reset, rebase, restore,
+  checkout of another ref) only when the user asks for that operation. Read-only git is fine.
+- Before a commit, run `git diff --cached --stat`. The user stages their own work; when the
+  index holds other changes, commit with a pathspec (`git commit -- <paths>`).
+- Message: `[Area] What changed, as a sentence`, then `- ` bullets when needed. Areas in use:
+  Rendering, Deploy, Scripting, Editor, Build, Engine, Assets, Physics, Core, Animation, UI,
+  MCP, Audio. Never name a game, an agent, a model or an email.
+- CI workflows (`.github/workflows/`) run by hand only (`workflow_dispatch`); never add push,
+  pull_request or schedule triggers.
+
+## Working here
+
+- Reproduce on the user's scene, state and settings before choosing a cause, and measure a
+  baseline in the same session before judging a change (skill `unravel-debugging`).
+- When the user edits a tested set of changes, change only the items they name. A measured
+  "no benefit" is data to report, not a reason to drop an item.
+- Driving an editor over MCP: start your own on your own port; never call an editor you did
+  not start (skill `unravel-editor-mcp`).
+- Done means verified: the touched targets build in the configured trees and the relevant
+  suites pass. Say what was not verified.
+- When the user corrects you, fix the work and write the rule into the file that owns it
+  (`.agents/README.md`, "When the user corrects an agent").
+- `tasks/` is local scratch for plans and analyses (not in git); repository docs never link
+  into it.

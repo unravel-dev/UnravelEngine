@@ -37,6 +37,11 @@ target_compile_definitions(${target_name} PRIVATE
     EDITOR_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../editor_data"
 )
 
+# The agent docs suite checks the repository paths that the AGENTS.md files and the skills name.
+target_compile_definitions(${target_name} PRIVATE
+    REPOSITORY_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../.."
+)
+
 set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "unravel-tests")
 unravel_add_windows_manifest(${target_name})
 

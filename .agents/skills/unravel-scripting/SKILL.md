@@ -1,178 +1,154 @@
 ---
 name: unravel-scripting
 description: >-
-  Works on UnravelEngine managed scripting: C# API, script glue, hot-reload,
-  ScriptComponent lifecycle, and C++/C# interop via dotnetpp (CoreCLR). Use for
-  game scripts, scripting backend, OnCreate/OnUpdate hooks, or physics/UI events
-  forwarded to C#.
+  Covers UnravelEngine C# scripting: script_system, the C++/C# glue and bindings, the engine's C#
+  API in engine_data/data/scripts, script builds and reloads, script member serialization, async
+  script code, and dotnetpp/clrpp (CoreCLR bridge, icall weaver). Use when exposing an engine
+  feature to C#, when scripts do not compile, reload, keep their values or leak a domain, or when
+  editing deps/dotnetpp.
 ---
 
-# Unravel Scripting
+# Unravel scripting
 
-## Start here
+The engine side of C# scripting (`engine/engine/scripting/`: `script_system`, glue, per-area
+bindings), the engine's C# API (`engine_data/data/scripts/`), script member serialization
+(`engine/engine/meta/ecs/components/script_component.cpp`), the script library build (the editor's
+`compile<script_library>`) and the embedding library `deps/dotnetpp/` (`dotnet::` API, the clrpp
+CoreCLR bridge and its managed side). Writing game scripts and the MCP script workflow are in
+`editor_data/data/mcp/skills/scripting-api.md` and `editor_data/data/mcp/skills/scripting.md`.
+
+## Gotchas
+
+Glue and API:
+
+- A binding that reaches engine state registers with `script_internal_call(f)`
+  (`engine/engine/scripting/ecs/systems/bindings/script_glue_common.h`): off the script thread it
+  raises `InvalidOperationException` in C# and returns a default. `dotnet_internal_call(f)` is only
+  for calls safe on any thread (logging).
+- Engine code reaches the runtime through `dotnet::` (`<dotnetpp/dotnetpp.h>`); converter
+  specializations live in `dotnetpp_backend::managed_interface`. The build forces
+  `DOTNETPP_BACKEND=coreclr` (`deps/dotnetpp/CMakeLists.txt`) and monopp is not built; the backend
+  `#if`s that exist stay where they are.
+- Blittable payloads mirror a managed struct field for field (`script_system::frame_update_data`,
+  `ui_event_payload`, the POD converters in `script_interop.h`): change both sides together.
+- A script API extends the engine's own object instead of adding parallel value types or
+  per-property parameters: per-draw material values are a `MaterialInstance` made from a material
+  (`new MaterialInstance(material)`, passed as `materialInstance:`). Before building an API the user
+  described in words, show the two or three lines a script would write and confirm them. Material
+  instance semantics: `unravel-materials`.
+- Public C# under `engine_data/data/scripts/` (outside `samples/` and `test/`) carries XML docs:
+  `summary`; `param` and `returns` on methods; a summary per enum value. `scripts_api_search` serves
+  them (`ApiIndex.cs`). A public signature change breaks user projects.
+- Never expose a raw native pointer to C#: pass entity ids, asset uids or handles the glue resolves
+  per call (`get_entity_from_id`).
+
+Script members:
+
+- A script's saved members are its public fields and public properties (not static, no `[Hide]`). A
+  public get-only property fails on every load ("did not load and keeps its current value"): make it
+  internal or protected, or give it a setter.
+- Member loads stay on `try_load`; `load_mono_member` catches only what fails around it (assigning
+  the value), so one bad member keeps its value and the entity's other members and scripts load.
+- Arrays and lists load as the element type the member declares (`try_load_mono_collection`), and
+  dictionaries into the dictionary the member holds; a type name saved in the file is never resolved.
+- Type lookup by name takes full names only (`FindType` in
+  `deps/dotnetpp/dotnetpp/clrpp/managed/Bridge.Runtime.cs`, `script_system::get_type_by_fullname`):
+  CoreLib's `Vector2/3/4`, `Quaternion`, `Random` and `Range` collide with the engine's global types.
+  Never add a simple-name fallback.
+- A new member type (an asset type, a math type) needs a save and a load entry in
+  `script_component.cpp`, a widget in `editor/editor/hub/panels/inspector_panel/inspectors/inspector_script.cpp`
+  and a conversion in `editor/editor/system/mcp/mcp_component_utils.cpp`.
+
+Builds and reloads:
+
+- The engine owns no compiler: the editor installs its script build through
+  `script_system::set_library_builder`; the player only loads prebuilt libraries.
+- `library_files_mutex` (`script_system.cpp`) guards every build's fixed temp outputs and the copies
+  into place, for all protocols. `copy_compiled_lib` runs under it: never lock inside it.
+- A protocol whose build is still running is queued again, never stacked; a newer
+  `compilation_version` drops the reload of an older build.
+- A scheduled build waits until the asset manager holds every `.cs` the asset database lists
+  (`is_waiting_for_sources`, at most `SOURCE_WAIT_LIMIT`): each file arrives after its own compile job.
+- Play start skips the app build when `is_library_current`: the last build succeeded in the same debug
+  mode, from the same source generation and sources stamp (paths and write times), and its dll exists.
+  Any other build input bumps the generation through `set_needs_recompile` (an engine change also
+  bumps the app's).
+- A library moves with its pdb, mdb and xml (`copy_compiled_lib`), and a companion the source lacks is
+  removed at the destination. Exceptions name the script line only when the pdb lies beside the dll.
+- The editor's build always writes a pdb (`params.debug_symbols` in
+  `editor/core/asset_compiler/asset_compiler.cpp`): `get_script_source_file` finds a type's file by
+  `[ScriptSourceFile]`, then the pdb (`ScriptSources.cs`), then the protocol's only script named after
+  the type. Deploy drops pdbs unless `deploy_debug_symbols`.
+- A recompile reloads every open scene through a checkpoint (`editing_manager::on_script_recompile`):
+  undo history is cleared, scripting is unloaded before the domains, and every script's values
+  round-trip through save and load. Scene handles taken before it are stale (`unravel-ecs-component`).
+- A static in a surviving assembly that holds script instances, script `Type`s or delegates pins the
+  unloaded app context: mark its class `[AutoStaticsCleanup]`. When an unload reports a leak, read the
+  roots the report names before adding a cleanup. Details: [domain-unload.md](domain-unload.md).
+
+Async script code:
+
+- Never block the script thread on async code (`.Result`, `.Wait()`, `GetAwaiter().GetResult()`): the
+  continuation needs that thread, so the game freezes. On CoreCLR the wait is logged after 3 s
+  (`BlockedWaitReportMilliseconds`).
+- Awaitables are not pooled: a kept one can be cancelled or awaited again, and token callbacks arrive
+  from other threads after the wait ended. Model and rules: [async-scripts.md](async-scripts.md).
+
+dotnetpp:
+
+- The icall weaver (`deps/dotnetpp/dotnetpp/clrpp/managed/Weaver.cs`, Mono.Cecil) rewrites the dll and
+  pdb inside the script build, never at load: a game with prebuilt libraries does not need Cecil. It
+  strips the pdb's TypeDefinitionDocuments records, which Cecil's round trip corrupts, and any other
+  per-type debug info Cecil reads lazily during Write lands on another type.
+- `Clrpp.Managed.dll` and the native bridge check each other's export table at start (`clr_bridge.cpp`,
+  "bridge export count mismatch"): a new export redeploys both.
+
+## How it works
+
+- Script thread: `script_system::init` records it (`get_script_thread_id`). Updates run in the frame
+  events at `frame_update_priority::scripts` and `scripts_late` (`engine/engine/events.h`);
+  `on_frame_begin` sets the managed `Time` before physics runs FixedUpdate and collision callbacks.
+  Play hooks: `on_play_begin` -1000, `on_play_end` 1000, `on_pause` 100, `on_resume` -100.
+- Domains: the engine library (`engine:` scripts, `Unravel.Core`) and the app library (`app:`
+  scripts) load into separate collectible contexts; an app type shadows an engine sample of the same
+  name (`append_engine_scriptable_component_types`).
+- Build: a `.cs` change calls `set_needs_recompile`; `check_for_recompile` schedules
+  `create_compilation_job` on the pool; a successful build raises `events::on_script_recompile`, and the
+  editor reloads the domains and the scenes (above).
+- Native components reach C# through `native_comp_lut::register_native_component` in
+  `bindings/scene_bindings.cpp` and one `register_*_script_bindings()` per area
+  (`bindings/script_bindings.h`). Not exposed on purpose: `tag_component` / `layer_component`
+  (`Entity.name`, `Entity.tag`, `Entity.layers`), `prefab_component` / `prefab_id_component` (`Prefab`
+  assets and `Scene.Instantiate`), `root_component` / `active_component` (active is on `Entity`),
+  `script_component` (hosts user `ScriptComponent` subclasses), `test_component`.
+
+## Procedures
+
+- Expose an engine feature, a component or a value type to C#: [add-script-api.md](add-script-api.md).
+- Domain unload, `[AutoStaticsCleanup]`, leak reports, bridge files: [domain-unload.md](domain-unload.md).
+- Async model, cancellation and the pump: [async-scripts.md](async-scripts.md).
+- Requirements: a .NET SDK at or above `CLRPP_DOTNET_VERSION` (9.0,
+  `deps/dotnetpp/dotnetpp/clrpp/CMakeLists.txt`) on `PATH`; `dotnet --info` lists it.
+
+## Verify
+
+- Build `engine` and `editor`; the engine tree's build also builds and deploys `bin/clrpp/`.
+- No `unravel-tests` suite drives scripts. Smoke in an editor over MCP: write a script
+  (`scripts_set_sources_batch`), wait for the build (`scripts_get_compile_status` with `wait`), attach
+  it, set a member, save, reopen the scene in a fresh editor and read the member back, enter and leave
+  play, then recompile and check the log for an unload leak report.
+- dotnetpp changes: its own suite, [domain-unload.md](domain-unload.md) "Testing dotnetpp".
+
+## Entry points
 
 | Purpose | Path |
 |---------|------|
-| Script system | `engine/engine/scripting/ecs/systems/script_system.h` |
-| Script glue | `engine/engine/scripting/ecs/systems/script_glue.cpp` |
-| Interop | `engine/engine/scripting/ecs/systems/script_interop.h` |
+| Script system: domains, builds, events, callbacks | `engine/engine/scripting/ecs/systems/script_system.h` |
+| Glue entry, internal call registration | `engine/engine/scripting/ecs/systems/script_glue.cpp`, `engine/engine/scripting/ecs/systems/bindings/` |
+| POD converters | `engine/engine/scripting/ecs/systems/script_interop.h` |
+| Script member save and load | `engine/engine/meta/ecs/components/script_component.cpp` |
 | Script component | `engine/engine/scripting/ecs/components/script_component.h` |
-| Meta | `engine/engine/meta/ecs/components/script_component.hpp` |
-| C# API scripts | `engine_data/data/scripts/` |
-| Embedding API | `deps/dotnetpp/dotnetpp/dotnetpp/` |
-
-## Architecture
-
-- **dotnetpp** embedding API (`dotnet::`) over CoreCLR (`DOTNETPP_BACKEND=coreclr`)
-- Requires **.NET 9 SDK** (`dotnet` on `PATH`) for script compile and hot-reload
-- **Dual script domains** - engine scripts + per-project scripts
-- **Hot-reload** - `events::on_script_recompile` triggers recompile and reload
-- **ScriptComponent** - attaches C# class to entity
-- **POD interop** - layout-compatible value types in `dotnetpp_backend::managed_interface`,
-  converter specializations in `dotnetpp_backend::managed_interface`, registered with
-  `dotnet_register_converter_for_pod`
-
-## C# API layout (`engine_data/data/scripts/`)
-
-| Area | Path |
-|------|------|
-| Components | `scene/components/` |
-| Physics callbacks | `scene/physics/` |
-| Math | `math/` |
-| UI | `ui/` |
-| Gizmos | `gizmos/` |
-| Entry | `system/` |
-
-Namespace: `Unravel.Core` (and project-specific assemblies).
-
-## Lifecycle hooks
-
-C# scripts implement:
-
-- `OnCreate` - entity created
-- `OnStart` - play mode start
-- `OnUpdate` / fixed update variants
-- Collision/sensor callbacks forwarded from physics
-
-Script system connects to `events` in `script_system.cpp`:
-
-- `on_frame_begin` (sets the managed `Time` before any system runs script code: the physics steps run
-  FixedUpdate and the collision callbacks before the scripts' update)
-- `on_frame_update`, `on_frame_fixed_update`, `on_frame_late_update`
-- `on_play_begin`, `on_play_end`, `on_pause`, `on_resume`
-
-## Async code (await)
-
-| Purpose | Path |
-|---------|------|
-| Contexts and pump (`ScriptSynchronizationContext`, `AwaitableScheduler`) | `engine_data/data/scripts/system/ScriptSynchronizationContext.cs` |
-| Waits (`Awaitable`) | `engine_data/data/scripts/system/Awaitable.cs` |
-| Destroy token, `RunningScope` | `engine_data/data/scripts/scene/components/ScriptComponent.cs` |
-
-- Each script has a synchronization context for each play session, and the session has one for code
-  no script runs. `RunningScope` installs it around every script call, so an `await` comes back to
-  the script. The pump runs after the coroutines; fixed-update waits after FixedUpdate, end-of-frame
-  waits after LateUpdate. Nothing pumps while paused or outside play.
-- One rule for the end of a script (destroy, before OnDestroy) and of a session (play stop,
-  `internal_n2m_end_play`, while the scene is whole; OnDestroy does not run at stop): the token
-  (`destroyCancellationToken`, or `Application.exitCancellationToken`) is cancelled and the pending
-  waits end cancelled, as the script on the script thread; what that cancellation posts runs right
-  after. Everything else is dropped: work queued before, and tasks that finish later (a running
-  `Task.Run` body, IO), finally blocks included. `task.WaitAsync(destroyCancellationToken)` ends such
-  a wait at once. Script tokens hang on the session token, so play stop cancels them all.
-- Pump lists only grow while they are pumped and shed ended waits after the outermost pump, so a
-  continuation may destroy scripts, add waits or run a pump again. Ending a script touches only its
-  own waits.
-- `MainThreadAsync` after `BackgroundThreadAsync` comes back as the same script: the worker runs
-  under a `WorkerSynchronizationContext` that carries the owner across worker awaits.
-- Never block the script thread on async code (`.Result`, `.Wait()`, `GetAwaiter().GetResult()`):
-  it deadlocks. On CoreCLR, `ScriptSynchronizationContext.Wait` logs a wait that lasts 3 s while
-  async code is pending, with its stack; Mono does not report waits.
-- Awaitables are not pooled: a kept Awaitable can be cancelled or awaited again, token callbacks
-  arrive from other threads after the wait ended, and a second await is chained (with an error)
-  rather than thrown, which pooling would turn into resuming the wrong code.
-- Exceptions from async code are logged with the script type; cancellations by a token are not.
-  An `async void` exception posted to a closed context is still logged.
-
-## C++ <-> C# glue
-
-When exposing new engine features to scripts:
-
-1. Add C++ callable from glue (`script_glue.cpp`, `script_interop.cpp`)
-2. Add C# wrapper in `engine_data/data/scripts/`
-3. Register internal call with `dotnet::add_internal_call` / `dotnet::internal_call_registry` and `dotnet_internal_call()`
-4. For POD types, add layout-compatible managed struct + `dotnet_register_converter_for_pod` in `script_interop.h`
-5. Maintain API parity - breaking C# API breaks user projects
-6. **Document every public C# API** (required - see below)
-
-## C# XML documentation (required)
-
-All public surface in `engine_data/data/scripts/` (except `samples/` and `test/`) must have XML docs:
-
-| Member | Required tags |
-|--------|----------------|
-| `public class` / `struct` / `enum` / `interface` | `/// <summary>` |
-| `public` properties / fields / constants / events | `/// <summary>` |
-| `public` methods / constructors | `/// <summary>`, plus `/// <param>` for each parameter and `/// <returns>` when non-void |
-| Enum members | `/// <summary>` on each value |
-
-Rules:
-
-- Write docs for **game-facing** APIs (`Unravel.Core` components, `Entity`, `Scene`, `Assets`, `Input`, math, UI).
-- Use `<see cref="..."/>` and `<paramref name="..."/>` where they clarify relationships.
-- Do not leave placeholder summaries ("Gets or sets the value").
-- Private/`internal` members and `[InternalCall]` externs do not need docs.
-- When editing an existing public API, add any missing docs in the same change.
-
-Verification: every new/changed `public` member under `engine_data/data/scripts/` (outside samples/test) has a preceding `///` block.
-
-## Editor MCP (scripts)
-
-For attach/edit/save via MCP, use skill `unravel-entities`:
-
-| Tool | Purpose |
-|------|---------|
-| `scripts_list_types` / `scene_add_scripts_batch` / `scene_remove_scripts_batch` | Type attach (not `scene_add_components_batch`) |
-| `scripts_get_source` / `scripts_set_sources_batch` | Read/write `.cs` (atomic write) |
-| `scripts_create_batch` | New files from `TemplateComponent.cs.in` |
-
-## Hot-reload
-
-Triggered by `on_script_recompile` event. Script system:
-
-- Recompiles changed assemblies via `dotnet::compile`
-- Reloads domain (project scripts)
-- Re-attaches ScriptComponents
-
-Test: edit C# script -> recompile menu -> scripts reload without full restart.
-
-Domain unload runs `[AutoStaticsCleanup]` and verifies collection with a leak report
-(see reference.md "Domain unload, statics cleanup, leak detection"). Mark any class
-whose statics hold script instances, script `Type`s, or delegates with `[AutoStaticsCleanup]`.
-
-## Verification checklist
-
-- [ ] C# API mirrors C++ behavior
-- [ ] Public C# members have XML documentation (`summary` / `param` / `returns` as required)
-- [ ] ScriptComponent add/remove in inspector works
-- [ ] Lifecycle hooks fire in correct order (create -> start -> update)
-- [ ] Hot-reload preserves or correctly resets state
-- [ ] Physics events reach C# (`on_collision_enter`, etc.)
-- [ ] No managed handle leaks after reload
-- [ ] Project scripts compile (`.NET 9 SDK`; `dotnet --info` reports an SDK)
-
-## Common mistakes
-
-- Exposing raw pointers to C# without lifetime management
-- Missing glue registration for new native method
-- Shipping public C# APIs without XML documentation
-- C# API change without migration note
-- Script logic in C++ that belongs in `script_system` dispatch
-- Forgetting play-mode-only guards on runtime script state
-- Using backend-specific embedding APIs directly - use `dotnet::` and `<dotnetpp/dotnetpp.h>`
-- Putting converter specializations in the wrong namespace - use
-  `dotnetpp_backend::managed_interface` (no backend ifdefs in user code)
-
-## Deep reference
-
-See [reference.md](reference.md) for glue patterns.
+| C# component base, async scope | `engine_data/data/scripts/scene/components/ScriptComponent.cs` |
+| Script library build | `editor/core/asset_compiler/asset_compiler.cpp` (`compile<script_library>`) |
+| `dotnet::` API | `deps/dotnetpp/dotnetpp/dotnetpp/dotnetpp/dotnetpp.h` |
+| CoreCLR bridge, managed side | `deps/dotnetpp/dotnetpp/clrpp/clrpp/clr_bridge.cpp`, `deps/dotnetpp/dotnetpp/clrpp/managed/` |

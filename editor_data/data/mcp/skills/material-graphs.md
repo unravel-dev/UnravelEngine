@@ -12,9 +12,10 @@ import) is the Standard graph: parameters named Base Color, Roughness, Metallic,
 Bumpiness, Emissive Color, Emissive Intensity, Subsurface Color, Tiling, Dither
 Threshold (Alpha Cutoff when masked; Specular Color and Glossiness in the specular
 workflow) and texture nodes named Color Map, Normal Map, Roughness Map, Metallic
-Map, Emissive Map, AO Map (Specular Map). materials_set and
-scene_set_model_material_instances_batch take those as the old PBR keys too
-(base_color, color_map, ...; colors sRGB). Assign it with
+Map, Emissive Map, AO Map (Specular Map). assets_create_batch,
+assets_set_properties_batch and scene_set_model_material_instances_batch take
+those as the old PBR keys too (base_color, color_map, ...; colors sRGB;
+assets_list_properties {"type":"material"} lists them). Assign it with
 scene_set_model_materials_batch, override its values per entity with
 scene_set_model_material_instances_batch (parameters, textures).
 

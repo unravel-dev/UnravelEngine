@@ -49,9 +49,10 @@ order: 10
    the user's own action opened, for instance); while one is open the editor
    takes no other input - editor_answer_modal {"button":...} presses one of
    its buttons. answerable false means a window only the user can close.
-2. No project open? project_list_recent, then project_open with recent_index
-   or an absolute path. project_close closes it; project_create makes and opens
-   a new one.
+2. No project open? project_list_recent, then project_open with recent_index,
+   recent:true (the most recent) or an absolute path; preset names the scene it
+   seeds when the project has none. project_close closes it; project_create
+   makes and opens a new one.
 3. Open a scene with scene_open {"key":"Levels/Main"} (the extension may be
    left out), or start one with scene_new_from_preset (names from
    scene_list_presets: low | medium | high | showcase - they seed a camera, sun

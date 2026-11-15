@@ -41,10 +41,16 @@
 .vscode/
 .cache/
 
-# Agent tool adapters (junctions/symlinks → .agents/). Recreate with tasks/link-agent-dirs.*
+# Agent tool folders. .claude/settings.json and .claude/hooks/ are shared; the skills links
+# (.claude/skills, .cursor/skills -> .agents/skills, made by .agents/link-agent-dirs.*),
+# local settings and worktrees are not.
 .codex/
 .cursor/
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+# Bytecode of the skills' and hooks' helper scripts.
+__pycache__/
 .gemini/
 .windsurf/
 .cline/

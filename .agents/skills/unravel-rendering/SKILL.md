@@ -1,336 +1,240 @@
 ---
 name: unravel-rendering
 description: >-
-  Works on UnravelEngine rendering: bgfx deferred pipeline, render passes, shaders,
-  materials, post-processing volumes, GI, clouds, shadows, and GPU stats. Use for
-  shader edits, pipeline changes, visual bugs, draw call issues, GI/probe work,
-  or GPU memory/eviction work.
+  UnravelEngine rendering on bgfx: the deferred pipeline, render passes, .eshader shaders, render targets,
+  shadows, post-processing volumes, GPU feature support, WebGL 2 / WebGPU limits and GI. Use when adding or
+  changing a pass or shader, fixing a visual bug, a black or backend-only image or a shader compile error,
+  working on draw calls or GPU cost, or touching engine/core/graphics.
 ---
 
-# Unravel Rendering
+# Unravel rendering
 
-## Start here
+The renderer on bgfx: the deferred pipeline and its passes (`engine/engine/rendering/pipeline/`), the graphics
+layer over bgfx (`engine/core/graphics/`), the engine and editor shaders (`engine_data/data/shaders/`,
+`editor_data/data/shaders/`), shadows, particle drawing, GPU feature support and GI. Material graphs and `.mat`
+files: skill `unravel-materials`. Builds and test runs: `unravel-build-verify`. Measuring GPU cost and A/B
+protocol: `unravel-debugging`.
+
+## Gotchas
+
+Backends (OpenGL breaks first; the other backends hide these):
+
+- Create a pass's uniforms (`uniforms_cache::cache_uniforms`) before its `gpu_program`. OpenGL wires a program
+  only from uniforms registered before it links, and bgfx dedupes programs by shader pair, so a relink cannot
+  repair it. Tell: "User defined uniform '...' is not found" in the log; samplers then sit on unit 0.
+- An image (`IMAGE*`) never shares its name with a sampler uniform of any program (`i_*` or `*_out` names): the
+  GL backend rebinds every registered uniform a program declares, so the image lands on that sampler's stage
+  (unit 0 if never set) and reads or writes another texture, often in a different pass.
+- Images bind at stages 0-7 (OpenGL has eight image units; a higher stage compiles and fails at runtime).
+  Samplers and buffers may sit higher; stages are unique across a dispatch's images, samplers and buffers.
+- A shader's image declaration and its `bgfx::setImage` access agree: `_RW` ReadWrite, `_RO` Read, `_WO` Write.
+  D3D11 binds Read as a shader resource view, so a `_RW` slot bound Read reads zeros with no error. After
+  changing a declaration, grep every `setImage` of that stage.
+- 3D images bind with plain `bgfx::setImage`, without a layer range: with one, the GL backend binds a single slice
+  of a one-mip volume and stores to the other slices are undefined (NVIDIA hides it; test another driver).
+- Never sample a texture attached to the bound frame buffer: D3D11 unbinds the view silently and every read
+  returns 0 (why the velocity pass has a color-only `VELOCITY_FBO_CAMERA`).
+- bgfx runs OpenGL with origin bottom-left and -1..1 clip depth. `gfx::is_homogeneous_depth()` is the engine's
+  projection convention and always false: projections are zero-to-one, a GL depth buffer holds 0.5 + 0.5 z, and
+  shaders read camera depth through `toClipSpaceDepth`. A projection whose depth is read raw, or that must clip
+  at its near plane, takes `bgfx::getCaps()->homogeneousDepth`. A pass that rasterizes tiles and reads them back
+  by texel mirrors its rect or scissor and flips y on GL (`gi_surface_cache::compute_capture_view`); passes that
+  sample by UV need nothing.
+- `gfx::render_pass::bind()` and `clear()` call `bgfx::touch`, which discards every uniform, texture, state and
+  buffer set since the last submit: bind or clear the pass first, then set per-draw state.
+- A bgfx view runs its blits, then all its compute dispatches, then its draws; `bgfx::update` of a dynamic buffer
+  lands at frame start for every view. Work that must interleave takes separate views, and per-view CPU data
+  takes a buffer per view.
+- The last argument of `bgfx::submit` / `gfx::dispatch` is a `BGFX_DISCARD_*` mask: `true` compiles as
+  `BGFX_DISCARD_BINDINGS`.
+- `bgfx::makeRef` without a release callback needs the memory alive for the frame or two the render thread reads
+  it; data an owner may free sooner goes through `gfx::eviction::backing_buffer` and the backing constructors of
+  `vertex_buffer` / `index_buffer`.
+- A readback is `bgfx::blit` into a `BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK` texture in a later view, then
+  `bgfx::read`; every read drains the GPU on desktop backends, so none runs every frame.
+- D3D12 creates a resource per texture update (batch into boxed region updates) and compiles pipelines at first
+  use (cache dir: `gfx::set_cache_directory`, set in `renderer.cpp`). Vulkan stages uploads in 32 MB a frame.
+- bgfx has no frame buffer without attachments (asserts), pixel-shader UAVs only from D3D11 feature level 11.1,
+  and image atomics only as `imageAtomicAdd` (`bgfx_compute.sh`); other atomics go on buffers.
+
+Pipeline, targets and draws:
+
+- Feature code decides from `gfx::get_device_caps()`, never `bgfx::getCaps()`: a `--gfx-disable` mask reaches only
+  the snapshot. Details: [gpu-features.md](gpu-features.md).
+- Every caller of a `render_view` key passes the same `texture_desc` and `auto_collect`, or the texture is rebuilt
+  on every call. Owners purge their views (`camera_component`, `reflection_probe_component` call
+  `release_unused`); a target whose absence its reader cannot detect takes `auto_collect = false`. A render view
+  is one camera's isolation boundary: no global render target pool.
+- G-buffer reads go through the `DecodeGBuffer*` functions and structs of `lighting.sh` (Texel / Lod variants,
+  `ConstructGBuffer`), never raw fetches of the G-buffer targets.
+- The velocity buffer is the layout `velocity_encoding.sh` states (RG total uv motion, B object-only motion in
+  pixels, A last frame's view depth). Consumers get it through their run params (a valid texture is the
+  enable), classify object motion from B, and never rebuild camera motion from their own matrices.
+- The G-buffer and velocity mains are shared (`vs_deferred_geom.sh`, `vs_velocity.sh`) and must raster the same
+  position for the velocity pass's EQUAL depth test: change both or neither. Movers leave static batching while
+  the velocity buffer runs.
+- A reduced-resolution pass reads the full-resolution G-buffer point-sampled, depth and normal from one source
+  pixel; a linear fetch averages normals and depths across edges.
+- A pass submits a fixed set of views every frame (touched empty when idle): bgfx reports a view's GPU time by
+  view id from an older frame, so a changing layout shifts every later row.
+- `math::vec3` is 16 bytes (`GLM_FORCE_DEFAULT_ALIGNED_GENTYPES`): hashing or copying it with `sizeof` takes the
+  padding (a "changed" detector then fires every frame). Hash the components; GPU records use `float[3]`.
+- The engine is left-handed: view-space z is positive into the screen (`computeViewSpacePosition`,
+  `screenSpaceToViewSpaceDepth`), materials cull CCW, so a front face winds clockwise on screen. A debug
+  primitive takes its cull state from that rule and is checked from both sides.
+- A fade or confidence built from view-space dot products normalizes its vectors first.
+- A temporal accumulator's composite shows the running mean; it never mixes the current frame back in by the
+  history count.
+- Shadow biases are in texels (`light.h`). The cascade a receiver reads (the smallest crop containing it,
+  `fs_pbr_lighting.sh`) and the nested-cascade caster culling (`shadow.cpp`) are one contract: change both.
+- An overlay that must win over coplanar geometry (the editor grid) biases by a few ulps plus a fraction of a
+  pixel of depth slope (`max(abs(dFdx(d)), abs(dFdy(d)))`), not a constant in device depth; check D3D and GL.
+- The World Normal debug view writes the normal unremapped: surfaces facing -x, -y or -z read black.
+- `particle_eval.h` mirrors `particle_common.sh` (suite "particle motion" compares the constants); change both.
+
+Shaders (procedure and per-language traps: [shader-change.md](shader-change.md)):
+
+- The C++ build compiles no shader. The editor compiles the copy deployed into the runtime tree, and a failed
+  compile keeps the old binary with no visible error: check with suite "eshader files" and the editor log.
+- A matrix element read by index differs per language: GLSL and GLSL ES read `m[column][row]` of the same memory
+  that HLSL, SPIR-V, Metal and WGSL read `m[row][column]`; split with `#if` as `screenSpaceToViewSpaceDepth`
+  (`shaderlib.sh`) does. Diagonal elements read the same.
+- fxc evaluates both sides of `&&`, `||` and `?:`: guard an expensive call with an explicit `if`.
+- No derivative of a `texelFetch` result after a per-pixel `discard` or early return (fxc moves the fetch below
+  it and drivers read dead lanes): difference explicit neighbour fetches (`GeometricSpecularAATexel`).
+- No constant table indexed at run time: SPIR-V, GLSL and WGSL copy it per pixel (suite "shader constant tables").
+- A debug view leaves production shader code byte-identical: debug paths live in the debug shader or behind a
+  define, never in a reshaped shared helper.
+- OpenGL rejects what every other backend accepts, only at run time and only by dropping the pass: an image
+  named like any sampler uniform, an image at stage 8+, GLSL keywords as names, `rsqrt`. Two scripts find them
+  offline: `scripts/scan_gl_image_names.py` (sources) and `scripts/validate_gl.py` (compiled GLSL), see
+  [shader-change.md](shader-change.md#opengl-checks).
+
+GI ([gi.md](gi.md) holds the contracts, layouts, quality rules and measuring):
+
+- `gi_constants.h` / `gi_pass_constants.h` own the GI constants; their `.sh` mirrors match row for row (suite
+  "gi constants").
+- A GI view owns its reflections and AO: SSR steps aside for the GI reflections, GTAO / ASSAO for the GI
+  short-range AO, and the indirect pass takes `GI_RESOLVE` over SSIL by its presence alone.
+- `camera::get_frustum()` is TAA-jittered: a cache keyed on it never holds with TAA on; key on the unjittered
+  projection.
+
+## How it works
+
+Frame (`deferred::run_pipeline_impl`, `engine/engine/rendering/pipeline/deferred/pipeline.cpp`): each step is a
+member taking the `run_context`; the steps live in `pipeline_geometry.cpp`, `pipeline_lighting.cpp`,
+`pipeline_post.cpp`, `pipeline_shadows.cpp` and `pipeline_gi.cpp`.
+
+```text
+begin_camera_frame            stats, instanced sources (camera runs only)
+capture_reflection_probes     each due probe face is a nested run of the pipeline
+prepare_passes                shadow maps, pre-exposure, GI scene, targets, TAA jitter
+render_geometry               G-buffer, velocity buffer, screen-space AO
+render_reflection_layers      probe layer (PBUFFER), Hi-Z, SSR (RBUFFER)
+render_lighting               cloud shadow, irradiance SH, direct lights, GI or SSIL, indirect
+render_sky_fog_and_particles  sky, fog, particles, GI world views
+finish_camera_image           post (TAA, exposure, bloom, tonemapping, FXAA), overlays, upscale, PREV_DEPTH
+                              (a probe capture blits its lit image to the output instead)
+finish_run_batches            packs the skinning palette rows the run reserved
+```
+
+- `run_params` (`engine/engine/rendering/pipeline/pipeline.h`) carries the run: `run_type` (camera or probe
+  capture), `pflags` (`deferred::pipeline_steps`; probe captures build theirs from 0), `limits`
+  (`feature_limits`) and one `fill_<pass>_params` callback per optional pass, whose presence enables it.
+  `pipeline::create_run_params` fills them from the post-process volumes (`resolve_post_process_volumes`) or the
+  camera entity's components, then `apply_feature_limits` and `apply_feature_support` turn off what the project
+  or the device does not allow; `apply_view_params` (`rendering_system.cpp`) applies the view's limits.
+- The passes are members of `pipeline` (`engine/engine/rendering/pipeline/passes/`), loaded in `pipeline::init`
+  and reported per `render_feature`. Each `gfx::render_pass` is one bgfx view; views run in id order.
+- Render targets live in the camera's `gfx::render_view`: `tex_acquire(key, desc, on_create)` builds and
+  rebuilds by description, `tex_find` / `fbo_find` return null when missing, `tex_get` / `fbo_get` assert,
+  `tex_acquire_transient(desc)` lends a pooled texture with undefined contents, and
+  `gfx::needs_recreate(fbo, {textures})` rebuilds a frame buffer when an attachment's identity changed.
+- Calls into bgfx go to bgfx directly (`bgfx::setState`, `bgfx::setTexture`, `bgfx::setImage`, bgfx types too);
+  `gfx::` free functions exist only where the engine adds behavior: `gfx::frame` / `gfx::frames` (eviction sees
+  every frame), `gfx::dispatch`, `gfx::dispatch_indirect` and `gfx::submit_indirect` (skip what the device
+  snapshot cannot run; bgfx checks only in debug builds). The `gfx::set_uniform` / `gfx::set_texture` overloads
+  taking `gfx::program::uniform_ptr` are in `gpu_program.h`.
+- Programs of features the settings may turn off build only while wanted (`gpu_program::set_wanted`; create
+  them unwanted with `gpu_program(..., false)`); the object stays, so pointers to it stay valid.
+  `gpu_program::begin()` rebuilds from reloaded shaders: gate a frame's work on it, not on `is_valid()`.
+- Post-processing settings are ECS volume components (`engine/engine/rendering/ecs/components/`) merged by
+  priority and blend weight in `volume_resolver.cpp`; a camera without volumes uses its own components.
+- The editor's Scene and Game panels run the same pipeline into viewport frame buffers; ImGui, gizmos and the
+  stats overlay draw outside it and are not in the scene's counts. Classify a visual bug first: pipeline
+  output, editor overlay, or play-mode Game view.
+
+Indirect occlusion contract (each indirect term takes only the occlusion it has not resolved itself;
+`pbr_indirect` in `fs_pbr_lighting.sh`, helpers in `lighting.sh`):
+
+- `PBUFFER` holds the untraced layer (probes, then the GI rough tier) unoccluded: rgb premultiplied, alpha the
+  union coverage (blend `ONE, INV_SRC_ALPHA`); the uncovered rest is the environment SH (`CompleteProbeLayer`).
+  `RBUFFER` holds the traced layers (GI reflection hits, then SSR), cleared to (0,0,0,1) and blended with alpha
+  `ZERO, INV_SRC_ALPHA`, so alpha is the share left to the probe layer. The indirect pass composes
+  `SO.traced * RBUFFER.rgb + RBUFFER.a * SO.untraced * completed PBUFFER` (`ComposeIndirectSpecular`). A new
+  traced layer blends into `RBUFFER` the same way; a new untraced source goes into `PBUFFER` with the union
+  alpha. Neither buffer ever holds occlusion.
+- Specular occlusion is GTSO (`SpecularOcclusionGTSO`, the table of `specular_occlusion_lut`; suite "specular
+  occlusion") with the multi-bounce fit on F0 (`ComputeIndirectSpecularOcclusion`).
+- Diffuse: the SH takes material x screen AO over the visibility cone (`eval_irradiance_sh_cone`); the GI
+  resolve takes both; SSIL takes the material AO only. Multi-bounce applies once, to the combined visibility
+  (`MultiBounceAOGain`). Direct light takes no AO. Screen AO is GTAO or ASSAO, never both
+  (`run_screen_ao_pass`), read through `get_screen_ao_inputs`, and never written into the G-buffer.
+- The screen AO's radius is the artist's setting: no other system derives or clamps it.
+
+## Procedures
+
+- Add a pass, a post-process volume or a debug view: [add-render-pass.md](add-render-pass.md).
+- Edit or add a shader, deploy it into a running editor, refresh the committed binaries:
+  [shader-change.md](shader-change.md).
+- Device capabilities, `--gfx-disable`, WebGL 2 and WebGPU, shader buffers, skinned draws:
+  [gpu-features.md](gpu-features.md).
+- Render change tracking and shadow map caching: [change-tracking.md](change-tracking.md).
+- GI changes: [gi.md](gi.md).
+- Update bgfx: move the bgfx.cmake fork (`deps/3rdparty/bgfx/bgfx`, whose `CMakeLists.txt` pins bgfx, bx and bimg)
+  to upstream bgfx.cmake first; move its three pins together only for a fix newer than upstream's. The fork's
+  commit and push and the engine's submodule pointer are the user's. Patches re-apply at the next configure and
+  stop it when one fails (rules: `deps/AGENTS.md`). Bump `get_format_version<gfx::shader>`
+  (`engine/engine/assets/impl/asset_extensions.h`) when `BGFX_SHADER_BIN_VERSION` changes.
+
+## Verify
+
+| Change | Suites (`unravel-tests --suite <name>`) |
+|--------|------------------------------------------|
+| Any shader | "eshader files"; compute shaders also "render feature shaders", "shader constant tables" |
+| Feature requirements, device caps | "render feature support", "render feature shaders", "feature limits" |
+| Render targets, `render_view` | "render view" |
+| Culling, batching, instancing | "render culling", "instanced draws", "skinning palettes" |
+| Material properties, change keys | "render change", "shadow caching", "material instances" |
+| Shadows | "shadow atlas", "shadow caching", "render culling" |
+| Exposure, specular occlusion, fog | "pre-exposure", "specular occlusion", "fog" |
+| Particles | "particle motion", "particle emitter desc" |
+| GI | see [gi.md](gi.md) |
+
+- Build `engine`, `editor` and `tests` in the configured tree (`unravel-build-verify`), deploy `engine_data`.
+- Check the Scene and the Game view, edit and play mode, and a reflection probe capture when the pass runs in
+  probe runs.
+- New or renamed images, samplers or uniforms, or a shader change that reaches OpenGL: run both OpenGL check
+  scripts ([shader-change.md](shader-change.md#opengl-checks)).
+- New or renamed shader resources, or a pass that rasterizes into an atlas: run the editor with `-r opengl` and
+  compare the debug views with `-r dx11` (G-buffer views first, then lighting). `-r` takes dx11, dx12, vulkan or
+  opengl.
+- A feature with a fallback: run with `--gfx-disable=<names>` ([gpu-features.md](gpu-features.md)).
+- A swap chain, fence or frame-pacing change: run the editor on that backend with panels floated into their own
+  windows (several swap chains), enter and leave play mode, resize. A report names what was not run.
+- Draw counts and batching: the viewport stats overlay (`pipeline_stats`).
+
+## Entry points
 
 | Purpose | Path |
 |---------|------|
-| Renderer service | `engine/engine/rendering/renderer.cpp` |
-| Rendering system | `engine/engine/rendering/ecs/systems/rendering_system.h` |
-| Deferred pipeline | `engine/engine/rendering/pipeline/deferred/pipeline.h` |
-| Pipeline base | `engine/engine/rendering/pipeline/pipeline.h` |
-| Pipeline stats | `engine/engine/rendering/pipeline/pipeline.h` (`pipeline_stats`) |
-| Graphics core | `engine/core/graphics/` |
-| Shader sources | `engine_data/data/shaders/` |
-| Compiled shaders | `engine_data/compiled/shaders/` |
-| Editor gizmo shaders | `editor_data/data/shaders/` |
-| Post-process volumes | `engine/engine/rendering/ecs/components/*_component.h` (bloom, taa, ssil, etc.) |
-
-## Deferred pipeline
-
-`rendering::deferred` extends `pipeline`. Pass control via `pipeline_steps` bitmask in `run_params::pflags`:
-
-| Flag | Purpose |
-|------|---------|
-| `geometry_pass` | G-buffer / main geometry |
-| `shadow_pass` | Shadow maps |
-| `reflection_probe` | Reflection probe capture |
-| `atmospheric` | Sky / atmospheric scattering |
-| `particles_pass` | GPU particles |
-| `full` | All passes |
-
-Implementation: `engine/engine/rendering/pipeline/deferred/pipeline.cpp`
-
-Do not add passes without understanding stage ordering in `run_pipeline_impl`.
-
-## Shader workflow
-
-1. Edit the `.eshader` in `engine_data/data/shaders/` (variants, inputs, outputs and code in one file, see
-   `unravel-shader-change`)
-2. `cmake --build build/<Config> --target engine_data` - this only **copies** sources
-   into the runtime tree; the editor's asset importer compiles via `shaderc` at import
-   time. Validate offline with `unravel-tests --suite "eshader files"` - a
-   failed compile silently keeps the stale binary
-3. Shader includes: `bgfx_shader.sh`, `bgfx_compute.sh` synced by CMake
-4. Do **not** edit `deps/3rdparty/bgfx/` unless absolutely necessary
-
-Use `unravel-shader-change` for step-by-step shader edits.
-
-## GPU contracts (hard-won - violating these costs days)
-
-- **GL uniform order:** on OpenGL, create bgfx uniforms BEFORE programs. Symptom of
-  breaking it: "uniform not found" warnings, samplers silently landing on unit 0
-  (black passes / invalid draws).
-- **3D image binds:** bind 3D images with the plain `bgfx::setImage`, without a layer range.
-  The GL backend binds a 3D texture layered. A layer range such as (0, 1) makes it bind
-  slice 0 alone for a one-mip volume: image3D stores to the other slices are undefined
-  (NVIDIA renders correctly anyway, so test on another driver).
-- **GL image names:** never name an image (`IMAGE*`) like any sampler uniform - use `i_`
-  names. The GL backend uploads every registered uniform a program declares, so the image
-  is rebound to that sampler's last stage (unit 0 if never set) and reads / writes another
-  texture. It happened twice: the auto exposure history ring wrote into the irradiance SH
-  through unit 0 (GL-only blue SSIL flash every 256 frames), and the GI gather / radiance
-  cache images (`s_gi_*`, sampled under the same names by the next pass) turned the
-  gather and the reflections to garbage, so the GL lit image went black.
-  `python tasks/scan_gl_image_names.py` finds these and the next trap.
-- **GL image units:** images bind at stages 0-7 only. Stage 8+ compiles offline and fails
-  at runtime on GL; samplers and buffers may go higher.
-- **GL rows and depth:** bgfx runs GL with `originBottomLeft` and homogeneous depth
-  (`BGFX_CONFIG_GL_NORMALIZE_NDC_CONVENTIONS` is 0): view rects and scissors count rows from
-  the bottom, and clip depth spans -1..1. A pass that rasterizes tiles and reads them back by
-  texel (`texelFetch` / `imageLoad` at pixel coordinates) must mirror its rect or scissor and
-  flip y (and map depth) in its projection on GL - see
-  `gi_surface_cache_pass::compute_capture_view`. Screen passes sampled by UV need nothing.
-- **GL depth range is not `gfx::is_homogeneous_depth()`:** that function is the engine's
-  projection convention and always returns false - every projection is zero-to-one, so on GL
-  a depth buffer holds 0.5 + 0.5 z and nothing in front of z = -w is clipped; shaders that
-  read a camera depth undo this with `toClipSpaceDepth`. A projection whose depth is read raw,
-  or that must clip at its near plane, takes the range from `bgfx::getCaps()->homogeneousDepth`.
-  The card capture once keyed off the engine flag: GL card depths shifted toward the card's
-  back, the lighting started its shadow and radiosity rays inside walls, and the GL GI scene
-  read about half as bright as D3D11 (the lit image 13% darker).
-- **Verify on GL:** after adding or renaming shader resources, or adding a pass that
-  rasterizes into an atlas, run the sandbox with `--renderer=opengl` and compare the debug
-  views with D3D11 (G-buffer views first, then lighting). `tasks/validate_gl.py` checks only
-  the compiled GLSL's syntax, not runtime bindings.
-- **D3D12:** allocates per texture update - batch updates into boxes. PSOs compile at
-  first use - the disk cache is wired via `gfx::set_cache_directory`.
-- **Vulkan:** scratch buffer is 32MB/frame - large per-frame uploads can exhaust it.
-
-## bgfx calls vs gfx:: functions
-
-- Call bgfx directly (`bgfx::setState`, `bgfx::setTexture`, `bgfx::setImage`, ...). Do not add
-  pass-through wrappers to `engine/core/graphics/graphics.h`.
-- Exception: compute dispatches and indirect draws go through `gfx::dispatch`, `gfx::dispatch_indirect`
-  and `gfx::submit_indirect`. They check the device snapshot (GPU feature support, below) and skip, discard
-  and log what the device cannot run; bgfx checks its capabilities in debug builds only.
-- Use bgfx types directly too (`bgfx::TextureHandle`, `bgfx::ViewId`, `bgfx::Memory`,
-  `bgfx::Access::Write`, ...); do not add `using` aliases for bgfx types to `gfx::`.
-- `gfx::` free functions are engine code only: they add behavior or change the API, e.g.
-  `gfx::init` / `gfx::frame` / `gfx::shutdown` (eviction bookkeeping), `gfx::clip_quad`.
-  The prefix tells whether a call is ours or bgfx's.
-- Advance frames through `gfx::frame()` / `gfx::frames()` so eviction sees every frame.
-- The last argument of `bgfx::submit` / `gfx::dispatch` is a `BGFX_DISCARD_*` mask, not a
-  bool: `true` compiles as `BGFX_DISCARD_BINDINGS` and `false` as `BGFX_DISCARD_NONE`. Model
-  submesh callbacks map `preserve_state` to `BGFX_DISCARD_NONE`, otherwise `BGFX_DISCARD_ALL`.
-- The `gfx::set_uniform` / `gfx::set_texture` overloads taking `gfx::program::uniform_ptr` live
-  in `engine/engine/rendering/gpu_program.h`; raw bgfx handles go straight to bgfx.
-
-## Indirect occlusion contract
-
-Each indirect term takes only the occlusion it has not resolved itself
-(`pbr_indirect` in `fs_pbr_lighting.sh`, helpers in `lighting.sh`):
-
-- **Reflection buffers.** `PBUFFER` = the untraced layer (probes, then the GI rough tier),
-  drawn unoccluded, rgb premultiplied and alpha the UNION coverage (alpha blend
-  `(ONE, INV_SRC_ALPHA)`) - the GI reflection trace reads it as the open sky, and the uncovered
-  rest is the environment SH (`CompleteProbeLayer`, UE's sky-light fill). `RBUFFER` = the traced
-  layers (GI reflection hits, then SSR), cleared to (0,0,0,1) and blended with alpha
-  `(ZERO, INV_SRC_ALPHA)`, so alpha is the share left to the probe layer. The indirect pass
-  composes `SO.traced * RBUFFER.rgb + RBUFFER.a * SO.untraced * completed PBUFFER`
-  (`ComposeIndirectSpecular`). A new traced layer blends into `RBUFFER` the same way; a new
-  untraced source goes into `PBUFFER` with the same union alpha. Never bake occlusion into
-  either buffer.
-- **Specular occlusion** is GTSO: `SpecularOcclusionGTSO` reads the 32^3 table from
-  `specular_occlusion_lut` (owned by `default_textures`; suite `specular occlusion`), with the
-  multi-bounce fit on F0 (`ComputeIndirectSpecularOcclusion`; UE, HDRP and Filament do the same).
-- **Diffuse:** the SH takes material x screen AO over the visibility cone
-  (`eval_irradiance_sh_cone`); the GI resolve takes both (it resolves visibility only at its
-  probe lattice); SSIL takes the material AO only (`u_indirect_params.y`). Multi-bounce applies
-  once, to the combined visibility, on the uncapped diffuse albedo (`MultiBounceAOGain`).
-  Direct light takes no AO.
-- **The screen AO's range is the artist's** (GTAO / ASSAO radius and screen radius): never
-  derive or clamp it from another system's settings (e.g. the GI probe spacing, as the GI's
-  short-range AO does) - document the trade-off on the setting instead.
-
-## GI subsystem
-
-`engine/engine/rendering/gi/` - voxel/probe GI with SDF tracing, surface cache, and
-its own shader constants mirror (`gi_constants.h` / `gi_constants.sh` must not drift -
-the `gi constants` test suite enforces parity). Before GI work, read the plan docs:
-`tasks/gi_perf_plan.md`, `tasks/gi_rewrite_plan.md`. Shadow bias model:
-`tasks/shadow_bias_plan.md`. Clouds: `tasks/clouds_audit.md`.
-
-Test suites: `unravel-tests --suite "gi constants"` and `--suite "gi bake"` (the
-latter also shader-compiles every GI shader).
-
-## Volume / post-processing components
-
-Post-FX are ECS volume components with priority and blend:
-
-- `bloom_component`, `tonemapping_component`, `fxaa_component`
-- `taa_component`, `assao_component`, `gtao_component`, `ssr_component`, `ssil_component`
-- `auto_exposure_component`
-
-Each has meta registration in `engine/engine/meta/ecs/components/`.
-
-## Materials and draws
-
-- `material` - `engine/engine/rendering/material.h`
-- `model_component` / `submesh_component` - mesh rendering
-- `batch_collector` - static mesh batching stats in `pipeline_stats`
-- Skinned mesh batching (`graphics.skinned_mesh_batching`): skinned submeshes instance by (mesh, material,
-  LOD, submesh) in the G-buffer, velocity and shadow passes. Every skinned draw, batched or not (editor picking,
-  outline and wireframe too), reads its bones from `skinning_palette_buffer` (one upload per frame, read by
-  every view; shaders include `skinning_palette.sh`, stage 7): an instance carries its first row, a single draw
-  gets it from `u_skin_rows` (`skinning_palette_buffer::bind(first, previous)`, rows acquired by
-  `model_submit_extras::owner`). The G-buffer and velocity skinned shaders must call the same
-  `skin_palette_matrix` (EQUAL depth test). `u_world` / `u_prev_world` hold one matrix.
-- Bone palettes: one per submesh, at most `gfx::get_max_blend_transforms()` (128) bones;
-  `mesh::apply_skin_to_load_data` splits a submesh reaching more bones into pieces whose palettes fit.
-- Shader buffers (`shader_buffer.h`, `shader_buffer.sh`): data vertex shaders read by index, a storage buffer
-  or, without `render_feature::vertex_storage_buffers` (WebGL 2, GLES without vertex SSBOs), an rgba32f /
-  rgba32u / r32u texture of 2048 texels a row read with `texelFetch`. The bone palettes, the baked animation
-  rows and the particle data use it. A shader declares `SHADER_BUFFER_FLOAT4` / `_UINT4` / `_UINT` and reads
-  with `shader_buffer_*`; its texture twin variant defines `SHADER_BUFFER_TEXTURES` and is named
-  `<variant>_textures` (`textures` for default): `gpu_program` draws with it on texture storage, so programs name
-  the plain variant (particles name theirs with `get_shader_buffer_variant`, their storage is their own). Texture storage needs
-  `shader_buffer::init()` before its programs are created: GL wires samplers at link time. A palette draw binds
-  storage that holds every row reserved so far; growth retires the old storage until the frame is done. The eshader
-  suite finds every vertex variant WebGL 2 cannot compile and requires its texture twin.
-- Programs of features the settings may turn off are built only while allowed: `gpu_program::set_wanted` (the
-  object stays, so raw pointers to it stay good). Deferred: skinned batching programs follow
-  `batch_collector::is_skinned_mesh_batching_enabled()`; shadows: `Programs::request` (VSM ones by soft shadows,
-  skinned batching ones by batching, wished for over this and the last frame). New gated programs: create them
-  unwanted (`gpu_program(..., false)`) so init builds nothing the settings leave off.
-- Skin weights: the skinned shaders take the blended bone matrix as affine (`v_wpos = wpos.xyz`, no divide by w),
-  so `apply_skin_to_load_data` keeps each vertex's four strongest weights scaled to sum to one. A sum off one
-  scales `v_wpos` about the world origin, which breaks the double-sided normal flip far from it.
-- `bgfx::makeRef` without a release callback needs the memory to outlive the frame bgfx's render thread reads it
-  in (a frame or two). Data an owner may free sooner goes through `gfx::eviction::backing_buffer` and the
-  `vertex_buffer` / `index_buffer` backing constructors (no copy; bgfx and eviction restores keep a reference).
-- `layer_mask` - culling/filtering per pass
-
-## GPU feature support
-
-Every GPU feature checks the device in one place. Plan and results: `tasks/gpu_feature_support_plan.md`.
-
-- `gfx::get_device_caps()` (`engine/core/graphics/device_caps.h`) is the snapshot features decide from, taken
-  after bgfx starts; never read `bgfx::getCaps()` in feature code. It has `can_write_image(format,
-  dimension)`, `can_read_write_image(format)` (R32 formats need compute only), `can_render_to(format,
-  samples)` and `can_generate_mips(format)`.
-- `--gfx-disable=` masks the snapshot to test fallbacks on a desktop: `compute`, `draw_indirect`,
-  `dispatch_indirect`, `image_rw`, `blend_independent`, `typed_image_loads`, `extended_storage_formats`,
-  `vertex_storage_buffers`, `depth_blit`, `bindings8`, `format:<name>:<write|read|render|msaa|mips|all>`. D3D11 feature level 11_0 is
-  `bindings8,image_rw,typed_image_loads`; the S21 is `draw_indirect`. Compute programs fail to build under
-  `compute`, as on a real device.
-- Minimum requirements (compute, RGBA16F and D32F targets, 4 color attachments, R32F image writes) are checked
-  on the real device at init; a device without them gets a message box. On OpenGL ES (WebGL 2) compute is a
-  feature, not a minimum (`gfx::is_compute_required`), and `runs_shader` drops every compute shader there.
-- WebGL 2: the web player has both bgfx renderers; `--graphics webgpu|webgl2` picks one. The page chooses it
-  (`game/web/wwwroot/graphics.js`, tested by `node --test game/web/tests/graphics.test.mjs`) from the manifest's
-  `graphics` block and passes `--graphics-fallback <reason>` (`renderer::get_graphics_fallback_reason`, C#
-  `Graphics.fallbackReason`); `?graphics=webgl2` forces it where the build ships it. Every vertex variant stays
-  within the 256 uniform vectors WebGL 2 guarantees (the "eshader files" suite counts them in the cooked GLSL
-  ES): large data goes into shader buffers. `RenderFeature` and `GraphicsFallbackReason` in `Graphics.cs` mirror the
-  engine's enums by value (static_asserts in `graphics_bindings.cpp`). OpenGL ES shaders compile for shaderc's `asm.js` platform (ESSL 300); a variant whose ESSL needs
-  3.1 (`binding = `, `CubeArray`) is cooked without code, as are compute shaders, because bgfx's GL renderer
-  treats a failed compile as fatal. ANGLE links every program at creation and the cost grows faster than the shader size, so the
-  deferred lighting loads only the variants the effective limits allow (`pipeline::update_light_programs`,
-  re-run when the limits change): `contact_shadows`, `subsurface`, `soft_shadows` and `max_shadow_filtering`
-  (hard / PCF 3x3 / PCF) decide which light programs exist, and `limit_light` clamps lights to them.
-- Depth copies go through `depth_copy_pass`: a blit where `device_caps::has_depth_blit`, else a draw that writes
-  depth. bgfx's OpenGL ES blit without copy-image copies through a color attachment, which fails for depth.
-- OpenGL ES samples depth textures (without comparison) and 32-bit float textures (without
-  `OES_texture_float_linear`) only with point filtering, else they read as zero; bgfx patch 0004 forces it.
-  To debug a WebGL frame, read back each framebuffer's color attachments from the page (a Playwright init script
-  that wraps `framebufferTexture2D` and the draw calls) instead of guessing from the final image.
-- `render_feature` (`engine/engine/rendering/render_feature_support.h`) lists what each feature needs:
-  compute, indirect draw or dispatch, independent blend, compute bindings, storage images (format, dimension,
-  access), render targets, dependencies and the compute shaders it owns. `get_render_feature_support()` holds
-  the resolution with a reason sentence per unavailable feature.
-- Where it applies: `apply_view_params` ANDs the device limits into the project's `feature_limits` in every
-  view; `pipeline::apply_feature_support` turns GTAO (ASSAO takes over), ASSAO and auto exposure off; the other
-  features check `is_available` where they decide to run (GI init, Hi-Z, prefilter, exposure, irradiance,
-  particles, fog, cloud shadow, UI MSAA, the temporal probe).
-- Particles read their data from shader buffers: textures where `render_feature::particle_storage_buffers` is
-  unavailable (no compute, or no storage buffers in vertex shaders, as WebGL), `vs_particle.eshader`'s
-  `*_textures` variants (`ps_soa::get_particle_data_storage`), and the CPU writes the records, culls and sorts.
-  Desktop test: `--gfx-disable=vertex_storage_buffers`, also with `-r opengl`.
-- A new compute pass: list its storage images and binding count in the table (the "render feature shaders"
-  suite reads the committed compiled shaders and fails otherwise), check `is_available` where it is enabled,
-  keep image stages below 8 (OpenGL) and every stage below 8 if it must run on D3D11 feature level 11_0.
-- Indirect dispatch needs compute only: bgfx checks `BGFX_CAPS_COMPUTE` for it (not `BGFX_CAPS_DRAW_INDIRECT`,
-  which Vulkan reports only with multi-draw), and `device_caps::has_dispatch_indirect` follows `has_compute`.
-- The editor shows unavailable features under the Allowed Features rows, on the components that ask for them
-  (`COMPONENT_RENDER_FEATURE_ATTRIBUTE`) and in the profiler's GPU Resources; MCP `editor_get_status` has a
-  `graphics` block.
-
-## Render change tracking
-
-Caches decide what changed through one vocabulary, `engine/engine/rendering/render_change.h`. Plan and results:
-`tasks/render_change_tracking_plan.md`.
-
-- `render_change` aspects: object (placement, pose, geometry, membership) and material (coverage, sidedness,
-  albedo, normal, specular, occlusion, emission). A consumer reads only its `render_interest` mask
-  (`shadow_caster`, `gi_card_capture`, `gi_card_direct`, `gi_field`, `velocity`).
-- Materials: `material_property_id` + `get_material_property_traits` (material.h) is the single table of each
-  property's aspects and whether it is per-instance; the reflection attributes "material_property" and
-  "per_instance" come from it (`make_material_property_attributes`). Setters compare first and call
-  `mark_changed`; `get_revision(mask)`, `get_state_revision(mask)`, `get_instance_values_revision(mask)` sum
-  only the asked aspects. Texture content (`asset_handle::version`) enters through `get_content_version(mask)` /
-  `add_change_keys`.
-- Models: `model_system` writes `model_component::get_change_stamps()` once per frame (the last frame of each
-  aspect). Inputs: the transform `dirty_ids::render_change` slot (placement), `update_armature` (pose, only when
-  matrices or mapping differ), `touch(reasons)` from the component setters, the LOD mesh identities, the material
-  change keys. `set_model` diffs the swap (`model::get_changes_from`), so the editor's whole-model override path
-  stamps only the aspects that moved.
-- Adding a material property: add the enum value and its traits row, wrap its reflection attributes, call
-  `mark_changed` from the setter. The "render change" test suite fails for a reflected property without traits.
-- Adding a consumer: define its `render_interest` mask and read `get_last_change(mask)` /
-  `has_changed_since` / `has_changed_within`, or key on `get_revision(mask)` for per-material caches.
-- A change that reaches no setter (a new input outside the component) must `touch` the model component.
-
-## Shadow map caching
-
-`graphics.shadow_map_caching` (`shadowmap_generator`, `engine/engine/rendering/shadow.cpp`): a spot or point
-light's map, or a cascade of the sun, renders again only when its key changes. Plan and results:
-`tasks/shadow_caching_plan.md`.
-
-- Every input of a map must reach a key: `compute_view_settings_key` (epoch, map size, light type and
-  implementation, view / projection matrices, atlas placement serial) or `compute_caster_facts` (entity, LOD,
-  LOD mesh, the model's last change in `render_interest::shadow_caster`). A new per-object input goes through
-  render change tracking (above); a global change calls `shadow::invalidate_cached_maps()`.
-- An atlas tile placed again, even on the same square, has a new placement serial: another light may have drawn
-  there in between.
-- The sun's reach test follows the camera at submesh level, so its cascade keys also take the collected batches'
-  content hash; local lights key on caster facts alone.
-- Static copy: a local light in the atlas with moving casters in reach restores its casters that hold still from a
-  depth-only copy (`shadow_atlas::get_static_frame_buffer`, `fs_shadowmaps_restore.eshader` rebuilds the R32F colour
-  from depth, InvZ only) and draws only the movers. A caster is a mover while
-  `has_changed_within(render_interest::shadow_caster, MOVER_SETTLE_FRAMES, frame)`.
-- Verify a change with caching on vs off on a paused frame: the captures must match.
-
-## Editor vs scene rendering
-
-- Scene panel renders through deferred pipeline into viewport FBO
-- Editor UI (ImGui) draws separately - excluded from scene primitive counts
-- Stats overlay: `editor/editor/hub/panels/viewport_stats_overlay.cpp`
-- Gizmo rendering: `editor/editor/hub/panels/scene_panel/gizmos/`
-
-When fixing visual bugs, identify whether the issue is pipeline output, editor overlay, or play-mode game view.
-
-## GPU memory / eviction
-
-- Stats via `bgfx::getStats()` and `gfx::eviction::get_stats()`
-- Profiler panel: `editor/editor/hub/panels/profiler_panel/`
-- Use `unravel-profiler-debug` for GPU timeline investigation
-
-## Verification checklist
-
-- [ ] Shaders recompiled (check `engine_data/compiled/shaders/`)
-- [ ] Scene and game view both correct
-- [ ] Play mode rendering matches edit mode expectations
-- [ ] No regression in draw calls / batching stats
-- [ ] Layer mask culling still correct
-- [ ] Post-process volumes compose in correct order
-
-## Common mistakes
-
-- Editing compiled `.asset.*` blobs directly instead of the `.eshader` source
-- Breaking `pipeline_steps` bitmask semantics
-- Scene draws leaking into wrong render target
-- Forgetting meta registration for new volume component
-- Modifying bgfx third-party instead of engine abstraction
-
-## Deep reference
-
-See [reference.md](reference.md) for pass flow and shader paths.
+| Frame steps, run context | `engine/engine/rendering/pipeline/deferred/pipeline.h`, `engine/engine/rendering/pipeline/deferred/pipeline_internal.h` |
+| Run params, passes, volumes | `engine/engine/rendering/pipeline/pipeline.h`, `engine/engine/rendering/pipeline/volume_resolver.h` |
+| Passes | `engine/engine/rendering/pipeline/passes/` |
+| Programs, uniform order | `engine/engine/rendering/gpu_program.h` |
+| bgfx layer: targets, views, caps | `engine/core/graphics/render_view.h`, `engine/core/graphics/render_pass.h`, `engine/core/graphics/device_caps.h`, `engine/core/graphics/graphics.h` |
+| Feature requirements | `engine/engine/rendering/render_feature_support.h` |
+| Shadows | `engine/engine/rendering/shadow.h`, `engine/engine/rendering/light.h` |
+| Renderer, launch options | `engine/engine/rendering/renderer.cpp` |
+| Shared shader code | `engine_data/data/shaders/lighting.sh`, `engine_data/data/shaders/fs_pbr_lighting.sh`, `engine_data/data/shaders/shaderlib.sh` |
+| Debug views, stats overlay | `editor/editor/hub/panels/visualization_modes.h`, `editor/editor/hub/panels/viewport_stats_overlay.cpp` |

@@ -1,115 +1,137 @@
 ---
 name: unravel-prefabs
 description: >-
-  Works on UnravelEngine prefabs: the unified statement model (qualified ids,
-  per-author statement lists), nested instances, property overrides, removal
-  records, replay/sync, and legacy migration. Use for prefab creation, instance
-  overrides, nested prefab bugs, reparent/clone semantics, or prefab
-  serialization.
+  Covers UnravelEngine prefabs: .pfb and .spfb documents, prefab instances and nested instances,
+  overrides and removals (statement lists), sync and replay, apply, revert, unlink, reparent and
+  clone of instance content, prefab mode, and the deploy's nesting bake. Use when an instance loses
+  or resurrects content, an override does not stick or leaks, or a change touches
+  prefab_component, prefab ids or sync_prefab_instance.
 ---
 
-# Unravel Prefabs
+# Unravel prefabs
 
-The prefab system uses the **unified statement model** (landed 2026-08-22). If you
-remember a `property_overrides` / `removed_entities` flat-list model with
-`placed_by` / `foreign_entities` provenance - that is the OLD model; only the legacy
-loader still reads it.
+Prefab documents (`prefab` and `scene_prefab`, `engine/engine/ecs/prefab.h`), the instance root
+(`prefab_component`), entity identity inside documents (`prefab_id_component`), the statement lists
+that hold overrides and removals, the sync that replays a document over its instances
+(`engine/engine/meta/ecs/entity.cpp`), and the editor bookkeeping in `editor/editor/editing/prefab_*`.
+Component serialization in general belongs to `unravel-ecs-component`; MCP prefab tools are in
+`editor_data/data/mcp/skills/scene-building.md`.
 
-## Start here
+## Gotchas
 
-| Purpose | Path |
-|---------|------|
-| Prefab asset struct | `engine/engine/ecs/prefab.h` |
-| Components + statement lists | `engine/engine/ecs/components/prefab_component.h` (extensively documented - read it) |
-| Sync / replay logic | `engine/engine/meta/ecs/entity.hpp` / `entity.cpp` (`sync_prefab_instance`, `scoped_deferred_nested_sync`) |
-| Scene load pass | `engine/engine/ecs/scene.cpp` (`qualify_legacy_prefab_ids`) |
-| Meta | `engine/engine/meta/ecs/components/prefab_component.hpp` / `.cpp` |
-| Design doc | `tasks/nested_prefabs_design.md` (esp. section 16), `tasks/unified_model_plan.md` |
-| Tests | `tests/tests/suites/ecs_serialization.cpp` - suite `ecs serialization / prefabs / cloning` |
+- Every prefab-space id names the document (asset uid) that issued it: `prefab_id_component::{id,
+  document}` for an entity, `prefab_component::{instance_id, instance_document}` for a nested
+  instance's slot. Both are issued at that document's save for an entity or instance without one and
+  never changed by another document's save or by a replay. Never restamp a matched entity's document.
+- A replay removes only entities and slots that carry its own document uid. Content an outer
+  document added inside a nested instance carries the outer uid, so the nested asset's sync leaves it.
+- One author per statement list, and the list lives with the author. `from_document` is written only
+  by its document's load and replay (replaced whole); `local` is never touched by a replay.
+  Scene-editing code writes the nearest instance root's `local`, never `from_document`. Never merge two
+  authors' lists or attribute entries afterwards.
+- A statement's key is (instance path of slot ids, qualified id, component path), and the component
+  path is the serialization path (`transform_component/position/x`). Renaming a component type or a
+  reflected field orphans every override on it; slot chains and component paths are file format.
+- `prefab_statements::add_override` collapses along the path: an override on an ancestor path
+  replaces or absorbs the narrower one.
+- Use `has_override_on_or_above` to decide what a replay must not overwrite (a field override must not
+  shield its siblings), and `has_override_touching` to decide whether a read may pass a level.
+- `remove_entity` drops that entity's overrides with it, so a revert cannot bring them back without
+  the entity.
+- A nil `instance_id` is an instance placed where it stands: no document names it, so no replay
+  removes it. A document only removes slots it named.
+- Saving into a prefab file folds every `local` under the root into the document's list
+  (`fold_document_statements`) and writes an empty `local`; a scene or a clone stream keeps `local`.
+- `sync_prefab_instance` keeps the instance root's local position, rotation and parent always; scale
+  and skew follow the asset unless overridden. The asymmetry is deliberate.
+- The authoring root (prefab mode, the prefab inspector; `authoring_root_tag`) is never synced against
+  its file and its own content is never recorded as overrides: its state is the file's next content.
+- Clone: the clone root's slot goes nil (an addition to its container until that container is saved
+  as a prefab). A nested slot keeps its id only when the document that placed it is an instance inside
+  the clone; every other slot goes nil (`reconcile_cloned_slots`). Prefab ids are kept only at and below
+  an instance root inside the clone.
+- Edits that record or strip statements (remove, reparent, apply) keep a record for undo
+  (`editor/editor/editing/prefab_removal_record.h`) and run as editor actions.
+- A document in a layout newer than the build reads is refused (`find_document_problem`,
+  `find_apply_problem`): never load and re-save it, the save would write the build's reading of it.
+- A scene file in layout 1 repeats the `"entities"` key once per root: a JSON parser that keeps the
+  last key (Python `json.load`) silently drops roots. Edit such files as text; layout 2 has a `"roots"`
+  array.
+- Nesting cycles are refused at expansion (`load_from_prefab_out` returns false) and reported by
+  `validate_prefab_graph`.
 
-## Qualified identity
+## How it works
 
-Every prefab-space id names the **document** (asset uid) that issued it:
+Identity:
 
 | Field | Meaning |
 |-------|---------|
-| `prefab_id_component::{id, document}` | Entity identity within the document that introduced it. Issued at that file's save; never changed by another document's save |
-| `prefab_component::instance_id` | Which slot of the containing document this instance is. Scoped to the container (unlike `id_component` = global, `prefab_id_component` = per-asset). Regenerated on clone - a copy is a different slot |
-| `prefab_component::instance_document` | Whose slot it is - the document that placed the instance. Nil = hand-placed here |
+| `prefab_id_component::id` + `document` | The entity within the document that introduced it |
+| `prefab_component::instance_id` | Which slot of the containing document this instance is; scoped to that document |
+| `prefab_component::instance_document` | The document that placed the instance (whose slot it is); nil = placed by hand |
+| `id_component` | Global entity id, unrelated to prefab identity |
 
-Ownership drives cleanup: a document's replay removes only entities/slots carrying
-**its own** document uid. Content an outer document added inside a nested instance
-keeps the outer document's name, so the nested asset's sync leaves it alone.
+Statement lists, both `prefab_statements` on the instance root:
 
-## Per-author statement lists
+| List | Author | Replay |
+|------|--------|--------|
+| `from_document` | The instance's own document: statements about content nested inside it (paths never empty) | Replaced whole by every replay of that document |
+| `local` | This scene, or the nearest root's editor (paths empty, except an authoring root that adopted its document's list) | Never touched |
 
-A **statement** is an override, a removed entity, or a removed nested instance -
-keyed `(instance_path slot chain, qualified id, property path)`. One author per list,
-and the list lives with the author (`prefab_statements` on the instance root):
+Replay (`sync_prefab_instance`): the document loads over the existing instance with a load context
+that matches entities by qualified id and consults every removal stated about the content. Order:
+innermost content first, then each document's `from_document` outward, then the top root's `local`.
+The sync holds `scoped_deferred_nested_sync` around its own load and cascades into nested instances
+afterwards, once the removals about them are applied again. `collect_statements_about` and
+`replay_statements` (`engine/engine/meta/ecs/entity.hpp`) gather what a replay must respect.
 
-| List | Author | Replay behavior |
-|------|--------|-----------------|
-| `prefab_component::from_document` | The instance's own document (statements about content *nested* inside it - paths always non-empty) | Replaced wholesale by every replay of that document; never written by editing here |
-| `prefab_component::local` | This scene / the nearest root's editor | Never touched by any replay |
+Saving a document: an entity without a prefab id, and an instance without a slot, under the save root
+gets one issued by the saving document. Nested assets name their own content at their own save.
 
-Replay applies innermost content first, then each document's `from_document` outward,
-then the top root's `local`. Nothing merges two authors into one set.
+Documents are JSON with a numeric `"version"` first: `SCENE_DOCUMENT_VERSION` (2, a `"roots"` array)
+and `PREFAB_DOCUMENT_VERSION` (1), both in `entity.hpp`. Older layouts load: ids without a document are
+attributed to the instance they sit in, and flat override sets on an instance root load into `local`.
 
-Recording: scene edits go to the **nearest** instance root's `local`; prefab-mode
-edits to the authoring root's `local` (the document's list is adopted as local while
-editing). Save folds `from_document U local` (and nested roots' locals) into the file.
+Deploy: `bake_prefab_nesting` (`editor/editor/editing/prefab_bake.h`) loads every prefab and scene
+dependency-first, resolves its nested instances, and writes cooked copies with a "nesting resolved"
+marker into a staging folder, never the compiled cache. Only a deployed build believes the marker; the
+editor syncs nested instances on every load.
 
-Override semantics worth knowing (see `prefab_statements` doc comments):
+## Procedures
 
-- `add_override` collapses along the property path - a more specific path replaces a
-  broader one
-- `has_override_touching` = on/above/below (what lets a read reach the value);
-  `has_override_on_or_above` = what shields a value from replay (a field override
-  must not shield its siblings)
-- `remove_entity` drops that entity's overrides too (revert must not resurrect them)
+| Operation | Function | What it does to the lists |
+|-----------|----------|---------------------------|
+| Revert | `revert_local_changes` | Drops the instance's `local`; containing documents' statements and added entities stay |
+| Apply | `apply_instance_to_prefab` | Statements about nested content become the document's; statements about own content become content; the nested root's own placement override stays. The caller syncs (`editing_manager::sync_after_override_change`) |
+| Unlink | `unlink_from_prefab` | Removing the root's `prefab_component` strips prefab ids down its subtree |
+| Reparent inside one instance | `prefab_override_context::mark_entity_reparented` | Parent and placement as overrides on the nearest root's `local` |
+| Reparent out of the supplying instance | same | Removals on each instance that supplied a part; the moved subtree becomes scene content, ids and slots dropped |
+| Reparent into an instance from outside | - | Nothing: it is an addition |
+| Rewrite every document in the current layout | Build > Migrate Prefabs (`bake_prefab_asset` in place) | Re-saves nested prefabs first, scenes last |
 
-## Operations
+Adding a field to `prefab_component`: SAVE and LOAD in
+`engine/engine/meta/ecs/components/prefab_component.cpp`, deciding for each field what a save into a
+prefab file writes (`is_saving_to_prefab`) and what a replay over an existing instance keeps
+(`is_updating_prefab`).
 
-| Operation | Semantics |
-|-----------|-----------|
-| Revert | Drop `local` entries |
-| Apply-to-inner | Move entries targeting instance C into C's file |
-| Reparent inside an instance | Transform-parent (+ position/rotation) override entries on the nearest root |
-| Reparent OUT of the supplying instance | Removal entries on whichever instance supplied each part; the moved subtree becomes scene content - prefab ids dropped, slots cleared |
-| Reparent INTO an instance from outside | No bookkeeping |
-| Clone | Copies lists as-is; keeps prefab ids only inside instance roots; slots of documents outside the clone go nil; `instance_id` regenerated |
+## Verify
 
-## Legacy migration
+- `unravel-tests --suite prefabs` (suite `ecs serialization / prefabs / cloning`) is the regression net
+  for identity, statements, replay, nesting and clone.
+- The runner links the engine and `editor/core` only. Apply, revert, reparent bookkeeping, undo and
+  prefab mode are checked in an editor: build `editor`, then over MCP open a prefab, save it, and check
+  that an override survives save and reopen, revert restores the asset value, and entities added under a
+  nested instance survive the outer document's resync.
 
-Old files (flat `property_overrides` / document-less ids) convert on load: nil
-documents are attributed to the nearest containing instance
-(`qualify_legacy_prefab_ids`); flat lists become the root's `local`.
-**Build > Migrate Prefabs** re-saves every prefab and scene in dependency order.
+## Entry points
 
-## Verification
-
-Run the suite - it is the regression net for this entire model (536+ checks):
-
-```bash
-build/Debug/bin/unravel-tests.exe --suite serialization
-```
-
-- [ ] Suite green (exit code 0)
-- [ ] New instance matches prefab base; override persists save/reload; revert restores
-- [ ] Entities/instances added under a NESTED instance survive the outer document's resync
-- [ ] Unlink produces an independent subtree; clone follows the slot rules above
-- [ ] Editor-side flows (reparent bookkeeping, undo un-recording, Apply-All) are
-      build-verified + manual - the test runner links the engine only
-
-## Common mistakes
-
-- Reasoning in the old model (flat overrides, `placed_by`, `foreign_entities`) - those
-  exist only in the legacy load path
-- Editing `from_document` from scene-editing code - only a document's own save/replay
-  owns that list
-- Merging statement lists across authors, or attributing entries after the fact - the
-  design's whole point is that neither is ever needed
-- Restamping a matched entity's `prefab_id_component` document on replay - identity is
-  written once, at the issuing document's save
-- Changing statement key formats (slot paths, component paths) without a migration -
-  files reference them
+| Purpose | Path |
+|---------|------|
+| Statement lists, instance root, prefab ids (read the comments) | `engine/engine/ecs/components/prefab_component.h` |
+| Serialization of the lists and slots | `engine/engine/meta/ecs/components/prefab_component.cpp` |
+| Sync, load context, document versions | `engine/engine/meta/ecs/entity.hpp`, `engine/engine/meta/ecs/entity.cpp` |
+| Change collection, apply, revert, unlink | `editor/editor/editing/prefab_instance_changes.h` |
+| Undo records for removals, reparents, overrides | `editor/editor/editing/prefab_removal_record.h` |
+| Authoring root (prefab mode) | `editor/editor/editing/authoring_root.h` |
+| Nesting graph check and deploy bake | `editor/editor/editing/prefab_bake.h` |
+| Tests | `tests/tests/suites/ecs_serialization.cpp` |

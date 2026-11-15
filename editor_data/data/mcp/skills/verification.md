@@ -16,9 +16,16 @@ order: 70
   is enough to judge composition); settle_frames lets temporal effects settle
   after a big change. A hidden Scene tab renders for the capture.
 - Framing without math: viewport_focus {entity_ids} (or center + radius, or
-  min + max) frames like the editor's F key - duration 0 is instant;
-  viewport_orbit_camera orbits a pivot by yaw / pitch; viewport_reset_camera
-  restores the default pose.
+  min + max) frames like the editor's F key, keeping the camera's view
+  direction - aim first (viewport_set_camera with target) when the side
+  matters. duration 0 is instant, which a capture or viewport_get_camera right
+  after it needs; viewport_orbit_camera orbits a pivot by yaw / pitch;
+  viewport_reset_camera restores the default pose.
+- Scene captures include the editor's gizmos, icons and grid, which can read as
+  geometry (a light's or a camera's icon as a glowing sphere or a lit wall).
+  viewport_set_overlays {"gizmos":false,"grid":false} hides them until set back
+  (nothing is saved); viewport_capture_game shows the game camera's view
+  without them, which is what the game will look like.
 - viewport_set_debug_view switches visualization ("full", "base_color",
   "normals", "depth", "velocity", ...). Always restore "full" afterwards.
   viewport_list_debug_views lists every mode grouped, with what it shows and
@@ -47,7 +54,10 @@ live, not to build the scene.
    and restore the previous size afterwards; viewport_set_render_size
    {"panel":"game",...} keeps the game at one size (0 x 0 to undo).
 4. play_set_active {"active":false} - edit state is restored, including
-   everything physics moved.
+   everything physics moved. The scenes reload after a stop: wait for
+   editor_wait_for {"play_phase":"inactive"} before the next edit or play
+   toggle, and decide whether play runs from editor_get_status, not from an
+   error you caught.
 5. play_set_time_scale {"time_scale":0.25} slows game time (up to 10 speeds it
    up; 0 stops it while frames go on); play stopping puts it back to 1.
    editor_set_frame_pacing sets vsync and the frame cap for the session.
@@ -162,7 +172,8 @@ silently reads zero.
 
 - Do not screenshot at full scale by default - scale 0.5 is enough to judge
   composition and saves tokens.
-- Do not leave a debug view or a paused play session active when you finish.
+- Do not leave a debug view, hidden overlays or a paused play session active
+  when you finish.
 - Do not treat a quiet log as success for physics/animation - only a capture
   (or two) proves motion.
 - Do not conclude a control scheme works without an unbound control case: hold
