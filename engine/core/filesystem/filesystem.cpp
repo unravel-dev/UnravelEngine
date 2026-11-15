@@ -412,6 +412,8 @@ const std::wstring EXTENDED_LENGTH_SHARE_PREFIX = L"\\\\?\\UNC\\";
 const std::wstring DEVICE_PREFIX = L"\\\\.\\";
 /// How a network share's path starts.
 const std::wstring SHARE_PREFIX = L"\\\\";
+/// MAX_PATH: from this length, its terminating null included, Windows takes a path only in the extended-length form.
+constexpr std::size_t ORDINARY_PATH_LIMIT = 260;
 
 bool is_taken_as_written(const std::wstring& text)
 {
@@ -469,6 +471,18 @@ path make_extended_length_path(const path& _path)
         return path(EXTENDED_LENGTH_SHARE_PREFIX + text.substr(SHARE_PREFIX.size()));
     }
     return path(EXTENDED_LENGTH_PREFIX + text);
+#else
+    return _path;
+#endif
+}
+
+path make_extended_length_path_if_long(const path& _path)
+{
+#if defined(_WIN32)
+    error_code ec;
+    const auto resolved = absolute(_path, ec);
+    const bool is_long = !ec && resolved.native().size() + 1 > ORDINARY_PATH_LIMIT;
+    return is_long ? make_extended_length_path(_path) : _path;
 #else
     return _path;
 #endif

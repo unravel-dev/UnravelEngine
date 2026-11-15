@@ -29,7 +29,8 @@ auto have_same_content(const path& lhs, const path& rhs, error_code& ec) -> bool
  *
  * The copy gets the source's write time, so the next call finds the two equal and skips it. It is
  * written beside `to` and renamed into place, so a file another process maps is replaced, not
- * rewritten under it (where the platform allows replacing it at all).
+ * rewritten under it (where the platform allows replacing it at all). Both go through the extended-length form
+ * (make_extended_length_path), so paths past 260 characters copy too.
  * @return False with `ec` set when the copy fails.
  */
 auto copy_file_if_changed(const path& from, const path& to, bool& is_copied, error_code& ec) -> bool;
@@ -49,6 +50,9 @@ auto remove_unlisted_files(const path& root,
 
 /**
  * @brief Makes the folder `to` hold exactly the files of `from` that `include` accepts (all when empty).
+ *
+ * Walked and written through the extended-length form (make_extended_length_path), so files past 260 characters
+ * mirror too; `include` still gets each file's path under `from` as the caller wrote it.
  *
  * New and changed files are copied with copy_file_if_changed, the others left alone. Files under `to`
  * that `from` does not have, or that `include` turns down, are removed, and so are folders left empty.

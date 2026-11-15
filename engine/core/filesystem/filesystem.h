@@ -128,6 +128,14 @@ auto from_utf8_string(const std::string& text) -> path;
 auto make_extended_length_path(const path& _path) -> path;
 
 /**
+ * @brief `_path` as it is while Windows takes it in the ordinary form (shorter than MAX_PATH), and in the
+ * extended-length form (make_extended_length_path) once it is longer. Narrow file calls, which take no path that
+ * long in any form, keep taking every path they took; wide ones take the long ones too. On other systems the path is
+ * returned unchanged.
+ */
+auto make_extended_length_path_if_long(const path& _path) -> path;
+
+/**
  * @brief The bytes of every file under `folder`, however deep: walked through make_extended_length_path, so the
  * files of a tree whose paths pass 260 characters count too. `ec` holds the first failure; what could be read is
  * still summed.

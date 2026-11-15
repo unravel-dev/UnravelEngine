@@ -13,6 +13,8 @@
  *     removes its temp file;
  *   - an empty write is rejected and its temp file removed;
  *   - a write or copy into a folder that does not exist reports an error instead of success;
+ *   - a write and a copy past 260 characters (a deep project's compiled cache, whose temp names are longer still)
+ *     land;
  *   - the stale sweep removes old `.<uuid>.temp` files, recursively and below folder names the narrow code page
  *     cannot represent, and keeps fresh temp files and user files that only resemble the pattern.
  *
@@ -177,6 +179,60 @@ void test_missing_folder(const fs::path& run_root)
     check(!copied && static_cast<bool>(copy_ec), "a copy into a missing folder reports an error");
 }
 
+/// A folder short of 260 characters whose temp names pass them: the target is short, its temp file is not.
+void test_temp_name_past_long_paths(const fs::path& run_root)
+{
+    constexpr std::size_t folder_length = 240;
+    constexpr std::size_t ordinary_limit = 260;
+    const auto base = fs::absolute(run_root / "edge");
+    if(base.native().size() + 2 > folder_length)
+    {
+        std::printf("  skipped: the scratch folder is already %zu characters long\n", base.native().size());
+        return;
+    }
+    const auto dir = base / std::string(folder_length - base.native().size() - 1, 'e');
+    fs::error_code ec;
+    fs::create_directories(dir, ec);
+    fs::path temp;
+    check(asset_writer::make_temp_path(dir, temp, ec) && temp.native().size() > ordinary_limit &&
+              temp == fs::make_extended_length_path_if_long(temp),
+          "a temp name past 260 characters is made in a folder short of them, in the form Windows takes at its length: " +
+              ec.message());
+    const auto destination = dir / "a.txt";
+    asset_writer::atomic_write_file(
+        destination,
+        [](const fs::path& temp_file)
+        {
+            write_text(temp_file, "edge");
+        },
+        ec);
+    check(!ec && read_text(destination) == "edge", "and a write through it lands: " + ec.message());
+}
+
+void test_long_paths(const fs::path& run_root)
+{
+    auto dir = run_root / "long";
+    for(int i = 0; i < 4; ++i)
+    {
+        dir /= std::string(55, 'c');
+    }
+    fs::error_code ec;
+    fs::create_directories(fs::make_extended_length_path(dir), ec);
+    const auto destination = dir / "shader.eshader.asset.wgsl.manifest";
+    asset_writer::atomic_write_file(
+        destination,
+        [](const fs::path& temp)
+        {
+            write_text(temp, "manifest");
+        },
+        ec);
+    check(!ec && read_text(fs::make_extended_length_path(destination)) == "manifest", "a write past 260 characters lands: " + ec.message());
+    const auto copy = dir / "copy.manifest";
+    check(asset_writer::atomic_copy_file(destination, copy, ec) && read_text(fs::make_extended_length_path(copy)) == "manifest",
+          "and so does a copy: " + ec.message());
+    test_temp_name_past_long_paths(run_root);
+}
+
 void test_stale_sweep(const fs::path& run_root)
 {
     const fs::path dir = run_root / "sweep";
@@ -217,6 +273,7 @@ auto run_asset_writer_suite(rtti::context& /*ctx*/) -> int
     test_throwing_callback(run_root);
     test_empty_write(run_root);
     test_missing_folder(run_root);
+    test_long_paths(run_root);
     test_stale_sweep(run_root);
     std::printf("asset writer: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

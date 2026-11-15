@@ -13,6 +13,8 @@
  *   - a rename in letter case leaves exactly the source's files;
  *   - a stale file that cannot be removed fails the mirror (Windows, where an open file is locked);
  *   - a missing source fails with an error;
+ *   - files past 260 characters (a deep project's deploy folder, a runtime's long file names) mirror and copy, and the
+ *     filter still gets each file under the source as the caller wrote it;
  *   - a source with no file to mirror succeeds and creates no target;
  *   - have_same_content: equal files, a difference in the last byte, a shorter file, a missing file;
  *   - remove_unlisted_files: files only an earlier list names go with the folders they leave empty, files the
@@ -151,6 +153,38 @@ auto list_file_keys(const fs::path& folder) -> std::vector<std::string>
     }
     std::sort(keys.begin(), keys.end());
     return keys;
+}
+
+void test_long_paths(const fs::path& root)
+{
+    std::printf("test_long_paths\n");
+    const std::string level(60, 'd');
+    auto source = root / "source";
+    auto target = root / "target";
+    for(int i = 0; i < 4; ++i)
+    {
+        source /= level;
+        target /= level;
+    }
+    const auto file_name = std::string(40, 'f') + ".dll";
+    // Written through the extended-length form: the plain path is past what Windows takes.
+    write_text(fs::make_extended_length_path(source / file_name), "runtime");
+    std::vector<fs::path> filtered;
+    const auto stats = mirror(source,
+                              target,
+                              [&filtered](const fs::path& file)
+                              {
+                                  filtered.push_back(file);
+                                  return true;
+                              });
+    check(stats.copied == 1 && read_text(fs::make_extended_length_path(target / file_name)) == "runtime",
+          "files past 260 characters are mirrored");
+    check(filtered.size() == 1 && filtered.front() == source / file_name, "the filter gets the file under the source as written");
+    fs::error_code ec;
+    bool is_copied = false;
+    check(fs::copy_file_if_changed(source / file_name, target / "copy" / file_name, is_copied, ec) && is_copied,
+          "and one is copied on its own: " + ec.message());
+    fs::remove_all(fs::make_extended_length_path(root), ec);
 }
 
 void test_case_only_rename(const fs::path& target)
@@ -328,6 +362,7 @@ auto run_fs_mirror_suite(rtti::context&) -> int
     test_changed_file_is_copied(source, target);
     test_removed_files_go(source, target);
     test_filter(source, target);
+    test_long_paths(get_temp_folder() / "long");
     test_case_only_rename(get_temp_folder() / "case_target");
     test_removal_failure(get_temp_folder() / "locked_target");
     test_missing_source(target);

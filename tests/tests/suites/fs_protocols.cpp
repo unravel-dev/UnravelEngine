@@ -21,7 +21,8 @@
  *     every executable of the build carries): a path's narrow string, a path made from one, a file opened by one;
  *   - make_extended_length_path: the "\\?\" form of drive, relative and network share paths on Windows, a path
  *     already in it left alone, the path unchanged on other systems, and a folder with paths past 260
- *     characters made and removed through it.
+ *     characters made and removed through it; make_extended_length_path_if_long leaves a short path as it is and
+ *     gives a long one that form.
  *
  * Environment: UNRAVEL_PROTOCOL_TEST_DIR overrides the scratch folder. Every run writes into a fresh subfolder
  * and nothing is deleted but the long folder the last test makes; the protocols it registers are removed again.
@@ -298,6 +299,14 @@ void test_extended_length_paths(const fs::path& run_root)
     {
         deep /= level_name;
     }
+    check(fs::make_extended_length_path_if_long(run_root / "near.bin") == run_root / "near.bin",
+          "a path shorter than 260 characters stays as it is when only long ones change");
+#ifdef _WIN32
+    check(fs::make_extended_length_path_if_long(deep / "file.bin") == fs::make_extended_length_path(deep / "file.bin"),
+          "a longer one takes the extended-length form");
+#else
+    check(fs::make_extended_length_path_if_long(deep / "file.bin") == deep / "file.bin", "a longer one is returned as it is");
+#endif
     fs::error_code err;
     fs::create_directories(fs::make_extended_length_path(deep), err);
     write_file(fs::make_extended_length_path(deep / "file.bin"));

@@ -591,7 +591,8 @@ auto make_temp_path(const fs::path& dir, fs::path& out, fs::error_code& ec) noex
     constexpr int max_attempts = 100;
     for(int attempt = 0; attempt < max_attempts; ++attempt)
     {
-        out = dir / ("." + hpp::to_string(generate_uuid()) + ".temp");
+        // In the form Windows takes at its length: the name carries a folder short of 260 characters past them.
+        out = fs::make_extended_length_path_if_long(dir / ("." + hpp::to_string(generate_uuid()) + ".temp"));
         fs::error_code exists_ec;
         const bool exists = fs::exists(out, exists_ec);
         if(exists_ec)
@@ -611,6 +612,11 @@ auto make_temp_path(const fs::path& dir, fs::path& out, fs::error_code& ec) noex
     return false;
 }
 
+auto make_long_temp_path(const fs::path& dst, fs::path& out, fs::error_code& ec) noexcept -> bool
+{
+    return make_temp_path(fs::make_extended_length_path_if_long(dst.parent_path()), out, ec);
+}
+
 //------------------------------------------------------------------------------
 // Atomically copy src -> dst via:
 //   1) copy_file(src, temp)
@@ -620,7 +626,7 @@ auto make_temp_path(const fs::path& dir, fs::path& out, fs::error_code& ec) noex
 //
 // The RAII guard removes the temp file on any early return.
 //------------------------------------------------------------------------------
-auto atomic_copy_file(const fs::path& src, const fs::path& dst, fs::error_code& ec) noexcept -> bool
+auto atomic_copy_file(const fs::path& from, const fs::path& to, fs::error_code& ec) noexcept -> bool
 {
     ec.clear();
 
@@ -629,6 +635,8 @@ auto atomic_copy_file(const fs::path& src, const fs::path& dst, fs::error_code& 
     // new write so the directory doesn't accumulate orphans.
     drain_deferred_cleanup();
 
+    const auto src = fs::make_extended_length_path_if_long(from);
+    const auto dst = fs::make_extended_length_path_if_long(to);
     if(!fs::exists(src, ec) || ec)
     {
         if(!ec)
@@ -647,7 +655,7 @@ auto atomic_copy_file(const fs::path& src, const fs::path& dst, fs::error_code& 
     }
 
     fs::path temp;
-    if(!make_temp_path(dst.parent_path(), temp, ec))
+    if(!make_long_temp_path(to, temp, ec))
     {
         return false;
     }
@@ -674,7 +682,7 @@ auto atomic_copy_file(const fs::path& src, const fs::path& dst, fs::error_code& 
     return true;
 }
 
-void atomic_write_file(const fs::path& dst,
+void atomic_write_file(const fs::path& target,
                        const std::function<void(const fs::path&)>& callback,
                        fs::error_code& ec) noexcept
 {
@@ -683,8 +691,9 @@ void atomic_write_file(const fs::path& dst,
     // Same opportunistic drain as in atomic_copy_file.
     drain_deferred_cleanup();
 
+    const auto dst = fs::make_extended_length_path_if_long(target);
     fs::path temp;
-    if(!make_temp_path(dst.parent_path(), temp, ec))
+    if(!make_long_temp_path(target, temp, ec))
     {
         return;
     }

@@ -227,12 +227,15 @@ auto copy_file_if_changed(const path& from, const path& to, bool& is_copied, err
 {
     is_copied = false;
     ec.clear();
-    if(has_same_size_and_time(from, to))
+    // A deep project's files, or a runtime's long file names, pass the 260 characters Windows takes by default.
+    const auto source = make_extended_length_path(from);
+    const auto target = make_extended_length_path(to);
+    if(has_same_size_and_time(source, target))
     {
         return true;
     }
-    create_directories(to.parent_path(), ec);
-    if(ec || !copy_through_temp(from, to, ec))
+    create_directories(target.parent_path(), ec);
+    if(ec || !copy_through_temp(source, target, ec))
     {
         return false;
     }
@@ -248,23 +251,26 @@ auto mirror_directory(const path& from,
 {
     stats = {};
     ec.clear();
+    // Walked and written in the extended-length form: a deep folder's paths pass 260 characters.
+    const auto source = make_extended_length_path(from);
+    const auto target = make_extended_length_path(to);
     std::unordered_set<std::string> kept;
-    for(recursive_directory_iterator it(from, ec), end; !ec && it != end; it.increment(ec))
+    for(recursive_directory_iterator it(source, ec), end; !ec && it != end; it.increment(ec))
     {
-        if(!it->is_regular_file(ec) || (include && !include(it->path())))
+        const auto relative_path = it->path().lexically_relative(source);
+        if(!it->is_regular_file(ec) || (include && !include(from / relative_path)))
         {
             continue;
         }
-        const auto relative_path = it->path().lexically_relative(from);
         bool is_copied = false;
-        if(!copy_file_if_changed(it->path(), to / relative_path, is_copied, ec))
+        if(!copy_file_if_changed(it->path(), target / relative_path, is_copied, ec))
         {
             return false;
         }
         ++(is_copied ? stats.copied : stats.unchanged);
         kept.insert(make_relative_key(relative_path));
     }
-    return !ec && remove_unmirrored(to, kept, stats, ec);
+    return !ec && remove_unmirrored(target, kept, stats, ec);
 }
 
 } // namespace fs

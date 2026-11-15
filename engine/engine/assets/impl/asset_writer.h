@@ -16,7 +16,13 @@ namespace asset_writer
 // Atomically rename src -> dst, overwriting dst if it exists.
 //------------------------------------------------------------------------------
 auto atomic_rename_file(const fs::path& src, const fs::path& dst, fs::error_code& ec) noexcept -> bool;
+/// A free temp path in `dir`, ".<uuid>.temp": probed and given in the extended-length form once it is past 260
+/// characters (fs::make_extended_length_path_if_long), which a folder short of them can be with the name.
 auto make_temp_path(const fs::path& dir, fs::path& out, fs::error_code& ec) noexcept -> bool;
+
+/// A temp path beside `dst` as make_temp_path makes one, its folder in the extended-length form once that is past 260
+/// characters: what the atomic writers write first. Their callbacks get it as it is.
+auto make_long_temp_path(const fs::path& dst, fs::path& out, fs::error_code& ec) noexcept -> bool;
 
 //------------------------------------------------------------------------------
 // Atomically copy src -> dst, overwriting dst if it exists.
