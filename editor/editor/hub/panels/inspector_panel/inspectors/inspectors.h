@@ -499,6 +499,15 @@ auto match_component_filter(rtti::context& ctx,
                             const std::string& pretty_name,
                             const std::string& type_name) -> filter_match;
 
+/// Whether `name` holds `lowercase_text`, in any case: the text test of the inspector's filter.
+auto holds_text(const std::string& name, const std::string& lowercase_text) -> bool;
+
+/**
+ * @brief The filter match of a row an inspector draws with no reflected property behind it, by its name, its segment
+ * taken on the override views: with the overridden toggle, it shows when the views mark it.
+ */
+auto match_row_filter(rtti::context& ctx, const std::string& name) -> filter_match;
+
 /// While alive with `is_whole` set, every row passes the inspector's text filter: they are inside a match.
 class inspector_filter_whole_scope
 {

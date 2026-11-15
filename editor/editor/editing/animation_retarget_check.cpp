@@ -244,7 +244,7 @@ auto get_editable_model_key(const model_component& model) -> std::string
 auto get_model_humanoid_overrides(rtti::context& ctx, const std::string& model_key) -> std::vector<humanoid_bone_override>
 {
     const auto meta = ctx.get_cached<asset_manager>().get_metadata_for_key(model_key);
-    const auto importer = std::dynamic_pointer_cast<mesh_importer_meta>(meta.meta.importer);
+    const auto importer = safe_pointer_cast<mesh_importer_meta>(meta.meta.importer);
     return importer ? importer->rig.humanoid_overrides : std::vector<humanoid_bone_override>{};
 }
 
@@ -254,7 +254,7 @@ auto set_model_humanoid_override(rtti::context& ctx,
                                  const std::optional<std::string>& bone) -> bool
 {
     auto meta = ctx.get_cached<asset_manager>().get_metadata_for_key(model_key);
-    const auto importer = std::dynamic_pointer_cast<mesh_importer_meta>(meta.meta.importer);
+    const auto importer = safe_pointer_cast<mesh_importer_meta>(meta.meta.importer);
     if(!importer)
     {
         return false;

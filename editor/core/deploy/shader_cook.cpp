@@ -6,7 +6,11 @@
 
 #include <asset_compiler/asset_compiler.h>
 #include <engine/assets/impl/asset_extensions.h>
+#include <engine/assets/impl/asset_reader.h>
+#include <engine/meta/rendering/graph_material.hpp>
 #include <graphics/graphics.h>
+
+#include <algorithm>
 
 namespace unravel::deployment
 {
@@ -14,11 +18,12 @@ namespace
 {
 constexpr cook_wording SHADER_WORDING{"shader(s)", "cooked shader file(s)", "shader cache"};
 
-/// One shader of one protocol to cook.
+/// One shader of one protocol to cook: a shader asset, or the shader of a graph material.
 struct shader_job
 {
     const shader_cook_protocol* protocol{};
     std::string key;
+    bool is_graph_material{};
 };
 
 /// The cooked file of the shader compiled to `relative` for the renderer of `renderer_extension`, relative to
@@ -30,7 +35,21 @@ auto get_cooked_relative_path(const fs::path& relative, const std::string& rende
     return cooked;
 }
 
-/// Cooks one shader for each renderer: its files ship from the cache, one per renderer.
+/// Whether the editor's own compile of graph material @p key's shader for @p renderer, beside the compiled material, is
+/// current: the deploy ships that one and cooks none.
+auto is_compiled_beside_material(const std::string& key, const std::string& renderer) -> bool
+{
+    if(renderer != gfx::get_current_renderer_filename_extension())
+    {
+        return false;
+    }
+    const auto compiled = asset_reader::resolve_compiled_path(key).string();
+    return asset_compiler::is_graph_material_shader_compiled(key, get_graph_material_shader_file(compiled, renderer));
+}
+
+/// Cooks one shader for each renderer: its files ship from the cache, one per renderer, named as the compiled shader's
+/// or, for a graph material, as the compiled material's with the renderer's extension added. A graph material's shader
+/// for the editor's renderer ships from beside the compiled material while that one is current.
 auto cook_shader(const shader_cook_plan& plan, const shader_job& job) -> cook_outcome
 {
     cook_outcome outcome;
@@ -39,19 +58,26 @@ auto cook_shader(const shader_cook_plan& plan, const shader_job& job) -> cook_ou
     {
         return outcome;
     }
-    for(const auto& renderer : plan.renderers)
+    const auto& renderers = job.is_graph_material ? plan.graph_material_renderers : plan.renderers;
+    const auto is_compiled = job.is_graph_material ? asset_compiler::is_graph_material_shader_compiled : asset_compiler::is_shader_compiled;
+    const auto compile = job.is_graph_material ? asset_compiler::compile_graph_material_shader : asset_compiler::compile_shader;
+    for(const auto& renderer : renderers)
     {
+        if(job.is_graph_material && is_compiled_beside_material(job.key, renderer))
+        {
+            continue;
+        }
         const auto cooked = get_cooked_relative_path(relative, renderer);
         outcome.files.push_back(get_cache_file_key(cooked));
         const auto output = job.protocol->variants / cooked;
-        if(asset_compiler::is_shader_compiled(job.key, output))
+        if(is_compiled(job.key, output))
         {
             continue;
         }
         // The compile writes its temporary files beside the output.
         fs::error_code ec;
         fs::create_directories(output.parent_path(), ec);
-        if(asset_compiler::compile_shader(job.key, output))
+        if(compile(job.key, output))
         {
             ++outcome.compiled;
         }
@@ -63,21 +89,28 @@ auto cook_shader(const shader_cook_plan& plan, const shader_job& job) -> cook_ou
     return outcome;
 }
 
-/// A left-out shader's cooked files stay for a deploy that ships it, which checks them first.
-void keep_left_out(const shader_cook_plan& plan, const shader_cook_protocol& protocol, std::unordered_set<std::string>& kept)
+/// Keeps the cooked files of @p keys for @p renderers.
+void keep_cooked_files(const std::vector<std::string>& keys, const std::set<std::string>& renderers, std::unordered_set<std::string>& kept)
 {
-    for(const auto& key : protocol.shaders.left_out)
+    for(const auto& key : keys)
     {
         const auto relative = get_compiled_relative_path(key);
         if(relative.empty())
         {
             continue;
         }
-        for(const auto& renderer : plan.renderers)
+        for(const auto& renderer : renderers)
         {
             keep_cache_file(kept, get_cache_file_key(get_cooked_relative_path(relative, renderer)));
         }
     }
+}
+
+/// A left-out shader's cooked files stay for a deploy that ships it, which checks them first.
+void keep_left_out(const shader_cook_plan& plan, const shader_cook_protocol& protocol, std::unordered_set<std::string>& kept)
+{
+    keep_cooked_files(protocol.shaders.left_out, plan.renderers, kept);
+    keep_cooked_files(protocol.graph_materials.left_out, plan.graph_material_renderers, kept);
 }
 
 auto make_jobs(const shader_cook_plan& plan) -> std::vector<shader_job>
@@ -87,7 +120,11 @@ auto make_jobs(const shader_cook_plan& plan) -> std::vector<shader_job>
     {
         for(const auto& key : protocol.shaders.shipped)
         {
-            jobs.push_back({&protocol, key});
+            jobs.push_back({&protocol, key, false});
+        }
+        for(const auto& key : protocol.graph_materials.shipped)
+        {
+            jobs.push_back({&protocol, key, true});
         }
     }
     return jobs;
@@ -125,7 +162,20 @@ auto make_shader_cook_protocol(const fs::path& variants,
     shader_cook_protocol protocol;
     protocol.variants = variants;
     protocol.shaders = split_assets(database, is_asset_key<gfx::shader>, left_out);
+    protocol.graph_materials = split_assets(database, is_asset_key<material>, left_out);
     return protocol;
+}
+
+/// The renderer extensions a deploy with `params` ships shaders for (get_shader_variants), all of them named.
+auto get_shipped_renderers(const deploy_settings& params) -> std::set<std::string>
+{
+    auto renderers = get_shader_variants(params);
+    if(renderers.empty())
+    {
+        const auto& platform = gfx::get_renderer_platform_supported_filename_extensions();
+        renderers.insert(platform.begin(), platform.end());
+    }
+    return renderers;
 }
 
 /// The renderer extensions of a web build: WGSL for WebGPU, GLSL ES for WebGL 2 (OpenGL ES).
@@ -207,14 +257,26 @@ auto make_shader_cook_plan(const fs::path& project_root,
     shader_cook_plan plan;
     plan.profile = params.profile;
     plan.renderers = get_cooked_shader_variants(get_shader_variants(params));
-    if(!plan.has_work())
-    {
-        return plan;
-    }
     plan.protocols.push_back(
         make_shader_cook_protocol(get_profile_shaders_folder(project_root, params.profile, ENGINE_PROTOCOL), engine_database, {}));
     plan.protocols.push_back(
         make_shader_cook_protocol(get_profile_shaders_folder(project_root, params.profile, CONTENT_PROTOCOL), app_database, left_out));
+    // Left-out graph materials count too: the sweep keeps their cooked files for the deploy that ships them.
+    const bool has_graph_materials = std::any_of(plan.protocols.begin(),
+                                                 plan.protocols.end(),
+                                                 [](const shader_cook_protocol& protocol)
+                                                 {
+                                                     return !protocol.graph_materials.shipped.empty() ||
+                                                            !protocol.graph_materials.left_out.empty();
+                                                 });
+    if(has_graph_materials)
+    {
+        plan.graph_material_renderers = get_shipped_renderers(params);
+    }
+    if(!plan.has_work())
+    {
+        plan.protocols.clear();
+    }
     return plan;
 }
 

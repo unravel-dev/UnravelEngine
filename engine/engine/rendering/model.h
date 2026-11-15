@@ -487,6 +487,30 @@ public:
     auto get_render_material(uint32_t index) const -> material::sptr;
 
     /**
+     * @brief The material a slot's shadow casts with: the shared material while the instance's overrides feed nothing
+     * a shadow reads (material_instance::get_resolved_shares_shadow), so its casters batch with the shared material's
+     * others; else get_render_material.
+     */
+    auto get_shadow_material(uint32_t index) const -> material::sptr;
+
+    /// The material a slot draws with, as get_render_material, but null while its shared material is still loading:
+    /// never waits, for what runs every frame.
+    auto find_loaded_render_material(uint32_t index) const -> material::sptr;
+
+    /// Calls @p visit with each loaded material the slots draw with (find_loaded_render_material); never waits.
+    template<typename Visitor>
+    void for_each_loaded_render_material(Visitor&& visit) const
+    {
+        for(uint32_t i = 0; i < uint32_t(materials_.size()); ++i)
+        {
+            if(const auto mat = find_loaded_render_material(i))
+            {
+                visit(*mat);
+            }
+        }
+    }
+
+    /**
      * @brief Brings the resolved materials of the material instances up to date. Not thread safe for one model:
      * the model system calls it once a frame from that model's task.
      */
@@ -906,6 +930,9 @@ private:
     /// A material instance that overrides only per-instance values draws in its shared material's batch, carrying
     /// its resolved material; any other slot keys on the material it draws with.
     auto get_slot_batch_material(uint32_t index) const -> slot_batch_material;
+
+    /// The material a slot draws with (get_render_material), waiting for its shared material to load when @p wait.
+    auto resolve_render_material(uint32_t index, bool wait) const -> material::sptr;
 
     /// The submesh (at its LOD) a skinned submesh draw binds; null when it is not drawn.
     struct skinned_submesh_choice

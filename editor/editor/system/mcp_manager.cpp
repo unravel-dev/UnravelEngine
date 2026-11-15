@@ -198,6 +198,7 @@ auto mcp_manager::init(rtti::context& ctx, const cmd_line::parser& parser) -> bo
     mcp::register_asset_tools(registry_);
     mcp::register_viewport_tools(registry_);
     mcp::register_material_tools(registry_);
+    mcp::register_material_graph_tools(registry_);
     mcp::register_asset_property_tools(registry_);
     mcp::register_project_tools(registry_);
     mcp::register_settings_tools(registry_);

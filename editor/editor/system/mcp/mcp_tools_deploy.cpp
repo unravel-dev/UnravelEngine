@@ -878,8 +878,10 @@ auto run_public_link_action(rtti::context& ctx, const simdjson::dom::object& arg
 
 auto require_not_deploying(rtti::context& ctx, std::string& error) -> bool
 {
-    // The window's steps are main-thread state; a worker-thread tool sees the running deploys' count only.
-    const bool is_main_thread = tpp::this_thread::get_id() == tpp::main_thread::get_id();
+    // The window's steps are main-thread state; a worker-thread tool sees the running deploys' count only. The MCP
+    // server's threads are not registered with tpp, whose get_id logs an error there: an unregistered thread is never
+    // the main one.
+    const bool is_main_thread = tpp::this_thread::is_registered() && tpp::this_thread::get_id() == tpp::main_thread::get_id();
     const auto* panel = is_main_thread ? get_deploy_panel(ctx) : nullptr;
     if(deployment::is_deploy_running() || (panel != nullptr && panel->is_deploying()))
     {

@@ -17,7 +17,11 @@
 #include <engine/ui/ui_tree.h>
 #include <graphics/texture.h>
 
+#include <atomic>
+#include <mutex>
+#include <set>
 #include <unordered_map>
+#include <utility>
 
 namespace unravel
 {
@@ -105,8 +109,8 @@ auto internal_m2n_get_asset_by_key(const std::string& key, const dotnet::type& t
 /// A shared material scripts edited, with its values from before the first edit.
 struct shared_material_edit
 {
-    std::weak_ptr<material> live;
-    material::sptr original;
+    std::weak_ptr<graph_material> live;
+    std::shared_ptr<const graph_material> original;
 };
 
 auto get_shared_material_edits() -> std::unordered_map<const material*, shared_material_edit>&
@@ -127,20 +131,81 @@ auto find_shared_material(const hpp::uuid& uid) -> material::sptr
     return shared && !asset_handle<material>::is_empty(shared) ? shared : nullptr;
 }
 
+/// The shared material of @p uid as a graph material; null for another kind.
+auto find_shared_graph(const hpp::uuid& uid) -> std::shared_ptr<graph_material>
+{
+    return safe_pointer_cast<graph_material>(find_shared_material(uid));
+}
+
+/// What the shared material draws a managed MaterialProperty with (its Standard parameter or texture).
 auto get_shared_value(const hpp::uuid& uid, int32_t property) -> entt::meta_any
 {
-    const auto shared = find_shared_material(uid);
-    return shared ? get_material_value(*shared, get_material_property_id(property)) : entt::meta_any{};
+    const auto graph = find_shared_graph(uid);
+    return graph ? get_script_material_value(*graph, property) : entt::meta_any{};
 }
 
 /// Changes the shared material for every renderer that uses it; restored when play stops.
 void set_shared_value(const hpp::uuid& uid, int32_t property, const entt::meta_any& value)
 {
-    if(const auto shared = find_shared_material(uid))
+    const auto graph = find_shared_graph(uid);
+    if(!graph)
     {
-        remember_shared_material_edit(shared);
-        set_material_value(*shared, get_material_property_id(property), value);
+        return;
     }
+    remember_shared_material_edit(graph);
+    if(!set_script_material_value(*graph, property, value))
+    {
+        warn_script_property_missing(engine::context().get_cached<asset_manager>().get_asset<material>(uid), *graph, property);
+    }
+}
+
+auto internal_m2n_material_has_parameter(const hpp::uuid& uid, const std::string& name) -> bool
+{
+    const auto graph = find_shared_graph(uid);
+    return graph && graph->find_parameter(name) != nullptr;
+}
+
+auto internal_m2n_material_get_parameter(const hpp::uuid& uid, const std::string& name) -> managed_vector4
+{
+    const auto graph = find_shared_graph(uid);
+    const auto value = graph ? graph->get_parameter(name) : hpp::optional<math::vec4>{};
+    return make_managed_vector4(value.value_or(math::vec4(0.0f)));
+}
+
+/// Changes a graph parameter for every renderer that uses the material; restored when play stops.
+auto internal_m2n_material_set_parameter(const hpp::uuid& uid, const std::string& name, const managed_vector4& value) -> bool
+{
+    const auto graph = find_shared_graph(uid);
+    if(!graph || graph->find_parameter(name) == nullptr)
+    {
+        return false;
+    }
+    remember_shared_material_edit(graph);
+    return graph->set_parameter(name, make_vector4(value));
+}
+
+auto internal_m2n_material_has_texture_node(const hpp::uuid& uid, const std::string& name) -> bool
+{
+    const auto graph = find_shared_graph(uid);
+    return graph && graph->find_texture(name) != nullptr;
+}
+
+auto internal_m2n_material_get_texture_by_name(const hpp::uuid& uid, const std::string& name) -> hpp::uuid
+{
+    const auto graph = find_shared_graph(uid);
+    return graph ? graph->get_texture(name).uid() : hpp::uuid{};
+}
+
+/// Changes a graph texture node's texture for every renderer that uses the material; restored when play stops.
+auto internal_m2n_material_set_texture_by_name(const hpp::uuid& uid, const std::string& name, const hpp::uuid& texture) -> bool
+{
+    const auto graph = find_shared_graph(uid);
+    if(!graph || graph->find_texture(name) == nullptr)
+    {
+        return false;
+    }
+    remember_shared_material_edit(graph);
+    return graph->set_texture(name, make_texture_value(texture).cast<texture_handle>());
 }
 
 void internal_m2n_material_set_color(const hpp::uuid& uid, int32_t property, const managed_color& value)
@@ -183,9 +248,9 @@ auto internal_m2n_material_get_texture(const hpp::uuid& uid, int32_t property) -
     return read_texture_value(get_shared_value(uid, property));
 }
 
-void internal_m2n_material_set_mode(const hpp::uuid& uid, int32_t property, int32_t value)
+void internal_m2n_material_set_mode(const hpp::uuid& /*uid*/, int32_t property, int32_t /*value*/)
 {
-    set_shared_value(uid, property, make_mode_value(property, value));
+    warn_script_mode_ignored(property);
 }
 
 auto internal_m2n_material_get_mode(const hpp::uuid& uid, int32_t property) -> int32_t
@@ -260,13 +325,48 @@ auto make_texture_value(const hpp::uuid& uid) -> entt::meta_any
     return texture;
 }
 
-void remember_shared_material_edit(const material::sptr& shared)
+void remember_shared_material_edit(const std::shared_ptr<graph_material>& shared)
 {
     auto& edits = get_shared_material_edits();
     if(edits.find(shared.get()) == edits.end())
     {
-        edits.emplace(shared.get(), shared_material_edit{shared, shared->clone()});
+        edits.emplace(shared.get(), shared_material_edit{shared, std::make_shared<graph_material>(*shared)});
     }
+}
+
+void warn_script_property_missing(const asset_handle<material>& handle, const graph_material& mat, int32_t property)
+{
+    static std::mutex mutex;
+    static std::set<std::pair<std::string, int32_t>> warned;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if(!warned.emplace(handle.id(), property).second)
+        {
+            return;
+        }
+    }
+    const auto* standard = find_script_standard_property(property);
+    const std::string name = standard != nullptr ? standard->name : get_material_property_key(property);
+    const char* hint = is_material_graph_specular_workflow(mat.get_graph()) ? "The material is in the specular workflow: set its Specular Color and Glossiness, "
+                                     "or its Specular Map, instead (SetVector and SetFloat by name)."
+                                   : "Set the graph's own parameters by name instead (SetFloat, SetVector, SetTexture).";
+    APPLOG_WARNING("A script set {} on the material {}, whose graph has no {}: nothing changed. {}", name, handle.id(), name, hint);
+}
+
+void warn_script_mode_ignored(int32_t property)
+{
+    static std::atomic<bool> is_alpha_mode_warned{false};
+    static std::atomic<bool> is_cull_mode_warned{false};
+    const bool is_cull = static_cast<material_property>(property) == material_property::cull_mode;
+    auto& is_warned = is_cull ? is_cull_mode_warned : is_alpha_mode_warned;
+    if(is_warned.exchange(true))
+    {
+        return;
+    }
+    APPLOG_WARNING("A script set a material's {}, which only reads: it is the material graph's {}. Edit the graph's "
+                   "Surface Output in the editor instead.",
+                   is_cull ? "cull mode" : "alpha mode",
+                   is_cull ? "Two Sided and Cull Front Faces settings" : "coverage (its Opacity Mask and Translucent setting)");
 }
 
 void restore_shared_material_edits()
@@ -277,7 +377,7 @@ void restore_shared_material_edits()
         // In place: renderers and material instances keep referencing the same material.
         if(const auto live = edit.live.lock())
         {
-            copy_material_values(*edit.original, *live);
+            live->copy_values(*edit.original);
         }
     }
     edits.clear();
@@ -305,6 +405,15 @@ void register_assets_script_bindings()
                               script_internal_call(internal_m2n_material_get_texture));
         reg.add_internal_call("internal_m2n_material_set_mode", script_internal_call(internal_m2n_material_set_mode));
         reg.add_internal_call("internal_m2n_material_get_mode", script_internal_call(internal_m2n_material_get_mode));
+        reg.add_internal_call("internal_m2n_material_has_parameter", script_internal_call(internal_m2n_material_has_parameter));
+        reg.add_internal_call("internal_m2n_material_get_parameter", script_internal_call(internal_m2n_material_get_parameter));
+        reg.add_internal_call("internal_m2n_material_set_parameter", script_internal_call(internal_m2n_material_set_parameter));
+        reg.add_internal_call("internal_m2n_material_has_texture_node",
+                              script_internal_call(internal_m2n_material_has_texture_node));
+        reg.add_internal_call("internal_m2n_material_get_texture_by_name",
+                              script_internal_call(internal_m2n_material_get_texture_by_name));
+        reg.add_internal_call("internal_m2n_material_set_texture_by_name",
+                              script_internal_call(internal_m2n_material_set_texture_by_name));
     }
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.AudioClip");

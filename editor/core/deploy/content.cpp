@@ -356,10 +356,11 @@ private:
         {
             return true;
         }
-        // A built-in shape named the way it was spelled before it was a file still loads that file.
-        if(const auto shape_key = get_built_in_mesh_key_of_embedded(path); !shape_key.empty())
+        // A built-in shape or a default material named the way it was spelled before it was a file still loads that
+        // file.
+        if(const auto engine_key = get_engine_key_of_embedded(path); !engine_key.empty())
         {
-            return reach(shape_key, use, used_by);
+            return reach(engine_key, use, used_by);
         }
         const auto [first, last] = entries_by_stem_.equal_range(fs::make_path_key(path));
         for(auto it = first; it != last; ++it)

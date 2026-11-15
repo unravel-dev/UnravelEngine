@@ -10,6 +10,7 @@
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <editor/imgui/integration/imgui_context_menu_style.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 
@@ -29,13 +30,47 @@ constexpr std::array<ImU32, 4> AXIS_EDGE_COLORS{
 /// Below this width, in font heights, a color drops its channel fields: one swatch the width of the value.
 constexpr float COMPACT_COLOR_EM = 14.0f;
 
+/// How a vector's fields drag: the speed per pixel, and the range they keep to while max is the greater.
+struct drag_limits
+{
+    float speed{DRAG_SPEED};
+    float min{};
+    float max{};
+};
+
+/// The drag limits a property's "step", "min" and "max" attributes give its vector's fields.
+auto read_drag_limits(const entt::meta_custom& custom) -> drag_limits
+{
+    drag_limits limits;
+    const auto& step = entt::get_attribute(custom, "step");
+    if(step && step.allow_cast<float>())
+    {
+        limits.speed = step.cast<float>();
+    }
+    const auto& min = entt::get_attribute(custom, "min");
+    const auto& max = entt::get_attribute(custom, "max");
+    if(min && max && min.allow_cast<float>() && max.allow_cast<float>())
+    {
+        limits.min = min.cast<float>();
+        limits.max = max.cast<float>();
+    }
+    return limits;
+}
+
+/// The flags of a color edit for a property: with the "hdr" attribute, its channels go above 1.
+auto get_color_range_flags(const entt::meta_custom& custom) -> ImGuiColorEditFlags
+{
+    return entt::get_attribute_as<bool>(custom, "hdr") ? ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float : 0;
+}
+
 /// A vector's fields, each with a colored edge naming its axis. A field's context menu resets its component when
 /// the vector has a reset value.
 bool drag_vector_fields(ImGuiDataType data_type,
                         void* data,
                         int components,
                         const void* reset,
-                        const char* format)
+                        const char* format,
+                        const drag_limits& limits = {})
 {
     const float width = ImGui::CalcItemWidth();
     const ImGuiStyle& style = ImGui::GetStyle();
@@ -53,7 +88,7 @@ bool drag_vector_fields(ImGuiDataType data_type,
         {
             ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
         }
-        changed |= ImGui::DragScalar("", data_type, component, DRAG_SPEED, nullptr, nullptr, format);
+        changed |= ImGui::DragScalar("", data_type, component, limits.speed, &limits.min, &limits.max, format);
         ImGui::DrawItemActivityOutline();
         const ImVec2 min = ImGui::GetItemRectMin();
         ImGui::GetWindowDrawList()->AddRectFilled(min,
@@ -93,7 +128,7 @@ struct color_edit_result
 };
 
 /// A color as one swatch the width of the value, opening the picker: for a value too narrow for the channels.
-auto edit_color_swatch(math::vec4& value, bool is_opaque) -> color_edit_result
+auto edit_color_swatch(math::vec4& value, bool is_opaque, ImGuiColorEditFlags range_flags) -> color_edit_result
 {
     color_edit_result result{};
     const ImVec2 size(ImGui::CalcItemWidth(), ImGui::GetFrameHeight());
@@ -106,10 +141,11 @@ auto edit_color_swatch(math::vec4& value, bool is_opaque) -> color_edit_result
     }
     if(ImGui::BeginPopup("##swatch_picker"))
     {
-        result.changed = is_opaque ? ImGui::ColorPicker3("##picker", math::value_ptr(value))
+        result.changed = is_opaque ? ImGui::ColorPicker3("##picker", math::value_ptr(value), range_flags)
                                    : ImGui::ColorPicker4("##picker",
                                                          math::value_ptr(value),
-                                                         ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf);
+                                                         range_flags | ImGuiColorEditFlags_AlphaBar |
+                                                             ImGuiColorEditFlags_AlphaPreviewHalf);
         result.edit_finished = ImGui::IsItemDeactivatedAfterEdit();
         ImGui::EndPopup();
     }
@@ -184,25 +220,35 @@ bool DragFloat4(math::vec4& data,
     return result;
 }
 
-bool DragVec2(math::vec2& data, const var_info& info, const math::vec2* reset = nullptr, const char* format = "%.3f")
+bool DragVec2(math::vec2& data,
+              const var_info& info,
+              const math::vec2* reset = nullptr,
+              const char* format = "%.3f",
+              const drag_limits& limits = {})
 {
     bool result = drag_vector_fields(ImGuiDataType_Float,
                                      math::value_ptr(data),
                                      data.length(),
                                      reset ? math::value_ptr(*reset) : nullptr,
-                                     format);
+                                     format,
+                                     limits);
     ImGui::ActiveItemWrapMousePos();
 
     return result;
 }
 
-bool DragVec3(math::vec3& data, const var_info& info, const math::vec3* reset = nullptr, const char* format = "%.3f")
+bool DragVec3(math::vec3& data,
+              const var_info& info,
+              const math::vec3* reset = nullptr,
+              const char* format = "%.3f",
+              const drag_limits& limits = {})
 {
     bool result = drag_vector_fields(ImGuiDataType_Float,
                                      math::value_ptr(data),
                                      data.length(),
                                      reset ? math::value_ptr(*reset) : nullptr,
-                                     format);
+                                     format,
+                                     limits);
 
     ImGui::ActiveItemWrapMousePos();
 
@@ -258,13 +304,18 @@ auto make_euler_rotation_proxy(const meta_any_proxy& transform_proxy) -> meta_an
     return proxy;
 }
 
-bool DragVec4(math::vec4& data, const var_info& info, const math::vec4* reset = nullptr, const char* format = "%.3f")
+bool DragVec4(math::vec4& data,
+              const var_info& info,
+              const math::vec4* reset = nullptr,
+              const char* format = "%.3f",
+              const drag_limits& limits = {})
 {
     bool result = drag_vector_fields(ImGuiDataType_Float,
                                      math::value_ptr(data),
                                      data.length(),
                                      reset ? math::value_ptr(*reset) : nullptr,
-                                     format);
+                                     format,
+                                     limits);
 
     ImGui::ActiveItemWrapMousePos();
 
@@ -413,7 +464,7 @@ auto inspector_vec2::inspect(rtti::context& ctx,
 
     static const auto reset = math::zero<math::vec2>();
 
-    if(DragVec2(data, info, &reset))
+    if(DragVec2(data, info, &reset, "%.3f", read_drag_limits(custom)))
     {
         result.changed = true;
     }
@@ -433,7 +484,7 @@ auto inspector_vec3::inspect(rtti::context& ctx,
 
     static const auto reset = math::zero<math::vec3>();
 
-    if(DragVec3(data, info, &reset))
+    if(DragVec3(data, info, &reset, "%.3f", read_drag_limits(custom)))
     {
         result.changed = true;
     }
@@ -453,7 +504,7 @@ auto inspector_vec4::inspect(rtti::context& ctx,
 
     static const auto reset = math::zero<math::vec4>();
 
-    if(DragVec4(data, info, &reset))
+    if(DragVec4(data, info, &reset, "%.3f", read_drag_limits(custom)))
     {
         result.changed = true;
     }
@@ -473,17 +524,19 @@ auto inspector_color::inspect(rtti::context& ctx,
 
     // "opaque": the property uses no alpha, so none is shown.
     const bool is_opaque = entt::get_attribute_as<bool>(custom, "opaque");
+    const ImGuiColorEditFlags range_flags = get_color_range_flags(custom);
     if(ImGui::CalcItemWidth() < COMPACT_COLOR_EM * ImGui::GetFontSize())
     {
-        const color_edit_result swatch = edit_color_swatch(data.value, is_opaque);
+        const color_edit_result swatch = edit_color_swatch(data.value, is_opaque, range_flags);
         result.changed = swatch.changed;
         result.edit_finished = swatch.edit_finished;
         return result;
     }
-    const bool is_edited = is_opaque ? ImGui::ColorEdit3("##", math::value_ptr(data.value))
+    const bool is_edited = is_opaque ? ImGui::ColorEdit3("##", math::value_ptr(data.value), range_flags)
                                      : ImGui::ColorEdit4("##",
                                                          math::value_ptr(data.value),
-                                                         ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf);
+                                                         range_flags | ImGuiColorEditFlags_AlphaBar |
+                                                             ImGuiColorEditFlags_AlphaPreviewHalf);
     if(is_edited)
     {
         result.changed = true;
@@ -884,4 +937,82 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
     return result;
 }
+namespace
+{
+/// @p value as the type the inspector draws a vector of @p style with.
+auto make_styled_value(const math::vec4& value, const vector_value_style& style) -> entt::meta_any
+{
+    if(style.is_color)
+    {
+        return math::color(value);
+    }
+    switch(style.width)
+    {
+        case 1:
+            return value.x;
+        case 2:
+            return math::vec2(value);
+        case 3:
+            return math::vec3(value);
+        default:
+            return value;
+    }
+}
+
+/// The components of a value make_styled_value made, after the inspector edited them.
+auto get_styled_components(const entt::meta_any& styled) -> const float*
+{
+    if(const auto* color = styled.try_cast<math::color>())
+    {
+        return math::value_ptr(color->value);
+    }
+    if(const auto* scalar = styled.try_cast<float>())
+    {
+        return scalar;
+    }
+    if(const auto* vector = styled.try_cast<math::vec2>())
+    {
+        return math::value_ptr(*vector);
+    }
+    if(const auto* vector = styled.try_cast<math::vec3>())
+    {
+        return math::value_ptr(*vector);
+    }
+    const auto* vector = styled.try_cast<math::vec4>();
+    return vector != nullptr ? math::value_ptr(*vector) : nullptr;
+}
+
+/// The attributes the float, vector and color inspectors take a style's speed, range and color kind from.
+auto make_style_attributes(const vector_value_style& style) -> entt::attributes
+{
+    entt::attributes attributes;
+    if(style.drag_speed > 0.0f)
+    {
+        attributes.emplace("step", style.drag_speed);
+    }
+    if(style.max_value > style.min_value)
+    {
+        attributes.emplace("min", style.min_value);
+        attributes.emplace("max", style.max_value);
+    }
+    attributes.emplace("opaque", style.width < 4);
+    attributes.emplace("hdr", style.is_hdr);
+    return attributes;
+}
+} // namespace
+
+auto inspect_vector_value(rtti::context& ctx, math::vec4& value, const vector_value_style& style) -> inspect_result
+{
+    const uint32_t width = std::clamp(style.width, 1u, uint32_t(value.length()));
+    entt::meta_any styled = make_styled_value(value, style);
+    const auto custom = entt::make_custom<entt::attributes>(make_style_attributes(style));
+    const auto result = inspect_var(ctx, styled, make_proxy(styled), {}, custom);
+    const float* components = result.changed ? get_styled_components(styled) : nullptr;
+    if(components != nullptr)
+    {
+        std::copy_n(components, width, math::value_ptr(value));
+    }
+    return result;
+}
+
 } // namespace unravel

@@ -17,7 +17,7 @@ class header_panel
 public:
     header_panel(imgui_panels* parent);
 
-    /// Height of the header: the menu bar row plus the play toolbar under it.
+    /// Height of the header: the menu bar row plus the play toolbar under it, at the font of the window it is called in.
     static auto calc_height() -> float;
 
     void on_frame_ui_render(rtti::context& ctx, float header_size);

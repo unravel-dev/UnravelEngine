@@ -160,6 +160,8 @@ auto gizmos_renderer::init(rtti::context& ctx) -> bool
         outline_mask_program_.program = std::make_unique<gpu_program>(vs, fs);
         outline_mask_program_skinned_.cache_uniforms();
         outline_mask_program_skinned_.program = std::make_unique<gpu_program>(vs, "skinned", fs);
+        moved_vertex_programs_.init(am.get_asset<gfx::shader>("engine:/data/shaders/deferred_geom/vs_deferred_geom.eshader"));
+        outline_mask_fragment_shader_ = fs;
     }
 
     {
@@ -189,6 +191,7 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
     auto& em = ctx.get_cached<editing_manager>();
     const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
+    moved_vertex_programs_.release_unused();
 
     gfx::render_pass pass("Gizmos/Selection Mask Pass");
     pass.bind(selection_mask.get());
@@ -262,8 +265,12 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
                 {
                     auto& prog =
                         submit_params.skinned ? outline_mask_program_skinned_.program : outline_mask_program_.program;
+                    auto* moved = moved_vertex_programs_.begin_moved_vertices(mat,
+                                                                              graph_material_programs::get_position_only_variant(submit_params.skinned),
+                                                                              outline_mask_fragment_shader_,
+                                                                              camera.get_position());
                     bgfx::submit(pass.id,
-                                 prog->native_handle(),
+                                 moved != nullptr ? moved->native_handle() : prog->native_handle(),
                                  0,
                                  submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL);
                 };

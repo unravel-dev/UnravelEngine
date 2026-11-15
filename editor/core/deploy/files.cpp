@@ -34,15 +34,17 @@ auto get_data_prefix(const std::string& protocol) -> std::string
 using file_visitor = std::function<void(const fs::path& file, const fs::path& relative)>;
 
 /// Calls `visit` with each regular file under `folder` and its path relative to `folder`; throws when the listing
-/// fails.
+/// fails. Walked in the extended-length form, which `visit` gets the files in: a deep project's compiled cache passes
+/// the 260 characters Windows takes by default.
 void for_each_file_or_throw(const fs::path& folder, const file_visitor& visit)
 {
     fs::error_code ec;
-    for(fs::recursive_directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
+    const auto root = fs::make_extended_length_path(folder);
+    for(fs::recursive_directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec))
     {
         if(it->is_regular_file(ec))
         {
-            visit(it->path(), it->path().lexically_relative(folder));
+            visit(it->path(), it->path().lexically_relative(root));
         }
     }
     if(ec)
@@ -59,6 +61,7 @@ void add_cooked_only_inputs(const fs::path& compiled,
                             std::vector<fs::pack_input>& inputs)
 {
     const auto compiled_folder = ex::get_compiled_directory_no_slash();
+    const auto compiled_root = fs::make_extended_length_path(compiled);
     std::set<std::string> added;
     for(const auto& folder : cooked)
     {
@@ -70,7 +73,7 @@ void add_cooked_only_inputs(const fs::path& compiled,
                                [&](const fs::path& file, const fs::path& relative)
                                {
                                    if(is_loose_only_file(file) || !is_shipped(file, relative) ||
-                                      is_present(compiled / relative) || !added.insert(relative.generic_string()).second)
+                                      is_present(compiled_root / relative) || !added.insert(relative.generic_string()).second)
                                    {
                                        return;
                                    }
@@ -193,7 +196,8 @@ auto get_shipped_variant(const cooked_folders& cooked, const fs::path& relative,
         {
             continue;
         }
-        auto variant = folder / relative;
+        // In the extended-length form, as for_each_file_or_throw walks: a deep cache passes 260 characters.
+        auto variant = fs::make_extended_length_path(folder) / relative;
         if(is_present(variant))
         {
             return variant;

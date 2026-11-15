@@ -15,6 +15,10 @@ void save_to_file_bin(const std::string& absolute_path, const std::shared_ptr<ma
 void load_from_file(const std::string& absolute_path, std::shared_ptr<material>& obj);
 void load_from_file_bin(const std::string& absolute_path, std::shared_ptr<material>& obj);
 
+/// Whether the material file at @p absolute_path was written before every material was a graph: it holds a PBR
+/// material, which loading upgrades to the Standard graph.
+auto is_legacy_material_file(const std::string& absolute_path) -> bool;
+
 /// @p attributes plus what every reflected material property carries from its table entry
 /// (get_material_property_traits): "material_property" and "per_instance".
 inline auto make_material_property_attributes(material_property_id property, entt::attributes attributes)

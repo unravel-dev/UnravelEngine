@@ -26,33 +26,6 @@ auto phong_shininess_exponent_to_roughness(float shininess) -> float
     return math::clamp(std::sqrt(2.0f / (shininess + 2.0f)), 0.0f, 1.0f);
 }
 
-/**
- * @brief True when the diffuse path is already the material's authored base color (PBR), not
- * KHR spec-gloss extension albedo that must be reconstructed with the specular map.
- *
- * Uses Assimp texture slots only - no filename heuristics:
- *   - BASE_COLOR alone -> dedicated PBR base color (e.g. Vespa BaseColor.dds).
- *   - BASE_COLOR and DIFFUSE bound to the same path -> MR base color is the albedo source.
- *   - BASE_COLOR and DIFFUSE differ -> dual-authored glTF (MR fallback vs KHR SG diffuse).
- */
-auto base_color_texture_is_authoritative(const aiMaterial* material) -> bool
-{
-    aiString base_path{};
-    aiString diffuse_path{};
-    const bool has_base =
-        material->GetTexture(aiTextureType_BASE_COLOR, 0, &base_path) == AI_SUCCESS && base_path.length > 0;
-    const bool has_diffuse =
-        material->GetTexture(aiTextureType_DIFFUSE, 0, &diffuse_path) == AI_SUCCESS && diffuse_path.length > 0;
-
-    if(has_base && has_diffuse)
-    {
-        return material_texture_paths_equal(normalize_assimp_path(base_path.C_Str()),
-                                            normalize_assimp_path(diffuse_path.C_Str()));
-    }
-
-    return has_base;
-}
-
 auto material_shading_is_phong_family(aiShadingMode shading) -> bool
 {
     switch(shading)
@@ -323,16 +296,6 @@ auto material_workflow_label(material_workflow workflow) -> const char*
 }
 
 /**
- * @brief KHR rebakes extension diffuse into PBR base color. Phong keeps diffuse as albedo.
- */
-auto should_reconstruct_base_color_for_spec_gloss_pair(material_workflow workflow,
-                                                       const aiMaterial* material) -> bool
-{
-    return workflow == material_workflow::khr_specular_glossiness
-           && !base_color_texture_is_authoritative(material);
-}
-
-/**
  * @brief Packed metallic-roughness stored in aiTextureType_SPECULAR (Bistro pairs / *_spec maps).
  * Not KHR spec/gloss and not Phong specular-color maps.
  */
@@ -362,32 +325,6 @@ auto material_has_packed_mr_in_specular_slot(const aiMaterial* material) -> bool
     // Path naming is the reliable packed-map signal. Do not require COLOR_SPECULAR ~ white:
     // Assimp FBX keeps Phong defaults (often ~0.2-0.5) even though the engine multiplies by white.
     return specular_texture_path_looks_like_packed_mr(material);
-}
-
-/**
- * @brief KHR specular-only fallback: convert one specular map to combined MR (no diffuse pair).
- */
-auto khr_needs_combined_specular_mr(const aiMaterial* material, material_workflow workflow) -> bool
-{
-    if(workflow != material_workflow::khr_specular_glossiness)
-    {
-        return false;
-    }
-
-    if(material->GetTextureCount(aiTextureType_METALNESS) > 0
-       || material->GetTextureCount(aiTextureType_GLTF_METALLIC_ROUGHNESS) > 0
-       || material->GetTextureCount(aiTextureType_DIFFUSE_ROUGHNESS) > 0)
-    {
-        return false;
-    }
-
-    if(material->GetTextureCount(aiTextureType_SPECULAR) > 0)
-    {
-        APPLOG_TRACE("Mesh Importer: KHR specular-only -> combined SpecularToMetallicRoughness conversion");
-        return true;
-    }
-
-    return false;
 }
 
 /**
@@ -473,7 +410,7 @@ auto gather_spec_gloss_factors(const aiMaterial* material) -> spec_gloss_factors
 /**
  * @brief Process material with intelligent property extraction and conversion.
  * First tries to get actual PBR properties, then converts missing ones from available data.
- * KHR spec/gloss factors go through the metallic solve; Phong uses shininess exponent mapping.
+ * Phong uses shininess exponent mapping. KHR spec/gloss keeps its factors (gather_spec_gloss_factors).
  */
 void process_material_with_workflow_conversion(const aiMaterial* material, 
                                              material_workflow workflow,
@@ -485,44 +422,7 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
     bool has_metallic = (material->Get(AI_MATKEY_METALLIC_FACTOR, metallic) == AI_SUCCESS);
     bool has_roughness = (material->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness) == AI_SUCCESS);
     
-    // KHR spec-gloss: derive MR (+ optional base color) from diffuse/specular/gloss factors when textures are absent.
-    if(workflow == material_workflow::khr_specular_glossiness)
-    {
-        aiColor3D diffuse_color{1.0f, 1.0f, 1.0f};
-        material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_color);
-        
-        aiColor3D specular_color{0.04f, 0.04f, 0.04f};
-        float specular_factor = 1.0f;
-        material->Get(AI_MATKEY_COLOR_SPECULAR, specular_color);
-        material->Get(AI_MATKEY_SPECULAR_FACTOR, specular_factor);
-        specular_color.r *= specular_factor;
-        specular_color.g *= specular_factor;
-        specular_color.b *= specular_factor;
-        
-        float glossiness = 0.5f;
-        if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, glossiness) != AI_SUCCESS)
-        {
-            float shininess = 32.0f;
-            if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
-            {
-                glossiness = math::clamp(1.0f - std::sqrt(2.0f / (shininess + 2.0f)), 0.0f, 1.0f);
-            }
-        }
-        
-        auto [converted_base_color, converted_metallic, converted_roughness] = 
-            convert_specular_gloss_to_metallic_roughness(diffuse_color, specular_color, glossiness);
-        
-        if(!has_base_color)
-        {
-            base_color = converted_base_color;
-            APPLOG_TRACE("Mesh Importer: Converted base color from specular/diffuse workflow");
-        }
-        metallic = converted_metallic;
-        roughness = converted_roughness;
-        APPLOG_TRACE("Mesh Importer: Converted PBR factors from KHR spec/gloss: metallic={:.3f}, roughness={:.3f}",
-                     metallic, roughness);
-    }
-    else if(workflow == material_workflow::phong_specular_gloss)
+    if(workflow == material_workflow::phong_specular_gloss)
     {
         // Albedo tint is COLOR_DIFFUSE; BASE_COLOR is often a white MR fallback on dual-authored assets.
         aiColor3D diffuse_tint{1.0f, 1.0f, 1.0f};

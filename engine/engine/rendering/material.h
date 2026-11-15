@@ -16,8 +16,6 @@
 namespace unravel
 {
 
-struct shadow_cutout_state;
-
 /**
  * @enum cull_type
  * @brief Enum representing the type of culling to be used.
@@ -29,12 +27,13 @@ enum class cull_type : std::uint32_t
     counter_clockwise, ///< Cull counter-clockwise faces.
 };
 
-/// glTF-aligned surface alpha behavior (default: opaque).
+/// glTF-aligned surface alpha behavior (default: opaque): how an imported or a legacy PBR material covers its surface
+/// (standard_surface), which the Standard graph draws.
 enum class alpha_mode : std::uint32_t
 {
-    opaque, ///< No alpha clip; casts solid shadows.
-    mask,   ///< Hard alpha cutoff; casts cutout shadows.
-    blend,  ///< Transparent (lit pass); does not cast shadows.
+    opaque, ///< No alpha clip.
+    mask,   ///< Hard alpha cutoff, its shadow cut out too.
+    blend,  ///< Transparent: dithered out by its alpha.
 };
 
 /**
@@ -45,23 +44,13 @@ enum class alpha_mode : std::uint32_t
 enum class material_property_id : std::uint8_t
 {
     cull_type,
-    base_color,
-    subsurface_color,
-    emissive_color,
-    emissive_intensity,
-    roughness,
-    metalness,
-    bumpiness,
-    alpha_mode,
-    alpha_cutoff,
-    tiling,
-    dither_threshold,
-    color_map,
-    normal_map,
-    roughness_map,
-    metalness_map,
-    emissive_map,
-    ao_map,
+    /// A graph material's graph: it can change every aspect (graph_material).
+    graph,
+    /// A value given to a graph material's parameter over the graph's default (graph_material::set_parameter): it can
+    /// feed any aspect, and a material instance can override it without a separate draw.
+    graph_parameter,
+    /// A texture given to a graph material's texture node over the graph's (graph_material::set_texture).
+    graph_texture,
 };
 
 /// What an edit of one material_property_id changes, and how the property is stored.
@@ -76,46 +65,15 @@ struct material_property_traits
 /// The one table of what each material property changes (see material_property_id).
 constexpr auto get_material_property_traits(material_property_id property) -> material_property_traits
 {
-    // Every texture is sampled with the tiling; the metalness and roughness maps are read as one texture when they
-    // are the same (pbr_material::metalness_roughness_combined), so either map moves both.
-    constexpr render_change::mask textured = render_change::coverage | render_change::albedo | render_change::normal |
-                                             render_change::specular | render_change::occlusion |
-                                             render_change::emission;
     switch(property)
     {
         case material_property_id::cull_type:
             return {render_change::sidedness, false};
-        case material_property_id::base_color:
-            // Its alpha is coverage: an edit of the color alone leaves coverage alone (pbr_material::set_base_color).
-            return {render_change::albedo | render_change::coverage, true};
-        case material_property_id::subsurface_color:
-            return {render_change::albedo, true};
-        case material_property_id::emissive_color:
-        case material_property_id::emissive_intensity:
-            return {render_change::emission, true};
-        case material_property_id::roughness:
-            return {render_change::specular, true};
-        case material_property_id::metalness:
-            return {render_change::albedo | render_change::specular, true};
-        case material_property_id::bumpiness:
-            return {render_change::normal, true};
-        case material_property_id::alpha_mode:
-        case material_property_id::alpha_cutoff:
-        case material_property_id::dither_threshold:
-            return {render_change::coverage, false};
-        case material_property_id::tiling:
-            return {textured, false};
-        case material_property_id::color_map:
-            return {render_change::albedo | render_change::coverage, false};
-        case material_property_id::normal_map:
-            return {render_change::normal, false};
-        case material_property_id::roughness_map:
-        case material_property_id::metalness_map:
-            return {render_change::albedo | render_change::specular, false};
-        case material_property_id::emissive_map:
-            return {render_change::emission, false};
-        case material_property_id::ao_map:
-            return {render_change::occlusion, false};
+        case material_property_id::graph:
+        case material_property_id::graph_texture:
+            return {render_change::material_aspects, false};
+        case material_property_id::graph_parameter:
+            return {render_change::material_aspects, true};
     }
     return {};
 }
@@ -171,13 +129,6 @@ public:
      */
     void add_change_keys(render_change_values& keys) const;
 
-
-    /**
-     * @brief Submits the material properties to the GPU program.
-     * @param program The GPU program to submit the properties to.
-     */
-    virtual auto submit(gpu_program* program) const -> bool;
-
     /**
      * @brief Gets the culling type of the material.
      * @return The culling type.
@@ -218,6 +169,13 @@ public:
      */
     virtual auto clone() const -> material::sptr;
 
+    /**
+     * @brief Gives this material the values of @p source, a material of the same type, that reflection does not reach:
+     * copy_material_values calls it after the reflected ones. Only values that differ are written, through the
+     * setters, so the revisions count what changed. None here.
+     */
+    virtual void copy_unreflected_values(const material& source);
+
     /// The most constants a material's instanced draw reads per instance (instance_material_vertex_data).
     static constexpr uint32_t MAX_INSTANCE_CONSTANTS = 4;
 
@@ -254,497 +212,6 @@ protected:
 private:
     render_change_revisions state_revisions_;
     render_change_revisions instance_values_revisions_;
-};
-
-/**
- * @class pbr_material
- * @brief Class for physically-based rendering (PBR) materials.
- */
-class pbr_material : public crtp_meta_type<pbr_material, material>
-{
-public:
-    SERIALIZABLE(pbr_material)
-
-    auto clone() const -> std::shared_ptr<material> override;
-
-protected:
-    void add_content_versions(render_change_values& keys) const override;
-
-public:
-    /// Linear base color, linear subsurface color, emissive premultiplied by its intensity, surface data: what
-    /// fs_deferred_geom.eshader reads as u_base_color, u_subsurface_color, u_emissive_color and u_surface_data.
-    auto write_instance_constants(math::vec4* out) const -> uint32_t override;
-
-    /**
-     * @brief Gets the base color of the material.
-     * @return A constant reference to the base color.
-     */
-    auto get_base_color() const -> const math::color&
-    {
-        return base_color_;
-    }
-
-    /**
-     * @brief Sets the base color of the material.
-     * @param val The base color to set.
-     */
-    void set_base_color(const math::color& val)
-    {
-        if(base_color_ == val)
-        {
-            return;
-        }
-        // Coverage reads only the alpha.
-        auto changes = get_material_property_traits(material_property_id::base_color).changes;
-        if(base_color_.value.a == val.value.a)
-        {
-            changes &= ~render_change::mask(render_change::coverage);
-        }
-        base_color_ = val;
-        mark_changed(material_property_id::base_color, changes);
-    }
-
-    /**
-     * @brief Gets the subsurface color of the material.
-     * @return A constant reference to the subsurface color.
-     */
-    auto get_subsurface_color() const -> const math::color&
-    {
-        return subsurface_color_;
-    }
-
-    /**
-     * @brief Sets the subsurface color of the material.
-     * @param val The subsurface color to set.
-     */
-    void set_subsurface_color(const math::color& val)
-    {
-        if(subsurface_color_ == val)
-        {
-            return;
-        }
-        subsurface_color_ = val;
-        mark_changed(material_property_id::subsurface_color);
-    }
-
-    /**
-     * @brief Gets the emissive color of the material.
-     * @return A constant reference to the emissive color.
-     */
-    auto get_emissive_color() const -> const math::color&
-    {
-        return emissive_color_;
-    }
-
-    /**
-     * @brief Sets the emissive color of the material.
-     * @param val The emissive color to set.
-     */
-    void set_emissive_color(const math::color& val)
-    {
-        if(emissive_color_ == val)
-        {
-            return;
-        }
-        emissive_color_ = val;
-        mark_changed(material_property_id::emissive_color);
-    }
-
-    auto get_emissive_intensity() const -> float
-    {
-        return emissive_intensity_;
-    }
-
-    void set_emissive_intensity(float val)
-    {
-        if(emissive_intensity_ == val)
-        {
-            return;
-        }
-        emissive_intensity_ = val;
-        mark_changed(material_property_id::emissive_intensity);
-    }
-
-    /**
-     * @brief Gets the roughness of the material.
-     * @return The roughness value.
-     */
-    auto get_roughness() const -> float
-    {
-        return surface_data_.x;
-    }
-
-    /**
-     * @brief Sets the roughness of the material.
-     * @param roughness The roughness value to set.
-     */
-    void set_roughness(float roughness)
-    {
-        if(surface_data_.x == roughness)
-        {
-            return;
-        }
-        surface_data_.x = roughness;
-        mark_changed(material_property_id::roughness);
-    }
-
-    /**
-     * @brief Gets the metalness of the material.
-     * @return The metalness value.
-     */
-    auto get_metalness() const -> float
-    {
-        return surface_data_.y;
-    }
-
-    /**
-     * @brief Sets the metalness of the material.
-     * @param metalness The metalness value to set.
-     */
-    void set_metalness(float metalness)
-    {
-        if(surface_data_.y == metalness)
-        {
-            return;
-        }
-        surface_data_.y = metalness;
-        mark_changed(material_property_id::metalness);
-    }
-
-    /**
-     * @brief Gets the bumpiness of the material.
-     * @return The bumpiness value.
-     */
-    auto get_bumpiness() const -> float
-    {
-        return surface_data_.z;
-    }
-
-    /**
-     * @brief Sets the bumpiness of the material.
-     * @param bumpiness The bumpiness value to set.
-     */
-    void set_bumpiness(float bumpiness)
-    {
-        if(surface_data_.z == bumpiness)
-        {
-            return;
-        }
-        surface_data_.z = bumpiness;
-        mark_changed(material_property_id::bumpiness);
-    }
-
-    /**
-     * @brief Gets the alpha mode (opaque / mask / blend).
-     */
-    auto get_alpha_mode() const -> alpha_mode
-    {
-        return alpha_mode_;
-    }
-
-    /**
-     * @brief Sets the alpha mode.
-     */
-    void set_alpha_mode(alpha_mode mode);
-
-    /**
-     * @brief Gets the alpha cutoff used when @ref alpha_mode is @ref alpha_mode::mask.
-     */
-    auto get_alpha_cutoff() const -> float
-    {
-        return alpha_cutoff_;
-    }
-
-    /**
-     * @brief Sets the alpha cutoff for @ref alpha_mode::mask materials.
-     */
-    void set_alpha_cutoff(float cutoff);
-
-    /// True when @ref alpha_mode is @ref alpha_mode::mask (hard alpha clip + cutout shadows).
-    [[nodiscard]] auto uses_alpha_cutout() const -> bool;
-
-    /// True when this material should contribute to shadow maps.
-    [[nodiscard]] auto casts_shadow() const -> bool;
-
-    /// Snapshot of shader state needed by the shadow cutout pass.
-    [[nodiscard]] auto make_shadow_cutout_state() const -> shadow_cutout_state;
-
-    /// Infer @ref alpha_mode when loading legacy assets that only stored a cutoff value.
-    void infer_alpha_mode_from_legacy_cutoff();
-
-    /**
-     * @brief Gets the surface data of the material.
-     * @return A constant reference to the surface data vector.
-     */
-    auto get_surface_data() const -> const math::vec4&
-    {
-        return surface_data_;
-    }
-
-    /**
-     * @brief Gets additional surface data for the material.
-     * @return A vector containing additional surface data.
-     */
-    auto get_surface_data2() const -> math::vec4
-    {
-        math::vec4 surface_data2{};
-
-        surface_data2[0] = metalness_roughness_combined() ? 1.0f : 0.0f;
-        const auto& normal_map = normal_map_ ? normal_map_ : default_normal_map();
-        const auto normal_texture = normal_map.get();
-        // Where the normal map keeps its vector (gfx::normal_map_channels), which the shader reads it by.
-        surface_data2[1] = normal_texture ? static_cast<float>(normal_texture->get_normal_map_channels()) : 0.0f;
-        // Two-sided (no culling): back faces shade with their normal turned toward the viewer.
-        surface_data2[2] = get_cull_type() == cull_type::none ? 1.0f : 0.0f;
-        // Alpha cutout (alpha_mode::mask): the surface cache's card capture keeps the cut-out texels (a masked
-        // material's cards are never clipped).
-        surface_data2[3] = uses_alpha_cutout() ? 1.0f : 0.0f;
-
-        return surface_data2;
-    }
-
-    auto metalness_roughness_combined() const -> bool
-    {
-        return metalness_map_ == roughness_map_;
-    }
-
-    /**
-     * @brief Gets the tiling factor of the material.
-     * @return A constant reference to the tiling vector.
-     */
-    auto get_tiling() const -> const math::vec2&
-    {
-        return tiling_;
-    }
-
-    /**
-     * @brief Sets the tiling factor of the material.
-     * @param tiling The tiling factor to set.
-     */
-    void set_tiling(const math::vec2& tiling)
-    {
-        if(tiling_ == tiling)
-        {
-            return;
-        }
-        tiling_ = tiling;
-        mark_changed(material_property_id::tiling);
-    }
-
-    /**
-     * @brief Gets the dither threshold of the material.
-     * @return A constant reference to the dither threshold vector.
-     */
-    auto get_dither_threshold() const -> const math::vec2&
-    {
-        return dither_threshold_;
-    }
-
-    /**
-     * @brief Sets the dither threshold of the material.
-     * @param threshold The dither threshold to set.
-     */
-    void set_dither_threshold(const math::vec2& threshold)
-    {
-        if(dither_threshold_ == threshold)
-        {
-            return;
-        }
-        dither_threshold_ = threshold;
-        mark_changed(material_property_id::dither_threshold);
-    }
-
-    /**
-     * @brief Gets the color map of the material.
-     * @return A constant reference to the color map asset handle.
-     */
-    auto get_color_map() const -> const asset_handle<gfx::texture>&
-    {
-        return color_map_;
-    }
-
-    /**
-     * @brief Sets the color map of the material.
-     * @param val The color map asset handle to set.
-     */
-    void set_color_map(const asset_handle<gfx::texture>& val)
-    {
-        if(color_map_ == val)
-        {
-            return;
-        }
-        color_map_ = val;
-        mark_changed(material_property_id::color_map);
-    }
-
-    /**
-     * @brief Gets the normal map of the material.
-     * @return A constant reference to the normal map asset handle.
-     */
-    auto get_normal_map() const -> const asset_handle<gfx::texture>&
-    {
-        return normal_map_;
-    }
-
-    /**
-     * @brief Sets the normal map of the material.
-     * @param val The normal map asset handle to set.
-     */
-    void set_normal_map(const asset_handle<gfx::texture>& val)
-    {
-        if(normal_map_ == val)
-        {
-            return;
-        }
-        normal_map_ = val;
-        mark_changed(material_property_id::normal_map);
-    }
-
-    /**
-     * @brief Gets the roughness map of the material.
-     * @return A constant reference to the roughness map asset handle.
-     */
-    auto get_roughness_map() const -> const asset_handle<gfx::texture>&
-    {
-        return roughness_map_;
-    }
-
-    /**
-     * @brief Sets the roughness map of the material.
-     * @param val The roughness map asset handle to set.
-     */
-    void set_roughness_map(const asset_handle<gfx::texture>& val)
-    {
-        if(roughness_map_ == val)
-        {
-            return;
-        }
-        roughness_map_ = val;
-        mark_changed(material_property_id::roughness_map);
-    }
-
-    /**
-     * @brief Gets the metalness map of the material.
-     * @return A constant reference to the metalness map asset handle.
-     */
-    auto get_metalness_map() const -> const asset_handle<gfx::texture>&
-    {
-        return metalness_map_;
-    }
-
-    /**
-     * @brief Sets the metalness map of the material.
-     * @param val The metalness map asset handle to set.
-     */
-    void set_metalness_map(const asset_handle<gfx::texture>& val)
-    {
-        if(metalness_map_ == val)
-        {
-            return;
-        }
-        metalness_map_ = val;
-        mark_changed(material_property_id::metalness_map);
-    }
-
-    /**
-     * @brief Gets the ambient occlusion map of the material.
-     * @return A constant reference to the ambient occlusion map asset handle.
-     */
-    auto get_ao_map() const -> const asset_handle<gfx::texture>&
-    {
-        return ao_map_;
-    }
-
-    /**
-     * @brief Sets the ambient occlusion map of the material.
-     * @param val The ambient occlusion map asset handle to set.
-     */
-    void set_ao_map(const asset_handle<gfx::texture>& val)
-    {
-        if(ao_map_ == val)
-        {
-            return;
-        }
-        ao_map_ = val;
-        mark_changed(material_property_id::ao_map);
-    }
-
-    /**
-     * @brief Gets the emissive map of the material.
-     * @return A constant reference to the emissive map asset handle.
-     */
-    auto get_emissive_map() const -> const asset_handle<gfx::texture>&
-    {
-        return emissive_map_;
-    }
-
-    /**
-     * @brief Sets the emissive map of the material.
-     * @param val The emissive map asset handle to set.
-     */
-    void set_emissive_map(const asset_handle<gfx::texture>& val)
-    {
-        if(emissive_map_ == val)
-        {
-            return;
-        }
-        emissive_map_ = val;
-        mark_changed(material_property_id::emissive_map);
-    }
-
-private:
-    void sync_surface_alpha_channel();
-
-    /// Base color
-    math::color base_color_{
-        1.0f,
-        1.0f,
-        1.0f, /// Color
-        1.0f  /// Opacity
-    };
-    /// Subsurface color
-    math::color subsurface_color_{
-        0.0f,
-        0.0f,
-        0.0f, /// Color
-        0.8f  /// Opacity
-    };
-    /// Emissive color
-    math::color emissive_color_{
-        0.0f,
-        0.0f,
-        0.0f, /// Color
-        0.0f  /// HDR Scale
-    };
-    /// Emissive intensity multiplier (premultiplied into color before G-buffer write)
-    float emissive_intensity_{1.0f};
-    alpha_mode alpha_mode_{alpha_mode::opaque};
-    float alpha_cutoff_{0.5f};
-    /// Surface data
-    math::vec4 surface_data_{
-        0.3f, /// Roughness
-        0.0f, /// Metalness
-        1.0f, /// Bumpiness
-        0.25f /// Deferred dither alpha (opaque/blend) or cutoff (mask) via sync_surface_alpha_channel
-    };
-    /// Tiling data
-    math::vec2 tiling_{
-        1.0f,
-        1.0f /// Primary
-    };
-    /// Dithering data
-    math::vec2 dither_threshold_{
-        0.5f, /// Alpha threshold
-        0.0f  /// Distance threshold
-    };
-
-    /// Texture maps
-    asset_handle<gfx::texture> color_map_;
-    asset_handle<gfx::texture> normal_map_;
-    asset_handle<gfx::texture> roughness_map_;
-    asset_handle<gfx::texture> metalness_map_;
-    asset_handle<gfx::texture> emissive_map_;
-    asset_handle<gfx::texture> ao_map_;
 };
 
 } // namespace unravel

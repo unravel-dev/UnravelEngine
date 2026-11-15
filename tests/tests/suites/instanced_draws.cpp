@@ -26,6 +26,7 @@
 #include <engine/rendering/instanced_draw_list.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/material_instance.h>
+#include <engine/rendering/material_graph/standard_material.h>
 #include <engine/rendering/mesh.h>
 #include <graphics/vertex_decl.h>
 
@@ -67,7 +68,7 @@ auto make_settings() -> instanced_draw_list::draw_settings
     cube->create_cube(gfx::mesh_vertex::get_layout(), 1.0f, 1.0f, 1.0f, 1, 1, 1, false);
     instanced_draw_list::draw_settings settings;
     settings.render_mesh = am.get_asset_from_instance<mesh>(MESH_KEY, cube);
-    settings.render_material = am.get_asset_from_instance<material>(MATERIAL_KEY, std::make_shared<pbr_material>());
+    settings.render_material = am.get_asset_from_instance<material>(MATERIAL_KEY, make_standard_material({}));
     // Ready before the draw list reads them without waiting: right after startup the pool is still busy with loads.
     settings.render_mesh.get();
     settings.render_material.get();
@@ -248,7 +249,7 @@ auto make_material_instance(const instanced_draw_list::draw_settings& settings, 
 {
     auto instance = std::make_shared<material_instance>();
     instance->set_shared_material(settings.render_material);
-    instance->set_override(entt::hashed_string{"base_color"}, entt::meta_any{base_color});
+    instance->set_graph_parameter("Base Color", base_color.to_linear().value);
     return instance;
 }
 
@@ -283,8 +284,8 @@ void test_material_instance(const instanced_draw_list::draw_settings& settings)
     const material* resolved = instance->get_resolved().get();
     check(resolved != nullptr && materials.size() == 1u && materials.front() == resolved,
           "a draw with a material instance draws its resolved material");
-    check(resolved != nullptr && resolved->is<pbr_material>() &&
-              static_cast<const pbr_material*>(resolved)->get_base_color() == base_color,
+    const auto* graph = resolved != nullptr ? resolved->safe_cast<graph_material>() : nullptr;
+    check(graph != nullptr && graph->get_parameter("Base Color") == base_color.to_linear().value,
           "the resolved material has the instance's base color");
     list.clear();
     list.add(settings, plain_transforms, {});

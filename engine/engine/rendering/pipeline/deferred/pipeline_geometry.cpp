@@ -1,51 +1,13 @@
 #include "pipeline_internal.h"
 
+#include <engine/rendering/material_graph/graph_material.h>
+
 namespace unravel
 {
 namespace
 {
 namespace ANONYMOUS
 {
-/// Where pbr_material::write_instance_constants puts the subsurface color (u_subsurface_color in fs_deferred_geom.eshader).
-constexpr size_t subsurface_instance_constant = 1;
-
-/// Turns the subsurface color among a material's instance @p constants black, as a run without subsurface draws it.
-/// The opacity only counts under a subsurface color.
-void clear_subsurface_color(math::vec4* constants)
-{
-    auto& subsurface = constants[subsurface_instance_constant];
-    subsurface = math::vec4(0.0f, 0.0f, 0.0f, subsurface.w);
-}
-
-/// @p Layout (instance_material_vertex_data, skinned_instance_material_vertex_data) with a black subsurface color,
-/// for the batches of a run without subsurface.
-template<typename Layout>
-struct subsurface_free_layout : Layout
-{
-    subsurface_free_layout() = default;
-    subsurface_free_layout(const batch_instance& instance, const material& batch_material)
-        : Layout(instance, batch_material)
-    {
-        static_assert(sizeof(subsurface_free_layout) == sizeof(Layout), "packed into the instance buffer as Layout");
-        clear_subsurface_color(this->constants);
-    }
-};
-
-/// Material textures filter anisotropically, up to the device maximum (BGFX_RESET_MAXANISOTROPY): trilinear alone
-/// picks the mip from the longer footprint axis and smears surfaces seen at grazing angles, such as distant floors.
-constexpr std::uint32_t material_anisotropic_sampler_flags = BGFX_SAMPLER_MIN_ANISOTROPIC | BGFX_SAMPLER_MAG_ANISOTROPIC;
-
-/// The texture's own sampler state (wrap, border...) with anisotropic filtering, unless it asks for point sampling.
-auto get_material_sampler_flags(const gfx::texture::ptr& texture) -> std::uint32_t
-{
-    if(!texture)
-    {
-        return material_anisotropic_sampler_flags;
-    }
-    const auto own_flags = static_cast<std::uint32_t>(texture->flags & BGFX_SAMPLER_BITS_MASK);
-    const bool is_point = (own_flags & (BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT)) != 0u;
-    return is_point ? own_flags : own_flags | material_anisotropic_sampler_flags;
-}
 /// Material texture mip bias while TAA jitters the view: the jitter integrates the slightly sharper mip's
 /// extra detail instead of aliasing it.
 constexpr float material_taa_mip_bias = -0.3f;
@@ -56,6 +18,7 @@ auto make_geometry_clip_planes(const camera& view_camera) -> math::vec4
     const bool is_jittered = view_camera.get_aa_data().y > 1.0f;
     return {view_camera.get_near_clip(), view_camera.get_far_clip(), is_jittered ? material_taa_mip_bias : 0.0f, 0.0f};
 }
+
 } // namespace ANONYMOUS
 } // namespace
 
@@ -120,66 +83,72 @@ auto create_or_resize_v_buffer(gfx::render_view& rview, const usize32_t& render_
 }
 } // namespace
 
-void deferred::submit_pbr_material(geom_program& program, const pbr_material& mat, bool keeps_subsurface)
+auto deferred::submit_geometry_material(geom_program& program, const material& mat) -> gfx::program::handle_type_t
 {
-    const auto& color_map = mat.get_color_map();
-    const auto& normal_map = mat.get_normal_map();
-    const auto& roughness_map = mat.get_roughness_map();
-    const auto& metalness_map = mat.get_metalness_map();
-    const auto& ao_map = mat.get_ao_map();
-    const auto& emissive_map = mat.get_emissive_map();
-
-    const auto& albedo = color_map ? color_map : mat.default_color_map();
-    const auto& normal = normal_map ? normal_map : mat.default_normal_map();
-    const auto& roughness = roughness_map ? roughness_map : mat.default_color_map();
-    const auto& metalness = metalness_map ? metalness_map : mat.default_color_map();
-    const auto& ao = ao_map ? ao_map : mat.default_color_map();
-    const auto& emissive = emissive_map ? emissive_map : mat.default_color_map();
-
-    // Resolve and pin every texture up front. asset_handle::get() returns a
-    // shared_ptr<texture>; holding our own copies for the duration of the
-    // submit keeps the texture objects alive even if the asset watcher
-    // thread invalidates/reloads these handles mid-frame (which happens
-    // intermittently right after a scene is opened). Without this, a texture
-    // resolved here could be released between the individual set_texture
-    // calls, leaving a dangling pointer for native_handle().
-    const auto albedo_tex = albedo.get();
-    const auto normal_tex = normal.get();
-    const auto roughness_tex = roughness.get();
-    const auto metalness_tex = metalness.get();
-    const auto ao_tex = ao.get();
-    const auto emissive_tex = emissive.get();
-
-    // The values an instanced draw reads per instance (pbr_material::write_instance_constants), here as uniforms.
-    std::array<math::vec4, material::MAX_INSTANCE_CONSTANTS> constants{};
-    mat.write_instance_constants(constants.data());
-    if(!keeps_subsurface)
+    if(const auto* graph = mat.safe_cast<graph_material>())
     {
-        ANONYMOUS::clear_subsurface_color(constants.data());
+        if(auto* graph_program = graph_material_programs_.begin(*graph, program.vertex_variant, program.graph_fragment_variant))
+        {
+            draws_animated_offsets_ = draws_animated_offsets_ || graph->is_world_position_offset_animated();
+            submit_graph_material(program, *graph);
+            return graph_program->native_handle();
+        }
     }
-    const auto& tiling = mat.get_tiling();
-    const auto& dither_threshold = mat.get_dither_threshold();
-    const auto surface_data2 = mat.get_surface_data2();
-
-    gfx::set_texture(program.s_tex_color, 0, albedo_tex, ANONYMOUS::get_material_sampler_flags(albedo_tex));
-    gfx::set_texture(program.s_tex_normal, 1, normal_tex, ANONYMOUS::get_material_sampler_flags(normal_tex));
-    gfx::set_texture(program.s_tex_roughness, 2, roughness_tex, ANONYMOUS::get_material_sampler_flags(roughness_tex));
-    gfx::set_texture(program.s_tex_metalness, 3, metalness_tex, ANONYMOUS::get_material_sampler_flags(metalness_tex));
-    gfx::set_texture(program.s_tex_ao, 4, ao_tex, ANONYMOUS::get_material_sampler_flags(ao_tex));
-    gfx::set_texture(program.s_tex_emissive, 5, emissive_tex, ANONYMOUS::get_material_sampler_flags(emissive_tex));
-
-    gfx::set_uniform(program.u_base_color, constants[0]);
-    gfx::set_uniform(program.u_subsurface_color, constants[1]);
-    gfx::set_uniform(program.u_emissive_color, constants[2]);
-    gfx::set_uniform(program.u_surface_data, constants[3]);
-    gfx::set_uniform(program.u_tiling, tiling);
-    gfx::set_uniform(program.u_dither_threshold, dither_threshold);
-    gfx::set_uniform(program.u_surface_data2, surface_data2);
-
-    auto state = mat.get_render_states(true, true, true);
-
-    bgfx::setState(state);
+    // The stand-in (fs_deferred_geom.eshader) draws the default surface with the material's sidedness.
+    bgfx::setState(mat.get_render_states(true, true, true));
+    return program.program->native_handle();
 }
+
+auto deferred::draws_instance_values(geom_program& program, const material& mat) -> bool
+{
+    const auto* graph = mat.safe_cast<graph_material>();
+    return graph == nullptr || graph_material_programs_.begin(*graph, program.vertex_variant, program.graph_fragment_variant) != nullptr;
+}
+
+void deferred::submit_graph_material(geom_program& program, const graph_material& mat)
+{
+    graph_material_programs_.submit_values(mat);
+    bgfx::setState(mat.get_render_states(true, true, true));
+}
+
+auto deferred::begin_offset_velocity_program(const material& mat, const std::string& vertex_variant, const math::vec3& camera_position)
+    -> gpu_program*
+{
+    // Most draws are of other materials: they name no velocity variant.
+    const auto* graph = mat.safe_cast<graph_material>();
+    if(graph == nullptr || !graph->uses_world_position_offset())
+    {
+        return nullptr;
+    }
+    return graph_material_programs_.begin_moved_vertices(mat,
+                                                         graph_material_programs::get_velocity_variant(vertex_variant),
+                                                         velocity_fragment_shader_,
+                                                         camera_position);
+}
+
+namespace
+{
+/// Whether a material @p mdl draws with moves its vertices by a World Position Offset that animates: the model moves
+/// though it stands still (graph_material::is_world_position_offset_animated).
+auto has_animated_offset(const model& mdl) -> bool
+{
+    bool is_animated = false;
+    mdl.for_each_loaded_render_material(
+        [&is_animated](const material& mat)
+        {
+            const auto* graph = mat.safe_cast<graph_material>();
+            is_animated = is_animated || (graph != nullptr && graph->is_world_position_offset_animated());
+        });
+    return is_animated;
+}
+
+/// Whether the batches of @p mat draw every instance in the velocity pass: its World Position Offset animates.
+auto is_offset_animated(const material* mat) -> bool
+{
+    const auto* graph = mat != nullptr ? mat->safe_cast<graph_material>() : nullptr;
+    return graph != nullptr && graph->is_world_position_offset_animated();
+}
+} // namespace
 
 auto deferred::collect_visible_models(scene& scn,
                                       const camera& camera,
@@ -230,6 +199,8 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     // The limits alone decide it: checking every drawn material would cost a scene with many of them on the CPU.
     gbuffer_has_subsurface_ = limits.subsurface;
     skinned_batching_run_ = is_skinned_batching_active();
+    draws_animated_offsets_ = false;
+    graph_material_programs_.release_unused();
     auto& skinning_palettes = engine::context().get_cached<renderer>().get_skinning_palettes();
 
     const auto& view_frustum = camera.get_frustum();
@@ -375,19 +346,9 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
                     stats_.drawn_static_submeshes++;
                 }
                 geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
-
-                bool submitted = mat.submit(prog.program.get());
-                if(!submitted)
-                {
-                    if(mat.is<pbr_material>())
-                    {
-                        const auto& pbr = static_cast<const pbr_material&>(mat);
-                        submit_pbr_material(prog, pbr, gbuffer_has_subsurface_);
-                    }
-                }
-
+                const auto program_handle = submit_geometry_material(prog, mat);
                 bgfx::submit(pass.id,
-                             prog.program->native_handle(),
+                             program_handle,
                              0,
                              submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL);
             };
@@ -584,7 +545,9 @@ void deferred::submit_prepared_geometry(batch_collector& collector,
     material_value_batches_.clear();
     for(const auto* batch : prepared_batches)
     {
-        (batch->has_material_overrides ? material_value_batches_ : plain_batches_).push_back(batch);
+        const bool draws_values =
+            batch->has_material_overrides && batch->key.material_ptr && draws_instance_values(material_program, *batch->key.material_ptr);
+        (draws_values ? material_value_batches_ : plain_batches_).push_back(batch);
     }
     const auto draw_batches = [&](geom_program& program, const std::vector<const batch_group*>& batches, auto layout)
     {
@@ -601,25 +564,14 @@ void deferred::submit_prepared_geometry(batch_collector& collector,
             [](const batch_instance&) { return true; },
             [&](const auto& /*batch*/, const material& mat, uint32_t instance_count)
             {
-                const bool material_submitted = mat.submit(program.program.get());
-                if(!material_submitted && mat.is<pbr_material>())
-                {
-                    submit_pbr_material(program, static_cast<const pbr_material&>(mat), gbuffer_has_subsurface_);
-                }
+                const auto program_handle = submit_geometry_material(program, mat);
                 on_draw(program, instance_count);
-                bgfx::submit(pass.id, program.program->native_handle(), 0, BGFX_DISCARD_ALL);
+                bgfx::submit(pass.id, program_handle, 0, BGFX_DISCARD_ALL);
             });
         program.program->end();
     };
     draw_batches(plain_program, plain_batches_, PlainLayout{});
-    if(gbuffer_has_subsurface_)
-    {
-        draw_batches(material_program, material_value_batches_, MaterialLayout{});
-    }
-    else
-    {
-        draw_batches(material_program, material_value_batches_, ANONYMOUS::subsurface_free_layout<MaterialLayout>{});
-    }
+    draw_batches(material_program, material_value_batches_, MaterialLayout{});
     stats_.add_batch_stats(collector.get_stats());
 }
 
@@ -727,12 +679,7 @@ void deferred::submit_source_runs(gfx::render_pass& pass, const camera& camera)
             {
                 continue;
             }
-            const auto& mat = *run.part->material_ptr;
-            const bool material_submitted = mat.submit(program.program.get());
-            if(!material_submitted && mat.is<pbr_material>())
-            {
-                submit_pbr_material(program, static_cast<const pbr_material&>(mat), gbuffer_has_subsurface_);
-            }
+            const auto program_handle = submit_geometry_material(program, *run.part->material_ptr);
             if(is_baked)
             {
                 stats_.drawn_skinned_submeshes += instance_count;
@@ -743,7 +690,7 @@ void deferred::submit_source_runs(gfx::render_pass& pass, const camera& camera)
                 stats_.drawn_static_submeshes += instance_count;
                 gfx::set_uniform(program.u_lod_params, lod_params);
             }
-            bgfx::submit(pass.id, program.program->native_handle(), 0, BGFX_DISCARD_ALL);
+            bgfx::submit(pass.id, program_handle, 0, BGFX_DISCARD_ALL);
         }
         program.program->end();
     };
@@ -839,17 +786,19 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
         pass.set_view_proj(view, proj);
 
         const auto& view_frustum = camera.get_frustum();
+        const auto camera_position = camera.get_position();
 
         for(const auto& element : visibility_set)
         {
             const auto& entity = element.entity;
             auto& model_comp = entity.get<model_component>();
-            if(!model_comp.has_motion())
+            const auto& model = model_comp.get_model();
+            if(!model.is_valid())
             {
                 continue;
             }
-            const auto& model = model_comp.get_model();
-            if(!model.is_valid())
+            // A still model moves too while a World Position Offset of its materials animates.
+            if(!model_comp.has_motion() && !(draws_animated_offsets_ && has_animated_offset(model)))
             {
                 continue;
             }
@@ -896,12 +845,16 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
             {
                 velocity_geom_program& prog =
                     submit_params.skinned ? velocity_program_skinned_ : velocity_program_;
+                // A material whose World Position Offset moves the vertices draws with its own vertex shader.
+                auto* offset_program = begin_offset_velocity_program(mat,
+                                                                     submit_params.skinned ? "skinned" : gfx::shader::DEFAULT_VARIANT,
+                                                                     camera_position);
                 // Match the material's cull so two-sided surfaces keep velocity coverage, but
                 // own the depth/write bits: EQUAL test, no depth write, color only.
                 const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
                 bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
                 bgfx::submit(pass.id,
-                             prog.program->native_handle(),
+                             offset_program != nullptr ? offset_program->native_handle() : prog.program->native_handle(),
                              0,
                              submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL);
             };
@@ -934,15 +887,15 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
         }
         if(batch_collector::is_static_mesh_batching_enabled() || has_source_instances_)
         {
-            submit_batched_velocity(pass, prev_vp);
+            submit_batched_velocity(pass, prev_vp, camera_position);
         }
-        submit_batched_skinned_velocity(pass, prev_vp);
-        submit_source_velocity_runs(pass, prev_vp);
+        submit_batched_skinned_velocity(pass, prev_vp, camera_position);
+        submit_source_velocity_runs(pass, prev_vp, camera_position);
         bgfx::discard();
     }
 }
 
-void deferred::submit_batched_velocity(gfx::render_pass& pass, const math::transform& prev_vp)
+void deferred::submit_batched_velocity(gfx::render_pass& pass, const math::transform& prev_vp, const math::vec3& camera_position)
 {
     if(!velocity_program_instanced_.program || !velocity_program_instanced_.program->is_valid())
     {
@@ -962,23 +915,38 @@ void deferred::submit_batched_velocity(gfx::render_pass& pass, const math::trans
     velocity_program_instanced_.program->begin();
     gfx::set_uniform(velocity_program_instanced_.u_prev_view_proj, prev_vp.get_matrix());
 
+    // The batches of a material whose World Position Offset animates draw every instance: a still one moves too.
+    mover_batches_.clear();
+    offset_batches_.clear();
+    for(const auto* batch : prepared_batches)
+    {
+        (draws_animated_offsets_ && is_offset_animated(batch->key.material_ptr.get()) ? offset_batches_ : mover_batches_).push_back(batch);
+    }
+    const auto submit_batch = [&](const auto& /*batch*/, const material& mat, uint32_t /*instance_count*/)
+    {
+        auto* offset_program = begin_offset_velocity_program(mat, "instanced", camera_position);
+        // Match the material's cull (two-sided coverage), own the depth/write bits:
+        // EQUAL test against the G-buffer depth, no depth write, color only.
+        const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
+        const auto program = offset_program != nullptr ? offset_program->native_handle() : velocity_program_instanced_.program->native_handle();
+        bgfx::submit(pass.id, program, 0, BGFX_DISCARD_ALL);
+    };
     submit_prepared_batches_instanced<velocity_instance_vertex_data>(
-        prepared_batches,
+        mover_batches_,
         // Only mover instances carry a previous transform; batches without any skip free.
         [](const batch_instance& instance) { return instance.prev_world_transform_ptr != nullptr; },
-        [&](const auto& /*batch*/, const material& mat, uint32_t /*instance_count*/)
-        {
-            // Match the material's cull (two-sided coverage), own the depth/write bits:
-            // EQUAL test against the G-buffer depth, no depth write, color only.
-            const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
-            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
-            bgfx::submit(pass.id, velocity_program_instanced_.program->native_handle(), 0, BGFX_DISCARD_ALL);
-        });
+        submit_batch);
+    // Still instances draw at their transform of both frames (velocity_instance_vertex_data).
+    submit_prepared_batches_instanced<velocity_instance_vertex_data>(
+        offset_batches_,
+        [](const batch_instance&) { return true; },
+        submit_batch);
 
     velocity_program_instanced_.program->end();
 }
 
-void deferred::submit_batched_skinned_velocity(gfx::render_pass& pass, const math::transform& prev_vp)
+void deferred::submit_batched_skinned_velocity(gfx::render_pass& pass, const math::transform& prev_vp, const math::vec3& camera_position)
 {
     auto& program = velocity_program_skinned_instanced_;
     if(!program.program || !program.program->is_valid())
@@ -1005,15 +973,19 @@ void deferred::submit_batched_skinned_velocity(gfx::render_pass& pass, const mat
         {
             // Match the material's cull (two-sided coverage), own the depth/write bits: EQUAL test against the
             // G-buffer depth, no depth write, color only.
+            auto* offset_program = begin_offset_velocity_program(mat, "skinned_instanced", camera_position);
             const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
             bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
             skinning_palettes.bind();
-            bgfx::submit(pass.id, program.program->native_handle(), 0, BGFX_DISCARD_ALL);
+            bgfx::submit(pass.id,
+                         offset_program != nullptr ? offset_program->native_handle() : program.program->native_handle(),
+                         0,
+                         BGFX_DISCARD_ALL);
         });
     program.program->end();
 }
 
-void deferred::submit_source_velocity_runs(gfx::render_pass& pass, const math::transform& prev_vp)
+void deferred::submit_source_velocity_runs(gfx::render_pass& pass, const math::transform& prev_vp, const math::vec3& camera_position)
 {
     source_runs_.clear();
     for(const auto* source : instance_sources_)
@@ -1047,13 +1019,17 @@ void deferred::submit_source_velocity_runs(gfx::render_pass& pass, const math::t
             // Match the material's cull (two-sided coverage), own the depth/write bits: EQUAL test against the
             // G-buffer depth, no depth write, color only.
             const auto& mat = *run.part->material_ptr;
+            auto* offset_program = begin_offset_velocity_program(mat, is_baked ? "skinned_baked_instanced" : "instanced", camera_position);
             const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
             bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
             if(is_baked)
             {
                 baked_animations.bind(run.part->palette_offset, run.part->is_rigid);
             }
-            bgfx::submit(pass.id, program.program->native_handle(), 0, BGFX_DISCARD_ALL);
+            bgfx::submit(pass.id,
+                         offset_program != nullptr ? offset_program->native_handle() : program.program->native_handle(),
+                         0,
+                         BGFX_DISCARD_ALL);
         }
         program.program->end();
     };

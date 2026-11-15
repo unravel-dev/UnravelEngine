@@ -8,6 +8,7 @@
 #include "panel_base.h"
 #include "layout_manager.h"
 #include "animation_panel/animation_panel.h"
+#include "material_graph_panel/material_graph_panel.h"
 #include "mcp_panel/mcp_panel.h"
 #include "packages_panel/packages_panel.h"
 #include "console_log_panel/console_log_panel.h"
@@ -54,6 +55,7 @@ public:
     auto get_style_panel() -> style_panel&;
     auto get_undo_redo_panel() -> undo_redo_panel&;
     auto get_animation_panel() -> animation_panel&;
+    auto get_material_graph_panel() -> material_graph_panel&;
     auto get_mcp_panel() -> mcp_panel&;
     auto get_packages_panel() -> packages_panel&;
     auto get_profiler_timeline_panel() -> profiler_timeline_panel&;
@@ -98,6 +100,7 @@ private:
     std::unique_ptr<undo_redo_panel> undo_redo_panel_;
 
     std::unique_ptr<animation_panel> animation_panel_;
+    std::unique_ptr<material_graph_panel> material_graph_panel_;
     std::unique_ptr<mcp_panel> mcp_panel_;
     std::unique_ptr<packages_panel> packages_panel_;
 

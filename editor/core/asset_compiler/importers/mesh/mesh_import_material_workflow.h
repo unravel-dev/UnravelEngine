@@ -13,13 +13,14 @@ namespace importer
 namespace mesh_import
 {
 
-/// Material input workflows (all compile to engine metallic-roughness + base color).
+/// Material input workflows: KHR spec-gloss becomes the Standard material's specular workflow, every other one its
+/// metal / roughness workflow.
 enum class material_workflow
 {
     unknown,
     metallic_roughness,      ///< glTF/FBX PBR MR: base color + metallic/roughness maps/factors
-    khr_specular_glossiness, ///< KHR_materials_pbrSpecularGlossiness: bake diffuse+spec textures
-    phong_specular_gloss,    ///< Legacy Phong/Blinn: diffuse pass-through, shininess -> roughness
+    khr_specular_glossiness, ///< KHR_materials_pbrSpecularGlossiness: diffuse + specular-glossiness maps, kept as authored
+    phong_specular_gloss,    ///< Legacy Phong/Blinn: diffuse pass-through, shininess -> roughness, metallic 0
 };
 
 /// Engine material slot a texture is looked up for.
@@ -46,7 +47,7 @@ struct texture_slot_candidate
 auto material_workflow_label(material_workflow workflow) -> const char*;
 
 /**
- * @brief Classify material input workflow before converting to engine metallic-roughness.
+ * @brief Classify material input workflow.
  *
  * Order: KHR (glossiness factor) -> native MR (textures / PBR factors) -> Phong legacy -> unknown.
  */
@@ -62,22 +63,15 @@ auto detect_material_workflow(const aiMaterial* material) -> material_workflow;
 auto get_texture_slot_candidates(const aiMaterial* material, material_workflow workflow, texture_target target)
     -> std::vector<texture_slot_candidate>;
 
-/// KHR rebakes extension diffuse into PBR base color unless BASE_COLOR is the authored albedo.
-auto should_reconstruct_base_color_for_spec_gloss_pair(material_workflow workflow, const aiMaterial* material)
-    -> bool;
-
 /// Packed metallic-roughness stored in aiTextureType_SPECULAR (Bistro pairs / *_spec maps), never glTF.
 auto material_has_packed_mr_in_specular_slot(const aiMaterial* material) -> bool;
 
-/// KHR specular-only fallback: convert one specular map to combined MR (no diffuse pair).
-auto khr_needs_combined_specular_mr(const aiMaterial* material, material_workflow workflow) -> bool;
-
-/// KHR diffuse / specular / glossiness multipliers a spec-gloss bake folds into its textures.
+/// KHR diffuse / specular / glossiness factors: what the specular workflow multiplies its maps by.
 auto gather_spec_gloss_factors(const aiMaterial* material) -> spec_gloss_factors_t;
 
 /**
- * @brief Scalar base color / metallic / roughness for @p workflow: authored PBR factors where
- * present, converted from KHR spec-gloss or Phong shininess otherwise.
+ * @brief Scalar base color / metallic / roughness for @p workflow (not KHR spec-gloss): authored PBR factors where
+ * present, converted from Phong shininess otherwise.
  */
 void process_material_with_workflow_conversion(const aiMaterial* material,
                                                material_workflow workflow,

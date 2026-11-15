@@ -25,7 +25,7 @@
 #include "gi/gi_short_range_ao.sh"
 
 SAMPLER2D(s_gi_depth, 0);
-/// G-buffer target 1: octahedral normal, metalness, roughness.
+/// G-buffer target 1: octahedral normal, metallic, roughness.
 SAMPLER2D(s_gi_normal, 1);
 /// The search, packed (GiPackShortRangeAO).
 UIMAGE2D_WO(s_gi_short_range_ao_out, r32ui, 2);

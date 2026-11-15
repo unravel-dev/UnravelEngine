@@ -406,9 +406,10 @@ private:
      */
     struct material_summary
     {
-        bool is_pbr = false;
-        bool is_blended = false;
-        /// Luminance of the emissive colour times its intensity (instance::is_emissive_light_source).
+        /// The surface is see-through (graph_material::is_translucent): it places no field.
+        bool is_translucent = false;
+        /// Luminance of what the surface gives off (graph_material::get_emissive_estimate,
+        /// instance::is_emissive_light_source).
         float emissive_luminance = 0.0f;
         /// The material culls no face (instance::is_two_sided).
         bool is_two_sided = false;

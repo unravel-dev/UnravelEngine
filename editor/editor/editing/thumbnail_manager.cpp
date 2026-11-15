@@ -18,6 +18,7 @@
 #include <engine/meta/ecs/entity.hpp>
 
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/scripting/script.h>
 #include <graphics/graphics.h>
@@ -133,6 +134,63 @@ auto render_thumbnail_preview_scene(rendering_system& rpath,
 }
 
 
+/// How long a thumbnail waits for its scene's materials before it shows them as they draw (a shader that failed to
+/// compile, a texture that is missing).
+constexpr std::chrono::seconds MATERIALS_WAIT_LIMIT{20};
+
+/// Whether @p handle has nothing left to load and draws as it is.
+auto is_material_ready(const asset_handle<material>& handle) -> bool
+{
+    if(!handle.is_valid())
+    {
+        return true;
+    }
+    const auto mat = handle.try_get();
+    if(!mat)
+    {
+        return false;
+    }
+    const auto* graph = mat->safe_cast<graph_material>();
+    return graph == nullptr || graph->is_ready_to_draw();
+}
+
+/// Whether every model in @p scn draws with the materials it keeps: none waits for its default materials, and each
+/// of its materials is ready.
+auto are_scene_materials_ready(scene& scn) -> bool
+{
+    bool is_ready = true;
+    scn.registry->view<model_component>().each(
+        [&](auto /*entity*/, const model_component& comp)
+        {
+            const auto& mdl = comp.get_model();
+            const auto& materials = mdl.get_shared_materials();
+            is_ready = is_ready && !mdl.is_default_materials_pending() &&
+                       std::all_of(materials.begin(), materials.end(), is_material_ready);
+        });
+    return is_ready;
+}
+
+/**
+ * @brief Whether the thumbnail is taken now: its scene's materials draw as they are, or it waited for them long enough.
+ *
+ * A thumbnail is taken once and kept, so one taken while a material still loads, or still compiles its shader,
+ * would show the stand-in surface until the asset changes.
+ */
+auto is_ready_to_capture(thumbnail_manager::generated_thumbnail& thumbnail, scene& scn) -> bool
+{
+    if(are_scene_materials_ready(scn))
+    {
+        thumbnail.materials_wait_start.reset();
+        return true;
+    }
+    const auto now = thumbnail_manager::clock::now();
+    if(!thumbnail.materials_wait_start)
+    {
+        thumbnail.materials_wait_start = now;
+    }
+    return now - *thumbnail.materials_wait_start >= MATERIALS_WAIT_LIMIT;
+}
+
 template<typename T>
 auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& asset, int frames = 2, delta_t dt = delta_t(0.016667f)) -> gfx::texture::ptr
 {
@@ -156,6 +214,13 @@ auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& as
             {
                 rpath.on_frame_update(scn, times);
                 rpath.on_frame_before_render(scn, times);
+            }
+
+            if(!is_ready_to_capture(thumbnail, scn))
+            {
+                // The scene took this cycle's place; a later cycle builds it again.
+                gen.remaining--;
+                return current_fbo;
             }
 
             defaults::focus_camera_on_3d_scene_for_asset_preview<T>(ctx, result);

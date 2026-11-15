@@ -6,6 +6,7 @@
 #include <editor/editing/editing_manager.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/ecs.h>
+#include <engine/rendering/material_graph/graph_material_programs.h>
 
 namespace unravel
 {
@@ -69,6 +70,11 @@ private:
         std::unique_ptr<gpu_program> program;
 
     } outline_mask_program_, outline_mask_program_skinned_;
+
+    /// The selection mask of graph materials whose World Position Offset moves their vertices: their own vertex shader
+    /// with the mask's fragment shader, so the outline follows the moved surface.
+    graph_material_programs moved_vertex_programs_;
+    asset_handle<gfx::shader> outline_mask_fragment_shader_;
 
     struct outline_program : uniforms_cache
     {

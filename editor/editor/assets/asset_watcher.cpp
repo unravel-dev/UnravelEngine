@@ -27,6 +27,7 @@
 
 
 #include <engine/meta/assets/asset_database.hpp>
+#include <engine/meta/rendering/graph_material.hpp>
 #include <engine/threading/threader.h>
 
 #include <editor/editing/editing_manager.h>
@@ -132,6 +133,21 @@ auto needs_recompilation(const fs::path& source_file_path, const fs::path& compi
             return true;
         }
     }
+    // A material compiles again when its shader for the editor's renderer is missing or of other code: a project last
+    // opened with another renderer has none. A shader that did not compile is tried again once per start: the failure
+    // may have been the compiler's (it could not run), not the code's.
+    if constexpr(std::is_same_v<T, material>)
+    {
+        const auto& renderer = gfx::get_current_renderer_filename_extension();
+        const auto shader_output = get_graph_material_shader_file(compiled_output_path.string(), renderer);
+        if(gfx::get_renderer_platform_supported_filename_extensions().contains(renderer) &&
+           !asset_compiler::is_graph_material_shader_compiled(source_file_path, shader_output))
+        {
+            APPLOG_INFO("Shader for this renderer missing or out of date for {}, recompilation needed",
+                        compiled_output_path.string());
+            return true;
+        }
+    }
     // A clip on Project Default compiles again when the project's default changed while the project was closed.
     if constexpr(std::is_same_v<T, audio_clip>)
     {
@@ -192,6 +208,58 @@ auto remove_meta_tag(const std::vector<fs::path>& synced_paths) -> std::vector<f
         reduced.emplace_back(remove_meta_tag(synced_path));
     }
     return reduced;
+}
+
+/// The files a graph material's compile writes beside its compiled file @p synced_path: its shader for each renderer.
+auto get_graph_material_shader_files(const fs::path& synced_path) -> std::vector<fs::path>
+{
+    std::vector<fs::path> files;
+    const auto compiled = remove_meta_tag(synced_path).string();
+    for(int type = bgfx::RendererType::Noop + 1; type < bgfx::RendererType::Count; ++type)
+    {
+        const auto& extension = gfx::get_renderer_filename_extension(bgfx::RendererType::Enum(type));
+        if(!extension.empty())
+        {
+            files.emplace_back(get_graph_material_shader_file(compiled, extension));
+        }
+    }
+    return files;
+}
+
+/// @p on_removed for materials: a graph material's shaders go with its compiled file.
+auto remove_graph_material_shaders_too(const fs::syncer::on_entry_removed_t& on_removed) -> fs::syncer::on_entry_removed_t
+{
+    return [on_removed](const std::string& ext, const fs::path& ref_path, const std::vector<fs::path>& synced_paths)
+    {
+        auto paths = synced_paths;
+        for(const auto& synced_path : synced_paths)
+        {
+            const auto shaders = get_graph_material_shader_files(synced_path);
+            paths.insert(paths.end(), shaders.begin(), shaders.end());
+        }
+        on_removed(ext, ref_path, paths);
+    };
+}
+
+/// @p on_renamed for materials: a graph material's shaders move with its compiled file.
+auto rename_graph_material_shaders_too(const fs::syncer::on_entry_renamed_t& on_renamed) -> fs::syncer::on_entry_renamed_t
+{
+    return [on_renamed](const std::string& ext,
+                        const fs::syncer::rename_pair_t& ref_paths,
+                        const std::vector<fs::syncer::rename_pair_t>& synced_paths)
+    {
+        auto paths = synced_paths;
+        for(const auto& [from, to] : synced_paths)
+        {
+            const auto old_shaders = get_graph_material_shader_files(from);
+            const auto new_shaders = get_graph_material_shader_files(to);
+            for(size_t i = 0; i < old_shaders.size(); ++i)
+            {
+                paths.emplace_back(old_shaders[i], new_shaders[i]);
+            }
+        }
+        on_renamed(ext, ref_paths, paths);
+    };
 }
 
 void unwatch(std::vector<uint64_t>& watchers)
@@ -474,7 +542,10 @@ auto watch_assets_depenencies(rtti::context& ctx, const fs::path& dir, const fs:
                                                               ++touched;
                                                           }
                                                       }
-                                                      APPLOG_INFO("[DEPWATCH] {} changed: touched {} dependent shader sources", entry.path.filename().string(), touched);
+                                                      APPLOG_INFO("[DEPWATCH] {} changed: touched {} dependent {} source(s)",
+                                                                  entry.path.filename().string(),
+                                                                  touched,
+                                                                  ex::get_type<T>());
                                                   });
                 }
             }
@@ -831,6 +902,12 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
         watchers.emplace_back(id);
     }
 
+    for(const auto& dep_ex : ex::get_suported_dependencies_formats<material>())
+    {
+        auto id = watch_assets_depenencies<material>(ctx, data_dir, fs::pattern_filter("*" + dep_ex));
+        watchers.emplace_back(id);
+    }
+
     auto on_sync_progress = [on_progress](size_t completed, size_t total, const std::string& current_entry)
     {
         if(on_progress)
@@ -898,7 +975,7 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
     add_to_syncer<gfx::texture>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<gfx::shader>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<mesh>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<material>(ctx, syncer, on_removed, on_renamed);
+    add_to_syncer<material>(ctx, syncer, remove_graph_material_shaders_too(on_removed), rename_graph_material_shaders_too(on_renamed));
     add_to_syncer<animation_clip>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<prefab>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<scene_prefab>(ctx, syncer, on_removed, on_renamed);

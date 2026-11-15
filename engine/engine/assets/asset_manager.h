@@ -141,12 +141,7 @@ public:
     template<typename HeaderT>
     auto get_header(const hpp::uuid& uid) const -> std::shared_ptr<HeaderT>
     {
-        auto meta = get_metadata(uid);
-        if(meta.meta.header && meta.meta.header->is<HeaderT>())
-        {
-            return std::static_pointer_cast<HeaderT>(meta.meta.header);
-        }
-        return nullptr;
+        return safe_pointer_cast<HeaderT>(get_metadata(uid).meta.header);
     }
 
     /**
@@ -684,8 +679,9 @@ private:
     }
 
     /**
-     * @brief The key a request for `key` loads: a key without an extension gets the one of its file, and a mesh
-     * key in the earlier spelling of a built-in shape ("engine:/embedded/cube") names the shape's file.
+     * @brief The key a request for `key` loads: a key without an extension gets the one of its file, and a key in
+     * the earlier spelling of a built-in shape ("engine:/embedded/cube") or a default material
+     * ("engine:/embedded/standard") names its file.
      * @tparam T The type of the asset.
      */
     template<typename T>
@@ -699,6 +695,10 @@ private:
         {
             return resolve_built_in_mesh_key(key);
         }
+        else if constexpr(std::is_same_v<T, material>)
+        {
+            return resolve_default_material_key(key);
+        }
         else
         {
             return key;
@@ -707,6 +707,13 @@ private:
 
     /// `key`, or the file of the built-in shape it names in the earlier spelling when the engine has that shape.
     auto resolve_built_in_mesh_key(const std::string& key) const -> std::string;
+
+    /// `key`, or the file of the default material it names in the earlier spelling when the engine has it.
+    auto resolve_default_material_key(const std::string& key) const -> std::string;
+
+    /// `key`, or `engine_key` (the engine file a key in an earlier spelling names) when a database has it; `key` when
+    /// `engine_key` is empty.
+    auto resolve_engine_key(const std::string& key, const std::string& engine_key) const -> std::string;
 
     /// The entry the database of `key`'s protocol holds at exactly `key`; without a location when it holds none.
     auto find_metadata_for_key(const std::string& key) const -> asset_database::meta;

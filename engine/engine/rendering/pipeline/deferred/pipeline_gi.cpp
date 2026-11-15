@@ -1,5 +1,7 @@
 #include "pipeline_internal.h"
 
+#include <engine/rendering/material_graph/graph_material.h>
+
 namespace unravel
 {
 namespace
@@ -374,7 +376,7 @@ void deferred::capture_gi_cards(const camera& camera, const surface_cache_system
             capture_lod = 0;
             submesh = src.owner->get_submesh(src.submesh_index);
         }
-        if(submesh == nullptr || !src.material || !src.material->is<pbr_material>())
+        if(submesh == nullptr || !src.material || !src.material->is<graph_material>())
         {
             continue;
         }
@@ -387,10 +389,10 @@ void deferred::capture_gi_cards(const camera& camera, const surface_cache_system
         gfx::set_uniform(program.u_lod_params, lod_params);
         gfx::set_world_transform(&src.local_to_world);
         src.owner->bind_render_buffers_for_submesh(submesh, capture_lod);
-        const auto& pbr = static_cast<const pbr_material&>(*src.material);
-        submit_pbr_material(program, pbr);
+        const auto& mat = *src.material;
+        const auto program_handle = submit_geometry_material(program, mat);
         // A card basis of the opposite orientation winds triangles the other way: flip culling.
-        uint64_t state = pbr.get_render_states(true, true, true);
+        uint64_t state = mat.get_render_states(true, true, true);
         if(view.orientation != camera_orientation)
         {
             const uint64_t cull = state & BGFX_STATE_CULL_MASK;
@@ -402,7 +404,7 @@ void deferred::capture_gi_cards(const camera& camera, const surface_cache_system
                          uint16_t(view.scissor.top),
                          uint16_t(view.scissor.width()),
                          uint16_t(view.scissor.height()));
-        bgfx::submit(pass.id, program.program->native_handle());
+        bgfx::submit(pass.id, program_handle);
         program.program->end();
     }
 }

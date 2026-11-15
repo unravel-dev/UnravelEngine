@@ -1,261 +1,157 @@
 #include "standard_material.hpp"
 #include "material.hpp"
-#include "serialization/serialization.h"
 
 #include <engine/meta/assets/asset_handle.hpp>
 #include <engine/meta/core/math/vector.hpp>
 
 #include <serialization/types/string.hpp>
 #include <serialization/types/unordered_map.hpp>
-
 #include <serialization/types/utility.hpp>
+
+#include <cmath>
 
 namespace unravel
 {
 
-REFLECT(pbr_material)
+namespace
 {
-    entt::meta_factory<pbr_material>{}
-        .type("pbr_material"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "pbr_material"},
-            entt::attribute{"pretty_name", "PBR Material"},
-        })
-        .base<material>()
-        .func<&pbr_material::get_meta_type>("get_meta_type"_hs)
-        .func<&pbr_material::get_static_meta_type>("get_static_meta_type"_hs)
-        .func<&pbr_material::as_derived>("as_derived"_hs)
-        .data<&pbr_material::set_base_color, &pbr_material::get_base_color>("base_color"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::base_color, entt::attributes{ 
-            entt::attribute{"name", "base_color"},
-            entt::attribute{"pretty_name", "Base Color"},
-        }))
-        .data<&pbr_material::set_subsurface_color, &pbr_material::get_subsurface_color>("subsurface_color"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::subsurface_color, entt::attributes{ 
-            entt::attribute{"name", "subsurface_color"},
-            entt::attribute{"pretty_name", "Subsurface Color"},
-        }))
-        .data<&pbr_material::set_emissive_color, &pbr_material::get_emissive_color>("emissive_color"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::emissive_color, entt::attributes{ 
-            entt::attribute{"name", "emissive_color"},
-            entt::attribute{"pretty_name", "Emissive Color"},
-        }))
-        .data<&pbr_material::set_emissive_intensity, &pbr_material::get_emissive_intensity>("emissive_intensity"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::emissive_intensity, entt::attributes{
-            entt::attribute{"name", "emissive_intensity"},
-            entt::attribute{"pretty_name", "Emissive Intensity"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 100.0f},
-        }))
-        .data<&pbr_material::set_roughness, &pbr_material::get_roughness>("roughness"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::roughness, entt::attributes{
-            entt::attribute{"name", "roughness"},
-            entt::attribute{"pretty_name", "Roughness"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
-        }))
-        .data<&pbr_material::set_metalness, &pbr_material::get_metalness>("metalness"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::metalness, entt::attributes{
-            entt::attribute{"name", "metalness"},
-            entt::attribute{"pretty_name", "Metalness"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
-        }))
-        .data<&pbr_material::set_bumpiness, &pbr_material::get_bumpiness>("bumpiness"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::bumpiness, entt::attributes{
-            entt::attribute{"name", "bumpiness"},
-            entt::attribute{"pretty_name", "Bumpiness"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 10.0f},
-        }))
-        .data<&pbr_material::set_alpha_mode, &pbr_material::get_alpha_mode>("alpha_mode"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::alpha_mode, entt::attributes{
-            entt::attribute{"name", "alpha_mode"},
-            entt::attribute{"pretty_name", "Alpha Mode"},
-        }))
-        .data<&pbr_material::set_alpha_cutoff, &pbr_material::get_alpha_cutoff>("alpha_cutoff"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::alpha_cutoff, entt::attributes{
-            entt::attribute{"name", "alpha_cutoff"},
-            entt::attribute{"pretty_name", "Alpha Cutoff"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
-        }))
-        .data<&pbr_material::set_tiling, &pbr_material::get_tiling>("tiling"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::tiling, entt::attributes{ 
-            entt::attribute{"name", "tiling"},
-            entt::attribute{"pretty_name", "Tiling"} 
-        }))
-        .data<&pbr_material::set_dither_threshold, &pbr_material::get_dither_threshold>("dither_threshold"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::dither_threshold, entt::attributes{ 
-            entt::attribute{"name", "dither_threshold"},
-            entt::attribute{"pretty_name", "Dither Threshold"} 
-        }))
-        .data<&pbr_material::set_color_map, &pbr_material::get_color_map>("color_map"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::color_map, entt::attributes{ 
-            entt::attribute{"name", "color_map"},
-            entt::attribute{"pretty_name", "Color Map"} 
-        }))
-        .data<&pbr_material::set_normal_map, &pbr_material::get_normal_map>("normal_map"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::normal_map, entt::attributes{ 
-            entt::attribute{"name", "normal_map"},
-            entt::attribute{"pretty_name", "Normal Map"} 
-        }))
-        .data<&pbr_material::set_roughness_map, &pbr_material::get_roughness_map>("roughness_map"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::roughness_map, entt::attributes{
-            entt::attribute{"name", "roughness_map"},
-            entt::attribute{"pretty_name", "Roughness Map"},
-            entt::attribute{"tooltip", "Red Channel (R): Contains the roughness values.\nWhen Metalness and Roughness maps are the same.\nAs per glTF 2.0 specification:\nGreen Channel (G): Contains the roughness values.\nBlue Channel (B): Contains the metalness values."},
-        }))
-        .data<&pbr_material::set_metalness_map, &pbr_material::get_metalness_map>("metalness_map"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::metalness_map, entt::attributes{
-            entt::attribute{"name", "metalness_map"},
-            entt::attribute{"pretty_name", "Metalness Map"},
-            entt::attribute{"tooltip", "Red Channel (R): Contains the metalness values.\nWhen Metalness and Roughness maps are the same.\nAs per glTF 2.0 specification:\nGreen Channel (G): Contains the roughness values.\nBlue Channel (B): Contains the metalness values."},
-        }))
-        .data<&pbr_material::set_emissive_map, &pbr_material::get_emissive_map>("emissive_map"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::emissive_map, entt::attributes{ 
-            entt::attribute{"name", "emissive_map"},
-            entt::attribute{"pretty_name", "Emissive Map"}, 
-            entt::attribute{"tooltip", "emissive color map."} 
-        }))
-        .data<&pbr_material::set_ao_map, &pbr_material::get_ao_map>("ao_map"_hs)
-        .custom<entt::attributes>(make_material_property_attributes(material_property_id::ao_map, entt::attributes{ 
-            entt::attribute{"name", "ao_map"},
-            entt::attribute{"pretty_name", "AO Map"}, 
-            entt::attribute{"tooltip", "black/white texture."} 
-        }));
+/// An alpha cutoff a file wrote for an opaque material: the dither alpha its shader used, not a cutoff.
+constexpr float LEGACY_OPAQUE_CUTOFF_SENTINEL = 0.25f;
+constexpr float LEGACY_CUTOFF_TOLERANCE = 0.001f;
+
+/// A masked material's cutoff of 0 clipped nothing; the PBR material read it as the default.
+constexpr float DEFAULT_MASK_CUTOFF = 0.5f;
+
+auto is_legacy_opaque_sentinel(float value) -> bool
+{
+    return std::abs(value - LEGACY_OPAQUE_CUTOFF_SENTINEL) <= LEGACY_CUTOFF_TOLERANCE;
 }
 
-SAVE(pbr_material)
+/// Files written before the alpha mode was saved said "masked" by a cutoff other than the opaque sentinel.
+auto infer_legacy_alpha_mode(float alpha_cutoff, float surface_alpha) -> alpha_mode
 {
-    try_save(ar, ser20::make_nvp("base_type", ser20::base_class<material>(&obj)));
-    try_save(ar, ser20::make_nvp("base_color", obj.base_color_));
-    try_save(ar, ser20::make_nvp("subsurface_color", obj.subsurface_color_));
-    try_save(ar, ser20::make_nvp("emissive_color", obj.emissive_color_));
-    try_save(ar, ser20::make_nvp("emissive_intensity", obj.emissive_intensity_));
-
-    float roughness = obj.get_roughness();
-    float metalness = obj.get_metalness();
-    float bumpiness = obj.get_bumpiness();
-    try_save(ar, ser20::make_nvp("roughness", roughness));
-    try_save(ar, ser20::make_nvp("metalness", metalness));
-    try_save(ar, ser20::make_nvp("bumpiness", bumpiness));
-
-    try_save(ar, ser20::make_nvp("alpha_mode", obj.alpha_mode_));
-    try_save(ar, ser20::make_nvp("alpha_cutoff", obj.alpha_cutoff_));
-
-    try_save(ar, ser20::make_nvp("tiling", obj.tiling_));
-    try_save(ar, ser20::make_nvp("dither_threshold", obj.dither_threshold_));
-
-    try_save(ar, ser20::make_nvp("color_map", obj.color_map_));
-    try_save(ar, ser20::make_nvp("normal_map", obj.normal_map_));
-    try_save(ar, ser20::make_nvp("roughness_map", obj.roughness_map_));
-    try_save(ar, ser20::make_nvp("metalness_map", obj.metalness_map_));
-    try_save(ar, ser20::make_nvp("emissive_map", obj.emissive_map_));
-    try_save(ar, ser20::make_nvp("ao_map", obj.ao_map_));
-
-    // Changes here should be reflected in ex::get_format_version<material>() in asset_extensions.h
-
+    return is_legacy_opaque_sentinel(alpha_cutoff) && is_legacy_opaque_sentinel(surface_alpha) ? alpha_mode::opaque
+                                                                                                : alpha_mode::mask;
 }
-SAVE_INSTANTIATE(pbr_material, ser20::oarchive_associative_t);
-SAVE_INSTANTIATE(pbr_material, ser20::oarchive_binary_t);
 
-LOAD(pbr_material)
+/// The cutoff as the PBR material's setter kept it: within 0 to 1, and never 0 while masked.
+auto normalize_legacy_cutoff(const standard_surface& surface) -> float
 {
-    try_load(ar, ser20::make_nvp("base_type", ser20::base_class<material>(&obj)));
-    try_load(ar, ser20::make_nvp("base_color", obj.base_color_));
-    try_load(ar, ser20::make_nvp("subsurface_color", obj.subsurface_color_));
-    try_load(ar, ser20::make_nvp("emissive_color", obj.emissive_color_));
-    try_load(ar, ser20::make_nvp("emissive_intensity", obj.emissive_intensity_));
+    const float cutoff = math::clamp(surface.alpha_cutoff, 0.0f, 1.0f);
+    return surface.alpha == alpha_mode::mask && cutoff <= 0.0f ? DEFAULT_MASK_CUTOFF : cutoff;
+}
 
-    if constexpr(is_binary_archive<Archive>())
+/// The values a text file names, in each spelling files used: older ones packed roughness, metalness, bumpiness and
+/// the alpha test into one vector, and left the alpha mode to the cutoff.
+template<typename Archive>
+void load_legacy_text_surface(Archive& ar, standard_surface& surface)
+{
+    const bool has_alpha_mode = try_load(ar, ser20::make_nvp("alpha_mode", surface.alpha));
+    const bool has_alpha_cutoff = try_load(ar, ser20::make_nvp("alpha_cutoff", surface.alpha_cutoff));
+    math::vec4 surface_data(surface.roughness, surface.metallic, surface.bumpiness, LEGACY_OPAQUE_CUTOFF_SENTINEL);
+    if(try_load(ar, ser20::make_nvp("surface_data", surface_data)))
     {
-        float roughness = obj.get_roughness();
-        float metalness = obj.get_metalness();
-        float bumpiness = obj.get_bumpiness();
-        try_load(ar, ser20::make_nvp("roughness", roughness));
-        try_load(ar, ser20::make_nvp("metalness", metalness));
-        try_load(ar, ser20::make_nvp("bumpiness", bumpiness));
-        obj.set_roughness(roughness);
-        obj.set_metalness(metalness);
-        obj.set_bumpiness(bumpiness);
-
-        try_load(ar, ser20::make_nvp("alpha_mode", obj.alpha_mode_));
-
-        float alpha_cutoff = obj.alpha_cutoff_;
-        try_load(ar, ser20::make_nvp("alpha_cutoff", alpha_cutoff));
-        obj.set_alpha_cutoff(alpha_cutoff);
+        surface.roughness = surface_data.x;
+        surface.metallic = surface_data.y;
+        surface.bumpiness = surface_data.z;
+        surface.alpha_cutoff = has_alpha_cutoff ? surface.alpha_cutoff : surface_data.w;
     }
     else
     {
-        const bool has_alpha_mode = try_load(ar, ser20::make_nvp("alpha_mode", obj.alpha_mode_));
-
-        float alpha_cutoff = obj.alpha_cutoff_;
-        const bool has_alpha_cutoff = try_load(ar, ser20::make_nvp("alpha_cutoff", alpha_cutoff));
-
-        math::vec4 surface_data{};
-        if(try_load(ar, ser20::make_nvp("surface_data", surface_data)))
+        try_load(ar, ser20::make_nvp("roughness", surface.roughness));
+        try_load(ar, ser20::make_nvp("metalness", surface.metallic));
+        try_load(ar, ser20::make_nvp("bumpiness", surface.bumpiness));
+    }
+    if(!has_alpha_cutoff)
+    {
+        try_load(ar, ser20::make_nvp("alpha_test_value", surface.alpha_cutoff));
+    }
+    if(!has_alpha_mode)
+    {
+        surface.alpha = infer_legacy_alpha_mode(surface.alpha_cutoff, surface_data.w);
+        if(surface.alpha == alpha_mode::mask && is_legacy_opaque_sentinel(surface.alpha_cutoff))
         {
-            obj.surface_data_ = surface_data;
-            if(!has_alpha_cutoff)
-            {
-                alpha_cutoff = surface_data.w;
-            }
-        }
-        else
-        {
-            float roughness = obj.get_roughness();
-            if(try_load(ar, ser20::make_nvp("roughness", roughness)))
-            {
-                obj.set_roughness(roughness);
-            }
-
-            float metalness = obj.get_metalness();
-            if(try_load(ar, ser20::make_nvp("metalness", metalness)))
-            {
-                obj.set_metalness(metalness);
-            }
-
-            float bumpiness = obj.get_bumpiness();
-            if(try_load(ar, ser20::make_nvp("bumpiness", bumpiness)))
-            {
-                obj.set_bumpiness(bumpiness);
-            }
-        }
-
-        if(!has_alpha_cutoff)
-        {
-            float legacy_alpha_test = alpha_cutoff;
-            if(try_load(ar, ser20::make_nvp("alpha_test_value", legacy_alpha_test)))
-            {
-                alpha_cutoff = legacy_alpha_test;
-            }
-        }
-
-        obj.alpha_cutoff_ = alpha_cutoff;
-
-        if(!has_alpha_mode)
-        {
-            obj.infer_alpha_mode_from_legacy_cutoff();
-        }
-        else
-        {
-            obj.set_alpha_cutoff(alpha_cutoff);
+            surface.alpha_cutoff = surface_data.w;
         }
     }
-
-    try_load(ar, ser20::make_nvp("tiling", obj.tiling_));
-    try_load(ar, ser20::make_nvp("dither_threshold", obj.dither_threshold_));
-
-    try_load(ar, ser20::make_nvp("color_map", obj.color_map_));
-    try_load(ar, ser20::make_nvp("normal_map", obj.normal_map_));
-    try_load(ar, ser20::make_nvp("roughness_map", obj.roughness_map_));
-    try_load(ar, ser20::make_nvp("metalness_map", obj.metalness_map_));
-    try_load(ar, ser20::make_nvp("emissive_map", obj.emissive_map_));
-    try_load(ar, ser20::make_nvp("ao_map", obj.ao_map_));
-
-    // Changes here should be reflected in ex::get_format_version<material>() in asset_extensions.h
 }
-LOAD_INSTANTIATE(pbr_material, ser20::iarchive_associative_t);
-LOAD_INSTANTIATE(pbr_material, ser20::iarchive_binary_t);
+} // namespace
+
+REFLECT(legacy_pbr_material)
+{
+    entt::meta_factory<legacy_pbr_material>{}
+        .type("legacy_pbr_material"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "legacy_pbr_material"},
+            entt::attribute{"pretty_name", "PBR Material"},
+        })
+        .base<material>()
+        .func<&legacy_pbr_material::get_meta_type>("get_meta_type"_hs)
+        .func<&legacy_pbr_material::get_static_meta_type>("get_static_meta_type"_hs)
+        .func<&legacy_pbr_material::as_derived>("as_derived"_hs);
+}
+
+SAVE(legacy_pbr_material)
+{
+    const auto& surface = obj.surface;
+    const math::vec2 dither_threshold(0.5f, surface.camera_fade_distance);
+    try_save(ar, ser20::make_nvp("base_type", ser20::base_class<material>(&obj)));
+    try_save(ar, ser20::make_nvp("base_color", surface.base_color));
+    try_save(ar, ser20::make_nvp("subsurface_color", surface.subsurface_color));
+    try_save(ar, ser20::make_nvp("emissive_color", surface.emissive_color));
+    try_save(ar, ser20::make_nvp("emissive_intensity", surface.emissive_intensity));
+    try_save(ar, ser20::make_nvp("roughness", surface.roughness));
+    try_save(ar, ser20::make_nvp("metalness", surface.metallic));
+    try_save(ar, ser20::make_nvp("bumpiness", surface.bumpiness));
+    try_save(ar, ser20::make_nvp("alpha_mode", surface.alpha));
+    try_save(ar, ser20::make_nvp("alpha_cutoff", surface.alpha_cutoff));
+    try_save(ar, ser20::make_nvp("tiling", surface.tiling));
+    try_save(ar, ser20::make_nvp("dither_threshold", dither_threshold));
+    try_save(ar, ser20::make_nvp("color_map", surface.color_map));
+    try_save(ar, ser20::make_nvp("normal_map", surface.normal_map));
+    try_save(ar, ser20::make_nvp("roughness_map", surface.roughness_map));
+    try_save(ar, ser20::make_nvp("metalness_map", surface.metallic_map));
+    try_save(ar, ser20::make_nvp("emissive_map", surface.emissive_map));
+    try_save(ar, ser20::make_nvp("ao_map", surface.ao_map));
+}
+SAVE_INSTANTIATE(legacy_pbr_material, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(legacy_pbr_material, ser20::oarchive_binary_t);
+
+LOAD(legacy_pbr_material)
+{
+    auto& surface = obj.surface;
+    try_load(ar, ser20::make_nvp("base_type", ser20::base_class<material>(&obj)));
+    surface.cull = obj.get_cull_type();
+    try_load(ar, ser20::make_nvp("base_color", surface.base_color));
+    try_load(ar, ser20::make_nvp("subsurface_color", surface.subsurface_color));
+    try_load(ar, ser20::make_nvp("emissive_color", surface.emissive_color));
+    try_load(ar, ser20::make_nvp("emissive_intensity", surface.emissive_intensity));
+    if constexpr(is_binary_archive<Archive>())
+    {
+        // A binary file is read in the order it was written.
+        try_load(ar, ser20::make_nvp("roughness", surface.roughness));
+        try_load(ar, ser20::make_nvp("metalness", surface.metallic));
+        try_load(ar, ser20::make_nvp("bumpiness", surface.bumpiness));
+        try_load(ar, ser20::make_nvp("alpha_mode", surface.alpha));
+        try_load(ar, ser20::make_nvp("alpha_cutoff", surface.alpha_cutoff));
+    }
+    else
+    {
+        load_legacy_text_surface(ar, surface);
+    }
+    math::vec2 dither_threshold(0.5f, surface.camera_fade_distance);
+    try_load(ar, ser20::make_nvp("tiling", surface.tiling));
+    try_load(ar, ser20::make_nvp("dither_threshold", dither_threshold));
+    surface.camera_fade_distance = dither_threshold.y;
+    try_load(ar, ser20::make_nvp("color_map", surface.color_map));
+    try_load(ar, ser20::make_nvp("normal_map", surface.normal_map));
+    try_load(ar, ser20::make_nvp("roughness_map", surface.roughness_map));
+    try_load(ar, ser20::make_nvp("metalness_map", surface.metallic_map));
+    try_load(ar, ser20::make_nvp("emissive_map", surface.emissive_map));
+    try_load(ar, ser20::make_nvp("ao_map", surface.ao_map));
+    surface.alpha_cutoff = normalize_legacy_cutoff(surface);
+}
+LOAD_INSTANTIATE(legacy_pbr_material, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(legacy_pbr_material, ser20::iarchive_binary_t);
+
 } // namespace unravel

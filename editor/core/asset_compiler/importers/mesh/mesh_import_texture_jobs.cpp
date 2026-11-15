@@ -21,57 +21,6 @@ namespace mesh_import
 namespace
 {
 
-auto spec_gloss_factors_key(const spec_gloss_factors_t& factors) -> std::string
-{
-    return fmt::format("{:.4f}_{:.4f}_{:.4f}_{:.4f}_{:.4f}_{:.4f}_{:.4f}_{:.4f}",
-                       factors.diffuse_r,
-                       factors.diffuse_g,
-                       factors.diffuse_b,
-                       factors.diffuse_a,
-                       factors.specular_r,
-                       factors.specular_g,
-                       factors.specular_b,
-                       factors.glossiness);
-}
-
-auto load_image_for_texture_desc(const aiScene* scene,
-                                 const fs::path& output_dir,
-                                 const imported_texture& tex,
-                                 const char* assimp_path_cstr = nullptr) -> bimg::ImageContainer*
-{
-    if(tex.embedded_index >= 0 && tex.embedded_index < static_cast<int>(scene->mNumTextures))
-    {
-        const auto* embedded = scene->mTextures[tex.embedded_index];
-        if(embedded->pcData && embedded->mHeight == 0)
-        {
-            return imageLoad(embedded->pcData, static_cast<uint32_t>(embedded->mWidth));
-        }
-        return nullptr;
-    }
-
-    if(assimp_path_cstr != nullptr && assimp_path_cstr[0] != '\0')
-    {
-        const fs::path relative = resolve_external_texture_path(output_dir, normalize_assimp_path(assimp_path_cstr));
-        return imageLoad(bx::FilePath((output_dir / relative).string().c_str()));
-    }
-
-    const fs::path relative = resolve_external_texture_path(output_dir, normalize_assimp_path(tex.name));
-    return imageLoad(bx::FilePath((output_dir / relative).string().c_str()));
-}
-
-void mark_embedded_consumed_index(int idx, std::unordered_set<int>& consumed, texture_catalog& catalog)
-{
-    if(idx < 0)
-    {
-        return;
-    }
-    consumed.insert(idx);
-    imported_texture entry{};
-    entry.embedded_index = idx;
-    entry.process_count = 1;
-    catalog.register_entry(entry, entry);
-}
-
 auto get_texture_job_output_paths(const texture_job& job) -> std::vector<std::string>
 {
     std::vector<std::string> paths;
@@ -85,16 +34,6 @@ auto get_texture_job_output_paths(const texture_job& job) -> std::vector<std::st
             break;
         case texture_job_type::external_convert:
             paths.push_back(make_converted_texture_name(job.desc.name, job.desc.semantic));
-            break;
-        case texture_job_type::spec_gloss_pair:
-            if(!job.output_base_color_relative.empty())
-            {
-                paths.push_back(job.output_base_color_relative);
-            }
-            if(!job.output_mr_relative.empty())
-            {
-                paths.push_back(job.output_mr_relative);
-            }
             break;
         default:
             break;
@@ -228,66 +167,6 @@ void execute_texture_job(const texture_job& job,
             catalog.register_entry(job.desc, result);
             break;
         }
-        case texture_job_type::spec_gloss_pair:
-        {
-            bimg::ImageContainer* diffuse_img = load_image_for_texture_desc(scene, output_dir, job.desc);
-            bimg::ImageContainer* specular_img =
-                load_image_for_texture_desc(scene, output_dir, job.specular_desc, nullptr);
-
-            if(!diffuse_img)
-            {
-                APPLOG_WARNING("Mesh Importer: Spec-gloss pair job could not load diffuse texture: {}",
-                               job.desc.name);
-            }
-            if(!specular_img)
-            {
-                APPLOG_WARNING("Mesh Importer: Spec-gloss pair job could not load specular texture: {}",
-                               job.specular_desc.name);
-            }
-
-            if(diffuse_img && specular_img)
-            {
-                auto conv = convert_spec_gloss_to_pbr_textures(output_dir,
-                                                               job.output_base_color_relative,
-                                                               job.output_mr_relative,
-                                                               diffuse_img,
-                                                               specular_img,
-                                                               job.spec_gloss_factors,
-                                                               job.bake_base_color);
-                if(conv.diffuse_converted)
-                {
-                    imported_texture base_result = job.desc;
-                    base_result.name = conv.base_color_relative;
-                    catalog.register_entry(job.desc, base_result);
-                    mark_embedded_consumed_index(job.desc.embedded_index, consumed_embedded, catalog);
-                }
-                catalog.register_pair_outputs(make_texture_job_key(job), conv);
-                if(!conv.mr_relative.empty())
-                {
-                    imported_texture mr_lookup = job.specular_desc;
-                    imported_texture mr_result = job.specular_desc;
-                    mr_result.name = conv.mr_relative;
-                    catalog.register_entry(mr_lookup, mr_result);
-                    mark_embedded_consumed_index(job.specular_desc.embedded_index, consumed_embedded, catalog);
-                    APPLOG_TRACE("Mesh Importer: Wrote pair metallic-roughness: {}", conv.mr_relative);
-                }
-                else
-                {
-                    APPLOG_WARNING("Mesh Importer: Spec-gloss pair job produced no metallic-roughness output ({} + {})",
-                                   job.desc.name,
-                                   job.specular_desc.name);
-                }
-            }
-            if(specular_img)
-            {
-                bimg::imageFree(specular_img);
-            }
-            if(diffuse_img)
-            {
-                bimg::imageFree(diffuse_img);
-            }
-            break;
-        }
         default:
             break;
     }
@@ -305,19 +184,6 @@ void execute_texture_job_composite(const std::vector<texture_job>& jobs,
     {
         execute_texture_job(jobs[job_index], filename, output_dir, scene, catalog, consumed_embedded);
     }
-}
-
-/// "<dir>/<stem>_<hash>.png" for "<dir>/<stem>.png".
-auto append_job_hash(const std::string& relative, const std::string& job_key) -> std::string
-{
-    uint32_t hash = 2166136261u;
-    for(const char c : job_key)
-    {
-        hash = (hash ^ static_cast<uint8_t>(c)) * 16777619u;
-    }
-    const fs::path path(relative);
-    const std::string stem = fmt::format("{}_{:08x}", path.stem().string(), hash);
-    return (path.parent_path() / (stem + path.extension().string())).generic_string();
 }
 
 } // namespace
@@ -343,95 +209,8 @@ auto make_texture_job_key(const texture_job& job) -> std::string
         case texture_job_type::embedded_extract:
         case texture_job_type::external_convert:
             return make_texture_catalog_key(job.desc);
-        case texture_job_type::spec_gloss_pair:
-            return fmt::format("sg:{}:{}:{}:{}",
-                               make_texture_catalog_key(job.desc),
-                               make_texture_catalog_key(job.specular_desc),
-                               spec_gloss_factors_key(job.spec_gloss_factors),
-                               job.bake_base_color ? "bc" : "mr");
         default:
             return {};
-    }
-}
-
-auto try_synchronous_spec_gloss_pair_mr(const fs::path& output_dir,
-                                        const aiScene* scene,
-                                        const imported_texture& pair_source,
-                                        const imported_texture& specular_tex,
-                                        const spec_gloss_factors_t& factors,
-                                        const std::string& expected_mr,
-                                        bool bake_base_color) -> std::string
-{
-    bimg::ImageContainer* diffuse_img = load_image_for_texture_desc(scene, output_dir, pair_source);
-    bimg::ImageContainer* specular_img = load_image_for_texture_desc(scene, output_dir, specular_tex);
-
-    if(!diffuse_img)
-    {
-        APPLOG_WARNING("Mesh Importer: Bind-time pair MR could not load diffuse: {}", pair_source.name);
-    }
-    if(!specular_img)
-    {
-        APPLOG_WARNING("Mesh Importer: Bind-time pair MR could not load specular: {}", specular_tex.name);
-    }
-
-    if(!diffuse_img || !specular_img)
-    {
-        if(diffuse_img)
-        {
-            bimg::imageFree(diffuse_img);
-        }
-        if(specular_img)
-        {
-            bimg::imageFree(specular_img);
-        }
-        return {};
-    }
-
-    auto conv = convert_spec_gloss_to_pbr_textures(output_dir,
-                                                   std::string{},
-                                                   expected_mr,
-                                                   diffuse_img,
-                                                   specular_img,
-                                                   factors,
-                                                   bake_base_color);
-    bimg::imageFree(diffuse_img);
-    bimg::imageFree(specular_img);
-
-    if(!conv.mr_relative.empty())
-    {
-        APPLOG_TRACE("Mesh Importer: Bind-time pair metallic-roughness bake: {}", conv.mr_relative);
-    }
-    return conv.mr_relative;
-}
-
-void disambiguate_shared_pair_outputs(texture_job_store& store)
-{
-    std::unordered_map<std::string, size_t> writers_per_output;
-    for(const auto& job : store.jobs())
-    {
-        if(job.type != texture_job_type::spec_gloss_pair)
-        {
-            continue;
-        }
-        for(const auto& output : get_texture_job_output_paths(job))
-        {
-            ++writers_per_output[output];
-        }
-    }
-    for(auto& job : store.jobs())
-    {
-        if(job.type != texture_job_type::spec_gloss_pair)
-        {
-            continue;
-        }
-        const std::string job_key = make_texture_job_key(job);
-        for(std::string* output : {&job.output_base_color_relative, &job.output_mr_relative})
-        {
-            if(!output->empty() && writers_per_output[*output] > 1)
-            {
-                *output = append_job_hash(*output, job_key);
-            }
-        }
     }
 }
 

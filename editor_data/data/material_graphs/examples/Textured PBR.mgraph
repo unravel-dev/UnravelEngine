@@ -1,0 +1,27 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "link": "tinted"},
+    {"pin": "metallic", "link": "orm.b"},
+    {"pin": "roughness", "link": "roughness"},
+    {"pin": "ambient_occlusion", "link": "orm.r"},
+    {"pin": "normal", "link": "normal"}
+   ]},
+   {"id": "tiling", "type": "tiling_offset", "inputs": [{"pin": "tiling", "value": [2.0, 2.0]}]},
+   {"id": "albedo", "type": "texture_sample", "inputs": [{"pin": "uv", "link": "tiling"}]},
+   {"id": "tint", "type": "color_parameter", "inputs": [{"pin": "value", "value": [1.0, 1.0, 1.0, 1.0]}],
+    "settings": [{"name": "name", "value": "Tint"}]},
+   {"id": "tinted", "type": "multiply", "inputs": [{"pin": "a", "link": "albedo.rgb"}, {"pin": "b", "link": "tint.rgb"}]},
+   {"id": "orm", "type": "texture_sample", "inputs": [{"pin": "uv", "link": "tiling"}]},
+   {"id": "roughness_scale", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [1.0]}],
+    "settings": [{"name": "name", "value": "Roughness Scale"}]},
+   {"id": "roughness", "type": "multiply", "inputs": [{"pin": "a", "link": "orm.g"}, {"pin": "b", "link": "roughness_scale"}]},
+   {"id": "normal", "type": "normal_map", "inputs": [{"pin": "uv", "link": "tiling"}, {"pin": "strength", "value": [1.0]}]}
+  ],
+  "comments": [
+   {"text": "Pick each texture in the Details of its node. ORM: occlusion in red, roughness in green, metalness in blue."}
+  ]
+ }
+}

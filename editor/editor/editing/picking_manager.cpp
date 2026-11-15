@@ -504,6 +504,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
         const auto& pick_view = pick_camera.get_view();
         const auto& pick_proj = pick_camera.get_projection();
 
+        moved_vertex_programs_.release_unused();
         gfx::render_pass pass("Picking/Buffer Pass");
         // ID buffer clears to black, which represents clicking on nothing (background)
         pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000ff, 1.0f, 0);
@@ -565,10 +566,14 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                     [&](const model::submit_callbacks::params& submit_params, const material& mat)
                 {
                     auto& prog = submit_params.skinned ? program_skinned_ : program_;
+                    auto* moved = moved_vertex_programs_.begin_moved_vertices(mat,
+                                                                              graph_material_programs::get_position_only_variant(submit_params.skinned),
+                                                                              id_fragment_shader_,
+                                                                              original_camera.get_position());
 
                     bgfx::setState(mat.get_render_states());
                     bgfx::submit(pass.id,
-                                 prog->native_handle(),
+                                 moved != nullptr ? moved->native_handle() : prog->native_handle(),
                                  0,
                                  submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL);
                 };
@@ -900,6 +905,8 @@ auto picking_manager::init(rtti::context& ctx) -> bool
 
     program_ = std::make_unique<gpu_program>(vs, fs);
     program_skinned_ = std::make_unique<gpu_program>(vs, "skinned", fs);
+    moved_vertex_programs_.init(am.get_asset<gfx::shader>("engine:/data/shaders/deferred_geom/vs_deferred_geom.eshader"));
+    id_fragment_shader_ = fs;
 
     auto vs_gizmos = am.get_asset<gfx::shader>("editor:/data/shaders/vs_picking_debugdraw_fill_texture.eshader");
     auto fs_gizmos = am.get_asset<gfx::shader>("editor:/data/shaders/fs_picking_debugdraw_fill_texture.eshader");

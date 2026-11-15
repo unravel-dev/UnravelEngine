@@ -7,6 +7,7 @@
 #include <engine/rendering/light.h>
 #include <engine/rendering/batch_collector.h>
 #include <engine/rendering/instanced_mesh_source.h>
+#include <engine/rendering/material_graph/graph_material_programs.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/pipeline/pipeline.h>
 #include <engine/rendering/shadow_atlas.h>
@@ -270,11 +271,6 @@ struct Uniforms
         u_shadowMapMtx1 = bgfx::createUniform("u_shadowMapMtx1", bgfx::UniformType::Mat4);
         u_shadowMapMtx2 = bgfx::createUniform("u_shadowMapMtx2", bgfx::UniformType::Mat4);
         u_shadowMapMtx3 = bgfx::createUniform("u_shadowMapMtx3", bgfx::UniformType::Mat4);
-
-        u_shadowCutoutBaseColor = bgfx::createUniform("u_base_color", bgfx::UniformType::Vec4);
-        u_shadowCutoutSurfaceData = bgfx::createUniform("u_surface_data", bgfx::UniformType::Vec4);
-        u_shadowCutoutTiling = bgfx::createUniform("u_tiling", bgfx::UniformType::Vec4);
-        s_shadowCutoutColor = bgfx::createUniform("s_tex_color", bgfx::UniformType::Sampler);
     }
 
     void setPtrs(Light* _lightPtr,
@@ -333,19 +329,6 @@ struct Uniforms
         bgfx::setUniform(u_color, m_colorPtr);
     }
 
-    void submitShadowCutoutState(const shadow_cutout_state& cutout) const
-    {
-        if(cutout.color_map)
-        {
-            bgfx::setTexture(0, s_shadowCutoutColor, cutout.color_map->native_handle());
-        }
-        bgfx::setUniform(u_shadowCutoutBaseColor, math::value_ptr(cutout.base_color.value));
-        const math::vec4 surface_data{0.0f, 0.0f, 0.0f, cutout.alpha_test_value};
-        bgfx::setUniform(u_shadowCutoutSurfaceData, math::value_ptr(surface_data));
-        const math::vec4 tiling{cutout.tiling.x, cutout.tiling.y, 0.0f, 0.0f};
-        bgfx::setUniform(u_shadowCutoutTiling, math::value_ptr(tiling));
-    }
-
     void destroy()
     {
         auto safe_destroy = [](bgfx::UniformHandle& handle)
@@ -377,11 +360,6 @@ struct Uniforms
         safe_destroy(u_shadowMapMtx1);
         safe_destroy(u_shadowMapMtx2);
         safe_destroy(u_shadowMapMtx3);
-
-        safe_destroy(u_shadowCutoutBaseColor);
-        safe_destroy(u_shadowCutoutSurfaceData);
-        safe_destroy(u_shadowCutoutTiling);
-        safe_destroy(s_shadowCutoutColor);
 
         safe_destroy(u_lightMtx);
     }
@@ -493,11 +471,6 @@ private:
     bgfx::UniformHandle u_shadowMapMtx2;
     bgfx::UniformHandle u_shadowMapMtx3;
 
-    bgfx::UniformHandle u_shadowCutoutBaseColor;
-    bgfx::UniformHandle u_shadowCutoutSurfaceData;
-    bgfx::UniformHandle u_shadowCutoutTiling;
-    bgfx::UniformHandle s_shadowCutoutColor;
-
     bgfx::UniformHandle u_lightMtx;
 };
 
@@ -574,13 +547,8 @@ struct Programs
                 m_packDepth[ii][jj].reset();
                 m_packDepthInstanced[ii][jj].reset();
                 m_packDepthSkinned[ii][jj].reset();
-                m_packDepthCutout[ii][jj].reset();
-                m_packDepthInstancedCutout[ii][jj].reset();
-                m_packDepthSkinnedCutout[ii][jj].reset();
                 m_packDepthSkinnedInstanced[ii][jj].reset();
-                m_packDepthSkinnedInstancedCutout[ii][jj].reset();
                 m_packDepthSkinnedBakedInstanced[ii][jj].reset();
-                m_packDepthSkinnedBakedInstancedCutout[ii][jj].reset();
             }
         }
 
@@ -616,17 +584,12 @@ struct Programs
     gpu_program::ptr m_packDepth[DepthImpl::Count][PackDepth::Count];
     gpu_program::ptr m_packDepthSkinned[DepthImpl::Count][PackDepth::Count];
     gpu_program::ptr m_packDepthInstanced[DepthImpl::Count][PackDepth::Count];
-    gpu_program::ptr m_packDepthCutout[DepthImpl::Count][PackDepth::Count];
-    gpu_program::ptr m_packDepthSkinnedCutout[DepthImpl::Count][PackDepth::Count];
-    gpu_program::ptr m_packDepthInstancedCutout[DepthImpl::Count][PackDepth::Count];
     /// Instanced skinned casters, the bones from the skinning palette buffer (vs_shadowmaps_packdepth.eshader#*skinned_instanced*). Reached from
     /// the settings table's skinned program through resolve_skinned_instanced_pack_program.
     gpu_program::ptr m_packDepthSkinnedInstanced[DepthImpl::Count][PackDepth::Count];
-    gpu_program::ptr m_packDepthSkinnedInstancedCutout[DepthImpl::Count][PackDepth::Count];
     /// Baked animation casters, the bones from the baked animation store (vs_shadowmaps_packdepth.eshader#*skinned_baked_instanced*). Reached
     /// from the settings table's skinned program like the instanced skinned ones.
     gpu_program::ptr m_packDepthSkinnedBakedInstanced[DepthImpl::Count][PackDepth::Count];
-    gpu_program::ptr m_packDepthSkinnedBakedInstancedCutout[DepthImpl::Count][PackDepth::Count];
 
 private:
     /// What runs wish for (request).
@@ -644,6 +607,10 @@ private:
     wishes this_frame_{};
     wishes last_frame_{};
     std::uint32_t frame_{std::numeric_limits<std::uint32_t>::max()};
+
+public:
+    /// The shadow casters of graph materials whose Opacity Mask clips (their shaders' shadow variants).
+    graph_material_programs graph_materials;
 };
 
 struct ShadowMapSettings
@@ -1095,12 +1062,24 @@ private:
                             const RenderState& renderState,
                             ::unravel::rendering::pipeline_stats* stats);
 
-    /// Submits one instanced shadow draw of @p key whose submesh and instances are bound: per-draw uniforms, cutout,
-    /// cull and state.
+    /// Submits one instanced shadow draw of @p key whose submesh and instances are bound: per-draw uniforms, cull and
+    /// state.
     void submit_shadow_instances(gpu_program& prog,
                                  const shadow_batch_key& key,
                                  bgfx::ViewId viewId,
                                  const RenderState& renderState);
+
+    /// The variant of a graph material's shader that casts into this generator's maps: shadow, shadow_linear,
+    /// shadow_vsm or shadow_vsm_linear.
+    auto get_graph_shadow_variant() const -> std::string;
+
+    /**
+     * @brief The program casting @p mat's shadow clipped by its Opacity Mask or moved by its World Position Offset,
+     * with @p vertex_variant of vs_deferred_geom.eshader or of its own vertex shader, begun; null for a material that
+     * is not a graph drawing its own shadow (graph_material::draws_own_shadow), or one whose shader cannot run yet: it
+     * casts as an opaque caster then. Binds the material's values for the draw.
+     */
+    auto begin_graph_shadow_program(const material* mat, const std::string& vertex_variant) -> gpu_program*;
 
     /// Fills the geometric bias conversions (depth scale, map axes, perspective texel size)
     /// from the final light view / projection matrices of this update.
@@ -1123,6 +1102,8 @@ private:
 
     Uniforms uniforms_;
     Programs programs_;
+    /// The camera position the shadows of graph materials are evaluated for (their mask may read it).
+    math::vec3 graph_camera_position_{};
 
     float light_view_[ShadowMapRenderTargets::Count][16];
     float light_proj_[ShadowMapRenderTargets::Count][16];

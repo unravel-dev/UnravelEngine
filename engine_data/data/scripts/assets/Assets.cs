@@ -60,11 +60,15 @@ public class Texture : Asset<Texture>
 /// A property of a material, as the typed getters and setters of <see cref="Material"/> and
 /// <see cref="MaterialInstance"/> (<see cref="Material.SetColor"/>, <see cref="Material.SetFloat"/>,
 /// <see cref="Material.SetVector"/>, <see cref="Material.SetTexture"/>),
-/// <see cref="MaterialInstance.IsOverridden"/> and <see cref="MaterialInstance.Revert"/> name it.
+/// <see cref="MaterialInstance.IsOverridden"/> and <see cref="MaterialInstance.Revert"/> name it. Each is a
+/// parameter or a texture of the Standard material graph ("Base Color", "Color Map"); setting one a graph does not have
+/// changes nothing and logs a warning once per material.
+/// The alpha and cull modes are the graph's and only read.
 /// </summary>
 public enum MaterialProperty
 {
-    /// <summary>Base (albedo) color; its alpha fades the surface.</summary>
+    /// <summary>Base (albedo) color; its alpha fades a surface whose graph clips by it (a masked or translucent
+    /// material, or one made with an alpha below 1).</summary>
     BaseColor,
     /// <summary>Emissive color.</summary>
     EmissiveColor,
@@ -72,10 +76,12 @@ public enum MaterialProperty
     SubsurfaceColor,
     /// <summary>Multiplier of the emissive color.</summary>
     EmissiveIntensity,
-    /// <summary>Surface roughness.</summary>
+    /// <summary>Surface roughness; on a specular-workflow material it reads and writes Glossiness as 1 - roughness.
+    /// </summary>
     Roughness,
-    /// <summary>Surface metalness.</summary>
-    Metalness,
+    /// <summary>How metallic the surface is, 0 to 1. A specular-workflow material has none: setting it there changes
+    /// nothing and logs a warning.</summary>
+    Metallic,
     /// <summary>Normal-map bump intensity.</summary>
     Bumpiness,
     /// <summary>Alpha below which a masked surface is cut out.</summary>
@@ -88,15 +94,16 @@ public enum MaterialProperty
     NormalMap,
     /// <summary>Roughness texture.</summary>
     RoughnessMap,
-    /// <summary>Metalness texture.</summary>
-    MetalnessMap,
+    /// <summary>Metallic texture.</summary>
+    MetallicMap,
     /// <summary>Emissive texture.</summary>
     EmissiveMap,
     /// <summary>Ambient occlusion texture.</summary>
     AoMap,
-    /// <summary>How the material treats alpha.</summary>
+    /// <summary>How the material treats alpha: the graph's (masked, translucent or opaque); setting it does nothing.</summary>
     AlphaMode,
-    /// <summary>Which faces the material hides.</summary>
+    /// <summary>Which faces the material hides: the graph's Two Sided and Cull Front Faces settings; setting it does
+    /// nothing.</summary>
     CullMode,
 }
 
@@ -118,10 +125,10 @@ internal static class MaterialPropertyTypes
     {
         bool isFloat = property == MaterialProperty.EmissiveIntensity ||
                        property == MaterialProperty.Roughness ||
-                       property == MaterialProperty.Metalness ||
+                       property == MaterialProperty.Metallic ||
                        property == MaterialProperty.Bumpiness ||
                        property == MaterialProperty.AlphaCutoff;
-        Require(isFloat, property, "EmissiveIntensity, Roughness, Metalness, Bumpiness or AlphaCutoff");
+        Require(isFloat, property, "EmissiveIntensity, Roughness, Metallic, Bumpiness or AlphaCutoff");
     }
 
     internal static void RequireVector(MaterialProperty property)
@@ -134,10 +141,10 @@ internal static class MaterialPropertyTypes
         bool isTexture = property == MaterialProperty.ColorMap ||
                          property == MaterialProperty.NormalMap ||
                          property == MaterialProperty.RoughnessMap ||
-                         property == MaterialProperty.MetalnessMap ||
+                         property == MaterialProperty.MetallicMap ||
                          property == MaterialProperty.EmissiveMap ||
                          property == MaterialProperty.AoMap;
-        Require(isTexture, property, "ColorMap, NormalMap, RoughnessMap, MetalnessMap, EmissiveMap or AoMap");
+        Require(isTexture, property, "ColorMap, NormalMap, RoughnessMap, MetallicMap, EmissiveMap or AoMap");
     }
 
     private static void Require(bool isOfType, MaterialProperty property, string expected)
@@ -186,7 +193,8 @@ public enum MaterialCullMode
 /// </remarks>
 public class Material : Asset<Material>
 {
-    /// <summary>Base (albedo) color; its alpha fades the surface.</summary>
+    /// <summary>Base (albedo) color; its alpha fades a surface whose graph clips by it (a masked or translucent
+    /// material, or one made with an alpha below 1).</summary>
     public Color baseColor
     {
         get => internal_m2n_material_get_color(uid, (int)MaterialProperty.BaseColor);
@@ -214,18 +222,20 @@ public class Material : Asset<Material>
         set => internal_m2n_material_set_float(uid, (int)MaterialProperty.EmissiveIntensity, value);
     }
 
-    /// <summary>Surface roughness.</summary>
+    /// <summary>Surface roughness; on a specular-workflow material it reads and writes Glossiness as 1 - roughness.
+    /// </summary>
     public float roughness
     {
         get => internal_m2n_material_get_float(uid, (int)MaterialProperty.Roughness);
         set => internal_m2n_material_set_float(uid, (int)MaterialProperty.Roughness, value);
     }
 
-    /// <summary>Surface metalness.</summary>
-    public float metalness
+    /// <summary>How metallic the surface is, 0 to 1. A specular-workflow material has none: setting it there changes
+    /// nothing and logs a warning.</summary>
+    public float metallic
     {
-        get => internal_m2n_material_get_float(uid, (int)MaterialProperty.Metalness);
-        set => internal_m2n_material_set_float(uid, (int)MaterialProperty.Metalness, value);
+        get => internal_m2n_material_get_float(uid, (int)MaterialProperty.Metallic);
+        set => internal_m2n_material_set_float(uid, (int)MaterialProperty.Metallic, value);
     }
 
     /// <summary>Normal-map bump intensity.</summary>
@@ -270,11 +280,11 @@ public class Material : Asset<Material>
         set => SetTexture(MaterialProperty.RoughnessMap, value);
     }
 
-    /// <summary>Metalness texture, or null for the engine's default map.</summary>
-    public Texture metalnessMap
+    /// <summary>Metallic texture, or null for the engine's default map.</summary>
+    public Texture metallicMap
     {
-        get => GetTexture(MaterialProperty.MetalnessMap);
-        set => SetTexture(MaterialProperty.MetalnessMap, value);
+        get => GetTexture(MaterialProperty.MetallicMap);
+        set => SetTexture(MaterialProperty.MetallicMap, value);
     }
 
     /// <summary>Emissive texture, or null for the engine's default map.</summary>
@@ -291,14 +301,15 @@ public class Material : Asset<Material>
         set => SetTexture(MaterialProperty.AoMap, value);
     }
 
-    /// <summary>How the material treats alpha.</summary>
+    /// <summary>How the material treats alpha: the graph's; setting it does nothing (a warning is logged).</summary>
     public MaterialAlphaMode alphaMode
     {
         get => (MaterialAlphaMode)internal_m2n_material_get_mode(uid, (int)MaterialProperty.AlphaMode);
         set => internal_m2n_material_set_mode(uid, (int)MaterialProperty.AlphaMode, (int)value);
     }
 
-    /// <summary>Which faces the material hides; None draws both sides.</summary>
+    /// <summary>Which faces the material hides (None draws both sides): the graph's Two Sided and Cull Front Faces
+    /// settings; setting it does nothing (a warning is logged).</summary>
     public MaterialCullMode cullMode
     {
         get => (MaterialCullMode)internal_m2n_material_get_mode(uid, (int)MaterialProperty.CullMode);
@@ -323,7 +334,7 @@ public class Material : Asset<Material>
         internal_m2n_material_set_color(uid, (int)property, value);
     }
 
-    /// <summary>Gets a number property: EmissiveIntensity, Roughness, Metalness, Bumpiness or AlphaCutoff.</summary>
+    /// <summary>Gets a number property: EmissiveIntensity, Roughness, Metallic, Bumpiness or AlphaCutoff.</summary>
     /// <exception cref="ArgumentException"><paramref name="property"/> is not a number property.</exception>
     public float GetFloat(MaterialProperty property)
     {
@@ -332,7 +343,7 @@ public class Material : Asset<Material>
     }
 
     /// <summary>
-    /// Sets a number property for every renderer that uses the material: EmissiveIntensity, Roughness, Metalness,
+    /// Sets a number property for every renderer that uses the material: EmissiveIntensity, Roughness, Metallic,
     /// Bumpiness or AlphaCutoff.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="property"/> is not a number property.</exception>
@@ -359,7 +370,7 @@ public class Material : Asset<Material>
     }
 
     /// <summary>
-    /// Gets a texture property: ColorMap, NormalMap, RoughnessMap, MetalnessMap, EmissiveMap or AoMap.
+    /// Gets a texture property: ColorMap, NormalMap, RoughnessMap, MetallicMap, EmissiveMap or AoMap.
     /// </summary>
     /// <returns>The texture, or null when the material uses the engine's default map.</returns>
     /// <exception cref="ArgumentException"><paramref name="property"/> is not a texture property.</exception>
@@ -372,7 +383,7 @@ public class Material : Asset<Material>
 
     /// <summary>
     /// Sets a texture property for every renderer that uses the material: ColorMap, NormalMap, RoughnessMap,
-    /// MetalnessMap, EmissiveMap or AoMap.
+    /// MetallicMap, EmissiveMap or AoMap.
     /// </summary>
     /// <param name="property">The texture property.</param>
     /// <param name="texture">The texture, or null for the engine's default map.</param>
@@ -382,6 +393,115 @@ public class Material : Asset<Material>
         MaterialPropertyTypes.RequireTexture(property);
         internal_m2n_material_set_texture(uid, (int)property, texture?.uid ?? Guid.Empty);
     }
+
+    /// <summary>Whether the material is a material graph with a parameter named <paramref name="name"/>.</summary>
+    public bool HasParameter(string name)
+    {
+        return internal_m2n_material_has_parameter(uid, name);
+    }
+
+    /// <summary>Gets the number a material graph's Scalar Parameter takes.</summary>
+    /// <exception cref="ArgumentException">The material has no parameter named <paramref name="name"/>.</exception>
+    public float GetFloat(string name)
+    {
+        return GetVector(name).x;
+    }
+
+    /// <summary>
+    /// Sets a material graph's Scalar Parameter for every renderer that uses the material; restored when play stops.
+    /// </summary>
+    /// <exception cref="ArgumentException">The material has no parameter named <paramref name="name"/>.</exception>
+    public void SetFloat(string name, float value)
+    {
+        SetVector(name, new Vector4(value, 0.0f, 0.0f, 0.0f));
+    }
+
+    /// <summary>Gets the vector a material graph's Vector or Color Parameter takes.</summary>
+    /// <exception cref="ArgumentException">The material has no parameter named <paramref name="name"/>.</exception>
+    public Vector4 GetVector(string name)
+    {
+        if (!HasParameter(name))
+        {
+            throw new ArgumentException($"The material is not a material graph with a parameter named '{name}'.", nameof(name));
+        }
+        return internal_m2n_material_get_parameter(uid, name);
+    }
+
+    /// <summary>
+    /// Sets a material graph's Vector or Color Parameter for every renderer that uses the material; restored when play
+    /// stops.
+    /// </summary>
+    /// <exception cref="ArgumentException">The material has no parameter named <paramref name="name"/>.</exception>
+    public void SetVector(string name, Vector4 value)
+    {
+        if (!internal_m2n_material_set_parameter(uid, name, value))
+        {
+            throw new ArgumentException($"The material is not a material graph with a parameter named '{name}'.", nameof(name));
+        }
+    }
+
+    /// <summary>Gets the color a material graph's Color Parameter takes.</summary>
+    /// <exception cref="ArgumentException">The material has no parameter named <paramref name="name"/>.</exception>
+    public Color GetColor(string name)
+    {
+        var value = GetVector(name);
+        return new Color(value.x, value.y, value.z, value.w);
+    }
+
+    /// <summary>
+    /// Sets a material graph's Color Parameter for every renderer that uses the material; restored when play stops.
+    /// </summary>
+    /// <exception cref="ArgumentException">The material has no parameter named <paramref name="name"/>.</exception>
+    public void SetColor(string name, Color value)
+    {
+        SetVector(name, new Vector4(value.r, value.g, value.b, value.a));
+    }
+
+    /// <summary>Gets the texture a material graph's texture node, named by its id, samples.</summary>
+    /// <returns>The texture, or null when the node samples the engine's default texture.</returns>
+    /// <exception cref="ArgumentException">The material has no texture node <paramref name="textureNode"/>.</exception>
+    public Texture GetTexture(string textureNode)
+    {
+        if (!internal_m2n_material_has_texture_node(uid, textureNode))
+        {
+            throw new ArgumentException($"The material is not a material graph with a texture node '{textureNode}'.", nameof(textureNode));
+        }
+        var texture = internal_m2n_material_get_texture_by_name(uid, textureNode);
+        return texture == Guid.Empty ? null : new Texture { uid = texture };
+    }
+
+    /// <summary>
+    /// Sets the texture of a material graph's texture node, named by its id, for every renderer that uses the material;
+    /// restored when play stops.
+    /// </summary>
+    /// <param name="textureNode">The texture node's id.</param>
+    /// <param name="texture">The texture, or null for the engine's default texture.</param>
+    /// <exception cref="ArgumentException">The material has no texture node <paramref name="textureNode"/>.</exception>
+    public void SetTexture(string textureNode, Texture texture)
+    {
+        if (!internal_m2n_material_set_texture_by_name(uid, textureNode, texture?.uid ?? Guid.Empty))
+        {
+            throw new ArgumentException($"The material is not a material graph with a texture node '{textureNode}'.", nameof(textureNode));
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern bool internal_m2n_material_has_parameter(Guid uid, string name);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern Vector4 internal_m2n_material_get_parameter(Guid uid, string name);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern bool internal_m2n_material_set_parameter(Guid uid, string name, Vector4 value);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern bool internal_m2n_material_has_texture_node(Guid uid, string name);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern Guid internal_m2n_material_get_texture_by_name(Guid uid, string name);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern bool internal_m2n_material_set_texture_by_name(Guid uid, string name, Guid texture);
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private static extern void internal_m2n_material_set_color(Guid uid, int property, Color value);

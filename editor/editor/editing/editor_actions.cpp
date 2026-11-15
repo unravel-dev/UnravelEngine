@@ -39,6 +39,8 @@
 #include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_graph/graph_material.h>
+#include <engine/rendering/material_graph/standard_material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/font.h>
 #include <engine/animation/animation.h>
@@ -61,6 +63,7 @@
 #include <base/platform/config.hpp>
 #include <hpp/string_view.hpp>
 #include <string_utils/utils.h>
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <functional>
@@ -970,6 +973,34 @@ void editor_actions::open_animation_controller(rtti::context& ctx, const asset_h
     ctx.get_cached<hub>().get_panels().get_animation_panel().open(asset);
 }
 
+auto editor_actions::open_material_graph(rtti::context& ctx, const asset_handle<material>& asset) -> bool
+{
+    return ctx.get_cached<hub>().get_panels().get_material_graph_panel().open(asset);
+}
+
+auto editor_actions::open_material_graph_file(rtti::context& ctx, const std::string& absolute_path) -> bool
+{
+    return ctx.get_cached<hub>().get_panels().get_material_graph_panel().open_path(absolute_path);
+}
+
+auto editor_actions::open_material_graph_without_asking(rtti::context& ctx,
+                                                        const asset_handle<material>& asset,
+                                                        std::string& error) -> bool
+{
+    auto& panel = ctx.get_cached<hub>().get_panels().get_material_graph_panel();
+    if(panel.has_unsaved_untitled_graph())
+    {
+        error = "The Material Graph window holds an untitled graph with unsaved changes: save or discard it first.";
+        return false;
+    }
+    if(!panel.open(asset))
+    {
+        error = asset.id() + " is not a material graph.";
+        return false;
+    }
+    return true;
+}
+
 auto editor_actions::open_scene_from_asset(rtti::context& ctx,
                                            const asset_handle<scene_prefab>& asset,
                                            std::string* problem) -> bool
@@ -1385,7 +1416,7 @@ auto editor_actions::migrate_texture_color_spaces(const std::string& group) -> s
             // one; re-running the migration afterwards will pick it up.
             return false;
         }
-        auto importer = std::dynamic_pointer_cast<texture_importer_meta>(meta.importer);
+        auto importer = safe_pointer_cast<texture_importer_meta>(meta.importer);
         if(!importer)
         {
             return false;
@@ -1428,24 +1459,49 @@ auto editor_actions::migrate_texture_color_spaces(const std::string& group) -> s
         return true;
     };
 
+    // The Standard graph's maps, by their texture names: color maps hold sRGB texels, data maps linear ones.
+    const auto standard_map_name = [](const char* key)
+    {
+        const auto* property = find_standard_property(key);
+        return property != nullptr ? std::string(property->name) : std::string{};
+    };
+    const std::array<std::string, 3> srgb_maps = {standard_map_name("color_map"),
+                                                  standard_map_name("emissive_map"),
+                                                  standard_map_name("specular_map")};
+    const std::array<std::string, 3> linear_maps = {standard_map_name("roughness_map"),
+                                                    standard_map_name("metallic_map"),
+                                                    standard_map_name("ao_map")};
+    const auto is_one_of = [](const auto& names, const std::string& name)
+    {
+        return std::find(names.begin(), names.end(), name) != names.end();
+    };
     size_t tagged = 0;
     auto materials = am.get_assets<material>(group);
     for(const auto& asset : materials)
     {
         auto mat = asset.get();
-        if(!mat || !mat->is<pbr_material>())
+        const auto* graph = mat ? mat->safe_cast<graph_material>() : nullptr;
+        if(graph == nullptr)
         {
             continue;
         }
-        const auto& pbr = static_cast<const pbr_material&>(*mat);
-        tagged += size_t(tag(pbr.get_color_map(), texture_importer_meta::color_space::srgb));
-        tagged += size_t(tag(pbr.get_emissive_map(), texture_importer_meta::color_space::srgb));
-        tagged += size_t(tag(pbr.get_normal_map(),
-                             texture_importer_meta::color_space::linear,
-                             texture_importer_meta::texture_type::normal_map));
-        tagged += size_t(tag(pbr.get_roughness_map(), texture_importer_meta::color_space::linear));
-        tagged += size_t(tag(pbr.get_metalness_map(), texture_importer_meta::color_space::linear));
-        tagged += size_t(tag(pbr.get_ao_map(), texture_importer_meta::color_space::linear));
+        for(const auto& texture : graph->get_textures())
+        {
+            if(texture.is_normal_map)
+            {
+                tagged += size_t(tag(texture.texture,
+                                     texture_importer_meta::color_space::linear,
+                                     texture_importer_meta::texture_type::normal_map));
+            }
+            else if(is_one_of(srgb_maps, texture.name))
+            {
+                tagged += size_t(tag(texture.texture, texture_importer_meta::color_space::srgb));
+            }
+            else if(is_one_of(linear_maps, texture.name))
+            {
+                tagged += size_t(tag(texture.texture, texture_importer_meta::color_space::linear));
+            }
+        }
     }
     APPLOG_INFO("Color space migration: tagged {} texture(s) from {} material(s).", tagged, materials.size());
     return tagged;
@@ -2031,6 +2087,20 @@ auto editor_actions::show_mcp_window(rtti::context& ctx, std::string* error) -> 
         return false;
     }
     ctx.get_cached<hub>().get_panels().get_mcp_panel().show(true);
+    return true;
+}
+
+auto editor_actions::show_material_graph_window(rtti::context& ctx, std::string* error) -> bool
+{
+    if(!ctx.has<hub>())
+    {
+        if(error)
+        {
+            *error = "Hub is not available";
+        }
+        return false;
+    }
+    ctx.get_cached<hub>().get_panels().get_material_graph_panel().show(true);
     return true;
 }
 

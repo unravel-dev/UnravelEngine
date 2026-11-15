@@ -5,6 +5,7 @@
 #include <engine/assets/asset_handle.h>
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/material_graph/graph_material_programs.h>
 #include <hpp/optional.hpp>
 #include <functional>
 
@@ -67,6 +68,10 @@ private:
     std::unique_ptr<gpu_program> program_gizmos_;
 
     std::unique_ptr<gpu_program> program_skinned_;
+    /// The ids of graph materials whose World Position Offset moves their vertices: their own vertex shader with the
+    /// id's fragment shader, so a click on the moved surface picks it.
+    graph_material_programs moved_vertex_programs_;
+    asset_handle<gfx::shader> id_fragment_shader_;
     /// Read blit into this
     std::array<std::uint8_t, tex_id_dim * tex_id_dim * 4> blit_data_;
     /// Indicates if is reading and when it will be ready

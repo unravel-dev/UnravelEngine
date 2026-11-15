@@ -16,12 +16,13 @@ namespace mesh_import
 {
 
 /**
- * @brief Import every scene material as a pbr_material, producing the textures they bind.
+ * @brief Import every scene material as a Standard graph material (make_standard_material), producing the
+ * textures they bind.
  *
- * Two passes over the materials: the first collects the texture jobs (embedded extraction,
- * conversions, spec-gloss pair bakes), which then run in parallel; the second binds the
- * produced files and the scalar properties. Embedded textures no material referenced are
- * extracted last. @p textures receives the sorted manifest of everything produced.
+ * Two passes over the materials: the first collects the texture jobs (embedded extraction and
+ * conversions), which then run in parallel; the second binds the produced files and the scalar
+ * properties. Embedded textures no material referenced are extracted last. @p textures receives the
+ * sorted manifest of everything produced.
  */
 void process_materials(asset_manager& am,
                        const fs::path& filename,

@@ -30,11 +30,11 @@ struct render_change
         coverage = 1u << 4,
         /// Which faces draw: cull type.
         sidedness = 1u << 5,
-        /// The diffuse surface: base color, color map, metalness, subsurface color.
+        /// The diffuse surface: base color, color map, metallic, subsurface color.
         albedo = 1u << 6,
         /// The shading normal: normal map, bumpiness.
         normal = 1u << 7,
-        /// Roughness and the specular share of metalness.
+        /// Roughness and the specular share of metallic.
         specular = 1u << 8,
         /// The ambient occlusion map.
         occlusion = 1u << 9,

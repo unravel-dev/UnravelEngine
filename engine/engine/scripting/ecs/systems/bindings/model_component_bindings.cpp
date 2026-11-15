@@ -7,6 +7,7 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/mesh.h>
 
 namespace unravel
@@ -186,28 +187,97 @@ void change_instance(entt::entity id, uint32_t slot, StandaloneChange&& change_s
     }
 }
 
+/// The graph material @p instance overrides, once it is loaded (as an override waits for it); null for another.
+auto get_instance_shared_graph(const material_instance& instance) -> std::shared_ptr<graph_material>
+{
+    const auto shared = instance.get_shared_material().get();
+    return shared && !asset_handle<material>::is_empty(shared) ? safe_pointer_cast<graph_material>(shared) : nullptr;
+}
+
+/// Where script property @p property of the slot's material instance lives: its shared graph's parameter or texture
+/// (resolve_script_property); no target while the instance is gone or overrides no graph material.
+auto resolve_instance_property(const material_instance* instance, int32_t property) -> standard_property_target
+{
+    const auto shared = instance != nullptr ? get_instance_shared_graph(*instance) : nullptr;
+    return shared ? resolve_script_property(*shared, property) : standard_property_target{};
+}
+
 /// The value slot @p slot of the model draws with for @p property: its material instance's override, else the shared
 /// material's.
 auto get_instance_value(entt::entity id, uint32_t slot, int32_t property) -> entt::meta_any
 {
     const auto* instance = find_instance(id, slot);
-    return instance ? instance->get_value(get_material_property_id(property)) : entt::meta_any{};
+    const auto shared = instance != nullptr ? get_instance_shared_graph(*instance) : nullptr;
+    if(!shared)
+    {
+        return {};
+    }
+    if(is_mode_property(property))
+    {
+        // The modes are the shared graph's.
+        return get_script_material_value(*shared, property);
+    }
+    const auto target = resolve_script_property(*shared, property);
+    if(target.property == nullptr)
+    {
+        return {};
+    }
+    if(target.property->type == standard_property::kind::texture)
+    {
+        return instance->get_graph_texture(target.property->name);
+    }
+    const auto parameter = instance->get_graph_parameter(target.property->name);
+    return parameter ? make_script_value(*target.property, apply_standard_inversion(target, *parameter)) : entt::meta_any{};
 }
 
-/// Overrides @p property of the slot's shared material for this model only.
+/// Overrides @p property of the slot's shared material for this model only: the parameter or texture the shared graph
+/// holds it in (Roughness as 1 - Glossiness on a specular material). The alpha and cull modes are the graph's.
 void set_instance_value(entt::entity id, uint32_t slot, int32_t property, const entt::meta_any& value)
 {
-    const entt::id_type property_id = get_material_property_id(property);
+    const auto* instance = find_instance(id, slot);
+    const auto shared = instance != nullptr ? get_instance_shared_graph(*instance) : nullptr;
+    if(!shared)
+    {
+        return;
+    }
+    const auto target = resolve_script_property(*shared, property);
+    if(target.property == nullptr)
+    {
+        warn_script_property_missing(instance->get_shared_material(), *shared, property);
+        return;
+    }
+    const std::string name = target.property->name;
+    if(const auto* texture = value.try_cast<texture_handle>())
+    {
+        change_instance(
+            id,
+            slot,
+            [&](material_instance& instance)
+            {
+                instance.set_graph_texture(name, *texture);
+            },
+            [&](model_component& comp)
+            {
+                comp.set_material_instance_texture(slot, name, *texture);
+            });
+        return;
+    }
+    const auto vector = get_script_vector(value);
+    if(!vector)
+    {
+        return;
+    }
+    const auto parameter = make_standard_parameter_value(*target.property, apply_standard_inversion(target, *vector));
     change_instance(
         id,
         slot,
         [&](material_instance& instance)
         {
-            instance.set_override(property_id, value);
+            instance.set_graph_parameter(name, parameter);
         },
         [&](model_component& comp)
         {
-            comp.set_material_instance_value(slot, property_id, value);
+            comp.set_material_instance_parameter(slot, name, parameter);
         });
 }
 
@@ -254,9 +324,9 @@ auto internal_m2n_material_instance_get_texture(entt::entity id, uint32_t slot, 
     return read_texture_value(get_instance_value(id, slot, property));
 }
 
-void internal_m2n_material_instance_set_mode(entt::entity id, uint32_t slot, int32_t property, int32_t value)
+void internal_m2n_material_instance_set_mode(entt::entity /*id*/, uint32_t /*slot*/, int32_t property, int32_t /*value*/)
 {
-    set_instance_value(id, slot, property, make_mode_value(property, value));
+    warn_script_mode_ignored(property);
 }
 
 auto internal_m2n_material_instance_get_mode(entt::entity id, uint32_t slot, int32_t property) -> int32_t
@@ -267,22 +337,31 @@ auto internal_m2n_material_instance_get_mode(entt::entity id, uint32_t slot, int
 auto internal_m2n_material_instance_is_overridden(entt::entity id, uint32_t slot, int32_t property) -> bool
 {
     const auto* instance = find_instance(id, slot);
-    return instance && instance->is_overridden(get_material_property_id(property));
+    // The modes are the graph's: never overridden.
+    const auto target = resolve_instance_property(instance, property);
+    return target.property != nullptr && (instance->is_graph_parameter_overridden(target.property->name) ||
+                                          instance->is_graph_texture_overridden(target.property->name));
 }
 
 void internal_m2n_material_instance_revert(entt::entity id, uint32_t slot, int32_t property)
 {
-    const entt::id_type property_id = get_material_property_id(property);
+    const auto target = resolve_instance_property(find_instance(id, slot), property);
+    if(target.property == nullptr)
+    {
+        return;
+    }
+    const std::string name = target.property->name;
     change_instance(
         id,
         slot,
         [&](material_instance& instance)
         {
-            instance.revert(property_id);
+            instance.revert_graph_parameter(name);
+            instance.revert_graph_texture(name);
         },
         [&](model_component& comp)
         {
-            comp.revert_material_instance_value(slot, property_id);
+            comp.revert_material_instance_graph_value(slot, name);
         });
 }
 
@@ -311,6 +390,92 @@ auto internal_m2n_material_instance_shares_draw(entt::entity id, uint32_t slot) 
 {
     const auto* instance = find_instance(id, slot);
     return instance && instance->shares_draw();
+}
+
+auto internal_m2n_material_instance_has_parameter(entt::entity id, uint32_t slot, const std::string& name) -> bool
+{
+    const auto* instance = find_instance(id, slot);
+    return instance && instance->get_graph_parameter(name).has_value();
+}
+
+auto internal_m2n_material_instance_get_parameter(entt::entity id, uint32_t slot, const std::string& name) -> managed_vector4
+{
+    const auto* instance = find_instance(id, slot);
+    const auto value = instance ? instance->get_graph_parameter(name) : hpp::optional<math::vec4>{};
+    return make_managed_vector4(value.value_or(math::vec4(0.0f)));
+}
+
+auto internal_m2n_material_instance_set_parameter(entt::entity id, uint32_t slot, const std::string& name, const managed_vector4& value)
+    -> bool
+{
+    bool is_set = false;
+    change_instance(
+        id,
+        slot,
+        [&](material_instance& instance)
+        {
+            is_set = instance.set_graph_parameter(name, make_vector4(value));
+        },
+        [&](model_component& comp)
+        {
+            is_set = comp.set_material_instance_parameter(slot, name, make_vector4(value));
+        });
+    return is_set;
+}
+
+auto internal_m2n_material_instance_has_texture_node(entt::entity id, uint32_t slot, const std::string& name) -> bool
+{
+    const auto* instance = find_instance(id, slot);
+    const auto shared = instance ? instance->get_shared_material().get() : nullptr;
+    const auto* graph = shared ? shared->safe_cast<graph_material>() : nullptr;
+    return graph && graph->find_texture(name) != nullptr;
+}
+
+auto internal_m2n_material_instance_get_texture_by_name(entt::entity id, uint32_t slot, const std::string& name) -> hpp::uuid
+{
+    const auto* instance = find_instance(id, slot);
+    return instance ? instance->get_graph_texture(name).uid() : hpp::uuid{};
+}
+
+auto internal_m2n_material_instance_set_texture_by_name(entt::entity id, uint32_t slot, const std::string& name, const hpp::uuid& uid)
+    -> bool
+{
+    const auto texture = make_texture_value(uid).cast<texture_handle>();
+    bool is_set = false;
+    change_instance(
+        id,
+        slot,
+        [&](material_instance& instance)
+        {
+            is_set = instance.set_graph_texture(name, texture);
+        },
+        [&](model_component& comp)
+        {
+            is_set = comp.set_material_instance_texture(slot, name, texture);
+        });
+    return is_set;
+}
+
+auto internal_m2n_material_instance_is_name_overridden(entt::entity id, uint32_t slot, const std::string& name) -> bool
+{
+    const auto* instance = find_instance(id, slot);
+    return instance && (instance->is_graph_parameter_overridden(name) || instance->is_graph_texture_overridden(name));
+}
+
+void internal_m2n_material_instance_revert_name(entt::entity id, uint32_t slot, const std::string& name)
+{
+    change_instance(
+        id,
+        slot,
+        [&](material_instance& instance)
+        {
+            instance.revert_graph_parameter(name);
+            instance.revert_graph_texture(name);
+        },
+        [&](model_component& comp)
+        {
+            comp.revert_material_instance_graph_value(slot, name);
+        });
 }
 
 auto internal_m2n_material_instance_create(const hpp::uuid& material_uid) -> uint32_t
@@ -390,6 +555,22 @@ void register_model_component_script_bindings()
                                    script_internal_call(internal_m2n_material_instance_release));
     instance_reg.add_internal_call("internal_m2n_material_instance_shares_draw",
                                    script_internal_call(internal_m2n_material_instance_shares_draw));
+    instance_reg.add_internal_call("internal_m2n_material_instance_has_parameter",
+                                   script_internal_call(internal_m2n_material_instance_has_parameter));
+    instance_reg.add_internal_call("internal_m2n_material_instance_get_parameter",
+                                   script_internal_call(internal_m2n_material_instance_get_parameter));
+    instance_reg.add_internal_call("internal_m2n_material_instance_set_parameter",
+                                   script_internal_call(internal_m2n_material_instance_set_parameter));
+    instance_reg.add_internal_call("internal_m2n_material_instance_has_texture_node",
+                                   script_internal_call(internal_m2n_material_instance_has_texture_node));
+    instance_reg.add_internal_call("internal_m2n_material_instance_get_texture_by_name",
+                                   script_internal_call(internal_m2n_material_instance_get_texture_by_name));
+    instance_reg.add_internal_call("internal_m2n_material_instance_set_texture_by_name",
+                                   script_internal_call(internal_m2n_material_instance_set_texture_by_name));
+    instance_reg.add_internal_call("internal_m2n_material_instance_is_name_overridden",
+                                   script_internal_call(internal_m2n_material_instance_is_name_overridden));
+    instance_reg.add_internal_call("internal_m2n_material_instance_revert_name",
+                                   script_internal_call(internal_m2n_material_instance_revert_name));
 }
 
 } // namespace unravel

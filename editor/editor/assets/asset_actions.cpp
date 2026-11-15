@@ -7,10 +7,15 @@
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/physics/physics_material.hpp>
 #include <engine/meta/animation/animation_controller.hpp>
+#include <engine/meta/rendering/graph_material.hpp>
 #include <engine/meta/rendering/material.hpp>
+#include <engine/meta/rendering/material_graph.hpp>
 #include <engine/physics/physics_material.h>
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_graph/graph_material.h>
+#include <engine/rendering/material_graph/standard_material.h>
 #include <engine/scripting/script.h>
+#include <editor/editing/thumbnail_manager.h>
 
 #include <filesystem/watcher.h>
 #include <logging/logging.h>
@@ -67,12 +72,119 @@ auto create_material(rtti::context& ctx, const fs::path& absolute_path) -> asset
 {
     auto& am = ctx.get_cached<asset_manager>();
     const auto key = fs::convert_to_protocol(absolute_path).generic_string();
-    auto handle = am.get_asset_from_instance<material>(key, std::make_shared<pbr_material>());
+    auto handle = am.get_asset_from_instance<material>(key, make_standard_material({}));
     if(!handle || !asset_writer::atomic_save_to_file(handle.id(), handle))
     {
         return {};
     }
     return handle;
+}
+
+namespace
+{
+/// The graph of Create > Material Graph: the surface's three main values as parameters, laid out on first open.
+constexpr const char* STARTER_MATERIAL_GRAPH = R"({"material_graph": {"nodes": [
+    {"id": "output", "type": "surface_output", "inputs": [
+        {"pin": "base_color", "link": "base_color.rgb"},
+        {"pin": "metallic", "link": "metallic"},
+        {"pin": "roughness", "link": "roughness"}]},
+    {"id": "base_color", "type": "color_parameter", "inputs": [{"pin": "value", "value": [0.8, 0.8, 0.8, 1.0]}]},
+    {"id": "metallic", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [0.0]}]},
+    {"id": "roughness", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [0.5]}]}
+]}})";
+/// A new material function: one input passed to one output, as the window lays them out.
+constexpr const char* STARTER_MATERIAL_FUNCTION = R"({"material_graph": {"nodes": [
+    {"id": "value", "type": "function_input", "settings": [{"name": "name", "value": "Value"}, {"name": "type", "value": "vec3"}]},
+    {"id": "result", "type": "function_output", "inputs": [{"pin": "in", "link": "value"}], "settings": [{"name": "name", "value": "Result"}]}
+]}})";
+} // namespace
+
+auto make_starter_material_function() -> material_graph
+{
+    material_graph graph;
+    if(!load_from_string(STARTER_MATERIAL_FUNCTION, graph))
+    {
+        graph = {};
+    }
+    return graph;
+}
+
+auto create_material_function(const fs::path& absolute_path, const material_graph& graph) -> bool
+{
+    return save_to_file(absolute_path.string(), graph);
+}
+
+auto make_starter_material_graph() -> material_graph
+{
+    material_graph graph;
+    if(!load_from_string(STARTER_MATERIAL_GRAPH, graph))
+    {
+        ensure_material_graph_output(graph);
+    }
+    return graph;
+}
+
+auto create_material_graph(rtti::context& ctx, const fs::path& absolute_path, const material_graph& graph)
+    -> asset_handle<material>
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    const auto key = fs::convert_to_protocol(absolute_path).generic_string();
+    auto mat = std::make_shared<graph_material>();
+    mat->set_graph(graph);
+    auto handle = am.get_asset_from_instance<material>(key, mat);
+    if(!handle || !asset_writer::atomic_save_to_file(handle.id(), handle))
+    {
+        return {};
+    }
+    return handle;
+}
+
+namespace
+{
+/// Writes @p mat to the file of material @p asset and regenerates its thumbnail; false when it cannot be written.
+auto write_material_file(rtti::context& ctx, const asset_handle<material>& asset, const std::shared_ptr<material>& mat) -> bool
+{
+    if(!asset_writer::atomic_save_to_file(asset.id(), mat))
+    {
+        return false;
+    }
+    if(ctx.has<thumbnail_manager>())
+    {
+        ctx.get_cached<thumbnail_manager>().regenerate_thumbnail(asset.uid());
+    }
+    return true;
+}
+} // namespace
+
+auto save_material_graph(rtti::context& ctx, const asset_handle<material>& asset, const material_graph& graph)
+    -> std::shared_ptr<material>
+{
+    if(!asset)
+    {
+        return {};
+    }
+    // Written from a copy: the loaded material keeps drawing its graph with its shader until the recompile this
+    // save starts reloads both, so the scene never binds the new graph's parameters over the old shader.
+    const auto loaded = asset.try_get();
+    std::shared_ptr<material> written;
+    if(loaded && !asset_handle<material>::is_empty(loaded))
+    {
+        if(!loaded->is<graph_material>())
+        {
+            return {};
+        }
+        written = loaded->clone();
+    }
+    else
+    {
+        written = std::make_shared<graph_material>();
+    }
+    written->safe_cast<graph_material>()->set_graph(graph);
+    if(!write_material_file(ctx, asset, written))
+    {
+        return {};
+    }
+    return written;
 }
 
 auto resolve_asset_source_path(const std::string& asset_key) -> fs::path

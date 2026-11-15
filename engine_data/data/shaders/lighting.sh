@@ -47,7 +47,7 @@ struct GBufferDataColorAndAO
 struct GBufferDataNormalMetalRoughness
 {
     vec3 world_normal;
-    float metalness;
+    float metallic;
     float roughness;
 };
 
@@ -76,7 +76,7 @@ struct GBufferData
     vec3 world_normal;
     float roughness;
     vec3 emissive_color;
-    float metalness;
+    float metallic;
     vec3 subsurface_color;
     float subsurface_opacity;
     float depth;
@@ -224,7 +224,7 @@ float F0RGBToMetallic(vec3 F0)
 void EncodeGBuffer(in GBufferData data, inout vec4 result[4])
 {
     result[0] = vec4(saturate(data.base_color), data.ambient_occlusion);
-    result[1] = vec4(encodeNormalOctahedron(data.world_normal), data.metalness, data.roughness);
+    result[1] = vec4(encodeNormalOctahedron(data.world_normal), data.metallic, data.roughness);
     result[2] = vec4(data.emissive_color, 0.0f);
     result[3] = vec4(data.subsurface_color, data.subsurface_opacity);
 }
@@ -275,10 +275,10 @@ GBufferDataNormalMetalRoughness DecodeGBufferNormalMetalRoughness(
     sampler2D normalMetalRoughnessTex)
 {
     GBufferDataNormalMetalRoughness data;
-    vec4 data1 = texture2D(normalMetalRoughnessTex, texcoord);   // normal, metalness, roughness
+    vec4 data1 = texture2D(normalMetalRoughnessTex, texcoord);   // normal, metallic, roughness
 
     data.world_normal = decodeNormalOctahedron(data1.xy);
-    data.metalness = data1.z;
+    data.metallic = data1.z;
     data.roughness = data1.w;
 
     return data;
@@ -290,10 +290,10 @@ GBufferDataNormalMetalRoughness DecodeGBufferNormalMetalRoughnessLod(
     float lod)
 {
     GBufferDataNormalMetalRoughness data;
-    vec4 data1 = texture2DLod(normalMetalRoughnessTex, texcoord, lod);   // normal, metalness, roughness
+    vec4 data1 = texture2DLod(normalMetalRoughnessTex, texcoord, lod);   // normal, metallic, roughness
 
     data.world_normal = decodeNormalOctahedron(data1.xy);
-    data.metalness = data1.z;
+    data.metallic = data1.z;
     data.roughness = data1.w;
 
     return data;
@@ -304,10 +304,10 @@ GBufferDataNormalMetalRoughness DecodeGBufferNormalMetalRoughnessTexel(
     sampler2D normalMetalRoughnessTex)
 {
     GBufferDataNormalMetalRoughness data;
-    vec4 data1 = texelFetch(normalMetalRoughnessTex, texel, 0);   // normal, metalness, roughness
+    vec4 data1 = texelFetch(normalMetalRoughnessTex, texel, 0);   // normal, metallic, roughness
 
     data.world_normal = decodeNormalOctahedron(data1.xy);
-    data.metalness = data1.z;
+    data.metallic = data1.z;
     data.roughness = data1.w;
 
     return data;
@@ -429,15 +429,15 @@ GBufferData ConstructGBuffer(
     data.base_color = colorAndAO.base_color;
     data.ambient_occlusion = colorAndAO.ambient_occlusion;
     data.world_normal = normalMetalRoughness.world_normal;
-    data.metalness = normalMetalRoughness.metalness;
+    data.metallic = normalMetalRoughness.metallic;
     data.roughness = normalMetalRoughness.roughness;
     data.emissive_color = emissive.emissive_color;
     data.subsurface_color = subsurface.subsurface_color;
     data.subsurface_opacity = subsurface.subsurface_opacity;
     data.depth01 = depth.depth01;
     data.depth = depth.depth;
-    data.diffuse_color = ComputeDiffuseColor(data.base_color, data.metalness);
-    data.specular_color = ComputeF0(0.5f, data.base_color, data.metalness);
+    data.diffuse_color = ComputeDiffuseColor(data.base_color, data.metallic);
+    data.specular_color = ComputeF0(0.5f, data.base_color, data.metallic);
     return data;
 }
 
@@ -522,7 +522,7 @@ vec3 ReconstructClipFromGBufferTexel(ivec2 texel, float clipSpaceDepth, sampler2
  *
  * @param texcoord   Texture coordinates
  * @param colorTex   GBuffer color/ao texture (tex0)
- * @param normalTex  GBuffer normal/metalness/roughness texture (tex1)
+ * @param normalTex  GBuffer normal/metallic/roughness texture (tex1)
  * @param depthTex   GBuffer depth texture (tex4)
  * @return           GBufferData with only fields that can be filled from these samplers
  */
@@ -540,12 +540,12 @@ GBufferData DecodeGBufferSimple(
     data.base_color = data0.base_color;
     data.ambient_occlusion = data0.ambient_occlusion;
     data.world_normal = data1.world_normal;
-    data.metalness = data1.metalness;
+    data.metallic = data1.metallic;
     data.roughness = data1.roughness;
     data.depth01 = data4.depth01;
     data.depth = data4.depth;
-    data.diffuse_color = ComputeDiffuseColor(data.base_color, data.metalness);
-    data.specular_color = ComputeF0(0.5f, data.base_color, data.metalness);
+    data.diffuse_color = ComputeDiffuseColor(data.base_color, data.metallic);
+    data.specular_color = ComputeF0(0.5f, data.base_color, data.metallic);
     // The following fields are not filled: emissive_color, subsurface_color, subsurface_opacity
     return data;
 }

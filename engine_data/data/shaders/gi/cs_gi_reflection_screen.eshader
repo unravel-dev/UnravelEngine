@@ -28,7 +28,7 @@ IMAGE2D_WO(s_gi_reflection_hit_out, r32f, 2);
 /// The reflection tiles (gi_reflection_common.sh).
 IMAGE2D_WO(s_gi_reflection_tiles_out, r8, 3);
 SAMPLER2D(s_gi_depth, 8);
-/// G-buffer target 1: octahedral normal, metalness, roughness.
+/// G-buffer target 1: octahedral normal, metallic, roughness.
 SAMPLER2D(s_gi_normal, 9);
 SAMPLER2D(s_gi_hiz, 10);
 /// Last frame's scene colour, in last frame's pre-exposed space.

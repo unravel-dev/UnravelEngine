@@ -30,7 +30,7 @@ enum class visualization_mode : int
     ambient_occlusion = 5,
     normals = 6,
     roughness = 7,
-    metalness = 8,
+    metallic = 8,
     emissive_color = 9,
     subsurface_color = 10,
     depth = 11,

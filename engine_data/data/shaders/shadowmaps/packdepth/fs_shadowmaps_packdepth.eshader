@@ -1,21 +1,14 @@
 [variants]
 default
 linear             LINEAR
-cutout             CUTOUT
-linear_cutout      LINEAR CUTOUT
 vsm                PACK_VSM
 vsm_linear         PACK_VSM LINEAR
-vsm_cutout         PACK_VSM CUTOUT
-vsm_linear_cutout  PACK_VSM LINEAR CUTOUT
 
 [inputs]
 #if LINEAR
 float v_depth
 #else
 vec4 v_position
-#endif
-#if CUTOUT
-vec2 v_texcoord0
 #endif
 
 [code]
@@ -25,15 +18,9 @@ vec2 v_texcoord0
  */
 
 #include "../../common.sh"
-#if CUTOUT
-#include "../shadow_cutout.sh"
-#endif
 
 void main()
 {
-#if CUTOUT
-    shadowCutoutClip(v_texcoord0);
-#endif
 #if LINEAR
     float depth = v_depth;
 #else

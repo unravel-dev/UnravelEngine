@@ -155,6 +155,24 @@ public:
     void revert_material_instance(uint32_t index);
 
     /**
+     * @brief Overrides parameter @p name of a slot's graph material for this model only
+     * (material_instance::set_graph_parameter).
+     * @return False when the slot's shared material is not a graph material with such a parameter.
+     */
+    auto set_material_instance_parameter(uint32_t index, const std::string& name, const math::vec4& value) -> bool;
+
+    /**
+     * @brief Overrides texture node @p name of a slot's graph material for this model only
+     * (material_instance::set_graph_texture).
+     * @return False when the slot's shared material is not a graph material with such a texture node.
+     */
+    auto set_material_instance_texture(uint32_t index, const std::string& name, const asset_handle<gfx::texture>& texture)
+        -> bool;
+
+    /// Drops the override of graph parameter or texture node @p name of a slot's material instance.
+    void revert_material_instance_graph_value(uint32_t index, hpp::string_view name);
+
+    /**
      * @brief Brings the resolved materials of the material instances up to date (see
      * model::update_material_instances); the model system calls it once a frame.
      */
@@ -402,6 +420,15 @@ private:
     /// The body of update_world_bounds, on the model's first LOD mesh.
     void refresh_world_bounds(const mesh& render_mesh, const math::transform& world_transform);
 
+    /// The box of the model's pose (world_bounds_) and its captures, before the materials grow it.
+    void compute_world_bounds(const mesh& render_mesh, const math::transform& world_transform);
+
+    /// Grows world_bounds_ by how far the World Position Offset of the model's materials moves a vertex at most.
+    void grow_world_bounds_by_offsets();
+
+    /// How far the World Position Offset of the model's materials moves a vertex at most (graph_material).
+    auto find_offset_bounds_padding() const -> float;
+
     /// Ends a pending rebuild: the previous mesh's nodes the current armature does not bind
     /// again become stale.
     void settle_previous_armature();
@@ -493,6 +520,10 @@ private:
      * @brief World bounds
      */
     math::bbox world_bounds_;
+
+    /// What world_bounds_ grew by for the World Position Offset of the model's materials: while above zero, submeshes
+    /// are culled by that box alone, as their own boxes do not grow.
+    float offset_bounds_padding_{};
 
     /**
      * @brief Tight pose bounds (world pose union) captured in owner-local space at the last

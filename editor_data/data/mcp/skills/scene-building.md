@@ -113,7 +113,8 @@ nothing to measure reports its position as a point).
 - scene_set_model_materials_batch assigns shared materials (assets) to slots;
   scene_set_model_material_instances_batch overrides values of a slot's shared
   material for one entity (its material instance; the .mat file stays as it is,
-  and values not overridden follow it).
+  and values not overridden follow it) - a material graph's by name, in
+  "parameters" and "textures" (see the assets skill).
 - scene_set_layers_batch puts entities on layers (names from the project's
   layer.layers setting); physics queries and rendering filter on them, and
   detail summary reports them.

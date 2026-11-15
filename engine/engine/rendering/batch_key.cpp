@@ -1,6 +1,7 @@
 #include "batch_key.h"
 #include "mesh.h"
 #include "material.h"
+#include "material_graph/graph_material.h"
 #include <base/hash.hpp>
 #include <cmath>
 #include <compare>
@@ -60,80 +61,13 @@ auto batch_key::to_string() const -> std::string
     return oss.str();
 }
 
-shadow_batch_key::shadow_batch_key(std::shared_ptr<mesh> mesh,
-                                   uint32_t lod,
-                                   uint32_t submesh,
-                                   cull_type cull_type,
-                                   hpp::optional<shadow_cutout_state> cutout_state)
+shadow_batch_key::shadow_batch_key(std::shared_ptr<mesh> mesh, uint32_t lod, uint32_t submesh, cull_type cull_type)
     : mesh_ptr(std::move(mesh))
     , lod_index(lod)
     , submesh_index(submesh)
     , cull(cull_type)
-    , cutout(std::move(cutout_state))
 {
 }
-
-namespace
-{
-auto compare_float(float lhs, float rhs) -> std::strong_ordering
-{
-    if(lhs < rhs)
-    {
-        return std::strong_ordering::less;
-    }
-    if(lhs > rhs)
-    {
-        return std::strong_ordering::greater;
-    }
-    return std::strong_ordering::equal;
-}
-
-auto compare_shadow_cutout(const hpp::optional<shadow_cutout_state>& a,
-                           const hpp::optional<shadow_cutout_state>& b) -> std::strong_ordering
-{
-    if(a.has_value() != b.has_value())
-    {
-        return a.has_value() ? std::strong_ordering::greater : std::strong_ordering::less;
-    }
-    if(!a.has_value())
-    {
-        return std::strong_ordering::equal;
-    }
-
-    const shadow_cutout_state& lhs = *a;
-    const shadow_cutout_state& rhs = *b;
-    if(lhs.color_map.get() != rhs.color_map.get())
-    {
-        return lhs.color_map.get() < rhs.color_map.get() ? std::strong_ordering::less
-                                                         : std::strong_ordering::greater;
-    }
-    if(const auto cmp = compare_float(lhs.alpha_test_value, rhs.alpha_test_value); cmp != 0)
-    {
-        return cmp;
-    }
-    if(const auto cmp = compare_float(lhs.base_color.value.r, rhs.base_color.value.r); cmp != 0)
-    {
-        return cmp;
-    }
-    if(const auto cmp = compare_float(lhs.base_color.value.g, rhs.base_color.value.g); cmp != 0)
-    {
-        return cmp;
-    }
-    if(const auto cmp = compare_float(lhs.base_color.value.b, rhs.base_color.value.b); cmp != 0)
-    {
-        return cmp;
-    }
-    if(const auto cmp = compare_float(lhs.base_color.value.a, rhs.base_color.value.a); cmp != 0)
-    {
-        return cmp;
-    }
-    if(const auto cmp = compare_float(lhs.tiling.x, rhs.tiling.x); cmp != 0)
-    {
-        return cmp;
-    }
-    return compare_float(lhs.tiling.y, rhs.tiling.y);
-}
-} // namespace
 
 auto shadow_batch_key::operator<=>(const shadow_batch_key& other) const -> std::strong_ordering
 {
@@ -153,7 +87,11 @@ auto shadow_batch_key::operator<=>(const shadow_batch_key& other) const -> std::
     {
         return cull < other.cull ? std::strong_ordering::less : std::strong_ordering::greater;
     }
-    return compare_shadow_cutout(cutout, other.cutout);
+    if(masked_graph.get() != other.masked_graph.get())
+    {
+        return masked_graph.get() < other.masked_graph.get() ? std::strong_ordering::less : std::strong_ordering::greater;
+    }
+    return std::strong_ordering::equal;
 }
 
 auto shadow_batch_key::operator==(const shadow_batch_key& other) const -> bool
@@ -168,18 +106,7 @@ auto shadow_batch_key::hash() const noexcept -> size_t
     utils::hash_combine(seed, lod_index);
     utils::hash_combine(seed, submesh_index);
     utils::hash_combine(seed, static_cast<std::uint8_t>(cull));
-    utils::hash_combine(seed, cutout.has_value());
-    if(cutout.has_value())
-    {
-        utils::hash_combine(seed, cutout->color_map.get());
-        utils::hash_combine(seed, cutout->alpha_test_value);
-        utils::hash_combine(seed, cutout->base_color.value.r);
-        utils::hash_combine(seed, cutout->base_color.value.g);
-        utils::hash_combine(seed, cutout->base_color.value.b);
-        utils::hash_combine(seed, cutout->base_color.value.a);
-        utils::hash_combine(seed, cutout->tiling.x);
-        utils::hash_combine(seed, cutout->tiling.y);
-    }
+    utils::hash_combine(seed, masked_graph.get());
     return seed;
 }
 
@@ -188,9 +115,9 @@ auto shadow_batch_key::is_valid() const -> bool
     return static_cast<bool>(mesh_ptr);
 }
 
-auto shadow_batch_key::uses_alpha_cutout() const -> bool
+auto shadow_batch_key::uses_graph_mask() const -> bool
 {
-    return cutout.has_value();
+    return masked_graph != nullptr;
 }
 
 auto shadow_batch_key::to_string() const -> std::string
@@ -198,7 +125,7 @@ auto shadow_batch_key::to_string() const -> std::string
     std::ostringstream oss;
     oss << "shadow_batch_key{mesh=" << static_cast<const void*>(mesh_ptr.get());
     oss << ", lod=" << lod_index << ", submesh=" << submesh_index;
-    oss << ", cutout=" << (cutout.has_value() ? "yes" : "no") << "}";
+    oss << ", masked_graph=" << (masked_graph ? "yes" : "no") << "}";
     return oss.str();
 }
 
@@ -207,25 +134,18 @@ auto make_shadow_batch_key(const std::shared_ptr<mesh>& mesh_ptr,
                            uint32_t submesh_index,
                            const std::shared_ptr<material>& material_ptr) -> shadow_batch_key
 {
-    cull_type cull = cull_type::counter_clockwise;
-    hpp::optional<shadow_cutout_state> cutout;
-    if(material_ptr)
+    const auto* graph = material_ptr ? material_ptr->safe_cast<graph_material>() : nullptr;
+    if(graph != nullptr && !graph->casts_shadow())
     {
-        cull = material_ptr->get_cull_type();
-        if(material_ptr->is<pbr_material>())
-        {
-            const auto& pbr = static_cast<const pbr_material&>(*material_ptr);
-            if(!pbr.casts_shadow())
-            {
-                return {};
-            }
-            if(pbr.uses_alpha_cutout())
-            {
-                cutout = pbr.make_shadow_cutout_state();
-            }
-        }
+        return {};
     }
-    return shadow_batch_key(mesh_ptr, lod_index, submesh_index, cull, cutout);
+    const cull_type cull = material_ptr ? material_ptr->get_cull_type() : cull_type::counter_clockwise;
+    shadow_batch_key key(mesh_ptr, lod_index, submesh_index, cull);
+    if(graph != nullptr && graph->draws_own_shadow())
+    {
+        key.masked_graph = material_ptr;
+    }
+    return key;
 }
 
 } // namespace unravel

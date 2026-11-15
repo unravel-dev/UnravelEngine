@@ -132,6 +132,31 @@ void set_pick_tooltip(const field_content& content)
     ImGui::SetItemTooltipEx("%s\n\nClick to pick another %s.", subject.c_str(), content.type.c_str());
 }
 
+/// Whether the field holds an asset that opens somewhere.
+auto can_open(const field_content& content) -> bool
+{
+    return !content.name.empty() && !content.open_in.empty();
+}
+
+auto make_open_tooltip(const field_content& content) -> std::string
+{
+    return fmt::format("Open in {}", content.open_in);
+}
+
+/// The thumbnail's tooltip: a thumbnail that opens its asset leaves picking to the name.
+void set_preview_tooltip(const field_content& content)
+{
+    if(!can_open(content))
+    {
+        set_pick_tooltip(content);
+        return;
+    }
+    ImGui::SetItemTooltipEx("%s\n\nDouble-click to open it in %s. Click the name to pick another %s.",
+                            content.path.c_str(),
+                            content.open_in.c_str(),
+                            content.type.c_str());
+}
+
 /// The field naming the asset, drawn as an input field with the picker icon at its right end.
 auto draw_pick_field(const field_content& content) -> bool
 {
@@ -174,6 +199,11 @@ void draw_field_actions(const field_content& content, field_request& request)
     request.is_locate_pressed |= draw_inline_icon_button("##locate", ICON_MDI_CROSSHAIRS_GPS, "Show in the content browser");
     ImGui::SameLine(0.0f, 0.0f);
     request.is_clear_pressed = draw_inline_icon_button("##clear", ICON_MDI_CLOSE_CIRCLE_OUTLINE, "Clear");
+    if(!content.open_in.empty())
+    {
+        ImGui::SameLine(0.0f, 0.0f);
+        request.is_open_pressed |= draw_inline_icon_button("##open", ICON_MDI_GRAPH, make_open_tooltip(content).c_str());
+    }
     ImGui::EndDisabled();
     if(!has_asset)
     {
@@ -264,10 +294,14 @@ auto draw_field(const field_content& content) -> field_request
     ImGui::BeginGroup();
     const ImVec2 preview_min = ImGui::GetCursorScreenPos();
     // The thumbnail is the largest target of the field, so it opens the picker like the name
-    // does; showing the asset in the content browser has its own button.
-    const bool is_preview_pressed = ImGui::InvisibleButton("##thumbnail", ImVec2(side, side));
+    // does; showing the asset in the content browser has its own button. An asset that opens
+    // somewhere opens on a double-click instead, which a picker opened by its first click would take.
+    const bool is_opening_preview = can_open(content);
+    const ImGuiButtonFlags preview_flags = is_opening_preview ? ImGuiButtonFlags(ImGuiButtonFlags_PressedOnDoubleClick)
+                                                              : ImGuiButtonFlags(ImGuiButtonFlags_None);
+    const bool is_preview_pressed = ImGui::InvisibleButton("##thumbnail", ImVec2(side, side), preview_flags);
     const bool is_preview_hovered = ImGui::IsItemHovered();
-    set_pick_tooltip(content);
+    set_preview_tooltip(content);
     const ImRect preview_rect(preview_min, preview_min + ImVec2(side, side));
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     draw_preview(draw_list, preview_rect, content.thumbnail, ImGui::GetFontSize() * PICKER_EMPTY_ICON_SCALE);
@@ -278,7 +312,8 @@ auto draw_field(const field_content& content) -> field_request
 
     ImGui::SameLine();
     ImGui::BeginGroup();
-    request.is_pick_pressed = draw_pick_field(content) || is_preview_pressed;
+    request.is_pick_pressed = draw_pick_field(content) || (is_preview_pressed && !is_opening_preview);
+    request.is_open_pressed = is_preview_pressed && is_opening_preview;
     draw_field_actions(content, request);
     ImGui::EndGroup();
     ImGui::EndGroup();

@@ -424,8 +424,8 @@ auto enum_to_json(const entt::meta_any& value) -> hpp::optional<std::string>;
 auto make_material_instance_codec() -> value_codec
 {
     return {.schema_type = "object",
-            .format_hint = "read only: {shared_material, overrides: {property: value}, shares_draw}; "
-                           "scene_set_model_material_instances_batch sets overrides",
+            .format_hint = "read only: {shared_material, overrides: {property: value}, parameters: {name: [x, y, z, w]}, "
+                           "textures: {node: key}, shares_draw}; scene_set_model_material_instances_batch sets overrides",
             .to_json = [](rtti::context& ctx, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 const auto& instance = value.cast<const material_instance&>();
@@ -449,10 +449,31 @@ auto make_material_instance_codec() -> value_codec
                                              make_json_string(entt::get_attribute_as<std::string>(data, "name")),
                                              *encoded);
                 }
+                std::string parameters;
+                for(const auto& entry : instance.get_graph_parameter_overrides())
+                {
+                    parameters += fmt::format("{}{}:[{},{},{},{}]",
+                                              parameters.empty() ? "" : ",",
+                                              make_json_string(entry.name),
+                                              entry.value.x,
+                                              entry.value.y,
+                                              entry.value.z,
+                                              entry.value.w);
+                }
+                std::string textures;
+                for(const auto& entry : instance.get_graph_texture_overrides())
+                {
+                    textures += fmt::format("{}{}:{}",
+                                            textures.empty() ? "" : ",",
+                                            make_json_string(entry.name),
+                                            make_json_string(entry.texture ? entry.texture.id() : std::string{}));
+                }
                 const auto& shared = instance.get_shared_material();
-                return fmt::format(R"({{"shared_material":{},"overrides":{{{}}},"shares_draw":{}}})",
+                return fmt::format(R"({{"shared_material":{},"overrides":{{{}}},"parameters":{{{}}},"textures":{{{}}},"shares_draw":{}}})",
                                    shared ? make_json_string(shared.id()) : std::string("null"),
                                    overrides,
+                                   parameters,
+                                   textures,
                                    bool_to_json(instance.shares_draw()));
             },
             .from_json = [](rtti::context&, const simdjson::dom::element&, entt::meta_any&, std::string& error) -> bool

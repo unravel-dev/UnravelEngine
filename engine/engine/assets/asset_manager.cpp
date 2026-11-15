@@ -304,8 +304,8 @@ auto asset_manager::get_metadata_for_key(const std::string& key) const -> asset_
     {
         return meta;
     }
-    const auto shape_key = get_built_in_mesh_key_of_embedded(key);
-    return shape_key.empty() ? meta : find_metadata_for_key(shape_key);
+    const auto engine_key = get_engine_key_of_embedded(key);
+    return engine_key.empty() ? meta : find_metadata_for_key(engine_key);
 }
 
 auto asset_manager::find_metadata_for_key(const std::string& key) const -> asset_database::meta
@@ -326,21 +326,30 @@ auto asset_manager::find_metadata_for_key(const std::string& key) const -> asset
 
 auto asset_manager::resolve_built_in_mesh_key(const std::string& key) const -> std::string
 {
-    const auto shape_key = get_built_in_mesh_key_of_embedded(key);
-    if(shape_key.empty())
+    return resolve_engine_key(key, get_built_in_mesh_key_of_embedded(key));
+}
+
+auto asset_manager::resolve_default_material_key(const std::string& key) const -> std::string
+{
+    return resolve_engine_key(key, get_default_material_key_of_embedded(key));
+}
+
+auto asset_manager::resolve_engine_key(const std::string& key, const std::string& engine_key) const -> std::string
+{
+    if(engine_key.empty())
     {
         return key;
     }
-    if(!find_metadata_for_key(shape_key).location.empty())
+    if(!find_metadata_for_key(engine_key).location.empty())
     {
-        return shape_key;
+        return engine_key;
     }
-    return parent_ ? parent_->resolve_built_in_mesh_key(key) : key;
+    return parent_ ? parent_->resolve_engine_key(key, engine_key) : key;
 }
 
 auto asset_manager::is_normal_map_texture(const std::string& key) const -> bool
 {
-    const auto importer = std::dynamic_pointer_cast<texture_importer_meta>(get_metadata_for_key(key).meta.importer);
+    const auto importer = safe_pointer_cast<texture_importer_meta>(get_metadata_for_key(key).meta.importer);
     return importer && importer->type == texture_importer_meta::texture_type::normal_map;
 }
 

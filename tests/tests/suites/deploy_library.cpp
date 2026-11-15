@@ -840,6 +840,55 @@ void test_web_shader_sets()
     check(deployment::get_web_shader_sets(params).empty(), "other platforms have none");
 }
 
+/// A graph material's .mat as the editor saves it, with an empty graph: the cook plan only reads that it is a material.
+constexpr const char* GRAPH_MATERIAL_SOURCE = R"({"material": {"polymorphic_id": 2147483649, "polymorphic_name": "graph_material",
+    "ptr_wrapper": {"id": 2147483649, "data": {"graph": {"nodes": []}}}}})";
+/// A PBR material's .mat as an older version saved it: it loads as the Standard graph, so its shader is cooked too.
+constexpr const char* PBR_MATERIAL_SOURCE = R"({"material": {"polymorphic_id": 2147483649, "polymorphic_name": "pbr_material",
+    "ptr_wrapper": {"id": 2147483649, "data": {}}}})";
+
+/// Every material (a graph) ships its shader cooked for every renderer the deploy ships.
+void test_graph_material_cook_plan(const fs::path& root)
+{
+    std::printf("test_graph_material_cook_plan\n");
+    const fs::path folder = fs::resolve_protocol("app:/data/deploy_graph_material_tests");
+    write_text(folder / "Glow.mat", GRAPH_MATERIAL_SOURCE);
+    write_text(folder / "Hidden.mat", GRAPH_MATERIAL_SOURCE);
+    write_text(folder / "Plain.mat", PBR_MATERIAL_SOURCE);
+    asset_database::database_t engine;
+    asset_database::database_t app;
+    add_asset(app, make_uid("50000000-0000-4000-8000-000000000011"), "app:/data/deploy_graph_material_tests/Glow.mat");
+    add_asset(app, make_uid("50000000-0000-4000-8000-000000000012"), "app:/data/deploy_graph_material_tests/Hidden.mat");
+    add_asset(app, make_uid("50000000-0000-4000-8000-000000000013"), "app:/data/deploy_graph_material_tests/Plain.mat");
+    const deployment::left_out_assets left_out{"app:/data/deploy_graph_material_tests/Hidden.mat"};
+    deploy_settings params;
+    params.profile = "Desktop";
+    params.deploy_target = unravel::deploy_platform::desktop;
+    const auto desktop = deployment::make_shader_cook_plan(root, params, engine, app, left_out);
+    const auto& platform = gfx::get_renderer_platform_supported_filename_extensions();
+    check(desktop.has_work() && desktop.renderers.empty() &&
+              desktop.graph_material_renderers == std::set<std::string>(platform.begin(), platform.end()),
+          "a desktop deploy with a graph material cooks its shader for every renderer of the platform");
+    const std::vector<std::string> shipped{"app:/data/deploy_graph_material_tests/Glow.mat",
+                                           "app:/data/deploy_graph_material_tests/Plain.mat"};
+    check(desktop.protocols.size() == 2 && desktop.protocols[1].graph_materials.shipped == shipped &&
+              desktop.protocols[1].graph_materials.left_out == std::vector<std::string>{"app:/data/deploy_graph_material_tests/Hidden.mat"},
+          "the materials it ships, a PBR one's file included, and not the one left out");
+    params.profile = "Web";
+    params.deploy_target = unravel::deploy_platform::web;
+    const auto web = deployment::make_shader_cook_plan(root, params, engine, app, left_out);
+    check(web.graph_material_renderers == std::set<std::string>{".wgsl"}, "a web deploy cooks graph materials for WebGPU");
+    const deployment::left_out_assets all_left_out{"app:/data/deploy_graph_material_tests/Glow.mat",
+                                                   "app:/data/deploy_graph_material_tests/Hidden.mat",
+                                                   "app:/data/deploy_graph_material_tests/Plain.mat"};
+    const auto none_shipped = deployment::make_shader_cook_plan(root, params, engine, app, all_left_out);
+    check(none_shipped.protocols.size() == 2 && none_shipped.protocols[1].graph_materials.shipped.empty() &&
+              none_shipped.graph_material_renderers == std::set<std::string>{".wgsl"},
+          "with every graph material left out, the sweep still keeps their cooked shaders for the renderers it ships");
+    fs::error_code ec;
+    fs::remove_all(folder, ec);
+}
+
 void test_shader_cook_plan(const fs::path& root)
 {
     std::printf("test_shader_cook_plan\n");
@@ -866,6 +915,7 @@ void test_shader_cook_plan(const fs::path& root)
     params.deploy_target = unravel::deploy_platform::desktop;
     const auto desktop = deployment::make_shader_cook_plan(root, params, engine, app, left_out);
     check(!desktop.has_work() && desktop.protocols.empty(), "a desktop deploy cooks no shader");
+    test_graph_material_cook_plan(root);
 }
 
 //-----------------------------------------------------------------------------

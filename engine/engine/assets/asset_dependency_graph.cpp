@@ -4,6 +4,7 @@
 
 #include <engine/ecs/prefab.h>
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/mesh.h>
 
 #include <ser20/external/simdjson/simdjson.h>
@@ -36,26 +37,17 @@ void push_if_set(std::vector<hpp::uuid>& out, const asset_handle<T>& handle)
 } // namespace
 
 //------------------------------------------------------------------------------
-// material → up to six texture maps.
-//
-// Only `pbr_material` carries texture slots today; the base `material` class
-// is abstract / has no maps. We dynamic-cast rather than make this virtual to
-// keep the dep-graph concern out of the material interface.
+// material -> the textures its graph reads.
 //------------------------------------------------------------------------------
 auto get_referenced_uids(const material& m) -> std::vector<hpp::uuid>
 {
     std::vector<hpp::uuid> result;
-    if(m.is<pbr_material>())
+    if(const auto* graph = m.safe_cast<graph_material>())
     {
-        const auto& pbr = static_cast<const pbr_material&>(m);
-
-        result.reserve(6);
-        push_if_set(result, pbr.get_color_map());
-        push_if_set(result, pbr.get_normal_map());
-        push_if_set(result, pbr.get_roughness_map());
-        push_if_set(result, pbr.get_metalness_map());
-        push_if_set(result, pbr.get_ao_map());
-        push_if_set(result, pbr.get_emissive_map());
+        for(const auto& texture : graph->get_textures())
+        {
+            push_if_set(result, texture.texture);
+        }
     }
     return result;
 }

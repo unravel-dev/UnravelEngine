@@ -174,7 +174,8 @@ auto inspect_scalar(rtti::context& ctx,
 
     auto& data = var.cast<T&>();
     {
-        T min{std::numeric_limits<T>::min()};
+        // lowest, not min: a float's min is its smallest positive value, which would stop a drag at zero.
+        T min{std::numeric_limits<T>::lowest()};
         T max{std::numeric_limits<T>::max()};
         float step{0.5};
         bool has_min{};

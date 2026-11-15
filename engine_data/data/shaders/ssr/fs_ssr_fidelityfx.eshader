@@ -257,7 +257,7 @@ void main()
     vec2 uv = HizScreenPassToFullResUV(half_uv, u_ssr_resolution_scale, vec2(u_hiz_width, u_hiz_height));
     GBufferDataNormalMetalRoughness normalData = DecodeGBufferNormalMetalRoughness(uv, s_normal);
 
-    float metallic = normalData.metalness;
+    float metallic = normalData.metallic;
     float roughness = normalData.roughness;
     float roughnessFade = GetRoughnessFade(roughness);
 

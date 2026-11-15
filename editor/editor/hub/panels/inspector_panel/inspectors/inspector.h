@@ -57,6 +57,12 @@ public:
      * @param columns Whether to use column-based layout (default: true)
      */
     property_layout(const std::string& name, const std::string& tooltip, bool columns = true);
+
+    /**
+     * @brief Constructs layout with name and a tooltip given as text: a literal would otherwise take the
+     * (name, columns) overload, a pointer converting to bool before it converts to std::string, and lose the tooltip.
+     */
+    property_layout(const std::string& name, const char* tooltip, bool columns = true);
     
 
         /**
@@ -419,6 +425,15 @@ struct inspector : crtp_meta_type<inspector>
     virtual auto get_rows_object(const entt::meta_any& value) const -> entt::meta_any
     {
         return {};
+    }
+
+    /**
+     * @brief Whether a block draws a row with no reflected property behind it whose name holds `lowercase_text`, for
+     * the inspector's search: the rows get_rows_object cannot name.
+     */
+    virtual auto holds_row_name(const entt::meta_any& value, const std::string& lowercase_text) const -> bool
+    {
+        return false;
     }
 
     /// @brief Whether a block draws values something overrides, for the inspector's overridden filter.

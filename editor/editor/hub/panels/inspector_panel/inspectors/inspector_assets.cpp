@@ -30,6 +30,9 @@
 #include <engine/meta/ui/ui_tree.hpp>
 #include <engine/rendering/font.h>
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_graph/graph_material.h>
+#include <engine/rendering/material_graph/material_graph_library.h>
+#include <editor/hub/panels/material_graph_panel/material_graph_style.h>
 #include <engine/rendering/mesh.h>
 
 
@@ -47,8 +50,11 @@
 
 #include <filesystem/filesystem.h>
 #include <algorithm>
+#include <cctype>
+#include <functional>
 #include <sstream>
 #include <type_traits>
+#include <utility>
 #include <graphics/texture.h>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -122,11 +128,20 @@ auto find_pickable_assets(asset_manager& am, const ImGuiTextFilter& filter) -> s
         });
 }
 
+/// Where an asset field opens its asset, and how; empty for a type nothing opens.
+template<typename T>
+struct asset_opener
+{
+    /// Where it shows the asset, "the Material Graph".
+    std::string target;
+    std::function<void(const asset_handle<T>&)> open;
+};
+
 //-----------------------------------------------------------------------------
 /// <summary>
 /// The field of an asset property: thumbnail, name and the buttons under it, a drop target for
 /// assets of the type, and the picker window it opens. The first tile of the picker, the empty
-/// handle, clears the property.
+/// handle, clears the property. With an @p opener, the field also opens its asset there.
 /// </summary>
 //-----------------------------------------------------------------------------
 template<typename T>
@@ -135,7 +150,8 @@ auto pick_asset(ImGuiTextFilter& filter,
                 thumbnail_manager& tm,
                 asset_manager& am,
                 asset_handle<T>& data,
-                const std::string& type) -> inspect_result
+                const std::string& type,
+                const asset_opener<T>& opener = {}) -> inspect_result
 {
     inspect_result result{};
 
@@ -147,7 +163,15 @@ auto pick_asset(ImGuiTextFilter& filter,
         content.name = data.name();
         content.path = data.id();
     }
+    if(opener.open)
+    {
+        content.open_in = opener.target;
+    }
     const asset_picker::field_request request = asset_picker::draw_field(content);
+    if(request.is_open_pressed && data && opener.open)
+    {
+        opener.open(data);
+    }
 
     const bool is_dropped = process_drag_drop_target(am, data);
     result.changed |= is_dropped;
@@ -625,7 +649,7 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
 
             auto base_importer = meta.meta.importer;
 
-            auto importer = std::static_pointer_cast<texture_importer_meta>(base_importer);
+            auto importer = safe_pointer_cast<texture_importer_meta>(base_importer);
 
             if(importer)
             {
@@ -654,10 +678,34 @@ auto inspector_asset_handle_material::inspect_as_property(rtti::context& ctx, as
 
     inspect_result result{};
 
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<material>());
+    const asset_opener<material> opener{"the Material Graph",
+                                        [&ctx](const asset_handle<material>& asset)
+                                        {
+                                            editor_actions::open_material_graph(ctx, asset);
+                                        }};
+    result |= pick_asset(filter, em, tm, am, data, ex::get_type<material>(), opener);
 
     return result;
 }
+
+namespace
+{
+/// The way to a graph material's graph, and a note while its shader is not compiled for the renderer that draws.
+void draw_graph_material_header(rtti::context& ctx, const asset_handle<material>& asset, const graph_material& mat)
+{
+    if(ImGui::Button(ICON_MDI_GRAPH " Open in Material Graph", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f)))
+    {
+        editor_actions::open_material_graph(ctx, asset);
+    }
+    ImGui::SetItemTooltipEx("Edit the graph; every finished edit is saved to this material.");
+    if(!mat.get_shader())
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
+        ImGui::TextWrapped("Its shader is not compiled for this renderer yet, so it draws as a default material.");
+        ImGui::PopStyleColor();
+    }
+}
+} // namespace
 
 auto inspector_asset_handle_material::inspect(rtti::context& ctx,
                                               entt::meta_any& var,
@@ -674,33 +722,17 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
 
     inspect_result result{};
 
-    inspect_import_origin(ctx, data);
     // try_get, not is_ready: it also starts the load of a material nothing has loaded yet.
     const auto loaded = data.try_get();
+    inspect_import_origin(ctx, data);
     if(asset_handle<material>::is_empty(loaded))
     {
         // A failed load hands out the shared empty material; editing it would write that over the file.
         ImGui::TextColored(imgui_style::get_muted_text_color(), "This material could not be loaded.");
     }
-    else if(loaded)
+    else if(auto* graph = loaded ? loaded->safe_cast<graph_material>() : nullptr)
     {
-        auto data_var_proxy = make_mutable_asset_proxy<material>(var, var_proxy);
-
-        entt::meta_any data_var;
-        if(data_var_proxy.impl->getter(data_var))
-        {
-            result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
-        }
-
-        if(result.changed)
-        {
-            auto& tm = ctx.get_cached<thumbnail_manager>();
-            tm.regenerate_thumbnail(data.uid());
-        }
-    }
-    if(result.edit_finished)
-    {
-        asset_writer::atomic_save_to_file(data.id(), data);
+        result |= inspect_graph(ctx, data, *graph);
     }
 
     return result;
@@ -827,12 +859,25 @@ void draw_instance_status(const material_instance& instance, const entt::meta_ty
         ImGui::PopTextWrapPos();
         return;
     }
-    const auto own_draw = find_own_draw_override(instance, type);
-    if(own_draw.empty())
+    if(instance.shares_draw())
     {
         ImGui::TextWrapped("Draws together with the other models that use %s.", shared.c_str());
         ImGui::SetItemTooltipEx("Every override is per instance (a color or a number), so the model shares the "
                                 "shared material's draw.");
+        return;
+    }
+    const auto own_draw = find_own_draw_override(instance, type);
+    const bool has_graph_overrides =
+        !instance.get_graph_parameter_overrides().empty() || !instance.get_graph_texture_overrides().empty();
+    if(own_draw.empty() && has_graph_overrides)
+    {
+        ImGui::TextWrapped("Draws on its own: it overrides a texture of the graph, a parameter past the graph's first "
+                           "four registers, or a parameter of a graph whose World Position Offset moves the vertices.");
+        return;
+    }
+    if(own_draw.empty())
+    {
+        ImGui::TextWrapped("Draws on its own until its shared material is loaded and its overrides are applied to it.");
         return;
     }
     ImGui::TextWrapped("Draws on its own: %s is overridden.", own_draw.c_str());
@@ -857,6 +902,420 @@ auto make_instance_marks(const material_instance& instance, hpp::optional<entt::
     marks.overridden_note = "This model overrides the shared material's value.";
     marks.marker_color = MATERIAL_INSTANCE_OVERRIDE_COLOR;
     return marks;
+}
+
+/// The path segments of a graph material's overrides, as the instance saves them (material_instance's SAVE).
+constexpr const char* GRAPH_PARAMETERS_SEGMENT = "graph_parameters";
+constexpr const char* GRAPH_TEXTURES_SEGMENT = "graph_textures";
+
+/// A graph override a row's path names: a parameter or a texture node, by name.
+struct graph_override_ref
+{
+    bool is_texture{};
+    std::string name;
+};
+
+auto parse_graph_override_path(const std::string& path) -> hpp::optional<graph_override_ref>
+{
+    for(const bool is_texture : {false, true})
+    {
+        const std::string prefix = std::string(is_texture ? GRAPH_TEXTURES_SEGMENT : GRAPH_PARAMETERS_SEGMENT) + "/";
+        if(path.size() > prefix.size() && path.compare(0, prefix.size(), prefix) == 0)
+        {
+            return graph_override_ref{is_texture, path.substr(prefix.size())};
+        }
+    }
+    return {};
+}
+
+/// Marks the graph parameters and textures the instance overrides, and reverts the one whose context menu asks.
+auto make_graph_override_marks(const material_instance& instance, hpp::optional<graph_override_ref>& reverted)
+    -> property_override_marks
+{
+    property_override_marks marks;
+    marks.get_mark = [&instance](const std::string& path)
+    {
+        const auto ref = parse_graph_override_path(path);
+        if(!ref)
+        {
+            return override_mark::none;
+        }
+        const bool is_overridden =
+            ref->is_texture ? instance.is_graph_texture_overridden(ref->name) : instance.is_graph_parameter_overridden(ref->name);
+        return is_overridden ? override_mark::overridden : override_mark::none;
+    };
+    marks.revert = [&reverted](const std::string& path)
+    {
+        reverted = parse_graph_override_path(path);
+    };
+    marks.revert_label = "Revert to Shared Material";
+    marks.overridden_note = "This model overrides the shared material's value.";
+    marks.marker_color = MATERIAL_INSTANCE_OVERRIDE_COLOR;
+    return marks;
+}
+
+/// What the graph rows of a frame did to the instance.
+struct graph_row_changes
+{
+    bool is_changed{};
+    bool is_finished{};
+};
+
+/// The label of a graph parameter, texture or switch row: its name as written, or an id ("color_map") in words
+/// ("Color Map").
+auto make_graph_row_label(const std::string& name) -> std::string
+{
+    if(name.find(' ') != std::string::npos || name.find('_') == std::string::npos)
+    {
+        return name;
+    }
+    std::string label;
+    bool starts_word = true;
+    for(const char c : name)
+    {
+        if(c == '_')
+        {
+            label += ' ';
+            starts_word = true;
+            continue;
+        }
+        label += starts_word ? char(std::toupper(static_cast<unsigned char>(c))) : c;
+        starts_word = false;
+    }
+    return label;
+}
+
+/// Whether texture @p index of @p textures is the first of its name: one name (a function called twice) is one row.
+auto is_first_texture_of_name(const std::vector<material_graph_texture>& textures, size_t index) -> bool
+{
+    return std::none_of(textures.begin(),
+                        textures.begin() + std::ptrdiff_t(index),
+                        [&](const material_graph_texture& texture)
+                        {
+                            return texture.name == textures[index].name;
+                        });
+}
+
+/// The row's hint: the graph's description of it, else @p fallback.
+auto make_graph_row_tooltip(const std::string& description, const char* fallback) -> std::string
+{
+    return description.empty() ? std::string(fallback) : description;
+}
+
+/// One parameter's row, its value as the instance draws it, edited as the graph edits its default; an edit overrides
+/// it.
+void draw_graph_parameter_row(rtti::context& ctx,
+                              material_instance& instance,
+                              const graph_material& graph,
+                              const material_graph_parameter& parameter,
+                              graph_row_changes& changes)
+{
+    auto value = instance.get_graph_parameter(parameter.name).value_or(parameter.default_value);
+    property_layout layout(make_graph_row_label(parameter.name),
+                           make_graph_row_tooltip(parameter.description,
+                                                  "A parameter of the material graph. Overriding it keeps the model in "
+                                                  "its shared material's draw while it is among the graph's first four "
+                                                  "registers."));
+    const auto edit = inspect_vector_value(ctx, value, make_parameter_value_style(graph.get_graph(), parameter));
+    changes.is_finished = changes.is_finished || edit.edit_finished;
+    if(edit.changed && instance.set_graph_parameter(parameter.name, value))
+    {
+        changes.is_changed = true;
+    }
+}
+
+/// One texture node's row, the texture the instance samples; picking one overrides it.
+void draw_graph_texture_row(rtti::context& ctx, material_instance& instance, const material_graph_texture& texture, graph_row_changes& changes)
+{
+    auto handle = instance.get_graph_texture(texture.name);
+    property_layout layout(make_graph_row_label(texture.name),
+                           make_graph_row_tooltip(texture.description,
+                                                  "A texture node of the material graph. Overriding it gives the model a "
+                                                  "draw of its own."));
+    entt::meta_any value = entt::forward_as_meta(handle);
+    var_info info;
+    info.is_property = true;
+    const auto result = inspect_var(ctx, value, make_proxy(value, texture.name), info);
+    changes.is_finished = changes.is_finished || result.edit_finished;
+    if(result.changed && instance.set_graph_texture(texture.name, handle))
+    {
+        changes.is_changed = true;
+    }
+}
+
+/// Whether going from @p before to @p after changes the generated code (a Static Switch), not values alone.
+auto is_code_edit(const material_graph& before, const material_graph& after) -> bool
+{
+    return !has_same_material_graph_code(before, after);
+}
+
+/// Puts @p graph into the graph material @p asset holds and saves it: what each step of an edit of its rows does, done
+/// and undone. A graph of new code (a Static Switch) is saved from a copy, and reaches the loaded material with the
+/// shader its compile makes.
+void write_graph_material_graph(rtti::context& ctx, const asset_handle<material>& asset, const material_graph& graph)
+{
+    const auto loaded = asset.try_get();
+    auto* mat = loaded && !asset_handle<material>::is_empty(loaded) ? loaded->safe_cast<graph_material>() : nullptr;
+    if(mat == nullptr || is_code_edit(mat->get_graph(), graph))
+    {
+        // New code, or a material still loading (the reload a save started), is written from a copy: the loaded
+        // material keeps its graph and its shader until the recompile the save starts reloads both, so no draw binds
+        // the new layout to the old shader.
+        asset_actions::save_material_graph(ctx, asset, graph);
+        return;
+    }
+    mat->set_graph(graph);
+    asset_writer::atomic_save_to_file(asset.id(), asset);
+    ctx.get_cached<thumbnail_manager>().regenerate_thumbnail(asset.uid());
+}
+
+/// Records a finished edit of a graph material's rows, from @p before to @p after, as one undo step.
+void record_graph_material_edit(rtti::context& ctx, const asset_handle<material>& asset, material_graph before, material_graph after)
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    em.do_action<tracked_editor_state_action_t>(
+        "Edit Material Graph Values",
+        [&ctx, asset, after = std::move(after)]()
+        {
+            write_graph_material_graph(ctx, asset, after);
+        },
+        [&ctx, asset, before = std::move(before)]()
+        {
+            write_graph_material_graph(ctx, asset, before);
+        });
+}
+
+/// Whether a parameter or texture of @p mat comes from a node of its own graph, so the graph's rows can edit it: one
+/// inside a material function is the function's.
+auto is_own_graph_node(const graph_material& mat, const std::string& node_id) -> bool
+{
+    return find_material_graph_node(mat.get_graph(), node_id) >= 0;
+}
+
+/// One parameter's row of a graph material: its default; an edit writes it into @p edited, a copy of the graph.
+void draw_graph_default_row(rtti::context& ctx,
+                            const graph_material& mat,
+                            const material_graph_parameter& parameter,
+                            hpp::optional<material_graph>& edited,
+                            graph_row_changes& changes)
+{
+    auto value = parameter.default_value;
+    const bool is_own = is_own_graph_node(mat, parameter.node_id);
+    property_layout layout(make_graph_row_label(parameter.name),
+                           make_graph_row_tooltip(parameter.description,
+                                                  is_own ? "A parameter of the material graph: its default, which "
+                                                           "material instances and scripts may change."
+                                                         : "A parameter of a material function the graph calls: its "
+                                                           "default is the function's."));
+    ImGui::BeginDisabled(!is_own);
+    const auto edit = inspect_vector_value(ctx, value, make_parameter_value_style(mat.get_graph(), parameter));
+    ImGui::EndDisabled();
+    changes.is_finished = changes.is_finished || edit.edit_finished;
+    if(edit.changed)
+    {
+        if(!edited)
+        {
+            edited = mat.get_graph();
+        }
+        changes.is_changed = set_material_graph_parameter_default(*edited, parameter.node_id, value) || changes.is_changed;
+    }
+}
+
+/// One texture node's row of a graph material: the texture it reads; picking one writes it into @p edited.
+void draw_graph_default_texture_row(rtti::context& ctx,
+                                    const graph_material& mat,
+                                    const material_graph_texture& texture,
+                                    hpp::optional<material_graph>& edited,
+                                    graph_row_changes& changes)
+{
+    auto handle = texture.texture;
+    const bool is_own = is_own_graph_node(mat, texture.node_id);
+    property_layout layout(make_graph_row_label(texture.name),
+                           make_graph_row_tooltip(texture.description,
+                                                  is_own ? "A texture node of the material graph: the texture it reads."
+                                                         : "A texture node of a material function the graph calls: its "
+                                                           "texture is the function's."));
+    entt::meta_any value = entt::forward_as_meta(handle);
+    var_info info;
+    info.is_property = true;
+    info.read_only = !is_own;
+    const auto result = inspect_var(ctx, value, make_proxy(value, texture.name), info);
+    changes.is_finished = changes.is_finished || result.edit_finished;
+    if(result.changed && is_own)
+    {
+        if(!edited)
+        {
+            edited = mat.get_graph();
+        }
+        changes.is_changed = set_material_graph_node_texture(*edited, texture.node_id, handle) || changes.is_changed;
+    }
+}
+
+/// One named Static Switch's row: a checkbox; a change writes it into @p edited, and the material compiles again.
+void draw_graph_static_switch_row(const graph_material& mat,
+                                  const material_graph_static_switch& entry,
+                                  hpp::optional<material_graph>& edited,
+                                  graph_row_changes& changes)
+{
+    property_layout layout(make_graph_row_label(entry.name),
+                           make_graph_row_tooltip(entry.description,
+                                                  "A Static Switch of the material graph: it picks code when the "
+                                                  "material compiles, so a change compiles the material again."));
+    bool value = entry.value;
+    if(!ImGui::Checkbox(("##" + entry.node_id).c_str(), &value))
+    {
+        return;
+    }
+    if(!edited)
+    {
+        edited = mat.get_graph();
+    }
+    const bool is_changed = set_material_graph_static_switch(*edited, entry.node_id, value);
+    changes.is_changed = is_changed || changes.is_changed;
+    changes.is_finished = is_changed || changes.is_finished;
+}
+
+/// The row naming how the graph describes the surface, and its hint.
+constexpr const char* WORKFLOW_ROW_LABEL = "Workflow";
+constexpr const char* WORKFLOW_ROW_TOOLTIP = "How the graph describes the surface, set on its Surface Output in the "
+                                             "Material Graph. Metallic: Base Color, Metallic and Roughness. Specular: "
+                                             "Base Color is the diffuse color, with Specular and Glossiness, which the "
+                                             "shader converts per pixel.";
+
+/// The surface's workflow, read only: the graph's Surface Output sets it, and the Material Graph edits it.
+void draw_graph_workflow_row(rtti::context& ctx, const graph_material& mat)
+{
+    if(!match_row_filter(ctx, WORKFLOW_ROW_LABEL).is_shown)
+    {
+        return;
+    }
+    std::string text = get_material_graph_workflow_label(mat.get_graph());
+    entt::meta_any var = entt::forward_as_meta(text);
+    const auto var_proxy = make_proxy(var);
+    var_info info;
+    info.is_property = true;
+    info.read_only = true;
+    property_layout layout(WORKFLOW_ROW_LABEL, WORKFLOW_ROW_TOOLTIP);
+    inspect_var(ctx, var, var_proxy, info);
+}
+
+/// A graph material's workflow, then its parameter, texture and switch rows, under their headers, as the inspector's
+/// filter shows them.
+void draw_graph_default_rows(rtti::context& ctx, const graph_material& mat, hpp::optional<material_graph>& edited, graph_row_changes& changes)
+{
+    draw_graph_workflow_row(ctx, mat);
+    bool has_header = false;
+    for(const auto& parameter : mat.get_parameters())
+    {
+        if(match_row_filter(ctx, make_graph_row_label(parameter.name)).is_shown)
+        {
+            if(!std::exchange(has_header, true))
+            {
+                draw_property_header("Parameters", true);
+            }
+            draw_graph_default_row(ctx, mat, parameter, edited, changes);
+        }
+    }
+    has_header = false;
+    const auto& textures = mat.get_textures();
+    for(size_t index = 0; index < textures.size(); ++index)
+    {
+        const auto& texture = textures[index];
+        if(is_first_texture_of_name(textures, index) && match_row_filter(ctx, make_graph_row_label(texture.name)).is_shown)
+        {
+            if(!std::exchange(has_header, true))
+            {
+                draw_property_header("Textures", true);
+            }
+            draw_graph_default_texture_row(ctx, mat, texture, edited, changes);
+        }
+    }
+    has_header = false;
+    for(const auto& entry : mat.get_static_switches())
+    {
+        if(match_row_filter(ctx, entry.name).is_shown)
+        {
+            if(!std::exchange(has_header, true))
+            {
+                draw_property_header("Switches", true);
+            }
+            draw_graph_static_switch_row(mat, entry, edited, changes);
+        }
+    }
+}
+
+/**
+ * @brief Draws a graph material's parameters and textures as the instance draws them, and records what an edit or a
+ * revert of one changed as the slot's undo step.
+ */
+auto inspect_graph_overrides(rtti::context& ctx,
+                             material_instance& instance,
+                             const graph_material& graph,
+                             const meta_any_proxy& slot_proxy,
+                             const entt::meta_custom& custom) -> inspect_result
+{
+    inspect_result result{};
+    if(graph.get_parameters().empty() && graph.get_textures().empty())
+    {
+        return result;
+    }
+    const material_instance before = instance;
+    hpp::optional<graph_override_ref> reverted;
+    graph_row_changes changes;
+    {
+        property_override_scope marked(ctx, {}, make_graph_override_marks(instance, reverted));
+        inspect_without_undo_scope no_undo;
+        auto& view = ctx.get_cached<property_override_view>();
+        view.push_segment(GRAPH_PARAMETERS_SEGMENT);
+        for(const auto& parameter : graph.get_parameters())
+        {
+            view.push_segment(parameter.name);
+            if(match_row_filter(ctx, make_graph_row_label(parameter.name)).is_shown)
+            {
+                draw_graph_parameter_row(ctx, instance, graph, parameter, changes);
+            }
+            view.pop_segment();
+        }
+        view.pop_segment();
+        view.push_segment(GRAPH_TEXTURES_SEGMENT);
+        const auto& textures = graph.get_textures();
+        for(size_t index = 0; index < textures.size(); ++index)
+        {
+            const auto& texture = textures[index];
+            if(!is_first_texture_of_name(textures, index))
+            {
+                continue;
+            }
+            view.push_segment(texture.name);
+            if(match_row_filter(ctx, make_graph_row_label(texture.name)).is_shown)
+            {
+                draw_graph_texture_row(ctx, instance, texture, changes);
+            }
+            view.pop_segment();
+        }
+        view.pop_segment();
+    }
+    if(reverted)
+    {
+        reverted->is_texture ? instance.revert_graph_texture(reverted->name) : instance.revert_graph_parameter(reverted->name);
+        changes = {true, true};
+    }
+    if(!changes.is_changed)
+    {
+        result.edit_finished = changes.is_finished;
+        return result;
+    }
+    result.changed = true;
+    result.edit_finished = changes.is_finished;
+    meta_any_proxy step_proxy = slot_proxy;
+    add_property_action(ctx,
+                        ctx.get_cached<prefab_override_context>(),
+                        result,
+                        step_proxy,
+                        entt::meta_any{before},
+                        entt::meta_any{instance},
+                        custom);
+    return result;
 }
 
 /// The slot's value under the name of one of its rows: the undo step of that row's edit or revert takes the name, so
@@ -968,6 +1427,43 @@ private:
 };
 } // namespace
 
+auto inspector_asset_handle_material::inspect_graph(rtti::context& ctx, const asset_handle<material>& data, graph_material& mat)
+    -> inspect_result
+{
+    draw_graph_material_header(ctx, data, mat);
+    hpp::optional<material_graph> edited;
+    graph_row_changes changes;
+    {
+        inspect_without_undo_scope no_undo;
+        draw_graph_default_rows(ctx, mat, edited, changes);
+    }
+    if(edited && changes.is_changed && is_code_edit(mat.get_graph(), *edited))
+    {
+        // A Static Switch is one finished step that changes the code: it goes to the file alone (write_graph_material_graph).
+        record_graph_material_edit(ctx, data, mat.get_graph(), std::move(*edited));
+        edited.reset();
+    }
+    if(edited && changes.is_changed)
+    {
+        // The rows edit the loaded material while a drag goes on; the file and the undo step take the edit once it
+        // is finished.
+        if(!graph_edit_ || graph_edit_->asset != data.uid())
+        {
+            graph_edit_ = graph_edit{data.uid(), mat.get_graph()};
+        }
+        mat.set_graph(std::move(*edited));
+    }
+    if(changes.is_finished && graph_edit_ && graph_edit_->asset == data.uid())
+    {
+        record_graph_material_edit(ctx, data, std::move(graph_edit_->before), mat.get_graph());
+        graph_edit_.reset();
+    }
+    inspect_result result{};
+    result.changed = changes.is_changed;
+    result.edit_finished = changes.is_finished;
+    return result;
+}
+
 auto inspector_material_instance::get_rows_object(const entt::meta_any& value) const -> entt::meta_any
 {
     const auto* data = value.try_cast<material_instance>();
@@ -977,6 +1473,31 @@ auto inspector_material_instance::get_rows_object(const entt::meta_any& value) c
         return {};
     }
     return make_material_view(*shared);
+}
+
+auto inspector_material_instance::holds_row_name(const entt::meta_any& value, const std::string& lowercase_text) const -> bool
+{
+    const auto* data = value.try_cast<material_instance>();
+    const auto shared = data != nullptr ? data->get_shared_material().get() : nullptr;
+    const auto* graph = shared ? shared->safe_cast<graph_material>() : nullptr;
+    if(graph == nullptr)
+    {
+        return false;
+    }
+    const auto& parameters = graph->get_parameters();
+    const auto& textures = graph->get_textures();
+    return std::any_of(parameters.begin(),
+                       parameters.end(),
+                       [&](const material_graph_parameter& parameter)
+                       {
+                           return holds_text(make_graph_row_label(parameter.name), lowercase_text);
+                       }) ||
+           std::any_of(textures.begin(),
+                       textures.end(),
+                       [&](const material_graph_texture& texture)
+                       {
+                           return holds_text(make_graph_row_label(texture.name), lowercase_text);
+                       });
 }
 
 auto inspector_material_instance::has_overridden_rows(const entt::meta_any& value) const -> bool
@@ -1025,6 +1546,10 @@ auto inspector_material_instance::inspect(rtti::context& ctx,
         result |= apply_row_change(ctx, data, view, *values, var_proxy, reverted, custom);
     }
     result.edit_finished |= view_result.edit_finished;
+    if(const auto* graph = shared->safe_cast<graph_material>())
+    {
+        result |= inspect_graph_overrides(ctx, data, *graph, var_proxy, custom);
+    }
     if(data.has_overrides() && !is_searching)
     {
         if(ImGui::Button("Revert All"))
@@ -1105,7 +1630,7 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
 
             auto base_importer = meta.meta.importer;
 
-            auto importer = std::static_pointer_cast<mesh_importer_meta>(base_importer);
+            auto importer = safe_pointer_cast<mesh_importer_meta>(base_importer);
 
             if(importer)
             {
@@ -1203,7 +1728,7 @@ void inspector_asset_handle_animation::apply_import_settings(rtti::context& ctx)
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto meta = am.get_metadata(inspected_asset_.uid());
-    auto importer = std::static_pointer_cast<animation_importer_meta>(meta.meta.importer);
+    auto importer = safe_pointer_cast<animation_importer_meta>(meta.meta.importer);
     if(importer && importer_)
     {
         *importer = *importer_;
@@ -1218,7 +1743,7 @@ auto inspector_asset_handle_animation::has_unapplied_edits(rtti::context& ctx) c
         return false;
     }
     const auto meta = ctx.get_cached<asset_manager>().get_metadata(inspected_asset_.uid());
-    const auto applied = std::static_pointer_cast<animation_importer_meta>(meta.meta.importer);
+    const auto applied = safe_pointer_cast<animation_importer_meta>(meta.meta.importer);
     return applied && !is_same_import_settings(*committed_, *applied);
 }
 
@@ -1353,7 +1878,7 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
             auto meta = am.get_metadata(data.uid());
             auto base_importer = meta.meta.importer;
 
-            auto importer = std::static_pointer_cast<animation_importer_meta>(base_importer);
+            auto importer = safe_pointer_cast<animation_importer_meta>(base_importer);
 
             if(importer)
             {
@@ -1858,7 +2383,7 @@ auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
             auto meta = am.get_metadata(data.uid());
             auto base_importer = meta.meta.importer;
 
-            auto importer = std::static_pointer_cast<audio_importer_meta>(base_importer);
+            auto importer = safe_pointer_cast<audio_importer_meta>(base_importer);
 
             if(importer)
             {

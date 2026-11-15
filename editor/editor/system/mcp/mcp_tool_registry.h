@@ -124,6 +124,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry);
 void register_asset_tools(mcp_tool_registry& registry);
 void register_viewport_tools(mcp_tool_registry& registry);
 void register_material_tools(mcp_tool_registry& registry);
+void register_material_graph_tools(mcp_tool_registry& registry);
 void register_asset_property_tools(mcp_tool_registry& registry);
 void register_project_tools(mcp_tool_registry& registry);
 void register_settings_tools(mcp_tool_registry& registry);

@@ -5,9 +5,11 @@
 #include <engine/engine.h>
 #include <engine/rendering/batch_instance.h>
 #include <engine/rendering/instanced_mesh_utils.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/render_change.h>
 #define XXH_INLINE_ALL
 #include <filesystem/xxhash.h>
+#include <graphics/graphics.h>
 
 #include <algorithm>
 #include <cmath>
@@ -96,7 +98,7 @@ auto instanced_cluster::make_run(uint32_t part, instanced_layout layout) const -
 void instanced_cluster::collect_mesh_runs(instanced_run_list& runs, instanced_layout layout) const
 {
     const auto& item = owner_->draws_[draw_];
-    if(layout == instanced_layout::velocity && !item.has_previous)
+    if(layout == instanced_layout::velocity && !instanced_draw_list::draws_velocity(item))
     {
         return;
     }
@@ -158,6 +160,11 @@ auto instanced_cluster::get_mesh_shadow_key() const -> uint64_t
                     {
                         utils::hash_combine(key, material_keys[aspect]);
                     });
+    // A mask or an offset that follows the time or the camera changes the shadow every frame without an edit.
+    if(item.has_animated_shadow)
+    {
+        utils::hash_combine(key, gfx::get_render_frame());
+    }
     return key;
 }
 
@@ -267,8 +274,7 @@ void instanced_draw_list::write_packed(instanced_layout layout, bool is_baked, u
 {
     for(const auto& item : draws_)
     {
-        // Only instances with last frame's matrices draw in the velocity pass.
-        if(layout == instanced_layout::velocity && !item.has_previous)
+        if(layout == instanced_layout::velocity && !draws_velocity(item))
         {
             continue;
         }
@@ -394,9 +400,25 @@ void instanced_draw_list::build_clusters()
     {
         if(draws_[draw_index].model->mesh_model.is_valid())
         {
+            const size_t first_cluster = clusters_.size();
             build_draw_clusters(draw_index);
             build_draw_parts(draws_[draw_index]);
+            grow_cluster_bounds(first_cluster, draws_[draw_index].offset_padding);
         }
+    }
+}
+
+void instanced_draw_list::grow_cluster_bounds(size_t first_cluster, float padding)
+{
+    if(padding <= 0.0f)
+    {
+        return;
+    }
+    for(size_t cluster = first_cluster; cluster < clusters_.size(); ++cluster)
+    {
+        auto& bounds = clusters_[cluster].bounds_;
+        bounds.min -= math::vec3(padding);
+        bounds.max += math::vec3(padding);
     }
 }
 
@@ -515,14 +537,26 @@ void instanced_draw_list::build_draw_parts(draw& item)
 {
     item.first_part = uint32_t(parts_.size());
     item.first_block = uint32_t(blocks_.size());
+    item.offset_padding = 0.0f;
+    item.has_animated_offset = false;
+    item.has_animated_shadow = false;
     const uint32_t stride = get_stride(item);
     // A material instance draws in place of the shared material in every slot; without overrides it is the shared
     // material itself.
     material::sptr instance_material;
+    // Overrides a shadow does not read cast with the instance's shared material: one shadow run with its other
+    // casters (model::get_shadow_material).
+    material::sptr instance_shadow_material;
     if(item.settings.render_material_instance)
     {
-        item.settings.render_material_instance->update_resolved();
-        instance_material = item.settings.render_material_instance->get_resolved();
+        auto& instance = *item.settings.render_material_instance;
+        instance.update_resolved();
+        instance_material = instance.get_resolved();
+        const auto shared = instance_material && instance.get_resolved_shares_shadow() ? instance.get_shared_material().try_get() : nullptr;
+        if(shared && !asset_handle<material>::is_empty(shared))
+        {
+            instance_shadow_material = shared;
+        }
     }
     const auto make_part =
         [&](const std::shared_ptr<mesh>& mesh_ptr, const material::sptr& material_ptr, uint32_t submesh)
@@ -531,6 +565,8 @@ void instanced_draw_list::build_draw_parts(draw& item)
         part.mesh_ptr = mesh_ptr;
         part.material_ptr = instance_material ? instance_material : material_ptr;
         part.submesh = submesh;
+        const auto& shadow_material = instance_shadow_material ? instance_shadow_material : part.material_ptr;
+        part.shadow_key = make_shadow_batch_key(mesh_ptr, 0, submesh, shadow_material);
         return part;
     };
     if(!item.animation)
@@ -566,6 +602,26 @@ void instanced_draw_list::build_draw_parts(draw& item)
     }
     item.part_count = uint32_t(parts_.size()) - item.first_part;
     item.block_count = uint32_t(blocks_.size()) - item.first_block;
+    // Known once every part's material is: whether the draw takes part in the velocity pass.
+    if(!draws_velocity(item))
+    {
+        return;
+    }
+    const size_t velocity = size_t(instanced_layout::velocity);
+    for(uint32_t block = item.first_block; block < item.first_block + item.block_count; ++block)
+    {
+        auto& range = blocks_[block];
+        const size_t kind = get_kind_index(range.is_baked);
+        range.first[velocity] = packed_counts_[velocity][kind];
+        packed_counts_[velocity][kind] += item.input_count;
+    }
+}
+
+auto instanced_draw_list::draws_velocity(const draw& item) -> bool
+{
+    // Still instances move too while a material's World Position Offset animates: their previous matrices are their
+    // current ones (add_unaligned).
+    return item.has_previous || item.has_animated_offset;
 }
 
 void instanced_draw_list::add_part(draw& item, instanced_part part, const packed_block& wanted)
@@ -574,7 +630,15 @@ void instanced_draw_list::add_part(draw& item, instanced_part part, const packed
     {
         return;
     }
-    part.shadow_key = make_shadow_batch_key(part.mesh_ptr, 0, part.submesh, part.material_ptr);
+    if(const auto* graph = part.material_ptr->safe_cast<graph_material>())
+    {
+        if(graph->uses_world_position_offset())
+        {
+            item.offset_padding = std::max(item.offset_padding, graph->get_max_world_position_offset());
+        }
+        item.has_animated_offset = item.has_animated_offset || graph->is_world_position_offset_animated();
+        item.has_animated_shadow = item.has_animated_shadow || graph->is_shadow_animated();
+    }
     auto& packed = parts_.emplace_back();
     packed.part = std::move(part);
     packed.block = find_or_add_block(item, wanted);
@@ -594,8 +658,8 @@ auto instanced_draw_list::find_or_add_block(const draw& item, const packed_block
     const size_t kind = get_kind_index(wanted.is_baked);
     for(size_t layout = 0; layout < size_t(instanced_layout::count); ++layout)
     {
-        // Only instances with last frame's matrices draw in the velocity pass.
-        if(layout == size_t(instanced_layout::velocity) && !item.has_previous)
+        // The velocity pass's range waits for every part of the draw (build_draw_parts).
+        if(layout == size_t(instanced_layout::velocity))
         {
             continue;
         }

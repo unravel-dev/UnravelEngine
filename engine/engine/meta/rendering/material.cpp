@@ -1,4 +1,5 @@
 #include "material.hpp"
+#include "standard_material.hpp"
 
 #include <fstream>
 #include <filesystem/file_istream.h>
@@ -62,10 +63,12 @@ REFLECT(material)
             entt::attribute{"name", "material"},
             entt::attribute{"pretty_name", "Material"},
         })
-        .data<&material::set_cull_type, &material::get_cull_type>("cull_type"_hs)
+        // Read only: a graph material's sidedness is its Surface Output's Two Sided and Cull Front Faces settings.
+        .data<nullptr, &material::get_cull_type>("cull_type"_hs)
         .custom<entt::attributes>(make_material_property_attributes(material_property_id::cull_type, entt::attributes{
             entt::attribute{"name", "cull_type"},
             entt::attribute{"pretty_name", "Cull Type"},
+            entt::attribute{"tooltip", "The faces the material hides: its graph's Two Sided and Cull Front Faces settings."},
         }))
         .func<&material::get_meta_type>("get_meta_type"_hs)
         .func<&material::get_static_meta_type>("get_static_meta_type"_hs)
@@ -120,6 +123,20 @@ void load_from_file(const std::string& absolute_path, std::shared_ptr<material>&
     }
     auto ar = ser20::create_iarchive_associative(input);
     try_load(ar, ser20::make_nvp("material", obj));
+    obj = upgrade_legacy_material(std::move(obj));
+}
+
+auto is_legacy_material_file(const std::string& absolute_path) -> bool
+{
+    fs::file_istream input(absolute_path);
+    if(!input.is_open())
+    {
+        return false;
+    }
+    std::shared_ptr<material> obj;
+    auto ar = ser20::create_iarchive_associative(input);
+    try_load(ar, ser20::make_nvp("material", obj));
+    return obj != nullptr && obj->is<legacy_pbr_material>();
 }
 
 void load_from_file_bin(const std::string& absolute_path, std::shared_ptr<material>& obj)
@@ -131,6 +148,7 @@ void load_from_file_bin(const std::string& absolute_path, std::shared_ptr<materi
     }
     ser20::iarchive_binary_t ar(*input);
     try_load(ar, ser20::make_nvp("material", obj));
+    obj = upgrade_legacy_material(std::move(obj));
 }
 
 } // namespace unravel

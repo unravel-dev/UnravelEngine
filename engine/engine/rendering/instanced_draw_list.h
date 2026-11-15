@@ -190,6 +190,12 @@ private:
         /// Set for add_baked().
         std::shared_ptr<const baked_animation> animation;
         bool has_previous = false;
+        /// What its parts' graph materials do (build_draw_parts): how far their World Position Offset moves a vertex at
+        /// most, which its clusters' bounds grow by; whether that offset animates, so the draw moves though its
+        /// instances stand still; and whether a shadow they draw changes every frame.
+        float offset_padding = 0.0f;
+        bool has_animated_offset = false;
+        bool has_animated_shadow = false;
         /// Its matrices in the input arrays.
         uint32_t input_first = 0;
         uint32_t input_count = 0;
@@ -240,6 +246,12 @@ private:
     auto get_stride(const draw& item) const -> uint32_t;
     /// Resolves the parts @p item draws and the blocks they read.
     void build_draw_parts(draw& item);
+    /// Whether @p item draws in the velocity pass: it has last frame's matrices, or its material's World Position Offset
+    /// animates.
+    static auto draws_velocity(const draw& item) -> bool;
+    /// Grows the bounds of the clusters from @p first_cluster on by @p padding: how far their material's World Position
+    /// Offset moves a vertex at most.
+    void grow_cluster_bounds(size_t first_cluster, float padding);
     /// Adds @p part, drawn from the block of @p item that packs what @p wanted packs.
     void add_part(draw& item, instanced_part part, const packed_block& wanted);
     /// The block of @p item that packs what @p wanted packs, added when there is none yet.

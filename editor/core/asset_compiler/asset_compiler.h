@@ -1,6 +1,9 @@
 #pragma once
 #include <engine/assets/asset_manager.h>
+#include <engine/meta/rendering/shader_variants.hpp>
 #include <filesystem/filesystem.h>
+
+#include <bgfx/bgfx.h>
 
 #include <string>
 #include <vector>
@@ -29,6 +32,35 @@ auto compile_shader(const fs::path& key, const fs::path& output) -> bool;
  *        fingerprint it records.
  */
 auto is_shader_compiled(const fs::path& key, const fs::path& output) -> bool;
+
+/**
+ * @brief Compiles the text of a shader that has no file, such as one generated, for `renderer`. Its includes are the
+ *        engine's shader files alone: a file of the project of the same name never stands in for one.
+ * @param shader_name What the shader is named in messages: its vs_, fs_ or cs_ prefix gives the stage. It need not
+ *        exist.
+ * @param temp_dir Where shaderc's input and output files are written meanwhile.
+ * @param[out] variants Every variant the text declares, compiled; filled only when all of them compile.
+ * @param[out] error When given: why it did not compile, the error lines of the first failed variant.
+ * @return False when it did not compile; the log says why in full.
+ */
+auto compile_shader_text(const fs::path& shader_name,
+                         const std::string& text,
+                         bgfx::RendererType::Enum renderer,
+                         const fs::path& temp_dir,
+                         std::vector<compiled_shader_variant>& variants,
+                         std::string* error = nullptr) -> bool;
+
+/**
+ * @brief Compiles the shader the graph material at `key` generates, for the renderer `output`'s extension names, into
+ *        `output`: the file beside the compiled material (get_graph_material_shader_file). Leaves an `output` that
+ *        holds it already as it is.
+ * @return False when it did not compile; the log says why.
+ */
+auto compile_graph_material_shader(const fs::path& key, const fs::path& output) -> bool;
+
+/// Whether `output` holds the shader the graph material at `key` generates now, compiled for its renderer as
+/// compile_graph_material_shader would compile it.
+auto is_graph_material_shader_compiled(const fs::path& key, const fs::path& output) -> bool;
 
 /**
  * @brief The import settings a source starts with, by the type its extension names; null for a type without any.

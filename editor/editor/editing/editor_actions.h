@@ -24,6 +24,7 @@ namespace unravel
 struct editing_action_t;
 struct asset_meta;
 struct animation_controller;
+class material;
 
 struct play_state_info
 {
@@ -119,6 +120,20 @@ struct editor_actions
      * @brief Opens the Animation Controller editor on a controller asset.
      */
     static void open_animation_controller(rtti::context& ctx, const asset_handle<animation_controller>& asset);
+    /// Opens graph material @p asset in the Material Graph window. False for a material that is not a graph.
+    static auto open_material_graph(rtti::context& ctx, const asset_handle<material>& asset) -> bool;
+
+    /// Opens the graph file (.mgraph) at @p absolute_path in the Material Graph window: a material function of the
+    /// project is edited in place.
+    static auto open_material_graph_file(rtti::context& ctx, const std::string& absolute_path) -> bool;
+
+    /**
+     * @brief Opens @p asset in the Material Graph window without asking anything: refused, with @p error saying why,
+     * where open_material_graph would ask the user to discard an unsaved untitled graph, and for a material that is not
+     * a graph. For callers no one answers, such as tools.
+     */
+    static auto open_material_graph_without_asking(rtti::context& ctx, const asset_handle<material>& asset, std::string& error)
+        -> bool;
     static auto save_scene(rtti::context& ctx) -> bool;
     static auto save_scene_as(rtti::context& ctx) -> bool;
     static auto prompt_save_scene(rtti::context& ctx, const std::function<void()>& on_continue) -> bool;
@@ -257,6 +272,8 @@ struct editor_actions
     static auto focus_game_panel(rtti::context& ctx, std::string* error = nullptr) -> bool;
     /// Opens the MCP Server window, as the header's MCP indicator does.
     static auto show_mcp_window(rtti::context& ctx, std::string* error = nullptr) -> bool;
+    /// Opens the Material Graph window, as Windows > Material Graph does.
+    static auto show_material_graph_window(rtti::context& ctx, std::string* error = nullptr) -> bool;
 
     /**
      * @brief Focus/raise the OS main window so asset watcher and similar focus-gated

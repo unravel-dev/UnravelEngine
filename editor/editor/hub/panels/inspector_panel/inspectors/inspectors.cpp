@@ -1450,19 +1450,6 @@ void draw_header_row(rtti::context& ctx, const std::string& text)
     draw_property_header(text, ImGui::GetCursorPosY() > ctx.get_cached<inspector_context>().rows_top_y);
 }
 
-auto holds_text(const std::string& name, const std::string& lowercase_text) -> bool
-{
-    std::string lowercase_name = name;
-    std::transform(lowercase_name.begin(),
-                   lowercase_name.end(),
-                   lowercase_name.begin(),
-                   [](unsigned char c)
-                   {
-                       return static_cast<char>(std::tolower(c));
-                   });
-    return lowercase_name.find(lowercase_text) != std::string::npos;
-}
-
 /// Calls visit with each reflected property of `value`'s type that the inspector draws, its bases' first, until visit
 /// returns false. Returns whether it visited them all.
 auto for_each_reflected_property(const entt::meta_any& value,
@@ -1517,7 +1504,8 @@ auto contains_name(rtti::context& ctx, entt::meta_any value, const std::string& 
     const auto type = value.type();
     if(const auto value_inspector = get_inspector(ctx, type))
     {
-        return value_inspector->is_block() && contains_name(ctx, value_inspector->get_rows_object(value), text, depth - 1);
+        return value_inspector->is_block() && (value_inspector->holds_row_name(value, text) ||
+                                               contains_name(ctx, value_inspector->get_rows_object(value), text, depth - 1));
     }
     if(type.is_enum())
     {
@@ -1735,6 +1723,40 @@ auto match_component_filter(rtti::context& ctx,
     {
         match.is_shown = is_prefab_override_touching(ctx, type_name) ||
                          contains_overridden_block_in_properties(ctx, component, FILTER_SEARCH_DEPTH);
+    }
+    return match;
+}
+
+auto holds_text(const std::string& name, const std::string& lowercase_text) -> bool
+{
+    std::string lowercase_name = name;
+    std::transform(lowercase_name.begin(),
+                   lowercase_name.end(),
+                   lowercase_name.begin(),
+                   [](unsigned char c)
+                   {
+                       return static_cast<char>(std::tolower(c));
+                   });
+    return lowercase_name.find(lowercase_text) != std::string::npos;
+}
+
+auto match_row_filter(rtti::context& ctx, const std::string& name) -> filter_match
+{
+    const auto& filter = get_filter(ctx);
+    filter_match match{};
+    if(!filter.is_active())
+    {
+        return match;
+    }
+    if(!filter.text.empty() && filter.matched_ancestors == 0)
+    {
+        match.is_whole = holds_text(name, filter.text);
+        match.is_shown = match.is_whole;
+    }
+    if(match.is_shown && filter.only_overridden)
+    {
+        const auto& override_ctx = ctx.get_cached<prefab_override_context>();
+        match.is_shown = is_overridden_value(ctx, override_ctx.path_context.get_current_path_with_component_type(), {});
     }
     return match;
 }

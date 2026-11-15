@@ -22,11 +22,14 @@
 #include <engine/meta/rendering/standard_material.hpp>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_graph/graph_material.h>
+#include <engine/rendering/material_graph/standard_material.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/shadow.h>
 #include <engine/threading/threader.h>
 
 #include <cstdio>
+#include <functional>
 #include <string>
 
 using namespace unravel;
@@ -47,21 +50,29 @@ void check(bool condition, const std::string& what)
     }
 }
 
-/// A PBR shared material registered under @p name, replacing an earlier one of that name.
+/// A Standard shared material registered under @p name, replacing an earlier one of that name.
 auto make_shared_material(const std::string& name) -> asset_handle<material>
 {
     auto& am = engine::context().get_cached<asset_manager>();
     const std::string key = "engine:/embedded/shadow_caching_test/" + name;
     am.unload_asset<material>(key);
-    auto handle = am.get_asset_from_instance<material>(key, std::make_shared<pbr_material>());
+    auto handle = am.get_asset_from_instance<material>(key, make_standard_material({}));
     // Ready before the checks read it without waiting: right after startup the pool is still busy with loads.
     handle.get();
     return handle;
 }
 
-auto get_pbr(const asset_handle<material>& handle) -> std::shared_ptr<pbr_material>
+auto get_graph(const asset_handle<material>& handle) -> std::shared_ptr<graph_material>
 {
-    return std::static_pointer_cast<pbr_material>(handle.get());
+    return std::static_pointer_cast<graph_material>(handle.get());
+}
+
+/// A color the Standard graph's Base Color differs by: @p change applied to its value.
+auto change_base_color(const asset_handle<material>& handle, const std::function<void(math::vec4&)>& change) -> math::vec4
+{
+    auto color = get_graph(handle)->get_parameter("Base Color").value_or(math::vec4(1.0f));
+    change(color);
+    return color;
 }
 
 void test_materials_revisions()
@@ -74,11 +85,11 @@ void test_materials_revisions()
     mdl.set_shared_material(shared, 0);
     mdl.update_material_instances();
     const auto initial = mdl.get_materials_change_keys();
-    get_pbr(shared)->set_roughness(0.6f);
+    get_graph(shared)->set_parameter("Roughness", math::vec4(0.6f));
     const auto after_shared_edit = mdl.get_materials_change_keys();
     check(after_shared_edit != initial, "editing the shared material moves them");
     check(get_changed_aspects(initial, after_shared_edit) == render_change::specular, "a roughness edit moves only specular");
-    mdl.get_material_instance(0).set_override("emissive_intensity"_hs, 4.0f);
+    mdl.get_material_instance(0).set_graph_parameter("Emissive Intensity", math::vec4(4.0f));
     mdl.update_material_instances();
     check(get_changed_aspects(after_shared_edit, mdl.get_materials_change_keys()) == render_change::emission,
           "a first emissive override moves only emission");
@@ -106,16 +117,19 @@ void test_change_stamps()
     update(12, render_change::placement);
     check(stamps.get_last_change(render_interest::shadow_caster) == 12, "a move stamps what shadows read");
     check(stamps.get_last_change(render_interest::gi_card_capture) == 10, "and not what a card capture reads");
-    get_pbr(shared)->set_emissive_intensity(3.0f);
+    get_graph(shared)->set_parameter("Emissive Intensity", math::vec4(3.0f));
     update(13, render_change::none);
     check(stamps.get_last_change(render_change::emission) == 13, "an emissive edit stamps emission");
     check(stamps.get_last_change(render_interest::shadow_caster) == 12, "and leaves the shadow stamp");
-    get_pbr(shared)->set_alpha_cutoff(0.75f);
+    get_graph(shared)->set_parameter("Dither Threshold", math::vec4(0.75f));
     update(14, render_change::none);
-    check(stamps.get_last_change(render_interest::shadow_caster) == 14, "a cutoff edit stamps the shadow aspects");
-    math::color color = get_pbr(shared)->get_base_color();
-    color.value.r = 0.5f;
-    check(comp.set_material_instance_value(0, "base_color"_hs, entt::meta_any{color}), "an override applies");
+    check(stamps.get_last_change(render_interest::shadow_caster) == 14, "a coverage edit stamps the shadow aspects");
+    const auto color = change_base_color(shared,
+                                         [](math::vec4& value)
+                                         {
+                                             value.r = 0.5f;
+                                         });
+    check(comp.set_material_instance_parameter(0, "Base Color", color), "an override applies");
     update(15, render_change::none);
     check(stamps.get_last_change(render_change::albedo) == 15, "a color override stamps albedo");
     check(stamps.get_last_change(render_interest::shadow_caster) == 14, "and leaves the shadow stamp");
@@ -144,7 +158,7 @@ void test_material_reload_stamps(tpp::thread_pool& pool)
     update(11);
     check(comp.get_change_stamps().get_last_change(render_interest::shadow_caster) == 10, "a steady model stamps nothing");
     // A reload loads a new object straight into its members: it counts as many edits as the object it replaces.
-    const std::shared_ptr<material> reloaded = std::make_shared<pbr_material>();
+    const std::shared_ptr<material> reloaded = make_standard_material({});
     auto handle = shared;
     handle.set_internal_job(pool.schedule("shadow_caching_reload",
                                           [reloaded]()
@@ -174,15 +188,18 @@ void test_model_swap_stamps()
     const auto& stamps = comp.get_change_stamps();
     update(10);
     model edited = comp.get_model();
-    edited.get_material_instance(0).set_override("emissive_intensity"_hs, 5.0f);
+    edited.get_material_instance(0).set_graph_parameter("Emissive Intensity", math::vec4(5.0f));
     comp.set_model(edited);
     update(11);
     check(stamps.get_last_change(render_change::emission) == 11, "an emissive override set with the model stamps emission");
     check(stamps.get_last_change(render_interest::shadow_caster) == 10, "and leaves the shadow stamp");
     model recolored = comp.get_model();
-    math::color color = get_pbr(shared)->get_base_color();
-    color.value.b = 0.25f;
-    recolored.get_material_instance(0).set_override("base_color"_hs, color);
+    const auto color = change_base_color(shared,
+                                         [](math::vec4& value)
+                                         {
+                                             value.b = 0.25f;
+                                         });
+    recolored.get_material_instance(0).set_graph_parameter("Base Color", color);
     comp.set_model(recolored);
     update(12);
     check(stamps.get_last_change(render_change::albedo) == 12, "a color override set with the model stamps albedo");

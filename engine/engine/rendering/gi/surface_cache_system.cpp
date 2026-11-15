@@ -519,7 +519,7 @@ void surface_cache_system::add_instance(uint64_t identity,
     // Decoded once per material per frame (summarize_material).
     inst.is_two_sided = material.is_two_sided;
     inst.is_emissive_light_source =
-        material.is_pbr && material.emissive_luminance >= float(gi::GI_EMISSIVE_LIGHT_SOURCE_MIN_LUMINANCE);
+        material.emissive_luminance >= float(gi::GI_EMISSIVE_LIGHT_SOURCE_MIN_LUMINANCE);
     inst.local_to_world = local_to_world;
     inst.header_index = field.header_index;
     inst.coarse_header_index =
@@ -824,19 +824,14 @@ auto surface_cache_system::summarize_material(const material::sptr& mat) -> cons
         return summary;
     }
     summary.is_two_sided = mat && mat->get_cull_type() == cull_type::none;
-    // Blending and emission live on pbr_material, not on the material base. A material of some
-    // other kind - or a submesh with none at all - keeps the defaults: opaque, not emissive.
-    const auto* pbr = mat ? mat->safe_cast<pbr_material>() : nullptr;
-    if(pbr == nullptr)
+    // A submesh with no material gives off nothing.
+    const auto* graph = mat ? mat->safe_cast<graph_material>() : nullptr;
+    if(graph == nullptr)
     {
         return summary;
     }
-    summary.is_pbr = true;
-    summary.is_blended = pbr->get_alpha_mode() == alpha_mode::blend;
-    // Linear decode matches the G-buffer path (picker colors are sRGB-encoded), times the intensity.
-    const auto emissive_color = pbr->get_emissive_color().to_linear();
-    const math::vec3 emissive = math::vec3(emissive_color.value.r, emissive_color.value.g, emissive_color.value.b) *
-                                pbr->get_emissive_intensity();
+    summary.is_translucent = graph->is_translucent();
+    const math::vec3 emissive = graph->get_emissive_estimate();
     summary.emissive_luminance = 0.2126f * emissive.x + 0.7152f * emissive.y + 0.0722f * emissive.z;
     return summary;
 }
@@ -914,14 +909,14 @@ void surface_cache_system::walk_scene(scene& scn)
                 // to the entity's root transform drags a rigid statue through the clipmap in a
                 // pose the character is not in - deforming geometry receives GI without
                 // contributing.
-                // Alpha-blended submeshes never occlude either: a blended surface transmits
+                // Translucent submeshes never occlude either: a see-through surface transmits
                 // light, so a field there blocks bounces that should pass straight through -
                 // glass that darkens the room behind it. Decided here rather than only at bake
                 // time because the material is a property of the INSTANCE (a component can
                 // override it), so the same compiled mesh may be opaque in one placement and
-                // blended in another. Cutout stays: it is opaque wherever it is not discarded.
+                // translucent in another. A masked one stays: it is opaque wherever it is not discarded.
                 const bool has_field =
-                    submesh_index < sdf_count && !submesh->skinned && !material.is_blended;
+                    submesh_index < sdf_count && !submesh->skinned && !material.is_translucent;
                 const uint64_t submesh_key = entity_key | (uint64_t(submesh_index) << 16u);
                 if(!has_field)
                 {

@@ -13,6 +13,37 @@
 namespace unravel
 {
 
+namespace
+{
+/// The heights of the bars above and below the dock space.
+struct main_window_bars
+{
+    float header{};
+    float footer{};
+};
+
+/**
+ * @brief Measures the bars inside the main viewport.
+ *
+ * ImGui scales the font by the DPI of the viewport it is in. Outside every window that is the viewport of its implicit
+ * window, wherever that was last left (another monitor's, at another scale), while the bars are drawn in the main one.
+ */
+auto measure_main_window_bars() -> main_window_bars
+{
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                   ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoFocusOnAppearing |
+                                   ImGuiWindowFlags_NoBringToFrontOnFocus;
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::Begin("##main_window_bars", nullptr, flags);
+    const main_window_bars bars{header_panel::calc_height(), ImGui::GetFrameHeightWithSpacing()};
+    ImGui::End();
+    return bars;
+}
+} // namespace
+
 imgui_panels::imgui_panels()
 {
     console_log_panel_ = std::make_shared<console_log_panel>(CONSOLE_VIEW);
@@ -30,6 +61,7 @@ imgui_panels::imgui_panels()
     game_panel_ = std::make_unique<game_panel>(this, GAME_VIEW);
     profiler_timeline_panel_ = std::make_unique<profiler_timeline_panel>(this, PROFILER_VIEW);
     animation_panel_ = std::make_unique<animation_panel>(this);
+    material_graph_panel_ = std::make_unique<material_graph_panel>(this);
     mcp_panel_ = std::make_unique<mcp_panel>(this);
     packages_panel_ = std::make_unique<packages_panel>(this);
 
@@ -56,6 +88,7 @@ void imgui_panels::init(rtti::context& ctx)
     scene_panel_->init(ctx);
     game_panel_->init(ctx);
     animation_panel_->init(ctx);
+    material_graph_panel_->init(ctx);
     mcp_panel_->init(ctx);
     packages_panel_->init(ctx);
 
@@ -70,6 +103,7 @@ void imgui_panels::deinit(rtti::context& ctx)
     game_panel_->deinit(ctx);
     inspector_panel_->deinit(ctx);
     animation_panel_->deinit(ctx);
+    material_graph_panel_->deinit(ctx);
     mcp_panel_->deinit(ctx);
 }
 
@@ -89,12 +123,14 @@ void imgui_panels::on_frame_render(rtti::context& ctx, const frame_times& times)
 {
     scene_panel_->on_frame_render(ctx, times);
     game_panel_->on_frame_render(ctx, times);
+    material_graph_panel_->on_frame_render(ctx, times);
 }
 
 void imgui_panels::on_frame_ui_render(rtti::context& ctx)
 {
-    auto footer_size = ImGui::GetFrameHeightWithSpacing();
-    auto header_size = header_panel::calc_height();
+    const auto bars = measure_main_window_bars();
+    const float footer_size = bars.footer;
+    const float header_size = bars.header;
 
     if(ImGui::IsCombinationKeyPressed(shortcuts::scene_fullscreen_toggle))
     {
@@ -157,6 +193,8 @@ void imgui_panels::on_frame_ui_render(rtti::context& ctx)
         layout_panel_->on_frame_ui_render(ctx);
 
         animation_panel_->on_frame_ui_render(ctx, ANIMATION_VIEW);
+
+        material_graph_panel_->on_frame_ui_render(ctx, MATERIAL_GRAPH_VIEW);
 
         mcp_panel_->on_frame_ui_render(ctx, MCP_VIEW);
 
@@ -235,6 +273,11 @@ auto imgui_panels::get_dockspace() -> dockspace&
 auto imgui_panels::get_animation_panel() -> animation_panel&
 {
     return *animation_panel_;
+}
+
+auto imgui_panels::get_material_graph_panel() -> material_graph_panel&
+{
+    return *material_graph_panel_;
 }
 
 auto imgui_panels::get_mcp_panel() -> mcp_panel&

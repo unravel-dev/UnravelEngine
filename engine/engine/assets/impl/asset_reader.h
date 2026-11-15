@@ -27,11 +27,26 @@ struct ui_tree;
 struct style_sheet;
 } // namespace unravel
 
+namespace unravel
+{
+struct compiled_shader_variant;
+} // namespace unravel
+
 namespace unravel::asset_reader
 {
 
 auto resolve_compiled_key(const std::string& key) -> std::string;
 auto resolve_compiled_path(const std::string& key) -> fs::path;
+
+/**
+ * @brief Compiled variants as one shader, as a shader asset loads them: the default variant is the shader itself, the
+ * others its variants. Null without a default variant.
+ * @param origin Where they were read or made, for an error message.
+ * @param key What the shader is named in GPU captures.
+ */
+auto create_shader_from_variants(const std::vector<compiled_shader_variant>& compiled,
+                                 const std::string& origin,
+                                 const std::string& key) -> std::shared_ptr<gfx::shader>;
 
 namespace detail
 {

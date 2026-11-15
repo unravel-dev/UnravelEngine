@@ -744,24 +744,10 @@ auto defaults::init_assets(rtti::context& ctx) -> bool
         material::default_color_map() = manager.get_asset<gfx::texture>("engine:/data/textures/default_color.dds");
         material::default_normal_map() = manager.get_asset<gfx::texture>("engine:/data/textures/default_normal.dds");
     }
-    {
-        const auto id = "engine:/embedded/standard";
-        auto instance = std::make_shared<pbr_material>();
-        auto asset = manager.get_asset_from_instance<material>(id, instance);
-
-        model::default_material() = asset;
-    }
-
-    {
-        const auto id = "engine:/embedded/fallback";
-        auto instance = std::make_shared<pbr_material>();
-        instance->set_emissive_color(math::color::purple());
-        instance->set_base_color(math::color::purple());
-        instance->set_roughness(1.0f);
-        auto asset = manager.get_asset_from_instance<material>(id, instance);
-
-        model::fallback_material() = asset;
-    }
+    // Engine assets with the ids the materials had while they were made at startup ("engine:/embedded/standard"), so
+    // scenes that name them by id still find them.
+    model::default_material() = manager.get_asset<material>(STANDARD_MATERIAL_KEY);
+    model::fallback_material() = manager.get_asset<material>(FALLBACK_MATERIAL_KEY);
 
     default_textures::get().generate();
 

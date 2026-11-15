@@ -186,7 +186,7 @@ auto pipeline_stats_json(const rendering::pipeline_stats& stats) -> std::string
 }
 
 /// The frame as the viewport statistics overlay shows it: time, draw counts without the editor UI,
-/// GPU memory, and what the Scene view's and the game's cameras drew.
+/// GPU memory, the shaders and programs alive, and what the Scene view's and the game's cameras drew.
 auto frame_stats_json(rtti::context& ctx) -> std::string
 {
     const auto* stats = bgfx::getStats();
@@ -207,6 +207,7 @@ auto frame_stats_json(rtti::context& ctx) -> std::string
         R"({{"frame":{{"fps":{:.1f},"frame_ms":{:.2f},"cpu_submit_ms":{:.2f},"gpu_ms":{:.2f},"gpu_latency_frames":{}}},)"
         R"("draw":{{"triangles":{},"draw_calls":{},"compute_calls":{},"blit_calls":{},"render_passes":{}}},)"
         R"("memory":{{"gpu_used_bytes":{},"gpu_max_bytes":{},"texture_bytes":{},"render_target_bytes":{}}},)"
+        R"("resources":{{"shaders":{},"programs":{},"max_programs":{}}},)"
         R"("entities":{},"play_phase":{},"scene_view":{},"game":{}}})",
         fps,
         fps > 0.0f ? static_cast<float>(k_milliseconds_per_second) / fps : 0.0f,
@@ -222,6 +223,9 @@ auto frame_stats_json(rtti::context& ctx) -> std::string
         stats->gpuMemoryMax,
         stats->textureMemoryUsed,
         stats->rtMemoryUsed,
+        stats->numShaders,
+        stats->numPrograms,
+        bgfx::getCaps()->limits.maxPrograms,
         scn != nullptr && scn->registry ? count_live_entities(*scn->registry) : 0,
         make_json_string(play_phase_from_ctx(ctx)),
         scene_view_json,
@@ -1064,22 +1068,24 @@ void register_editor_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "panel_focus",
          .description = "Make the Scene or the Game panel the active editor tab, as clicking its tab does, or open "
-                        "the MCP Server window (mcp), as the header's MCP indicator does.",
+                        "the MCP Server window (mcp), as the header's MCP indicator does, or the Material Graph window "
+                        "(material_graph), as Windows > Material Graph does.",
          .input_schema_json =
-             R"({"type":"object","properties":{"panel":{"type":"string","enum":["scene","game","mcp"]}},"required":["panel"]})",
+             R"({"type":"object","properties":{"panel":{"type":"string","enum":["scene","game","mcp","material_graph"]}},"required":["panel"]})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
                  std::string panel;
                  read_string(args, "panel", panel);
-                 if(panel != "scene" && panel != "game" && panel != "mcp")
+                 if(panel != "scene" && panel != "game" && panel != "mcp" && panel != "material_graph")
                  {
-                     return {.text = "panel must be scene, game or mcp", .is_error = true};
+                     return {.text = "panel must be scene, game, mcp or material_graph", .is_error = true};
                  }
                  std::string error;
                  const bool is_focused = panel == "scene"  ? editor_actions::focus_scene_panel(ctx, &error)
                                          : panel == "game" ? editor_actions::focus_game_panel(ctx, &error)
-                                                           : editor_actions::show_mcp_window(ctx, &error);
+                                         : panel == "mcp"  ? editor_actions::show_mcp_window(ctx, &error)
+                                                           : editor_actions::show_material_graph_window(ctx, &error);
                  if(!is_focused)
                  {
                      return {.text = error, .is_error = true};
@@ -1203,7 +1209,8 @@ void register_editor_tools(mcp_tool_registry& registry)
         {.name = "stats_get",
          .description =
              "Frame statistics, as the viewport statistics overlay shows them: fps, CPU and GPU ms, triangles and "
-             "draw calls without the editor UI, GPU memory, live entities, and per view (scene_view, game) the "
+             "draw calls without the editor UI, GPU memory, the shaders and programs alive (bgfx holds at most "
+             "max_programs), live entities, and per view (scene_view, game) the "
              "models, lights, shadow casters and particles drawn. Last frame's values; with vsync on, times "
              "include waiting for the display.",
          .input_schema_json = empty_object_schema(),

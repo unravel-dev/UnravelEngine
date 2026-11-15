@@ -4,11 +4,10 @@
 #include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/mesh.h>
 
 #include <base/hash.hpp>
-
-#include <hpp/finally.hpp>
 
 #include <algorithm>
 #include <utility>
@@ -830,19 +829,45 @@ void model_component::update_world_bounds(const math::transform& world_transform
 void model_component::refresh_world_bounds(const mesh& render_mesh, const math::transform& world_transform)
 {
     // Any real move of the box is a caster change, whatever produced it: node / bone
-    // animation, the conservative fallback taking over from the tight pose box, or a mesh
-    // asset finishing its load. None of those touch the owner's transform, so this is the
-    // only signal a bounds consumer gets. Checked on every return path below.
+    // animation, the conservative fallback taking over from the tight pose box, a mesh
+    // asset finishing its load, or a material's offset. None of those touch the owner's
+    // transform, so this is the only signal a bounds consumer gets.
     const auto previous_world_bounds = world_bounds_;
-    auto signal_bounds_change = hpp::finally(
-        [this, previous_world_bounds]()
+    compute_world_bounds(render_mesh, world_transform);
+    grow_world_bounds_by_offsets();
+    if(world_bounds_ != previous_world_bounds)
+    {
+        render_dirty_.set(dirty_ids::render_change);
+    }
+}
+
+void model_component::grow_world_bounds_by_offsets()
+{
+    offset_bounds_padding_ = graph_material::has_offset_bounds() ? find_offset_bounds_padding() : 0.0f;
+    if(offset_bounds_padding_ > 0.0f && world_bounds_.is_populated())
+    {
+        world_bounds_.min -= math::vec3(offset_bounds_padding_);
+        world_bounds_.max += math::vec3(offset_bounds_padding_);
+    }
+}
+
+auto model_component::find_offset_bounds_padding() const -> float
+{
+    float padding = 0.0f;
+    model_.for_each_loaded_render_material(
+        [&padding](const material& mat)
         {
-            if(world_bounds_ != previous_world_bounds)
+            const auto* graph = mat.safe_cast<graph_material>();
+            if(graph != nullptr && graph->uses_world_position_offset())
             {
-                render_dirty_.set(dirty_ids::render_change);
+                padding = std::max(padding, graph->get_max_world_position_offset());
             }
         });
+    return padding;
+}
 
+void model_component::compute_world_bounds(const mesh& render_mesh, const math::transform& world_transform)
+{
     // Anchor transform for the conservative culling bounds. Root motion baked into bone
     // animation moves the topmost bone, not the owner, so anchoring to it keeps the
     // conservative box tracking the character even while the pose refresh is skipped.
@@ -1239,6 +1264,26 @@ void model_component::revert_material_instance(uint32_t index)
     model_.get_material_instance(index).revert_all();
 }
 
+auto model_component::set_material_instance_parameter(uint32_t index, const std::string& name, const math::vec4& value)
+    -> bool
+{
+    return model_.get_material_instance(index).set_graph_parameter(name, value);
+}
+
+auto model_component::set_material_instance_texture(uint32_t index,
+                                                    const std::string& name,
+                                                    const asset_handle<gfx::texture>& texture) -> bool
+{
+    return model_.get_material_instance(index).set_graph_texture(name, texture);
+}
+
+void model_component::revert_material_instance_graph_value(uint32_t index, hpp::string_view name)
+{
+    auto& instance = model_.get_material_instance(index);
+    instance.revert_graph_parameter(name);
+    instance.revert_graph_texture(name);
+}
+
 void model_component::update_material_instances()
 {
     model_.update_material_instances();
@@ -1375,7 +1420,8 @@ auto model_component::get_submit_extras(bool shadow_pass) const -> model_submit_
     // changed) are withheld: submit paths treat missing cached bounds as "draw
     // conservatively", which only costs extra draws on the re-entry frame. The next
     // update_armature runs a full refresh and clears the flag.
-    extras.proxies = render_proxies_stale_ ? nullptr : &render_proxies_;
+    // Withheld too while the materials' offsets grow the model's box: the submeshes' own boxes do not grow.
+    extras.proxies = render_proxies_stale_ || offset_bounds_padding_ > 0.0f ? nullptr : &render_proxies_;
     extras.shadow_pass = shadow_pass;
     extras.owner = get_owner();
     return extras;

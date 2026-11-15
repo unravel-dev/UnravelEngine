@@ -45,7 +45,7 @@ SAMPLER2D(s_gi_reflection_tiles_history, 2);
 /// Last frame's device depth.
 SAMPLER2D(s_gi_prev_depth, 11);
 SAMPLER2D(s_gi_depth, 12);
-/// G-buffer target 1: octahedral normal, metalness, roughness.
+/// G-buffer target 1: octahedral normal, metallic, roughness.
 SAMPLER2D(s_gi_normal, 13);
 
 /// This frame's velocity buffer (where moving surfaces were last frame).

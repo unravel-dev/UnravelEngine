@@ -32,6 +32,8 @@ struct field_content
     std::string type;
     /// Where the asset is, "app:/data/Materials/M_Gold.mat".
     std::string path;
+    /// Where opening the asset shows it, "the Material Graph"; empty for a type nothing opens.
+    std::string open_in;
 };
 
 /// What the field was asked for this frame.
@@ -40,6 +42,7 @@ struct field_request
     bool is_pick_pressed{};
     bool is_locate_pressed{};
     bool is_clear_pressed{};
+    bool is_open_pressed{};
 };
 
 //-----------------------------------------------------------------------------
@@ -47,6 +50,10 @@ struct field_request
 /// The thumbnail and a field naming the asset, both opening the picker, and under the field
 /// buttons to show the asset in the content browser and to clear it, beside its path. Drawn as
 /// one group, so a drop target set on the last item takes the whole field.
+///
+/// An asset that opens somewhere (content.open_in) gets a button for it, and opens on a
+/// double-click of its thumbnail: a click there is then the first half of the double-click, and
+/// the name alone opens the picker.
 /// </summary>
 //-----------------------------------------------------------------------------
 auto draw_field(const field_content& content) -> field_request;

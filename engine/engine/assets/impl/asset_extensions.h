@@ -82,6 +82,15 @@ inline auto get_suported_dependencies_formats<gfx::shader>() -> const std::vecto
     return formats;
 }
 
+/// A graph material's shader includes engine shader files (asset_compiler::resolve_graph_material_shader_dependencies)
+/// and calls material functions (.mgraph).
+template<>
+inline auto get_suported_dependencies_formats<unravel::material>() -> const std::vector<std::string>&
+{
+    static std::vector<std::string> formats = {".sh", ".mgraph"};
+    return formats;
+}
+
 template<>
 inline auto get_suported_dependencies_formats<unravel::ui_tree>() -> const std::vector<std::string>&
 {
@@ -300,7 +309,11 @@ inline auto get_format_version<unravel::mesh>() -> uint64_t
 template<>
 inline auto get_format_version<unravel::material>() -> uint64_t
 {
-    return 4;
+    // 5: graph materials (the graph, the hash of its shader's code).
+    // 6: compiled graph materials keep copies of the material functions their graph calls.
+    // 7: every material is a graph: a PBR material's file compiles as the Standard graph (legacy_pbr_material).
+    // 8: the Standard graph's Metalness parameter and map are named Metallic and Metallic Map.
+    return 8;
 }
 
 template<>

@@ -42,8 +42,8 @@ auto load_importer_from_file(const std::string& absolute_path, asset_meta& obj) 
     asset_meta loaded_meta;
     if(load_from_file(absolute_path, loaded_meta))
     {
-        auto obj_importer = std::dynamic_pointer_cast<Importer>(obj.importer);;
-        auto loaded_importer = std::dynamic_pointer_cast<Importer>(loaded_meta.importer);;
+        auto obj_importer = safe_pointer_cast<Importer>(obj.importer);;
+        auto loaded_importer = safe_pointer_cast<Importer>(loaded_meta.importer);;
 
         if(obj_importer && loaded_importer)
         {

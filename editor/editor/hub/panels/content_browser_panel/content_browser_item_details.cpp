@@ -5,6 +5,7 @@
 #include <engine/audio/audio_clip.h>
 #include <engine/physics/physics_material.h>
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/mesh.h>
 #include <graphics/texture.h>
 #include <logging/logging.h>
@@ -203,41 +204,28 @@ auto make_mesh_gi_section(const mesh& loaded) -> content_item_section
     return section;
 }
 
-/// The texture maps a PBR material assigns, by name.
-auto get_assigned_map_names(const pbr_material& pbr) -> std::string
+/// The textures a graph material's texture nodes read, by name.
+auto get_assigned_map_names(const graph_material& mat) -> std::string
 {
-    const std::array<std::pair<const char*, bool>, 6> maps{{
-        {"Color", static_cast<bool>(pbr.get_color_map())},
-        {"Normal", static_cast<bool>(pbr.get_normal_map())},
-        {"Roughness", static_cast<bool>(pbr.get_roughness_map())},
-        {"Metalness", static_cast<bool>(pbr.get_metalness_map())},
-        {"AO", static_cast<bool>(pbr.get_ao_map())},
-        {"Emissive", static_cast<bool>(pbr.get_emissive_map())},
-    }};
     std::string names;
-    for(const auto& [name, is_assigned] : maps)
+    for(const auto& texture : mat.get_textures())
     {
-        if(is_assigned)
+        if(texture.texture)
         {
-            names += names.empty() ? name : fmt::format(", {}", name);
+            names += names.empty() ? texture.name : fmt::format(", {}", texture.name);
         }
     }
     return names.empty() ? "None" : names;
 }
 
-/// Display name of a material's alpha mode, with the cutoff for masked materials.
-auto get_alpha_mode_text(const pbr_material& pbr) -> std::string
+/// How a graph material covers its surface.
+auto get_coverage_text(const graph_material& mat) -> std::string
 {
-    switch(pbr.get_alpha_mode())
+    if(mat.is_translucent())
     {
-        case alpha_mode::opaque:
-            return "Opaque";
-        case alpha_mode::mask:
-            return fmt::format("Mask (cutoff {:.2f})", pbr.get_alpha_cutoff());
-        case alpha_mode::blend:
-            return "Blend";
+        return "Translucent";
     }
-    return {};
+    return mat.uses_opacity_mask() ? "Masked" : "Opaque";
 }
 
 /// Display name of a material's face culling.
@@ -433,17 +421,12 @@ void collect_asset_details(const asset_handle<material>& asset, content_item_sec
     }
     content_item_section section{"Material"};
     section.add("Culling", item_details::get_cull_type_text(loaded->get_cull_type()));
-    if(const auto pbr = std::dynamic_pointer_cast<pbr_material>(loaded))
+    if(const auto* graph = loaded->safe_cast<graph_material>())
     {
-        section.add("Shading", "PBR");
-        section.add("Alpha", item_details::get_alpha_mode_text(*pbr));
-        section.add("Roughness", fmt::format("{:.2f}", pbr->get_roughness()));
-        section.add("Metalness", fmt::format("{:.2f}", pbr->get_metalness()));
-        section.add("Texture Maps", item_details::get_assigned_map_names(*pbr));
-        if(pbr->get_emissive_intensity() > 0.0f)
-        {
-            section.add("Emissive Intensity", fmt::format("{:.2f}", pbr->get_emissive_intensity()));
-        }
+        section.add("Workflow", get_material_graph_workflow_label(graph->get_graph()));
+        section.add("Coverage", item_details::get_coverage_text(*graph));
+        section.add("Parameters", item_details::format_grouped_count(graph->get_parameters().size()));
+        section.add("Texture Maps", item_details::get_assigned_map_names(*graph));
     }
     sections.push_back(std::move(section));
 }

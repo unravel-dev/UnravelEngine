@@ -12,7 +12,7 @@
 #include "gi/gi_adaptive_probes.sh"
 
 SAMPLER2D(s_gi_depth, 0);
-/// G-buffer target 1: octahedral normal, metalness, roughness.
+/// G-buffer target 1: octahedral normal, metallic, roughness.
 SAMPLER2D(s_gi_normal, 1);
 SAMPLER2D(s_gi_probe_records, 2);
 BUFFER_RW(b_gi_adaptive, uint, 3);

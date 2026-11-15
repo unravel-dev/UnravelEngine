@@ -12,6 +12,7 @@ namespace unravel
 {
 struct physics_material;
 struct animation_controller;
+struct material_graph;
 class material;
 class asset_manager;
 }
@@ -38,6 +39,36 @@ auto create_animation_controller(rtti::context& ctx, const fs::path& absolute_pa
  * @return The new asset's handle; empty when it could not be saved.
  */
 auto create_material(rtti::context& ctx, const fs::path& absolute_path) -> asset_handle<material>;
+
+/**
+ * @brief The graph a new graph material starts with: Base Color, Metallic and Roughness parameters wired into the
+ * Surface Output.
+ */
+auto make_starter_material_graph() -> material_graph;
+
+/// The graph a new material function starts with: a Vector 3 input passed to an output.
+auto make_starter_material_function() -> material_graph;
+
+/// Saves a new material function made of @p graph at `absolute_path` (.mgraph). False when it cannot be written.
+auto create_material_function(const fs::path& absolute_path, const material_graph& graph) -> bool;
+
+/**
+ * @brief Creates a graph material made of @p graph at `absolute_path` and saves it. Its compile writes the shader the
+ *        graph generates into the compiled cache, beside the compiled material.
+ * @return The new asset's handle; empty when it could not be saved.
+ */
+auto create_material_graph(rtti::context& ctx, const fs::path& absolute_path, const material_graph& graph)
+    -> asset_handle<material>;
+
+/**
+ * @brief Saves graph material @p asset with @p graph. The file is written from a copy: the loaded material keeps its
+ *        graph and shader until the recompile the save starts reloads both together. The Material Graph window
+ *        follows the reload.
+ * @return The material written: a copy of the loaded asset, or a new one while it is not loaded; null when the asset
+ *         is not a graph material or could not be saved.
+ */
+auto save_material_graph(rtti::context& ctx, const asset_handle<material>& asset, const material_graph& graph)
+    -> std::shared_ptr<material>;
 
 auto resolve_asset_source_path(const std::string& asset_key) -> fs::path;
 auto resolve_asset_source_path(const fs::path& path) -> fs::path;

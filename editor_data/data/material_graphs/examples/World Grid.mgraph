@@ -1,0 +1,20 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "link": "grid_color"},
+    {"pin": "roughness", "value": [0.7]}
+   ]},
+   {"id": "position", "type": "world_position"},
+   {"id": "ground_plane", "type": "swizzle", "inputs": [{"pin": "in", "link": "position"}],
+    "settings": [{"name": "mask", "value": "xz"}]},
+   {"id": "cells", "type": "checker", "inputs": [{"pin": "uv", "link": "ground_plane"}, {"pin": "scale", "value": [1.0, 1.0]}]},
+   {"id": "base", "type": "vector3", "inputs": [{"pin": "value", "value": [0.32, 0.33, 0.35]}]},
+   {"id": "alternate", "type": "vector3", "inputs": [{"pin": "value", "value": [0.42, 0.43, 0.45]}]},
+   {"id": "grid_color", "type": "lerp", "inputs": [
+    {"pin": "a", "link": "base"}, {"pin": "b", "link": "alternate"}, {"pin": "alpha", "link": "cells"}
+   ]}
+  ]
+ }
+}

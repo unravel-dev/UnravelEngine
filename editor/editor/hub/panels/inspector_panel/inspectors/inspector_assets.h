@@ -5,7 +5,10 @@
 #include <engine/assets/asset_handle.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/scene.h>
+#include <engine/rendering/material_graph/material_graph.h>
 #include <engine/rendering/material_instance.h>
+#include <hpp/optional.hpp>
+#include <uuid/uuid.h>
 #include <audiopp/source.h>
 
 namespace gfx
@@ -17,6 +20,7 @@ namespace unravel
 {
 class mesh;
 class material;
+class graph_material;
 struct physics_material;
 struct animation_clip;
 struct animation_controller;
@@ -55,6 +59,17 @@ private:
     /// For a model's default material: a banner naming the model it comes from and whether imports still rewrite
     /// it, with Reset to Imported once it was edited.
     void inspect_import_origin(rtti::context& ctx, const asset_handle<material>& data);
+    /// A graph material's rows: the way to its graph, then its parameters' and textures' defaults. An edit writes
+    /// them into its graph, so the file and the Material Graph window take them; each finished edit is an undo step.
+    auto inspect_graph(rtti::context& ctx, const asset_handle<material>& data, graph_material& mat) -> inspect_result;
+
+    /// The graph a graph material's rows held when the edit in progress on them began: its undo step puts it back.
+    struct graph_edit
+    {
+        hpp::uuid asset;
+        material_graph before;
+    };
+    hpp::optional<graph_edit> graph_edit_;
 };
 REFLECT_INSPECTOR_INLINE(inspector_asset_handle_material, asset_handle<material>)
 
@@ -73,6 +88,8 @@ struct inspector_material_instance : public crtp_meta_type<inspector_material_in
 
     /// The rows are the shared material's properties.
     auto get_rows_object(const entt::meta_any& value) const -> entt::meta_any override;
+    /// A graph material's parameters and textures are rows too.
+    auto holds_row_name(const entt::meta_any& value, const std::string& lowercase_text) const -> bool override;
     auto has_overridden_rows(const entt::meta_any& value) const -> bool override;
 
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;

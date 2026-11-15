@@ -6,6 +6,7 @@
 #include "mcp_tools_common.h"
 
 #include <editor/assets/asset_actions.h>
+#include <engine/rendering/material_graph/standard_material.h>
 #include <editor/hub/hub.h>
 #include <editor/hub/panels/panel.h>
 #include <editor/system/mcp_manager.h>
@@ -51,7 +52,7 @@ struct material_kind
                       const simdjson::dom::object& properties,
                       component_apply_result& result)
     {
-        auto candidate = handle ? handle.get()->clone() : material::sptr(std::make_shared<pbr_material>());
+        auto candidate = handle ? handle.get()->clone() : material::sptr(make_standard_material({}));
         result = apply_material_properties(ctx, *candidate, properties);
     }
 

@@ -44,7 +44,7 @@ uniform vec4 u_probe_layer_params;
 #define AMBIENT_OCCLUSION 5
 #define WORLD_NORMAL 6
 #define ROUGHNESS 7
-#define METALNESS 8
+#define METALLIC 8
 #define EMISSIVE_COLOR 9
 #define SUBSURFACE_COLOR 10
 #define DEPTH 11
@@ -151,9 +151,9 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     {
         color = vec3_splat(data.roughness);
     }
-    else if(u_mode == METALNESS)
+    else if(u_mode == METALLIC)
     {
-        color = vec3_splat(data.metalness);
+        color = vec3_splat(data.metallic);
     }
     else if(u_mode == EMISSIVE_COLOR)
     {

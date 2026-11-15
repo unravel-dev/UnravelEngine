@@ -1,4 +1,5 @@
 #include "generated_asset.h"
+#include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_writer.h>
 
 #include <engine/meta/assets/asset_database.hpp>
@@ -6,6 +7,8 @@
 #include <filesystem/file_fingerprint.h>
 #include <logging/logging.h>
 
+#include <fstream>
+#include <iterator>
 #include <mutex>
 
 namespace unravel
@@ -110,6 +113,12 @@ auto set_source(asset_meta& meta, const hpp::uuid& source_uid) -> bool
     return true;
 }
 
+/// Whether the .meta holds the fingerprint of an import's write, rather than no record or only the source.
+auto has_write_record(const asset_meta& meta) -> bool
+{
+    return !meta.generated.fingerprint.empty();
+}
+
 /// Whether the file whose current fingerprint is @p current still holds what its import last wrote.
 auto is_owned_by_import(const asset_meta& meta, const std::string& current) -> bool
 {
@@ -180,13 +189,93 @@ auto keep_edited(asset_manager& am, const fs::path& path, asset_meta& meta, cons
     return write_result::kept_edited;
 }
 
+/// The text assets that can name another asset: by its id, or by its path for documents and scripts.
+auto get_referencing_formats() -> const std::vector<std::string>&
+{
+    static const std::vector<std::string> formats = []
+    {
+        std::vector<std::string> result;
+        for(const auto* list : {&ex::get_suported_formats<material>(),
+                                &ex::get_suported_dependencies_formats<material>(),
+                                &ex::get_suported_formats<prefab>(),
+                                &ex::get_suported_formats<scene_prefab>(),
+                                &ex::get_suported_formats<script>(),
+                                &ex::get_suported_formats<ui_tree>(),
+                                &ex::get_suported_formats<style_sheet>()})
+        {
+            result.insert(result.end(), list->begin(), list->end());
+        }
+        return result;
+    }();
+    return formats;
+}
+
+auto is_referencing_file(const fs::path& path) -> bool
+{
+    const auto& formats = get_referencing_formats();
+    return std::find(formats.begin(), formats.end(), path.extension().string()) != formats.end();
+}
+
+/// A file to delete once no text asset names it, by either of the two ways one can.
+struct unreferenced_candidate
+{
+    fs::path path;
+    std::string uid;
+    std::string file_name;
+    bool is_referenced{};
+};
+
+auto make_candidate(const fs::path& path) -> unreferenced_candidate
+{
+    asset_meta meta;
+    load_from_file(get_meta_path(path).string(), meta);
+    return {path, meta.uid.is_nil() ? std::string() : hpp::to_string(meta.uid), path.filename().string()};
+}
+
+/// Marks the candidates @p text names; true while some are not named yet.
+auto mark_referenced(const std::string& text, std::vector<unreferenced_candidate>& candidates) -> bool
+{
+    bool has_unreferenced = false;
+    for(auto& candidate : candidates)
+    {
+        if(!candidate.is_referenced)
+        {
+            candidate.is_referenced = (!candidate.uid.empty() && text.find(candidate.uid) != std::string::npos) ||
+                                      text.find(candidate.file_name) != std::string::npos;
+            has_unreferenced = has_unreferenced || !candidate.is_referenced;
+        }
+    }
+    return has_unreferenced;
+}
+
+/// Reads every text asset under @p root, until each candidate is named or none is left to read.
+void mark_referenced_under(const fs::path& root, std::vector<unreferenced_candidate>& candidates)
+{
+    fs::error_code err;
+    for(fs::recursive_directory_iterator it(root, err), end; it != end && !err; it.increment(err))
+    {
+        fs::error_code entry_err;
+        if(!it->is_regular_file(entry_err) || !is_referencing_file(it->path()))
+        {
+            continue;
+        }
+        std::ifstream stream(it->path(), std::ios::binary);
+        const std::string text(std::istreambuf_iterator<char>(stream), {});
+        if(!mark_referenced(text, candidates))
+        {
+            return;
+        }
+    }
+}
+
 } // namespace
 
 auto write_file(asset_manager& am,
                 const fs::path& path,
                 const hpp::uuid& uid,
                 const hpp::uuid& source_uid,
-                const content_writer_t& write_content) -> write_result
+                const content_writer_t& write_content,
+                const older_import_check_t& is_older_import) -> write_result
 {
     const staged_content content(write_content);
     if(content.get_fingerprint().empty())
@@ -210,11 +299,16 @@ auto write_file(asset_manager& am,
     {
         return record_unchanged(am, path, meta, source_uid, current);
     }
-    if(!is_owned_by_import(meta, current))
+    if(is_owned_by_import(meta, current))
+    {
+        return commit(am, path, meta, source_uid, content);
+    }
+    if(has_write_record(meta) || !is_older_import || !is_older_import(path))
     {
         return keep_edited(am, path, meta, source_uid);
     }
-    return commit(am, path, meta, source_uid, content);
+    const auto result = commit(am, path, meta, source_uid, content);
+    return result == write_result::written ? write_result::replaced_untracked : result;
 }
 
 auto adopt_former_file(asset_manager& am, const fs::path& former_path, const fs::path& path) -> bool
@@ -265,6 +359,30 @@ auto release_to_import(asset_manager& am, const fs::path& path) -> bool
     }
     meta.generated.fingerprint = get_file_fingerprint(path);
     return save_meta(am, path, meta);
+}
+
+auto remove_unreferenced_files(asset_manager& am, const fs::path& root, const std::vector<fs::path>& paths)
+    -> std::vector<fs::path>
+{
+    std::vector<unreferenced_candidate> candidates;
+    std::transform(paths.begin(), paths.end(), std::back_inserter(candidates), make_candidate);
+    if(!candidates.empty())
+    {
+        mark_referenced_under(root, candidates);
+    }
+    std::vector<fs::path> removed;
+    for(const auto& candidate : candidates)
+    {
+        fs::error_code err;
+        if(candidate.is_referenced || !fs::remove(candidate.path, err))
+        {
+            continue;
+        }
+        fs::remove(get_meta_path(candidate.path), err);
+        am.remove_asset_info_for_path(candidate.path);
+        removed.push_back(candidate.path);
+    }
+    return removed;
 }
 
 } // namespace generated_asset

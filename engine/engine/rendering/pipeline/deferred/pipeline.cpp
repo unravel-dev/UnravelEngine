@@ -679,29 +679,44 @@ auto deferred::init(rtti::context& ctx) -> bool
 
     geom_program_.cache_uniforms();
     geom_program_.program = load_geom_program(default_variant, default_variant);
+    geom_program_.vertex_variant = default_variant;
 
     geom_program_skinned_.cache_uniforms();
     geom_program_skinned_.program = load_geom_program("skinned", default_variant);
+    geom_program_skinned_.vertex_variant = "skinned";
 
     geom_program_instanced_.cache_uniforms();
     geom_program_instanced_.program = load_geom_program("instanced", default_variant);
+    geom_program_instanced_.vertex_variant = "instanced";
 
     geom_program_instanced_material_.cache_uniforms();
     geom_program_instanced_material_.program = load_geom_program("instanced_material", "instance_material");
+    geom_program_instanced_material_.vertex_variant = "instanced_material";
+    geom_program_instanced_material_.graph_fragment_variant = "instance_material";
 
     geom_program_skinned_instanced_.cache_uniforms();
     geom_program_skinned_instanced_.program = load_geom_program("skinned_instanced", default_variant, is_built_by_run);
+    geom_program_skinned_instanced_.vertex_variant = "skinned_instanced";
 
     geom_program_skinned_instanced_material_.cache_uniforms();
     geom_program_skinned_instanced_material_.program =
         load_geom_program("skinned_instanced_material", "instance_material", is_built_by_run);
+    geom_program_skinned_instanced_material_.vertex_variant = "skinned_instanced_material";
+    geom_program_skinned_instanced_material_.graph_fragment_variant = "instance_material";
 
     geom_program_skinned_baked_instanced_.cache_uniforms();
     geom_program_skinned_baked_instanced_.program = load_geom_program("skinned_baked_instanced", default_variant);
-
+    geom_program_skinned_baked_instanced_.vertex_variant = "skinned_baked_instanced";
 
     card_capture_program_.cache_uniforms();
-    card_capture_program_.program = load_geom_program("card_capture", "card_capture");
+    // The default surface keeps every texel anyway: the default fragment variant.
+    card_capture_program_.program = load_geom_program("card_capture", default_variant);
+    card_capture_program_.vertex_variant = "card_capture";
+    card_capture_program_.graph_fragment_variant = "card_capture";
+
+    // The graph materials' programs are made at their first draw, after these uniforms.
+    graph_material_programs_.init(am.get_asset<gfx::shader>("engine:/data/shaders/deferred_geom/vs_deferred_geom.eshader"));
+    velocity_fragment_shader_ = am.get_asset<gfx::shader>("engine:/data/shaders/velocity/fs_velocity.eshader");
 
     velocity_program_.cache_uniforms();
     velocity_program_.program = load_velocity_program(default_variant);

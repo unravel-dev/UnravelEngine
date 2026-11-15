@@ -1,0 +1,732 @@
+{
+ "material": {
+  "polymorphic_id": 2147483649,
+  "polymorphic_name": "graph_material",
+  "ptr_wrapper": {
+   "id": 2147483649,
+   "data": {
+    "base_type": {
+     "cull_type": 2
+    },
+    "graph": {
+     "version": 1,
+     "nodes": [
+      {
+       "id": "output",
+       "type": "surface_output",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "base_color",
+         "link": "albedo.out.rgb",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "roughness",
+         "link": "roughness_times_map",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "metallic",
+         "link": "metallic_times_map",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "normal",
+         "link": "normal_map",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "ambient_occlusion",
+         "link": "ao_map.r",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "emissive",
+         "link": "emissive",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "subsurface_color",
+         "link": "subsurface_color.rgb",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "subsurface_opacity",
+         "link": "subsurface_color.a",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "camera_fade_distance",
+         "link": "dither_threshold",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": []
+      },
+      {
+       "id": "base_color",
+       "type": "color_parameter",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "value",
+         "link": "",
+         "value": [
+          1.0,
+          0.0,
+          1.0,
+          1.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Base Color"
+        }
+       ]
+      },
+      {
+       "id": "subsurface_color",
+       "type": "color_parameter",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "value",
+         "link": "",
+         "value": [
+          0.0,
+          0.0,
+          0.0,
+          0.800000011920929
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Subsurface Color"
+        }
+       ]
+      },
+      {
+       "id": "emissive_color",
+       "type": "color_parameter",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "value",
+         "link": "",
+         "value": [
+          1.0,
+          0.0,
+          1.0,
+          1.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Emissive Color"
+        }
+       ]
+      },
+      {
+       "id": "emissive_intensity",
+       "type": "scalar_parameter",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "value",
+         "link": "",
+         "value": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Emissive Intensity"
+        },
+        {
+         "name": "slider_max",
+         "value": "100.000000"
+        }
+       ]
+      },
+      {
+       "id": "roughness",
+       "type": "scalar_parameter",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "value",
+         "link": "",
+         "value": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Roughness"
+        },
+        {
+         "name": "slider_max",
+         "value": "1.000000"
+        }
+       ]
+      },
+      {
+       "id": "metallic",
+       "type": "scalar_parameter",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "value",
+         "link": "",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Metallic"
+        },
+        {
+         "name": "slider_max",
+         "value": "1.000000"
+        }
+       ]
+      },
+      {
+       "id": "bumpiness",
+       "type": "scalar_parameter",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "value",
+         "link": "",
+         "value": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Bumpiness"
+        },
+        {
+         "name": "slider_max",
+         "value": "10.000000"
+        }
+       ]
+      },
+      {
+       "id": "tiling",
+       "type": "vector_parameter",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "value",
+         "link": "",
+         "value": [
+          1.0,
+          1.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Tiling"
+        },
+        {
+         "name": "per_instance",
+         "value": "off"
+        }
+       ]
+      },
+      {
+       "id": "dither_threshold",
+       "type": "scalar_parameter",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "value",
+         "link": "",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Dither Threshold"
+        },
+        {
+         "name": "per_instance",
+         "value": "off"
+        }
+       ]
+      },
+      {
+       "id": "uv",
+       "type": "tiling_offset",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "tiling",
+         "link": "tiling.xyzw.xy",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": []
+      },
+      {
+       "id": "color_map",
+       "type": "texture_sample",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "uv",
+         "link": "uv",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Color Map"
+        }
+       ]
+      },
+      {
+       "id": "normal_map",
+       "type": "normal_map",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "uv",
+         "link": "uv",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "strength",
+         "link": "bumpiness",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Normal Map"
+        }
+       ]
+      },
+      {
+       "id": "roughness_map",
+       "type": "texture_sample",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "uv",
+         "link": "uv",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Roughness Map"
+        },
+        {
+         "name": "description",
+         "value": "Roughness in red, or in green with Packed Metal Roughness (one map holding both, glTF 2.0)."
+        }
+       ]
+      },
+      {
+       "id": "metallic_map",
+       "type": "texture_sample",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "uv",
+         "link": "uv",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Metallic Map"
+        },
+        {
+         "name": "description",
+         "value": "Metallic in red, or in blue with Packed Metal Roughness (one map holding both, glTF 2.0)."
+        }
+       ]
+      },
+      {
+       "id": "emissive_map",
+       "type": "texture_sample",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "uv",
+         "link": "uv",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Emissive Map"
+        }
+       ]
+      },
+      {
+       "id": "ao_map",
+       "type": "texture_sample",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "uv",
+         "link": "uv",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "AO Map"
+        },
+        {
+         "name": "description",
+         "value": "Ambient occlusion in red: white is unoccluded."
+        }
+       ]
+      },
+      {
+       "id": "albedo",
+       "type": "multiply",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "a",
+         "link": "color_map.rgba",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "b",
+         "link": "base_color.rgba",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": []
+      },
+      {
+       "id": "roughness_metallic",
+       "type": "append",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "a",
+         "link": "roughness_map.r",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "b",
+         "link": "metallic_map.r",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": []
+      },
+      {
+       "id": "packed_roughness_metallic",
+       "type": "append",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "a",
+         "link": "roughness_map.g",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "b",
+         "link": "metallic_map.b",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": []
+      },
+      {
+       "id": "packed_metal_roughness",
+       "type": "static_switch",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "true",
+         "link": "packed_roughness_metallic",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "false",
+         "link": "roughness_metallic",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Packed Metal Roughness"
+        },
+        {
+         "name": "description",
+         "value": "The Roughness Map holds roughness in green and the Metallic Map the metallic value in blue, as one map packing both does (glTF 2.0); off, each in red."
+        },
+        {
+         "name": "value",
+         "value": "false"
+        }
+       ]
+      },
+      {
+       "id": "roughness_times_map",
+       "type": "multiply",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "a",
+         "link": "roughness",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "b",
+         "link": "packed_metal_roughness.out.x",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": []
+      },
+      {
+       "id": "metallic_times_map",
+       "type": "multiply",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "a",
+         "link": "metallic",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "b",
+         "link": "packed_metal_roughness.out.y",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": []
+      },
+      {
+       "id": "emissive_tint",
+       "type": "multiply",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "a",
+         "link": "emissive_color.rgb",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "b",
+         "link": "emissive_intensity",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": []
+      },
+      {
+       "id": "emissive",
+       "type": "multiply",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "a",
+         "link": "emissive_map.rgb",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "b",
+         "link": "emissive_tint",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": []
+      }
+     ],
+     "comments": []
+    }
+   }
+  }
+ }
+}

@@ -77,49 +77,25 @@ public:
         {
             entries_[kvp.first] = kvp.second;
         }
-        for(const auto& kvp : other.pair_outputs_)
-        {
-            pair_outputs_[kvp.first] = kvp.second;
-        }
-    }
-
-    /// What a spec-gloss pair job produced, keyed by make_texture_job_key: several jobs share sources.
-    void register_pair_outputs(const std::string& job_key, spec_gloss_pbr_result outputs)
-    {
-        pair_outputs_[job_key] = std::move(outputs);
-    }
-
-    auto find_pair_outputs(const std::string& job_key) const -> const spec_gloss_pbr_result*
-    {
-        const auto it = pair_outputs_.find(job_key);
-        return it == pair_outputs_.end() ? nullptr : &it->second;
     }
 
 private:
     std::unordered_map<std::string, imported_texture> entries_;
-    std::unordered_map<std::string, spec_gloss_pbr_result> pair_outputs_;
 };
 
 enum class texture_job_type : uint8_t
 {
     embedded_extract,
     external_convert,
-    spec_gloss_pair,
 };
 
 struct texture_job
 {
     texture_job_type type{};
     imported_texture desc{};
-    imported_texture specular_desc{};
-    spec_gloss_factors_t spec_gloss_factors{};
-    std::string output_base_color_relative;
-    std::string output_mr_relative;
-    /// When true, KHR pair bake rewrites diffuse into reconstructed base color.
-    bool bake_base_color{true};
 };
 
-/// Identity of a texture job: its source textures, semantics and spec-gloss factors (not its output names).
+/// Identity of a texture job: its source texture and semantic.
 auto make_texture_job_key(const texture_job& job) -> std::string;
 
 /// Texture jobs collected from every material, each distinct job once.
@@ -152,14 +128,6 @@ private:
 };
 
 /**
- * @brief Spec-gloss pair bakes are named after their source textures, so two materials sharing a
- * diffuse map under different factors, or a specular map with different diffuse maps, would bake into
- * one file and the last job would win for both. Every pair output more than one distinct job writes
- * gets that job's hash appended, so each material binds its own bake.
- */
-void disambiguate_shared_pair_outputs(texture_job_store& store);
-
-/**
  * @brief Run every job of @p store on the thread pool. Jobs writing a common output file run
  * serially in one group; results merge into @p catalog and @p consumed_embedded in job order.
  */
@@ -169,15 +137,6 @@ void run_texture_jobs_parallel(texture_job_store& store,
                                const aiScene* scene,
                                texture_catalog& catalog,
                                std::unordered_set<int>& consumed_embedded);
-
-/// Bind-time fallback when the collect pass produced no pair bake: bake the MR map now.
-auto try_synchronous_spec_gloss_pair_mr(const fs::path& output_dir,
-                                        const aiScene* scene,
-                                        const imported_texture& pair_source,
-                                        const imported_texture& specular_tex,
-                                        const spec_gloss_factors_t& factors,
-                                        const std::string& expected_mr,
-                                        bool bake_base_color) -> std::string;
 
 /// Deterministic manifest order: embedded index, semantic, name.
 void sort_imported_textures(std::vector<imported_texture>& textures);

@@ -36,6 +36,7 @@
 #include <engine/meta/ui/ui_tree.hpp>
 #include <engine/meta/ui/style_sheet.hpp>
 #include <engine/meta/rendering/font.hpp>
+#include <engine/meta/rendering/graph_material.hpp>
 #include <engine/meta/rendering/material.hpp>
 #include <engine/meta/rendering/mesh.hpp>
 #include <engine/meta/rendering/shader_variants.hpp>
@@ -50,8 +51,10 @@
 #include <concurrency/parallel.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <functional>
 #include <iterator>
@@ -72,6 +75,7 @@
 #include <mutex>
 
 #include <map>
+#include <unordered_map>
 
 namespace unravel::asset_compiler
 {
@@ -118,6 +122,141 @@ auto get_default_material_path(const fs::path& dir, const fs::path& model_stem, 
         return (dir / model_stem).string() + ".mat";
     }
     return dir / (model_stem.string() + "_" + material_name + ".mat");
+}
+
+/// Conversions an older import baked an external texture into, as "<texture>_<conversion>.png" beside it.
+constexpr std::array<const char*, 7> FORMER_TEXTURE_CONVERSIONS = {"SpecularToMetallicRoughness",
+                                                                   "MetallicRoughness",
+                                                                   "GlossinessToRoughness",
+                                                                   "ShininessToRoughness",
+                                                                   "ExtractMetallicChannel",
+                                                                   "ExtractRoughnessChannel",
+                                                                   "converted"};
+
+/// A file name in UTF-8, which never fails as the narrow string of the system code page can.
+auto get_utf8_file_name(const fs::path& path) -> std::string
+{
+    const auto name = path.filename().u8string();
+    return std::string(name.begin(), name.end());
+}
+
+auto is_texture_file_name(const std::string& name) -> bool
+{
+    const size_t dot = name.rfind('.');
+    if(dot == std::string::npos)
+    {
+        return false;
+    }
+    const auto& formats = ex::get_suported_formats<gfx::texture>();
+    return std::find(formats.begin(), formats.end(), string_utils::to_lower(name.substr(dot))) != formats.end();
+}
+
+/// Whether @p name is how an import of the model @p model_stem names a texture it extracts or converts from the
+/// model's file: "[<index>] <semantic> <model><extension>".
+auto is_embedded_texture_output_of(const std::string& name, const std::string& model_stem) -> bool
+{
+    const size_t close = name.find("] ");
+    const auto is_digit = [](char c)
+    {
+        return std::isdigit(static_cast<unsigned char>(c)) != 0;
+    };
+    if(name.empty() || name.front() != '[' || close == std::string::npos || close < 2 ||
+       !std::all_of(name.begin() + 1, name.begin() + static_cast<std::ptrdiff_t>(close), is_digit))
+    {
+        return false;
+    }
+    const size_t semantic_end = name.find(' ', close + 2);
+    if(semantic_end == std::string::npos || semantic_end == close + 2)
+    {
+        return false;
+    }
+    const std::string model_part = name.substr(semantic_end + 1);
+    const size_t extension = model_part.rfind('.');
+    return extension != std::string::npos && model_part.substr(0, extension) == model_stem &&
+           is_texture_file_name(model_part);
+}
+
+/**
+ * @brief Textures an older import of the model @p model_stem wrote beside it that this import, which wrote or read
+ * @p textures, does not: embedded ones it extracted or converted, and conversions of the external ones it reads.
+ */
+auto find_former_texture_outputs(const fs::path& dir,
+                                 const fs::path& model_stem,
+                                 const std::vector<importer::imported_texture>& textures) -> std::vector<fs::path>
+{
+    std::set<fs::path> current;
+    for(const auto& texture : textures)
+    {
+        current.insert((dir / texture.name).lexically_normal());
+    }
+    std::set<fs::path> former;
+    const auto add_if_former = [&](const fs::path& path)
+    {
+        fs::error_code err;
+        const auto normal = path.lexically_normal();
+        if(current.count(normal) == 0 && fs::is_regular_file(normal, err))
+        {
+            former.insert(normal);
+        }
+    };
+    const auto model = get_utf8_file_name(model_stem);
+    fs::error_code err;
+    for(fs::directory_iterator it(dir, err), end; it != end && !err; it.increment(err))
+    {
+        if(is_embedded_texture_output_of(get_utf8_file_name(it->path()), model))
+        {
+            add_if_former(it->path());
+        }
+    }
+    for(const auto& texture : textures)
+    {
+        if(texture.embedded_index >= 0)
+        {
+            continue;
+        }
+        const fs::path source = dir / texture.name;
+        for(const char* conversion : FORMER_TEXTURE_CONVERSIONS)
+        {
+            fs::path converted = source.stem();
+            converted += std::string("_") + conversion + ".png";
+            add_if_former(source.parent_path() / converted);
+        }
+    }
+    return {former.begin(), former.end()};
+}
+
+/// The folder the references to a model's textures are looked for in: the project's data folder holding it, or the
+/// model's own folder outside one.
+auto get_reference_root(const fs::path& dir) -> fs::path
+{
+    const auto data = fs::absolute(fs::resolve_protocol(ex::get_data_directory_no_slash("app:/"))).lexically_normal();
+    const auto folder = fs::absolute(dir).lexically_normal();
+    return folder == data || fs::is_any_parent_path(data, folder) ? data : folder;
+}
+
+/// Deletes the textures an older import of the model wrote that this import no longer does, once nothing names them.
+void remove_former_texture_outputs(asset_manager& am,
+                                   const fs::path& dir,
+                                   const fs::path& model_stem,
+                                   const std::vector<importer::imported_texture>& textures,
+                                   const std::string& str_input)
+{
+    const auto former = find_former_texture_outputs(dir, model_stem, textures);
+    if(former.empty())
+    {
+        return;
+    }
+    const auto removed = generated_asset::remove_unreferenced_files(am, get_reference_root(dir), former);
+    std::vector<std::string> names;
+    std::transform(removed.begin(), removed.end(), std::back_inserter(names), get_utf8_file_name);
+    if(!names.empty())
+    {
+        APPLOG_INFO("{0}: deleted {1} texture(s) an older import made that this import no longer uses and nothing "
+                    "in the project names: {2}.",
+                    str_input,
+                    names.size(),
+                    fmt::join(names, ", "));
+    }
 }
 
 auto escape_str(const std::string& str) -> std::string
@@ -1098,6 +1237,33 @@ void run_eshader_variant_job(eshader_variant_job& job, shader_compile_input inpu
     }
 }
 
+/// The lines of a shaderc log that state errors, without the source it echoes; the log's end when none does.
+auto summarize_shader_error(const std::string& log) -> std::string
+{
+    constexpr size_t MAX_SUMMARY_LINES = 12;
+    std::vector<std::string> lines;
+    std::vector<std::string> errors;
+    std::istringstream stream(log);
+    for(std::string line; std::getline(stream, line);)
+    {
+        if(line.empty())
+        {
+            continue;
+        }
+        lines.push_back(line);
+        if(line.find("error") != std::string::npos || line.find("Error") != std::string::npos)
+        {
+            errors.push_back(line);
+        }
+    }
+    auto& kept = errors.empty() ? lines : errors;
+    if(kept.size() > MAX_SUMMARY_LINES)
+    {
+        kept.erase(kept.begin(), kept.end() - std::ptrdiff_t(MAX_SUMMARY_LINES));
+    }
+    return fmt::format("{}", fmt::join(kept, "\n"));
+}
+
 /// Logs the first failed job in full. One broken line usually fails every variant, with the same error each.
 void log_failed_eshader_variants(const fs::path& source_path, const std::vector<eshader_variant_job>& jobs)
 {
@@ -1179,6 +1345,12 @@ auto make_variants_without_code(const eshader_file& file) -> std::vector<compile
     return compiled;
 }
 
+/// The engine's shader files: what every shader's includes are looked for in.
+auto get_engine_shader_folder() -> fs::path
+{
+    return fs::resolve_protocol("engine:/data/shaders");
+}
+
 /**
  * @brief Runs shaderc once per variant, on the current pool.
  *
@@ -1193,7 +1365,9 @@ auto compile_eshader_variants(const fs::path& source_path,
                               const eshader_file& file,
                               const fs::path& temp_dir,
                               bgfx::RendererType::Enum renderer,
-                              std::vector<compiled_shader_variant>& compiled) -> bool
+                              const std::string& include_dirs,
+                              std::vector<compiled_shader_variant>& compiled,
+                              std::string* error = nullptr) -> bool
 {
     const bool is_webgl2 = renderer == bgfx::RendererType::OpenGLES;
     if(is_webgl2 && get_shader_stage(source_path.stem().string()) == shader_stage::compute)
@@ -1204,9 +1378,7 @@ auto compile_eshader_variants(const fs::path& source_path,
     compile_temp_files temp_files(temp_dir);
     shader_compile_input input;
     input.name = source_path.stem().string();
-    // The code compiles from a temp folder, so the source's own folder comes first in the include list: what the code
-    // includes relative to itself is there.
-    input.include_dirs = source_path.parent_path().string() + ";" + fs::resolve_protocol("engine:/data/shaders").string();
+    input.include_dirs = include_dirs;
     std::vector<eshader_variant_job> jobs;
     if(!prepare_eshader_jobs(source_path, file, temp_files, input, jobs))
     {
@@ -1223,6 +1395,11 @@ auto compile_eshader_variants(const fs::path& source_path,
     if(std::any_of(jobs.begin(), jobs.end(), is_failed_job))
     {
         log_failed_eshader_variants(source_path, jobs);
+        if(error != nullptr)
+        {
+            const auto failed = std::find_if(jobs.begin(), jobs.end(), is_failed_job);
+            *error = "variant " + failed->variant->name + ": " + summarize_shader_error(failed->error);
+        }
         return false;
     }
     const auto varyings = get_eshader_varyings(file);
@@ -1248,7 +1425,10 @@ auto compile_eshader_to_file(const fs::path& source_path, const fs::path& output
         return false;
     }
     std::vector<compiled_shader_variant> compiled;
-    if(!compile_eshader_variants(source_path, file, output.parent_path(), renderer, compiled))
+    // The code compiles from a temp folder, so the source's own folder comes first in the include list: what the code
+    // includes relative to itself is there.
+    const auto include_dirs = source_path.parent_path().string() + ";" + get_engine_shader_folder().string();
+    if(!compile_eshader_variants(source_path, file, output.parent_path(), renderer, include_dirs, compiled))
     {
         return false;
     }
@@ -1380,7 +1560,7 @@ auto read_texture_importer_settings(const fs::path& source_path) -> texture_impo
     asset_meta meta;
     if(load_from_file(source_path.string() + ".meta", meta) && meta.importer)
     {
-        if(auto importer = std::dynamic_pointer_cast<texture_importer_meta>(meta.importer))
+        if(auto importer = safe_pointer_cast<texture_importer_meta>(meta.importer))
         {
             return *importer;
         }
@@ -1513,6 +1693,252 @@ auto is_shader_compiled(const fs::path& key, const fs::path& output) -> bool
     return is_compiled_with<gfx::shader>(key, output, get_shader_compile_parameters(output));
 }
 
+namespace
+{
+/// A graph material's generated shaders and the hash of what they compile from: the code, the engine files it includes
+/// and the shader format.
+struct graph_material_shader_source
+{
+    std::string text;
+    /// Empty for a graph whose World Position Offset moves nothing.
+    std::string vertex_text;
+    std::string code_hash;
+};
+
+/**
+ * @brief The part of a graph material's code hash the engine shader files it includes give: each file's fingerprint on
+ * a line. Every material's check and compile reads it, so it is computed again only when one of the files changed on
+ * disk (the include list comes from their text, so it is valid as long as they are).
+ */
+auto get_graph_material_includes_fingerprint() -> std::string
+{
+    static std::mutex mutex;
+    static std::vector<file_stamp> stamps;
+    static std::string fingerprint;
+    std::lock_guard<std::mutex> lock(mutex);
+    if(are_file_stamps_current(stamps))
+    {
+        return fingerprint;
+    }
+    std::vector<fs::path> includes;
+    resolve_graph_material_shader_dependencies(includes);
+    stamps.clear();
+    fingerprint.clear();
+    for(const auto& include : includes)
+    {
+        stamps.push_back(make_file_stamp(include));
+        fingerprint += "\n" + fs::hash_file_fingerprint(include, true);
+    }
+    return fingerprint;
+}
+
+auto make_graph_material_shader_source(const graph_material& mat) -> graph_material_shader_source
+{
+    graph_material_shader_source source;
+    // Named after no file: materials of the same graph code (Standard materials of other values) generate the same
+    // text and hash, so they share the shader's compile and, once loaded, its programs.
+    auto compiled = compile_material_graph(mat.get_graph());
+    source.text = std::move(compiled.shader);
+    source.vertex_text = std::move(compiled.vertex_shader);
+    std::string hashed = source.text + source.vertex_text;
+    hashed += fmt::format("\nshader format {}", ex::get_format_version<gfx::shader>());
+    hashed += get_graph_material_includes_fingerprint();
+    source.code_hash = fs::hash_bytes_fingerprint(hashed.data(), hashed.size());
+    return source;
+}
+
+/// The name a graph material's generated shader compiles under, beside the material: shaderc takes the stage from its
+/// fs_ prefix (vs_ for the vertex shader), the code's own includes are looked for in its folder first, and compile
+/// messages name it.
+auto get_graph_material_shader_name(const fs::path& material_path, const char* stage_prefix = "fs_") -> fs::path
+{
+    return material_path.parent_path() / (stage_prefix + material_path.filename().string());
+}
+
+/// Whether @p output holds the code of @p code_hash, compiled for its renderer as a compile would compile it now. The
+/// record of a compile that failed (no variants) does not count.
+auto is_graph_material_shader_current(const fs::path& output, const std::string& code_hash) -> bool
+{
+    fs::error_code ec;
+    compiled_graph_material_shader_header header;
+    return fs::exists(output, ec) && load_header_from_file_bin(output.string(), header) && header.code_hash == code_hash &&
+           header.compile_parameters == get_shader_compile_parameters(output) && header.has_variants;
+}
+
+/// Writes @p compiled to @p output in place of what it held; false with the error logged when it cannot.
+auto write_graph_material_shader(const fs::path& output, const compiled_graph_material_shader& compiled) -> bool
+{
+    fs::error_code ec;
+    asset_writer::atomic_write_file(output,
+                                    [&](const fs::path& temp_output) -> void
+                                    {
+                                        save_to_file_bin(temp_output.string(), compiled);
+                                    },
+                                    ec);
+    if(ec)
+    {
+        APPLOG_ERROR("Failed writing the material shader {0}: {1}", output.string(), ec.message());
+        return false;
+    }
+    return true;
+}
+
+/**
+ * @brief The graph material shader files this session compiled, by what they were compiled from (code hash and
+ * compile parameters): a material of the same code (a Standard material of other values) takes a copy of one rather
+ * than running the compiler again.
+ */
+struct compiled_graph_shader_index
+{
+    std::mutex mutex;
+    std::unordered_map<std::string, fs::path> files;
+};
+
+auto get_compiled_graph_shader_index() -> compiled_graph_shader_index&
+{
+    static compiled_graph_shader_index index;
+    return index;
+}
+
+auto make_graph_shader_identity(const std::string& code_hash, const fs::path& output) -> std::string
+{
+    return code_hash + "|" + get_shader_compile_parameters(output);
+}
+
+/// Notes that @p output holds the shader of @p code_hash, compiled for its renderer.
+void remember_graph_material_shader(const std::string& code_hash, const fs::path& output)
+{
+    auto& index = get_compiled_graph_shader_index();
+    const auto identity = make_graph_shader_identity(code_hash, output);
+    std::lock_guard<std::mutex> lock(index.mutex);
+    index.files[identity] = output;
+}
+
+/// Writes to @p output the shader of @p code_hash another material compiled this session; false when there is none,
+/// or its file holds other code by now.
+auto copy_graph_material_shader_of_same_code(const std::string& code_hash, const fs::path& output) -> bool
+{
+    auto& index = get_compiled_graph_shader_index();
+    const auto identity = make_graph_shader_identity(code_hash, output);
+    fs::path compiled_file;
+    {
+        std::lock_guard<std::mutex> lock(index.mutex);
+        const auto found = index.files.find(identity);
+        if(found == index.files.end())
+        {
+            return false;
+        }
+        compiled_file = found->second;
+    }
+    compiled_graph_material_shader compiled;
+    return compiled_file != output && is_graph_material_shader_current(compiled_file, code_hash) &&
+           load_from_file_bin(compiled_file.string(), compiled) && compiled.code_hash == code_hash &&
+           !compiled.variants.empty() && write_graph_material_shader(output, compiled);
+}
+
+/// Compiles @p source, the shader of the graph material at @p material_path, into @p output for its renderer.
+auto compile_graph_material_shader_source(const fs::path& material_path,
+                                          const graph_material_shader_source& source,
+                                          const fs::path& output) -> bool
+{
+    if(is_graph_material_shader_current(output, source.code_hash) || copy_graph_material_shader_of_same_code(source.code_hash, output))
+    {
+        return true;
+    }
+    const auto shader_name = get_graph_material_shader_name(material_path);
+    fs::error_code ec;
+    fs::create_directories(output.parent_path(), ec);
+    const auto renderer = gfx::get_renderer_based_on_filename_extension(output.extension().string());
+    compiled_graph_material_shader compiled{source.code_hash, get_shader_compile_parameters(output), {}, {}};
+    const auto vertex_shader_name = get_graph_material_shader_name(material_path, "vs_");
+    const bool is_compiled =
+        compile_shader_text(shader_name, source.text, renderer, output.parent_path(), compiled.variants) &&
+        (source.vertex_text.empty() ||
+         compile_shader_text(vertex_shader_name, source.vertex_text, renderer, output.parent_path(), compiled.vertex_variants));
+    if(!is_compiled)
+    {
+        // Recorded with no variants: the material draws as a default one. The editor tries again at its next start
+        // (the failure may have been the compiler's, not the code's), or when the code changes.
+        compiled.variants.clear();
+        compiled.vertex_variants.clear();
+    }
+    if(!write_graph_material_shader(output, compiled) || !is_compiled)
+    {
+        return false;
+    }
+    remember_graph_material_shader(source.code_hash, output);
+    return true;
+}
+
+/// The graph material at @p key as its source holds it; null for another material or none.
+auto load_graph_material_source(const fs::path& key) -> std::shared_ptr<graph_material>
+{
+    std::shared_ptr<material> loaded;
+    load_from_file(resolve_input_file(key).string(), loaded);
+    return safe_pointer_cast<graph_material>(loaded);
+}
+
+/// Gives graph material @p mat the hash of its generated code and compiles the code beside the compiled material at
+/// @p output, for the renderer the editor draws with.
+void compile_graph_material_shaders(const fs::path& material_path, const fs::path& output, graph_material& mat)
+{
+    const auto source = make_graph_material_shader_source(mat);
+    mat.set_shader_hash(source.code_hash);
+    // The renderer the editor draws with, before the compiled material is written: its reload finds the shader there.
+    // A deploy compiles the renderers it ships (deployment::cook_shader_variants).
+    const auto& renderer = gfx::get_current_renderer_filename_extension();
+    if(gfx::get_renderer_platform_supported_filename_extensions().contains(renderer))
+    {
+        compile_graph_material_shader_source(material_path, source, get_graph_material_shader_file(output.string(), renderer));
+    }
+}
+} // namespace
+
+auto compile_shader_text(const fs::path& shader_name,
+                         const std::string& text,
+                         bgfx::RendererType::Enum renderer,
+                         const fs::path& temp_dir,
+                         std::vector<compiled_shader_variant>& variants,
+                         std::string* error) -> bool
+{
+    const auto stage = get_shader_stage(shader_name.stem().string());
+    eshader_file file;
+    std::string parse_error;
+    if(!stage)
+    {
+        parse_error = "the name must start with vs_, fs_ or cs_, which gives the shader's stage";
+    }
+    if(!stage || !parse_eshader_file(text, *stage, file, parse_error))
+    {
+        APPLOG_ERROR("Failed compilation of {0} with error: {1}", shader_name.string(), parse_error);
+        if(error != nullptr)
+        {
+            *error = parse_error;
+        }
+        return false;
+    }
+    // Generated code lives in no folder: its includes are the engine's, never a project file of the same name.
+    return compile_eshader_variants(shader_name, file, temp_dir, renderer, get_engine_shader_folder().string(), variants, error);
+}
+
+auto compile_graph_material_shader(const fs::path& key, const fs::path& output) -> bool
+{
+    const auto mat = load_graph_material_source(key);
+    if(!mat)
+    {
+        APPLOG_ERROR("{0} is not a material graph, so it has no shader to compile.", key.generic_string());
+        return false;
+    }
+    const auto material_path = resolve_input_file(key);
+    return compile_graph_material_shader_source(material_path, make_graph_material_shader_source(*mat), output);
+}
+
+auto is_graph_material_shader_compiled(const fs::path& key, const fs::path& output) -> bool
+{
+    const auto mat = load_graph_material_source(key);
+    return mat && is_graph_material_shader_current(output, make_graph_material_shader_source(*mat).code_hash);
+}
+
 template<>
 auto read_importer<gfx::texture>(asset_manager& am, const fs::path& key) -> std::shared_ptr<asset_importer_meta>
 {
@@ -1525,13 +1951,11 @@ auto compile<gfx::texture>(asset_manager& am, const fs::path& key, const fs::pat
     APP_SCOPE_PERF("Compile Texture");
     // Before the importer settings are read (compile_texture_with_importer).
     auto manifest = make_manifest<gfx::texture>(resolve_input_file(key));
-    auto base_importer = read_importer<gfx::texture>(am, key);
-
-    if(!base_importer)
+    const auto importer = safe_pointer_cast<texture_importer_meta>(read_importer<gfx::texture>(am, key));
+    if(!importer)
     {
         return true;
     }
-    auto importer = std::static_pointer_cast<texture_importer_meta>(base_importer);
     return compile_texture_with_importer(key, output, *importer, get_editor_texture_target_for(key), std::move(manifest));
 }
 
@@ -1566,7 +1990,7 @@ auto read_audio_importer(const fs::path& key) -> audio_importer_meta
     asset_meta meta;
     if(load_from_file(resolve_input_file(key).string() + ".meta", meta) && meta.importer)
     {
-        if(auto importer = std::dynamic_pointer_cast<audio_importer_meta>(meta.importer))
+        if(auto importer = safe_pointer_cast<audio_importer_meta>(meta.importer))
         {
             return *importer;
         }
@@ -1597,6 +2021,16 @@ auto compile<material>(asset_manager& am, const fs::path& key, const fs::path& o
     std::shared_ptr<material> material;
     {
         load_from_file(str_input, material);
+        if(auto graph = safe_pointer_cast<graph_material>(material))
+        {
+            // The compiled material keeps the functions its graph calls: a game has none of their files.
+            if(!graph->copy_functions())
+            {
+                APPLOG_WARNING("{} calls a material function that has no file; it reads 0 there.", str_input);
+            }
+            // A shader that does not compile leaves the material drawing as a default one; the material still compiles.
+            compile_graph_material_shaders(absolute_path, output, *graph);
+        }
 
         asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
         {
@@ -1632,14 +2066,11 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
 {
     APP_SCOPE_PERF("Compile Mesh");
     // Try to import first.
-    auto base_importer = read_importer<mesh>(am, key);
-
-    if(!base_importer)
+    auto importer = safe_pointer_cast<mesh_importer_meta>(read_importer<mesh>(am, key));
+    if(!importer)
     {
         return true;
     }
-
-    auto importer = std::static_pointer_cast<mesh_importer_meta>(base_importer);
 
     auto absolute_path = resolve_input_file(key);
 
@@ -1744,7 +2175,7 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         /// What a submesh's material says about the field that represents it.
         struct sdf_material_traits
         {
-            ///< Alpha-blended. The surface transmits light, so a field that occludes it is a lie:
+            ///< Translucent. The surface transmits light, so a field that occludes it is a lie:
             ///< glass, water and blended decal cards would each block GI outright.
             bool is_translucent = false;
             ///< Rendered with culling off, which is how cards and sheets are authored. Such a
@@ -1768,8 +2199,8 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                 continue;
             }
             material_traits[m].is_two_sided = mat->get_cull_type() == cull_type::none;
-            const auto pbr = std::dynamic_pointer_cast<pbr_material>(mat);
-            material_traits[m].is_translucent = pbr && pbr->get_alpha_mode() == alpha_mode::blend;
+            const auto* graph = mat->safe_cast<graph_material>();
+            material_traits[m].is_translucent = graph != nullptr && graph->is_translucent();
         }
         // A data group with no entry in the table (a mesh whose materials failed to import) falls
         // through to the asset-level settings.
@@ -2243,6 +2674,11 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
     APPLOG_INFO("Adding default material UIDs for {0}", str_input);
     const auto source_uid = get_source_uid(am, key, absolute_path);
     std::vector<std::string> kept_material_names;
+    std::vector<std::string> replaced_material_names;
+    const auto is_older_import = [](const fs::path& existing)
+    {
+        return is_legacy_material_file(existing.string());
+    };
     for(const auto& material : materials)
     {
         const auto mat_output = get_default_material_path(dir, file, material.name);
@@ -2263,7 +2699,8 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                                                         [&](const fs::path& temp)
                                                         {
                                                             save_to_file(temp.string(), material.mat);
-                                                        });
+                                                        },
+                                                        is_older_import);
         if(result == generated_asset::write_result::failed)
         {
             has_write_error = true;
@@ -2272,7 +2709,20 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         {
             kept_material_names.push_back(mat_output.filename().string());
         }
+        else if(result == generated_asset::write_result::replaced_untracked)
+        {
+            replaced_material_names.push_back(mat_output.filename().string());
+        }
     }
+    if(!replaced_material_names.empty())
+    {
+        APPLOG_INFO("{0}: replaced {1} default material(s) an older engine imported, before edits to them were "
+                    "tracked: {2}.",
+                    str_input,
+                    replaced_material_names.size(),
+                    fmt::join(replaced_material_names, ", "));
+    }
+    remove_former_texture_outputs(am, dir, file, textures, str_input);
     if(!kept_material_names.empty())
     {
         APPLOG_INFO("{0}: kept {1} edited default material(s) as they are: {2}. Reset to Imported in a "
@@ -2340,14 +2790,11 @@ auto compile<animation_clip>(asset_manager& am, const fs::path& key, const fs::p
 {
     APP_SCOPE_PERF("Compile Animation Clip");
     // Try to import first.
-    auto base_importer = read_importer<animation_clip>(am, key);
-
-    if(!base_importer)
+    auto importer = safe_pointer_cast<animation_importer_meta>(read_importer<animation_clip>(am, key));
+    if(!importer)
     {
         return true;
     }
-
-    auto importer = std::static_pointer_cast<animation_importer_meta>(base_importer);
 
     auto absolute_path = resolve_input_file(key);
 
@@ -2702,13 +3149,12 @@ auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path&
 {
     APP_SCOPE_PERF("Compile Audio Clip");
     // Try to import first.
-    auto base_importer = read_importer<audio_clip>(am, key);
-    if(!base_importer)
+    const auto importer = safe_pointer_cast<audio_importer_meta>(read_importer<audio_clip>(am, key));
+    if(!importer)
     {
         return true;
     }
-    const auto& importer = *std::static_pointer_cast<audio_importer_meta>(base_importer);
-    return compile_audio_clip(key, output, importer, resolve_editor_audio_compression(key, importer));
+    return compile_audio_clip(key, output, *importer, resolve_editor_audio_compression(key, *importer));
 }
 namespace
 {

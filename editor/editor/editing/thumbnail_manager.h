@@ -10,6 +10,7 @@
 #include <engine/ecs/scene.h>
 
 #include <chrono>
+#include <optional>
 
 
 namespace gfx
@@ -59,6 +60,8 @@ struct thumbnail_manager
         fs::path cache_path{};
 
         clock::time_point last_access_time{clock::now()};
+        /// When the thumbnail first found its scene's materials still loading; cleared once it is taken.
+        std::optional<clock::time_point> materials_wait_start;
     };
 
     struct generator

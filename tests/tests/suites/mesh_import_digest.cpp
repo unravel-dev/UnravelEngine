@@ -30,6 +30,7 @@
 #include <engine/assets/asset_manager.h>
 #include <asset_compiler/importers/mesh_importer.h>
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <logging/logging.h>
 
 #include <algorithm>
@@ -373,36 +374,44 @@ void write_animations(digest_writer& out, const std::vector<animation_clip>& ani
     }
 }
 
+/// One value of a material's graph parameter for the digest: its four numbers, or "-" when the graph has none.
+auto format_parameter(const graph_material& mat, const char* name) -> std::string
+{
+    const auto value = mat.get_parameter(name);
+    return value ? format_vec4(*value) : std::string("-");
+}
+
 void write_materials(digest_writer& out, const std::vector<importer::imported_material>& materials)
 {
     out.line("  materials count={}", materials.size());
     for(const auto& imported : materials)
     {
-        const auto pbr = std::dynamic_pointer_cast<pbr_material>(imported.mat);
-        if(!pbr)
+        const auto* mat = imported.mat ? imported.mat->safe_cast<graph_material>() : nullptr;
+        if(mat == nullptr)
         {
-            out.line("  material '{}' <not pbr>", imported.name);
+            out.line("  material '{}' <not a graph>", imported.name);
             continue;
         }
-        out.line("  material '{}' base={} metal={:.5f} rough={:.5f} bump={:.5f} emissive={}x{:.5f} alpha={} cutoff={:.5f} "
-                 "cull={}",
+        const auto output = find_material_graph_output(mat->get_graph());
+        const bool is_specular = output >= 0 && is_material_specular_workflow(mat->get_graph().nodes[size_t(output)]);
+        out.line("  material '{}' workflow={} masked={} translucent={} cull={}",
                  imported.name,
-                 format_vec4(pbr->get_base_color().value),
-                 pbr->get_metalness(),
-                 pbr->get_roughness(),
-                 pbr->get_bumpiness(),
-                 format_vec4(pbr->get_emissive_color().value),
-                 pbr->get_emissive_intensity(),
-                 static_cast<uint32_t>(pbr->get_alpha_mode()),
-                 pbr->get_alpha_cutoff(),
-                 static_cast<uint32_t>(pbr->get_cull_type()));
-        out.line("    maps color='{}' normal='{}' rough='{}' metal='{}' ao='{}' emissive='{}'",
-                 out.normalize_key(pbr->get_color_map().id()),
-                 out.normalize_key(pbr->get_normal_map().id()),
-                 out.normalize_key(pbr->get_roughness_map().id()),
-                 out.normalize_key(pbr->get_metalness_map().id()),
-                 out.normalize_key(pbr->get_ao_map().id()),
-                 out.normalize_key(pbr->get_emissive_map().id()));
+                 is_specular ? "specular" : "metallic",
+                 mat->uses_opacity_mask(),
+                 mat->is_translucent(),
+                 static_cast<uint32_t>(mat->get_cull_type()));
+        std::string values;
+        for(const auto& parameter : mat->get_parameters())
+        {
+            values += fmt::format(" '{}'={}", parameter.name, format_parameter(*mat, parameter.name.c_str()));
+        }
+        out.line("    values{}", values);
+        std::string maps;
+        for(const auto& texture : mat->get_textures())
+        {
+            maps += fmt::format(" '{}'='{}'", texture.name, out.normalize_key(texture.texture.id()));
+        }
+        out.line("    maps{}", maps);
     }
 }
 

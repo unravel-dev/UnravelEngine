@@ -22,7 +22,7 @@
 
 /// Prefiltered view-space depth, GTAO_DEPTH_MIP_LEVELS mips, point sampled.
 SAMPLER2D(s_gtao_depth_mips, 0);
-/// Full-resolution G-buffer normal / metalness / roughness.
+/// Full-resolution G-buffer normal / metallic / roughness.
 SAMPLER2D(s_gtao_normal, 1);
 IMAGE2D_WO(i_gtao_out, rgba8, 2);
 

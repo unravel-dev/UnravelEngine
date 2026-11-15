@@ -2,6 +2,7 @@
 #include <engine/engine_export.h>
 
 #include "material.h"
+#include "material_graph/graph_material.h"
 
 #include <engine/assets/asset_handle.h>
 
@@ -14,20 +15,30 @@
 namespace unravel
 {
 
-/// Calls @p visit(id, data) for every reflected property of a material type: its base types' first, then its own.
+/**
+ * @brief Calls @p visit(id, data) for every property of a material type a material instance can override: each
+ * writable reflected property, its base types' first, then its own. A read-only one (the cull type) is the graph's.
+ */
 template<typename Visitor>
 void for_each_material_property(const entt::meta_type& type, Visitor&& visit)
 {
+    const auto visit_writable = [&visit](entt::id_type id, const entt::meta_data& data)
+    {
+        if(!data.is_const())
+        {
+            visit(id, data);
+        }
+    };
     for(auto [base_id, base] : type.base())
     {
         for(auto [id, data] : base.data())
         {
-            visit(id, data);
+            visit_writable(id, data);
         }
     }
     for(auto [id, data] : type.data())
     {
-        visit(id, data);
+        visit_writable(id, data);
     }
 }
 
@@ -44,8 +55,9 @@ auto get_material_value(const material& mat, entt::id_type property) -> entt::me
 auto set_material_value(material& mat, entt::id_type property, const entt::meta_any& value) -> bool;
 
 /**
- * @brief Gives @p target every reflected value of @p source, in place: @p target keeps its identity, which caches of
- * its look key on. Only values that differ are written. The two must be of the same type.
+ * @brief Gives @p target every value of @p source, in place: the reflected ones, then those reflection does not reach
+ * (material::copy_unreflected_values, such as a graph material's graph and shader). @p target keeps its identity,
+ * which caches of its look key on. Only values that differ are written. The two must be of the same type.
  */
 void copy_material_values(const material& source, material& target);
 
@@ -64,7 +76,8 @@ auto get_material_property_changes(const entt::meta_type& type, entt::id_type pr
  * its shared material.
  *
  * Overrides are keyed by the reflected properties of the shared material's type. A property registered with the
- * "per_instance" attribute can differ between renderers that are still drawn together (see shares_draw).
+ * "per_instance" attribute can differ between renderers that are still drawn together (see shares_draw). A graph
+ * material's parameters and textures are overridden by name (set_graph_parameter, set_graph_texture).
  */
 class material_instance
 {
@@ -120,6 +133,42 @@ public:
     auto get_overrides() const -> const std::vector<property_override>&;
 
     /**
+     * @brief Overrides parameter @p name of a graph material (graph_material::set_parameter).
+     * @return False when the shared material is not a loaded graph material with such a parameter.
+     */
+    auto set_graph_parameter(const std::string& name, const math::vec4& value) -> bool;
+
+    /// What the renderer gives parameter @p name: the override, or the shared material's value. Empty when the shared
+    /// material is not a loaded graph material with such a parameter.
+    auto get_graph_parameter(hpp::string_view name) const -> hpp::optional<math::vec4>;
+
+    auto is_graph_parameter_overridden(hpp::string_view name) const -> bool;
+
+    /// Drops the override of parameter @p name: it follows the shared material again.
+    void revert_graph_parameter(hpp::string_view name);
+
+    /// The overridden graph parameters, in the order they were first overridden.
+    auto get_graph_parameter_overrides() const -> const std::vector<graph_parameter_value>&;
+
+    /**
+     * @brief Overrides texture node @p name of a graph material (graph_material::set_texture); an empty handle samples
+     * the default texture.
+     * @return False when the shared material is not a loaded graph material with such a texture node.
+     */
+    auto set_graph_texture(const std::string& name, const asset_handle<gfx::texture>& texture) -> bool;
+
+    /// What the renderer samples for texture node @p name: the override, or the shared material's texture.
+    auto get_graph_texture(hpp::string_view name) const -> asset_handle<gfx::texture>;
+
+    auto is_graph_texture_overridden(hpp::string_view name) const -> bool;
+
+    /// Drops the override of texture node @p name: it follows the shared material again.
+    void revert_graph_texture(hpp::string_view name);
+
+    /// The overridden graph textures, in the order they were first overridden.
+    auto get_graph_texture_overrides() const -> const std::vector<graph_texture_value>&;
+
+    /**
      * @brief The render_change aspects this instance draws differently from @p previous: every material aspect when
      * the shared material differs (or a legacy copy waits), else the aspects of the properties whose override was
      * added, dropped or changed.
@@ -140,7 +189,10 @@ public:
 
     /**
      * @brief True when every override is a per-instance property, so the renderer can be drawn together with
-     * the other renderers of the shared material.
+     * the other renderers of the shared material. For a graph material: no texture is overridden, its World Position
+     * Offset moves nothing (the vertex shader reads the material's own values), and every overridden parameter the
+     * graph has sits in the registers the shader's instance_material variant reads per instance
+     * (material::MAX_INSTANCE_CONSTANTS). A masked graph's shadow casters draw with the instance's resolved material.
      */
     auto shares_draw() const -> bool;
 
@@ -165,6 +217,12 @@ public:
     auto get_resolved_shares_draw() const -> bool;
 
     /**
+     * @brief Whether the overrides feed nothing a shadow reads (render_interest::shadow_caster), as of the last
+     * update_resolved(): the slot's shadow casts with the shared material, together with its other casters.
+     */
+    auto get_resolved_shares_shadow() const -> bool;
+
+    /**
      * @brief Takes the resolved material of @p previous, the instance this copy replaces, when both are over the same
      * shared material. The next update_resolved() rewrites it in place, so caches of its look (the GI cards) keep
      * their key across an edit that sets a whole copy of the model.
@@ -172,10 +230,18 @@ public:
     void adopt_resolved(material_instance& previous);
 
     /**
-     * @brief Takes a whole material saved by an older version, which kept a full copy instead of overrides.
+     * @brief The graph overrides to save: the stored ones and, while a legacy copy waits, the parameters and textures
+     * where it differs from the shared graph (waiting for the shared material to load).
+     */
+    void collect_graph_overrides(std::vector<graph_parameter_value>& parameters, std::vector<graph_texture_value>& textures) const;
+
+    /**
+     * @brief Takes a whole material saved by an older version, which kept a full copy instead of overrides. A PBR
+     * material's copy becomes the Standard graph (upgrade_legacy_material).
      *
-     * The properties where it differs from the shared material become overrides once the shared material is
-     * loaded, so the look stays the same and the rest follows the shared material from then on.
+     * The values where it differs from the shared material become overrides once the shared material is loaded (a
+     * graph's parameters and textures by name), so the look stays the same and the rest follows the shared material
+     * from then on.
      */
     void set_legacy_copy(material::sptr copy);
     auto has_legacy_copy() const -> bool;
@@ -189,9 +255,24 @@ public:
 private:
     auto find_override(entt::id_type property) -> property_override*;
     auto find_override(entt::id_type property) const -> const property_override*;
+    /// The shared material as a loaded graph material, waiting for it to load when @p wait; null otherwise.
+    auto get_shared_graph(bool wait) const -> std::shared_ptr<graph_material>;
+    auto has_graph_overrides() const -> bool;
+    auto shares_graph_draw() const -> bool;
+    auto shares_shadow() const -> bool;
+    /// Gives the resolved material the graph overrides.
+    void apply_graph_overrides();
     auto diff_legacy_copy(const material::sptr& shared) const -> std::vector<property_override>;
+    /// Adds to @p parameters and @p textures where the legacy copy's graph differs from the shared graph; nothing when
+    /// either is not a graph material.
+    void diff_legacy_graph_copy(const material::sptr& shared,
+                                std::vector<graph_parameter_value>& parameters,
+                                std::vector<graph_texture_value>& textures) const;
     void rebuild_resolved(const material::sptr& shared);
     void sync_changed_properties(const material::sptr& shared);
+    /// Gives the resolved material the graph values changed since the last update_resolved(): each override's, else
+    /// the shared material's back.
+    void sync_changed_graph_values(const material::sptr& shared);
 
     /// The slot's shared material.
     asset_handle<material> shared_;
@@ -199,6 +280,9 @@ private:
     entt::id_type material_type_{};
     /// The overridden properties, in the order they were first overridden.
     std::vector<property_override> overrides_;
+    /// A graph material's overridden parameters and textures, by name.
+    std::vector<graph_parameter_value> graph_parameters_;
+    std::vector<graph_texture_value> graph_textures_;
     /// A full material from an older save, waiting to be compared with the loaded shared material.
     material::sptr legacy_copy_;
 
@@ -208,8 +292,14 @@ private:
     const material* resolved_shared_{};
     uint64_t resolved_shared_revision_{};
     bool resolved_shares_draw_{};
+    bool resolved_shares_shadow_{};
     /// Properties overridden or reverted since the last update_resolved().
     std::vector<entt::id_type> changed_properties_;
+    /// Graph parameters and textures overridden or reverted since the last update_resolved(), by name.
+    std::vector<std::string> changed_graph_parameters_;
+    std::vector<std::string> changed_graph_textures_;
+    /// The graph overrides were replaced at once (a load, a copy, a revert of all): the resolved material is rebuilt.
+    bool are_graph_overrides_changed_{};
 };
 
 /**

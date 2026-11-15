@@ -233,6 +233,11 @@ property_layout::property_layout(const std::string& name, const std::string& too
     push_layout();
 }
 
+property_layout::property_layout(const std::string& name, const char* tooltip, bool columns /*= true*/)
+    : property_layout(name, std::string(tooltip != nullptr ? tooltip : ""), columns)
+{
+}
+
 property_layout::property_layout(const std::string& name, const std::string& tooltip, const std::string& hint, bool columns /*= true*/)
 {
     push_layout_to_stack(this);

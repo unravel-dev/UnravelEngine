@@ -25,10 +25,10 @@ namespace
 // -----------------------------------------------------------------------------
 
 constexpr std::array<visualization_swatch, 1> k_legend_diffuse_color = {{
-    {{0.0f, 0.0f, 0.0f}, "Pure metal - metalness 1 leaves no diffuse lobe"},
+    {{0.0f, 0.0f, 0.0f}, "Pure metal - metallic 1 leaves no diffuse lobe"},
 }};
 
-/// ComputeF0(0.5, base, metalness) gives every dielectric F0 = 0.04 LINEAR, and this view
+/// ComputeF0(0.5, base, metallic) gives every dielectric F0 = 0.04 LINEAR, and this view
 /// sRGB-encodes before writing, so the constant reads as ~0.22 grey on screen - not near-black.
 constexpr std::array<visualization_swatch, 1> k_legend_specular_color = {{
     {{0.22f, 0.22f, 0.22f}, "Dielectric - the one flat F0 every non-metal shares (0.04 linear)"},
@@ -203,7 +203,7 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      visualization_group::surface,
      "diffuse_color",
      "Diffuse Color",
-     "Base color with the metal fraction removed: base_color * (1 - metalness). What the "
+     "Base color with the metal fraction removed: base_color * (1 - metallic). What the "
      "diffuse lobe is tinted by.",
      k_legend_diffuse_color},
     {visualization_mode::specular_color,
@@ -225,11 +225,11 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      "Roughness",
      "Perceptual roughness as greyscale: black = 0 (mirror), white = 1 (fully rough).",
      {}},
-    {visualization_mode::metalness,
+    {visualization_mode::metallic,
      visualization_group::surface,
-     "metalness",
-     "Metalness",
-     "Metalness as greyscale: black = 0 (dielectric), white = 1 (metal).",
+     "metallic",
+     "Metallic",
+     "Metallic as greyscale: black = 0 (dielectric), white = 1 (metal).",
      {}},
     {visualization_mode::emissive_color,
      visualization_group::surface,

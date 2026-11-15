@@ -586,6 +586,10 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
             {
                 parent_->get_animation_panel().show(true);
             }
+            if(ImGui::MenuItem("Material Graph"))
+            {
+                parent_->get_material_graph_panel().show(true);
+            }
             if(ImGui::MenuItem("MCP Server"))
             {
                 parent_->get_mcp_panel().show(true);
@@ -625,8 +629,8 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
         ImGui::EndMenuBar();
     }
 
-    // A focused Animation Controller window undoes, redoes and saves its own controller.
-    const bool edits_controller = parent_->get_animation_panel().is_focused();
+    // A focused Animation Controller or Material Graph window undoes, redoes and saves its own document.
+    const bool edits_controller = parent_->get_animation_panel().is_focused() || parent_->get_material_graph_panel().is_focused();
     // While the game plays with the keyboard (its panel focused), its keys are the game's: Ctrl+Z is not an undo.
     const bool game_has_keyboard =
         editor_actions::get_play_state(ctx).is_active && ctx.get_cached<input_system>().manager.is_input_allowed();

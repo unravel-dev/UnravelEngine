@@ -113,7 +113,11 @@ reset state there instead of in `OnStart`, which runs only once per instance.
   does not override follow the shared material; `instance.Revert(MaterialProperty.X)`,
   `instance.RevertAll()`, `instance.IsOverridden(...)`. Colors and numbers are per instance (the
   renderer keeps sharing the material's instanced draw, `instance.sharesDraw`); textures, tiling
-  and modes give it a draw of its own.
+  and modes give it a draw of its own. A material graph's values go by name, on the instance or
+  the `Material`: `SetFloat("roughness", 0.3f)`, `SetVector("offset", v4)`, `SetColor("tint", c)`,
+  `SetTexture("albedo", tex)` (texture node id), the matching getters, `HasParameter(name)`, and on
+  the instance `IsOverridden(name)` / `Revert(name)`; a name the graph lacks throws
+  `ArgumentException`. Edits of a shared `Material` are put back when play stops.
 - Particles: `emitter.Emit(count)` or `Emit(count, new EmitParams { position = p, velocity = v,
   color = c, size = s, lifetime = t })` bursts regardless of rate or play state.
   Gradients are `Gradient` (color keys), `MinMaxCurve` (random between two), `Curve` and

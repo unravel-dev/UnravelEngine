@@ -14,6 +14,10 @@ namespace Unravel.Core
     /// draws with. Colors and numbers are per instance: renderers that override only those still draw together with
     /// the other renderers of the shared material (<see cref="sharesDraw"/>). Textures, tiling and modes are per
     /// material: overriding one gives the renderer a draw of its own.
+    ///
+    /// A material graph's parameters and texture nodes are set by name (<see cref="SetFloat(string, float)"/>,
+    /// <see cref="SetTexture(string, Texture)"/>): a parameter among the graph's first four registers keeps the
+    /// renderer in the shared draw; a texture node, or any parameter of a graph whose Opacity Mask clips, does not.
     /// </remarks>
     public sealed class MaterialInstance : IDisposable
     {
@@ -84,7 +88,8 @@ namespace Unravel.Core
             }
         }
 
-        /// <summary>Base (albedo) color; its alpha fades the surface. Per instance.</summary>
+        /// <summary>Base (albedo) color; its alpha fades a surface whose graph clips by it (a masked or translucent
+        /// material, or one made with an alpha below 1). Per instance.</summary>
         public Color baseColor
         {
             get => internal_m2n_material_instance_get_color(owner, key, (int)MaterialProperty.BaseColor);
@@ -112,18 +117,20 @@ namespace Unravel.Core
             set => internal_m2n_material_instance_set_float(owner, key, (int)MaterialProperty.EmissiveIntensity, value);
         }
 
-        /// <summary>Surface roughness. Per instance.</summary>
+        /// <summary>Surface roughness; on a specular-workflow material it reads and writes Glossiness as 1 -
+        /// roughness. Per instance.</summary>
         public float roughness
         {
             get => internal_m2n_material_instance_get_float(owner, key, (int)MaterialProperty.Roughness);
             set => internal_m2n_material_instance_set_float(owner, key, (int)MaterialProperty.Roughness, value);
         }
 
-        /// <summary>Surface metalness. Per instance.</summary>
-        public float metalness
+        /// <summary>How metallic the surface is, 0 to 1. A specular-workflow material has none: setting it there
+        /// changes nothing and logs a warning. Per instance.</summary>
+        public float metallic
         {
-            get => internal_m2n_material_instance_get_float(owner, key, (int)MaterialProperty.Metalness);
-            set => internal_m2n_material_instance_set_float(owner, key, (int)MaterialProperty.Metalness, value);
+            get => internal_m2n_material_instance_get_float(owner, key, (int)MaterialProperty.Metallic);
+            set => internal_m2n_material_instance_set_float(owner, key, (int)MaterialProperty.Metallic, value);
         }
 
         /// <summary>Normal-map bump intensity. Per instance.</summary>
@@ -168,11 +175,11 @@ namespace Unravel.Core
             set => SetTexture(MaterialProperty.RoughnessMap, value);
         }
 
-        /// <summary>Metalness texture, or null for the engine's default map. Per material.</summary>
-        public Texture metalnessMap
+        /// <summary>Metallic texture, or null for the engine's default map. Per material.</summary>
+        public Texture metallicMap
         {
-            get => GetTexture(MaterialProperty.MetalnessMap);
-            set => SetTexture(MaterialProperty.MetalnessMap, value);
+            get => GetTexture(MaterialProperty.MetallicMap);
+            set => SetTexture(MaterialProperty.MetallicMap, value);
         }
 
         /// <summary>Emissive texture, or null for the engine's default map. Per material.</summary>
@@ -189,14 +196,15 @@ namespace Unravel.Core
             set => SetTexture(MaterialProperty.AoMap, value);
         }
 
-        /// <summary>How the material treats alpha. Per material.</summary>
+        /// <summary>How the material treats alpha: the graph's; setting it does nothing (a warning is logged).</summary>
         public MaterialAlphaMode alphaMode
         {
             get => (MaterialAlphaMode)internal_m2n_material_instance_get_mode(owner, key, (int)MaterialProperty.AlphaMode);
             set => internal_m2n_material_instance_set_mode(owner, key, (int)MaterialProperty.AlphaMode, (int)value);
         }
 
-        /// <summary>Which faces the material hides; None draws both sides. Per material.</summary>
+        /// <summary>Which faces the material hides (None draws both sides): the graph's Two Sided and Cull Front
+        /// Faces settings; setting it does nothing (a warning is logged).</summary>
         public MaterialCullMode cullMode
         {
             get => (MaterialCullMode)internal_m2n_material_instance_get_mode(owner, key, (int)MaterialProperty.CullMode);
@@ -251,7 +259,7 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Gets the number this renderer draws with: EmissiveIntensity, Roughness, Metalness, Bumpiness or AlphaCutoff.
+        /// Gets the number this renderer draws with: EmissiveIntensity, Roughness, Metallic, Bumpiness or AlphaCutoff.
         /// </summary>
         /// <exception cref="ArgumentException"><paramref name="property"/> is not a number property.</exception>
         public float GetFloat(MaterialProperty property)
@@ -261,7 +269,7 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Overrides a number for this renderer: EmissiveIntensity, Roughness, Metalness, Bumpiness or AlphaCutoff.
+        /// Overrides a number for this renderer: EmissiveIntensity, Roughness, Metallic, Bumpiness or AlphaCutoff.
         /// Per instance, except AlphaCutoff, which is per material.
         /// </summary>
         /// <exception cref="ArgumentException"><paramref name="property"/> is not a number property.</exception>
@@ -288,7 +296,7 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Gets the texture this renderer draws with: ColorMap, NormalMap, RoughnessMap, MetalnessMap, EmissiveMap or
+        /// Gets the texture this renderer draws with: ColorMap, NormalMap, RoughnessMap, MetallicMap, EmissiveMap or
         /// AoMap.
         /// </summary>
         /// <returns>The texture, or null when the renderer uses the engine's default map.</returns>
@@ -301,7 +309,7 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Overrides a texture for this renderer: ColorMap, NormalMap, RoughnessMap, MetalnessMap, EmissiveMap or
+        /// Overrides a texture for this renderer: ColorMap, NormalMap, RoughnessMap, MetallicMap, EmissiveMap or
         /// AoMap. Per material.
         /// </summary>
         /// <param name="property">The texture property.</param>
@@ -312,6 +320,135 @@ namespace Unravel.Core
             MaterialPropertyTypes.RequireTexture(property);
             internal_m2n_material_instance_set_texture(owner, key, (int)property, texture?.uid ?? Guid.Empty);
         }
+
+        /// <summary>Whether the shared material is a material graph with a parameter named <paramref name="name"/>.</summary>
+        public bool HasParameter(string name)
+        {
+            return internal_m2n_material_instance_has_parameter(owner, key, name);
+        }
+
+        /// <summary>Gets the number this renderer gives a material graph's Scalar Parameter.</summary>
+        /// <exception cref="ArgumentException">The shared material has no parameter named <paramref name="name"/>.</exception>
+        public float GetFloat(string name)
+        {
+            return GetVector(name).x;
+        }
+
+        /// <summary>Overrides a material graph's Scalar Parameter for this renderer.</summary>
+        /// <exception cref="ArgumentException">The shared material has no parameter named <paramref name="name"/>.</exception>
+        public void SetFloat(string name, float value)
+        {
+            SetVector(name, new Vector4(value, 0.0f, 0.0f, 0.0f));
+        }
+
+        /// <summary>Gets the vector this renderer gives a material graph's Vector or Color Parameter.</summary>
+        /// <exception cref="ArgumentException">The shared material has no parameter named <paramref name="name"/>.</exception>
+        public Vector4 GetVector(string name)
+        {
+            RequireParameter(name);
+            return internal_m2n_material_instance_get_parameter(owner, key, name);
+        }
+
+        /// <summary>Overrides a material graph's Vector or Color Parameter for this renderer.</summary>
+        /// <exception cref="ArgumentException">The shared material has no parameter named <paramref name="name"/>.</exception>
+        public void SetVector(string name, Vector4 value)
+        {
+            if (!internal_m2n_material_instance_set_parameter(owner, key, name, value))
+            {
+                throw new ArgumentException($"The shared material is not a material graph with a parameter named '{name}'.", nameof(name));
+            }
+        }
+
+        /// <summary>Gets the color this renderer gives a material graph's Color Parameter.</summary>
+        /// <exception cref="ArgumentException">The shared material has no parameter named <paramref name="name"/>.</exception>
+        public Color GetColor(string name)
+        {
+            var value = GetVector(name);
+            return new Color(value.x, value.y, value.z, value.w);
+        }
+
+        /// <summary>Overrides a material graph's Color Parameter for this renderer.</summary>
+        /// <exception cref="ArgumentException">The shared material has no parameter named <paramref name="name"/>.</exception>
+        public void SetColor(string name, Color value)
+        {
+            SetVector(name, new Vector4(value.r, value.g, value.b, value.a));
+        }
+
+        /// <summary>
+        /// Gets the texture this renderer samples for a material graph's texture node, named by its id.
+        /// </summary>
+        /// <returns>The texture, or null when the node samples the engine's default texture.</returns>
+        /// <exception cref="ArgumentException">The shared material has no texture node <paramref name="textureNode"/>.</exception>
+        public Texture GetTexture(string textureNode)
+        {
+            if (!internal_m2n_material_instance_has_texture_node(owner, key, textureNode))
+            {
+                throw new ArgumentException($"The shared material is not a material graph with a texture node '{textureNode}'.", nameof(textureNode));
+            }
+            var uid = internal_m2n_material_instance_get_texture_by_name(owner, key, textureNode);
+            return uid == Guid.Empty ? null : new Texture { uid = uid };
+        }
+
+        /// <summary>
+        /// Overrides the texture of a material graph's texture node, named by its id, for this renderer. Per material.
+        /// </summary>
+        /// <param name="textureNode">The texture node's id.</param>
+        /// <param name="texture">The texture, or null for the engine's default texture.</param>
+        /// <exception cref="ArgumentException">The shared material has no texture node <paramref name="textureNode"/>.</exception>
+        public void SetTexture(string textureNode, Texture texture)
+        {
+            if (!internal_m2n_material_instance_set_texture_by_name(owner, key, textureNode, texture?.uid ?? Guid.Empty))
+            {
+                throw new ArgumentException($"The shared material is not a material graph with a texture node '{textureNode}'.", nameof(textureNode));
+            }
+        }
+
+        /// <summary>Whether this renderer overrides the material graph's parameter or texture node <paramref name="name"/>.</summary>
+        public bool IsOverridden(string name)
+        {
+            return internal_m2n_material_instance_is_name_overridden(owner, key, name);
+        }
+
+        /// <summary>
+        /// Drops the override of the material graph's parameter or texture node <paramref name="name"/>: it follows the
+        /// shared material again.
+        /// </summary>
+        public void Revert(string name)
+        {
+            internal_m2n_material_instance_revert_name(owner, key, name);
+        }
+
+        private void RequireParameter(string name)
+        {
+            if (!HasParameter(name))
+            {
+                throw new ArgumentException($"The shared material is not a material graph with a parameter named '{name}'.", nameof(name));
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_material_instance_has_parameter(Entity eid, uint slot, string name);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector4 internal_m2n_material_instance_get_parameter(Entity eid, uint slot, string name);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_material_instance_set_parameter(Entity eid, uint slot, string name, Vector4 value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_material_instance_has_texture_node(Entity eid, uint slot, string name);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Guid internal_m2n_material_instance_get_texture_by_name(Entity eid, uint slot, string name);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_material_instance_set_texture_by_name(Entity eid, uint slot, string name, Guid texture);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_material_instance_is_name_overridden(Entity eid, uint slot, string name);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_material_instance_revert_name(Entity eid, uint slot, string name);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_material_instance_set_color(Entity eid, uint slot, int property, Color value);

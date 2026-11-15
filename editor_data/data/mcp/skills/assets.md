@@ -117,7 +117,7 @@ inside the project).
   value writes nothing - and saves the files (save:false keeps the change in
   memory).
 - assets_create_batch {"items":[{"type":"material","path":"Materials/Brass",
-  "properties":{"base_color":[1,0.8,0.4,1],"metalness":1}}]} makes new ones
+  "properties":{"base_color":[1,0.8,0.4,1],"metallic":1}}]} makes new ones
   (properties checked first; a rejected value creates nothing) and waits until
   they load. Assign a material with scene_create_batch material or
   scene_set_model_materials_batch; a physics material with the Physics
@@ -132,6 +132,13 @@ inside the project).
   (shares_draw in the result). Overriding a texture, tiling or a mode gives the
   entity a draw of its own - give many entities the same look with a shared
   material instead.
+- A material graph's parameters and texture nodes go by name in the same call:
+  "parameters": {"tint": [1, 0, 0, 1], "roughness": 0.3} (a number or up to
+  four numbers), "textures": {"albedo": "app:/textures/rust.png"} (node id to
+  texture key, "" for the default texture); null reverts one. A parameter in
+  the graph's first four registers keeps the shared draw; a texture, or any
+  parameter of a graph whose Opacity Mask clips, does not. A name the graph
+  lacks is an error and the item applies nothing.
 - Useful emissive_intensity ranges: strips acting as area lights 25-35; small
   glowing props 5-10 (larger overwhelms bloom).
 

@@ -10,7 +10,12 @@
  *   - a first write creates the file and records its source and fingerprint in the .meta;
  *   - a write of the same content touches nothing, and line endings alone are not an edit;
  *   - an untouched file takes a new import, an edited one is kept, and releasing it lets the next import in;
- *   - a file without a record is adopted when it holds the import and kept otherwise;
+ *   - a file without a record is adopted when it holds the import, replaced when an older import wrote it, and kept
+ *     otherwise; a recorded file is never taken for an older import's;
+ *   - a model's default material that an older engine imported, in the format before graphs, takes the new import and
+ *     keeps its id;
+ *   - textures an older import of a model extracted or converted that this import no longer writes are deleted with
+ *     their .meta, unless a text asset names them by id or by file name; other files are left alone;
  *   - a file under the name an earlier import gave it moves to the new name with its .meta, keeping its id;
  *   - two models in one folder with a same-named material at the same index write two materials with two ids,
  *     also when both used to share one file under the earlier name;
@@ -27,6 +32,8 @@
 #include <asset_compiler/generated_asset.h>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/assets/asset_importer_meta.hpp>
+#include <engine/meta/rendering/material.hpp>
+#include <engine/rendering/material_graph/standard_material.h>
 #include <engine/rendering/mesh.h>
 #include <filesystem/file_fingerprint.h>
 
@@ -121,11 +128,20 @@ auto make_text_writer(const std::string& text) -> generated_asset::content_write
 }
 
 /// Writes @p text to @p path as a generated asset of @p source_uid, registered under the path's own id.
-auto write_generated(asset_manager& am, const fs::path& path, const hpp::uuid& source_uid, const std::string& text)
-    -> generated_asset::write_result
+auto write_generated(asset_manager& am,
+                     const fs::path& path,
+                     const hpp::uuid& source_uid,
+                     const std::string& text,
+                     const generated_asset::older_import_check_t& is_older_import = {}) -> generated_asset::write_result
 {
     const auto uid = am.add_asset_for_path(path, false);
-    return generated_asset::write_file(am, path, uid, source_uid, make_text_writer(text));
+    return generated_asset::write_file(am, path, uid, source_uid, make_text_writer(text), is_older_import);
+}
+
+/// Takes every file for an older import's, as a check that cannot tell one would have to.
+auto is_any_older_import(const fs::path&) -> bool
+{
+    return true;
 }
 
 void test_write_cycle(asset_manager& am, const fs::path& run_root)
@@ -174,6 +190,15 @@ void test_files_without_record(asset_manager& am, const fs::path& run_root)
     check(read_text(other) == "user\n", "the kept file is untouched");
     check(load_meta(other).generated.source_uid == source_uid, "the kept file records its source");
     check(generated_asset::is_edited(other, load_meta(other).generated), "the kept file reads as edited");
+    const fs::path older = run_root / "unrecorded" / "Model_[2] Older.mat";
+    write_text(older, "older import\n");
+    check(write_generated(am, older, source_uid, "import\n", is_any_older_import) == write_result::replaced_untracked,
+          "an unrecorded file an older import wrote is replaced");
+    check(read_text(older) == "import\n", "the replaced file holds the import");
+    check(!generated_asset::is_edited(older, load_meta(older).generated), "the replaced file is the import's");
+    write_text(older, "edited\n");
+    check(write_generated(am, older, source_uid, "again\n", is_any_older_import) == write_result::kept_edited,
+          "a recorded file edited since is kept, whatever the older-import check says");
 }
 
 void test_adopt_former_file(asset_manager& am, const fs::path& run_root)
@@ -331,6 +356,77 @@ void test_models_in_one_folder(asset_manager& am, const fs::path& run_root)
           "the new material is the import's");
 }
 
+/// Writes a PBR material, as an engine wrote one before every material was a graph, with a .meta of @p uid.
+void write_legacy_material(const fs::path& path, const hpp::uuid& uid)
+{
+    auto legacy = std::make_shared<legacy_pbr_material>();
+    legacy->surface.base_color = math::color(0.1f, 0.2f, 0.3f, 1.0f);
+    save_to_file(path.string(), std::shared_ptr<material>(legacy));
+    asset_meta meta;
+    meta.uid = uid;
+    meta.type = ".mat";
+    save_to_file(get_meta_path(path).string(), meta);
+}
+
+void test_older_engine_material(asset_manager& am, const fs::path& run_root)
+{
+    const fs::path model = run_root / "older" / "Barrel.gltf";
+    write_model(model, 0.7f, 0.5f, 0.3f);
+    write_model_meta(am, model);
+    const auto material = get_material_path(model);
+    const auto uid = generate_uuid();
+    write_legacy_material(material, uid);
+    am.add_asset_info_for_path(material, load_meta(material), true);
+    check(is_legacy_material_file(material.string()), "the material is in the format before graphs");
+    check(compile_model(am, model), "the model compiles over an older engine's material");
+    check(!is_legacy_material_file(material.string()), "the material now holds the new import");
+    check(load_meta(material).uid == uid, "the replaced material keeps its id");
+    check(!generated_asset::is_edited(material, load_meta(material).generated), "the replaced material is the import's");
+    const fs::path user_material = model.parent_path() / "Barrel_[1] Kept.mat";
+    write_legacy_material(user_material, generate_uuid());
+    const auto user_text = read_text(user_material);
+    check(compile_model(am, model) && read_text(user_material) == user_text,
+          "an older engine's material the import does not write is left alone");
+}
+
+/// Writes a texture file and its .meta, as an import leaves them, and returns the id.
+auto write_texture_file(const fs::path& path) -> hpp::uuid
+{
+    write_text(path, "texture");
+    asset_meta meta;
+    meta.uid = generate_uuid();
+    meta.type = path.extension().string();
+    save_to_file(get_meta_path(path).string(), meta);
+    return meta.uid;
+}
+
+void test_former_texture_outputs(asset_manager& am, const fs::path& run_root)
+{
+    const fs::path dir = run_root / "former_textures";
+    const fs::path model = dir / "Crate.gltf";
+    write_embedded_texture_model(model);
+    write_model_meta(am, model);
+    const fs::path baked = dir / "[1] SpecularToMetallicRoughness Crate.png";
+    const fs::path named_by_id = dir / "[2] Diffuse Crate.png";
+    const fs::path named_by_path = dir / "[3] MetallicRoughness Crate.png";
+    const fs::path other_model = dir / "[1] SpecularToMetallicRoughness Crate Lid.png";
+    const fs::path user_texture = dir / "Crate_SpecularToMetallicRoughness.png";
+    write_texture_file(baked);
+    const auto named_uid = write_texture_file(named_by_id);
+    write_texture_file(named_by_path);
+    write_texture_file(other_model);
+    write_texture_file(user_texture);
+    write_text(dir / "Hand made.mat", "{\"texture\": {\"uid\": \"" + hpp::to_string(named_uid) + "\"}}");
+    write_text(dir / "ui" / "menu.rcss", "decorator: image(\"../[3] MetallicRoughness Crate.png\");");
+    check(compile_model(am, model), "the model compiles beside an older import's textures");
+    check(is_on_disk(dir / "[0] BaseColor Crate.png"), "the texture this import extracts is there");
+    check(!is_on_disk(baked) && !is_on_disk(get_meta_path(baked)), "an older bake nothing names is deleted, .meta too");
+    check(is_on_disk(named_by_id), "an older texture a material names by id is kept");
+    check(is_on_disk(named_by_path), "an older texture a style sheet names by path is kept");
+    check(is_on_disk(other_model), "another model's texture is left alone");
+    check(is_on_disk(user_texture), "a texture not named like an import's is left alone");
+}
+
 void test_embedded_texture_binding(asset_manager& am, const fs::path& run_root)
 {
     const fs::path model = run_root / "embedded" / "Crate.gltf";
@@ -364,6 +460,8 @@ auto run_generated_assets_suite(rtti::context& ctx) -> int
     test_adopt_former_file(am, run_root);
     test_models_in_one_folder(am, run_root);
     test_embedded_texture_binding(am, run_root);
+    test_older_engine_material(am, run_root);
+    test_former_texture_outputs(am, run_root);
     std::printf("generated assets: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }

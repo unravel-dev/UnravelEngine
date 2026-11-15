@@ -10,6 +10,7 @@
 #include <engine/rendering/shadow.h>
 #include <engine/rendering/batch_collector.h>
 #include <engine/rendering/instanced_mesh_source.h>
+#include <engine/rendering/material_graph/graph_material_programs.h>
 #include <hpp/optional.hpp>
 
 #include <graphics/utils/font/font_manager.h>
@@ -18,8 +19,12 @@
 #include <graphics/utils/bgfx_utils.h>
 #include <graphics/utils/entry/entry.h>
 
+#include <chrono>
+#include <map>
+
 namespace unravel
 {
+class graph_material;
 class surface_cache_system;
 class surface_cache_view;
 
@@ -472,46 +477,21 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_tex_color, "s_tex_color", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), s_tex_normal, "s_tex_normal", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), s_tex_roughness, "s_tex_roughness", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), s_tex_metalness, "s_tex_metalness", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), s_tex_ao, "s_tex_ao", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), s_tex_emissive, "s_tex_emissive", bgfx::UniformType::Sampler);
-
-            cache_uniform(program.get(), u_base_color, "u_base_color", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_subsurface_color, "u_subsurface_color", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_emissive_color, "u_emissive_color", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_surface_data, "u_surface_data", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_tiling, "u_tiling", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_dither_threshold, "u_dither_threshold", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_surface_data2, "u_surface_data2", bgfx::UniformType::Vec4);
-
             cache_uniform(program.get(), u_camera_wpos, "u_camera_wpos", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_camera_clip_planes, "u_camera_clip_planes", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_lod_params, "u_lod_params", bgfx::UniformType::Vec4);
         }
-
-        gfx::program::uniform_ptr s_tex_color;
-        gfx::program::uniform_ptr s_tex_normal;
-        gfx::program::uniform_ptr s_tex_roughness;
-        gfx::program::uniform_ptr s_tex_metalness;
-        gfx::program::uniform_ptr s_tex_ao;
-        gfx::program::uniform_ptr s_tex_emissive;
-
-        gfx::program::uniform_ptr u_base_color;
-        gfx::program::uniform_ptr u_subsurface_color;
-        gfx::program::uniform_ptr u_emissive_color;
-        gfx::program::uniform_ptr u_surface_data;
-        gfx::program::uniform_ptr u_tiling;
-        gfx::program::uniform_ptr u_dither_threshold;
-        gfx::program::uniform_ptr u_surface_data2;
 
         gfx::program::uniform_ptr u_camera_wpos;
         gfx::program::uniform_ptr u_camera_clip_planes;
         gfx::program::uniform_ptr u_lod_params;
 
         std::unique_ptr<gpu_program> program;
+        /// The variant of vs_deferred_geom.eshader the program draws with; a graph material drawn in its place takes
+        /// the same one.
+        std::string vertex_variant;
+        /// The variant of a graph material's shader drawn in its place (material_graph_compiler: default, card_capture).
+        std::string graph_fragment_variant{gfx::shader::DEFAULT_VARIANT};
     };
 
     /// The geometry program of the surface cache card captures: each draw brings its own world -> clip transform, so
@@ -541,10 +521,23 @@ private:
     /// come from the baked animation store.
     geom_program geom_program_skinned_baked_instanced_;
     card_capture_program card_capture_program_;
+
+    /// The G-buffer and card capture programs of graph materials (graph_material), with geom_program's variants.
+    graph_material_programs graph_material_programs_;
     /// This frame's prepared batches split by layout (submit_batched_geometry, submit_batched_skinned_geometry);
     /// kept for their capacity.
     std::vector<const batch_group*> plain_batches_;
     std::vector<const batch_group*> material_value_batches_;
+    /// This frame's prepared batches split for the velocity pass (submit_batched_velocity): the movers' and those of a
+    /// material whose World Position Offset animates; kept for their capacity.
+    std::vector<const batch_group*> mover_batches_;
+    std::vector<const batch_group*> offset_batches_;
+    /// The fragment shader of the velocity programs, which graph materials whose World Position Offset moves their
+    /// vertices pair with their own vertex shader (graph_material_programs::begin_moved_vertices).
+    asset_handle<gfx::shader> velocity_fragment_shader_;
+    /// The G-buffer pass of this run drew a graph material whose World Position Offset animates: the velocity pass
+    /// looks for still models drawn with one.
+    bool draws_animated_offsets_{};
 
     struct velocity_geom_program : uniforms_cache
     {
@@ -900,9 +893,27 @@ private:
 
     /// Scratch of submit_particle_lights.
     std::vector<ps_soa::particle_light> particle_lights_;
-    /// Binds @p mat's textures, values and states for @p program; without @p keeps_subsurface, with a black
-    /// subsurface color (gbuffer_has_subsurface_).
-    void submit_pbr_material(geom_program& program, const pbr_material& mat, bool keeps_subsurface = true);
+    /**
+     * @brief Binds @p mat for the next draw of @p program's geometry and returns the program to submit it with: a
+     * graph material's own (graph_material_programs_, with @p program's variants). A material whose shader is not
+     * compiled yet draws with @p program, the default surface (fs_deferred_geom.eshader), with its own sidedness.
+     */
+    auto submit_geometry_material(geom_program& program, const material& mat) -> gfx::program::handle_type_t;
+    /// Binds graph material @p mat's textures, parameters and states for the next draw of @p program's geometry.
+    void submit_graph_material(geom_program& program, const graph_material& mat);
+    /**
+     * @brief Whether batches of @p mat draw their instances' own values with @p program (an *_instance_material one):
+     * a graph material only while its own program can; the default surface drawn until then reads none. Batches that
+     * cannot draw with the plain program, without the values.
+     */
+    auto draws_instance_values(geom_program& program, const material& mat) -> bool;
+    /**
+     * @brief The program drawing the velocity of @p mat's draws with @p vertex_variant when its World Position Offset
+     * moves the vertices, begun with the graph's values and @p camera_position (the G-buffer's) bound; null for every
+     * other material, which draws with the pass's own program.
+     */
+    auto begin_offset_velocity_program(const material& mat, const std::string& vertex_variant, const math::vec3& camera_position)
+        -> gpu_program*;
     /**
      * @brief Prepares the batches of @p collector and draws them instanced into the G-buffer: the batches whose
      * instances carry material values with @p material_program and MaterialLayout, the others with @p plain_program
@@ -920,7 +931,7 @@ private:
     /// Velocity for batched movers: draws the mover instances of this frame's prepared
     /// batches (instance stream doubled with the previous world matrix) into the velocity
     /// target, depth-tested EQUAL. Batches without movers cost nothing.
-    void submit_batched_velocity(gfx::render_pass& pass, const math::transform& prev_vp);
+    void submit_batched_velocity(gfx::render_pass& pass, const math::transform& prev_vp, const math::vec3& camera_position);
     /// Skinned batching is switched on and its G-buffer and velocity programs are usable; otherwise skinned models
     /// keep the per-draw path.
     auto is_skinned_batching_active() const -> bool;
@@ -932,7 +943,7 @@ private:
     void submit_batched_skinned_geometry(gfx::render_pass& pass, const camera& camera);
     /// Velocity for the skinned batches the G-buffer drew: every skinned instance is a mover, drawn with its current
     /// and previous palette, depth-tested EQUAL.
-    void submit_batched_skinned_velocity(gfx::render_pass& pass, const math::transform& prev_vp);
+    void submit_batched_skinned_velocity(gfx::render_pass& pass, const math::transform& prev_vp, const math::vec3& camera_position);
     /// The device reads vertex storage buffers and the baked G-buffer and velocity programs are usable; otherwise
     /// baked animation draws are not drawn.
     auto is_baked_animation_active() const -> bool;
@@ -940,7 +951,7 @@ private:
     /// instanced program, baked parts with the baked program and the baked animation store.
     void submit_source_runs(gfx::render_pass& pass, const camera& camera);
     /// Velocity for the runs of the camera's instanced sources that have last frame's matrices, depth-tested EQUAL.
-    void submit_source_velocity_runs(gfx::render_pass& pass, const math::transform& prev_vp);
+    void submit_source_velocity_runs(gfx::render_pass& pass, const math::transform& prev_vp, const math::vec3& camera_position);
 
     /// A light program and its variants without code a draw does not need, each the same image where
     /// get_light_program picks it: "_no_contact" (PBR_CONTACT_SHADOWS 0) for a light without contact shadows, and
@@ -1011,8 +1022,8 @@ private:
     static void set_light_program(color_lighting& entry, const std::string& fragment_shader, const std::string& variant, bool is_wanted);
 
     /// Whether this run's G-buffer holds subsurface colors: its limits allow subsurface (feature_limits::subsurface),
-    /// set by run_g_buffer_pass. Without it the G-buffer draws write every subsurface color black, and the light and
-    /// indirect passes use their programs without the subsurface code.
+    /// set by run_g_buffer_pass. Without it the G-buffer draws leave the subsurface target out (it stays black), and the
+    /// light and indirect passes use their programs without the subsurface code.
     bool gbuffer_has_subsurface_{true};
 
     asset_handle<gfx::texture> ibl_brdf_lut_;

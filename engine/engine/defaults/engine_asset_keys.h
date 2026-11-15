@@ -60,6 +60,36 @@ inline constexpr std::array<const char*, 6> UI_FONT_KEYS = {
 /// The font a text component starts with.
 inline constexpr const char* TEXT_DEFAULT_FONT_KEY = "engine:/data/fonts/Inter/static/Inter-Regular.ttf";
 
+/// The Standard material: what a model slot without a material draws with, and what a new material starts as.
+inline constexpr const char* STANDARD_MATERIAL_KEY = "engine:/data/materials/standard.mat";
+
+/// What a model draws with where its material is missing: a purple, glowing Standard material.
+inline constexpr const char* FALLBACK_MATERIAL_KEY = "engine:/data/materials/fallback.mat";
+
+/// How the default materials' keys were spelled while they were made at startup. Keys in that spelling still load
+/// them.
+inline constexpr const char* EMBEDDED_STANDARD_MATERIAL_KEY = "engine:/embedded/standard";
+inline constexpr const char* EMBEDDED_FALLBACK_MATERIAL_KEY = "engine:/embedded/fallback";
+
+/// The default material a key in the earlier spelling names ("engine:/embedded/standard" -> STANDARD_MATERIAL_KEY);
+/// empty for every other key.
+inline auto get_default_material_key_of_embedded(const std::string& key) -> std::string
+{
+    if(key == EMBEDDED_STANDARD_MATERIAL_KEY)
+    {
+        return STANDARD_MATERIAL_KEY;
+    }
+    return key == EMBEDDED_FALLBACK_MATERIAL_KEY ? std::string(FALLBACK_MATERIAL_KEY) : std::string{};
+}
+
+/// The engine asset a key in the earlier "engine:/embedded/" spelling names: a default material or a built-in shape;
+/// empty for every other key.
+inline auto get_engine_key_of_embedded(const std::string& key) -> std::string
+{
+    auto material_key = get_default_material_key_of_embedded(key);
+    return material_key.empty() ? get_built_in_mesh_key_of_embedded(key) : material_key;
+}
+
 /// The style sheet every UI document starts from.
 inline constexpr const char* UI_BASE_STYLE_SHEET_KEY = "engine:/data/ui/rml.rcss";
 

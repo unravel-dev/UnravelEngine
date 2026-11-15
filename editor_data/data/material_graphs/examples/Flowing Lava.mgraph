@@ -1,0 +1,30 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "link": "surface_color"},
+    {"pin": "roughness", "link": "surface_roughness"},
+    {"pin": "emissive", "link": "heat_glow"}
+   ]},
+   {"id": "flow_a", "type": "panner", "inputs": [{"pin": "speed", "value": [0.05, 0.02]}]},
+   {"id": "noise_a", "type": "noise", "inputs": [{"pin": "uv", "link": "flow_a"}, {"pin": "scale", "value": [6.0]}]},
+   {"id": "flow_b", "type": "panner", "inputs": [{"pin": "speed", "value": [-0.03, 0.04]}]},
+   {"id": "noise_b", "type": "noise", "inputs": [{"pin": "uv", "link": "flow_b"}, {"pin": "scale", "value": [13.0]}]},
+   {"id": "heat", "type": "multiply", "inputs": [{"pin": "a", "link": "noise_a"}, {"pin": "b", "link": "noise_b"}]},
+   {"id": "cracks", "type": "smoothstep", "inputs": [
+    {"pin": "min", "value": [0.15]}, {"pin": "max", "value": [0.45]}, {"pin": "in", "link": "heat"}
+   ]},
+   {"id": "hot_color", "type": "color", "inputs": [{"pin": "value", "value": [4.0, 1.2, 0.2, 1.0]}]},
+   {"id": "heat_glow", "type": "multiply", "inputs": [{"pin": "a", "link": "hot_color.rgb"}, {"pin": "b", "link": "cracks"}]},
+   {"id": "rock_color", "type": "vector3", "inputs": [{"pin": "value", "value": [0.06, 0.05, 0.05]}]},
+   {"id": "molten_color", "type": "vector3", "inputs": [{"pin": "value", "value": [0.3, 0.1, 0.05]}]},
+   {"id": "surface_color", "type": "lerp", "inputs": [
+    {"pin": "a", "link": "rock_color"}, {"pin": "b", "link": "molten_color"}, {"pin": "alpha", "link": "cracks"}
+   ]},
+   {"id": "surface_roughness", "type": "lerp", "inputs": [
+    {"pin": "a", "value": [0.9]}, {"pin": "b", "value": [0.4]}, {"pin": "alpha", "link": "cracks"}
+   ]}
+  ]
+ }
+}

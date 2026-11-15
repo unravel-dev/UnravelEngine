@@ -13,7 +13,8 @@
 
 /// A deploy's cooked shaders: the compiled shaders a profile's renderer reads and the editor does not compile
 /// for itself (WGSL and GLSL ES for the web) ship from the profile's cache, cache/profiles/<profile>/shaders/<protocol>,
-/// laid out as the protocol's compiled folder.
+/// laid out as the protocol's compiled folder. So do the shaders of graph materials for every renderer a deploy ships:
+/// the editor compiles a graph material's shader only for the renderer it draws with.
 namespace unravel::deployment
 {
 
@@ -39,6 +40,8 @@ struct shader_cook_protocol
     fs::path variants;
     /// The protocol's shaders, by whether the deploy ships them.
     asset_split shaders;
+    /// The protocol's graph materials, by whether the deploy ships them.
+    asset_split graph_materials;
 };
 
 /// What cooking a profile's shaders reads, resolved before it runs.
@@ -47,12 +50,15 @@ struct shader_cook_plan
     std::string profile;
     /// The renderer extensions cooked (".wgsl", ".essl"); none: the deploy cooks no shader.
     std::set<std::string> renderers;
+    /// The renderer extensions graph materials are cooked for, and their left-out ones' files kept for: every one the
+    /// deploy ships; none in a project without graph materials.
+    std::set<std::string> graph_material_renderers;
     std::vector<shader_cook_protocol> protocols;
 
     /// Whether the deploy cooks any shader.
     auto has_work() const -> bool
     {
-        return !renderers.empty();
+        return !renderers.empty() || !graph_material_renderers.empty();
     }
 };
 

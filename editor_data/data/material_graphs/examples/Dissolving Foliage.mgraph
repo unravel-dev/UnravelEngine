@@ -1,0 +1,23 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output",
+    "inputs": [
+     {"pin": "base_color", "link": "leaf.rgb"},
+     {"pin": "roughness", "value": [0.6]},
+     {"pin": "opacity_mask", "link": "mask"},
+     {"pin": "opacity_mask_clip", "value": [0.4]},
+     {"pin": "subsurface_color", "value": [0.2, 0.4, 0.05]},
+     {"pin": "subsurface_opacity", "value": [0.6]}
+    ],
+    "settings": [{"name": "two_sided", "value": "on"}]},
+   {"id": "leaf", "type": "texture_sample"},
+   {"id": "dissolve_noise", "type": "noise", "inputs": [{"pin": "scale", "value": [20.0]}]},
+   {"id": "dissolve", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [0.0]}],
+    "settings": [{"name": "name", "value": "Dissolve"}]},
+   {"id": "kept", "type": "step", "inputs": [{"pin": "a", "link": "dissolve"}, {"pin": "b", "link": "dissolve_noise"}]},
+   {"id": "mask", "type": "multiply", "inputs": [{"pin": "a", "link": "leaf.a"}, {"pin": "b", "link": "kept"}]}
+  ]
+ }
+}

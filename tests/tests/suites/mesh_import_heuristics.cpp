@@ -19,8 +19,9 @@
  *   - skinned meshes under different transforms sharing one bind pose per bone;
  *   - faces and bone weights naming vertices a mesh does not have dropped, nodes listing no mesh that was not
  *     imported, and the Import Meshes setting saved with the import settings;
- *   - embedded texture extraction names, the glossiness conversion, spec-gloss bakes of shared
- *     textures, DDS alpha-mode headers and compiled-path to source-path mapping.
+ *   - the KHR spec-gloss factors the specular workflow keeps;
+ *   - embedded texture extraction names, the glossiness conversion, DDS alpha-mode headers and compiled-path to
+ *     source-path mapping.
  */
 
 #include "../tests.h"
@@ -182,11 +183,9 @@ void test_material_workflows()
     check(detect_material_workflow(khr_dual.get()) == material_workflow::khr_specular_glossiness, "KHR spec-gloss -> khr");
     check_candidates(*khr_dual, texture_target::base_color, {"Diffuse:BaseColor"}, "KHR albedo comes from DIFFUSE");
     check_candidates(*khr_dual, texture_target::metallic, {}, "KHR ignores MR fallback maps");
-    check(should_reconstruct_base_color_for_spec_gloss_pair(material_workflow::khr_specular_glossiness, khr_dual.get()),
-          "dual-authored KHR rebakes its diffuse into base color");
-    const auto khr_single = make_gltf_spec_gloss("sg_diffuse.png");
-    check(!should_reconstruct_base_color_for_spec_gloss_pair(material_workflow::khr_specular_glossiness, khr_single.get()),
-          "KHR whose BASE_COLOR is the diffuse keeps it as authored");
+    const auto factors = gather_spec_gloss_factors(khr_dual.get());
+    check(factors.glossiness == 0.8f && factors.specular_r == 1.0f && factors.diffuse_r == 1.0f,
+          "KHR keeps its glossiness factor, and the extension's default specular and diffuse");
     const auto phong = make_fbx_phong();
     check(detect_material_workflow(phong.get()) == material_workflow::phong_specular_gloss, "FBX Phong -> phong");
     check_candidates(*phong, texture_target::base_color, {"Diffuse:BaseColor"}, "Phong albedo comes from DIFFUSE");
@@ -568,36 +567,6 @@ void test_texture_files()
     raw.mHeight = 4;
     std::strcpy(raw.achFormatHint, "rgba8888");
     check(get_texture_extension(&raw, false) == ".png", "raw texel data is written as PNG");
-
-    const auto make_pair_job = [](float diffuse_r)
-    {
-        texture_job job{};
-        job.type = texture_job_type::spec_gloss_pair;
-        job.desc.name = "wood_diffuse.png";
-        job.desc.semantic = "Diffuse";
-        job.specular_desc.name = "wood_specular.png";
-        job.specular_desc.semantic = "Specular";
-        job.spec_gloss_factors.diffuse_r = diffuse_r;
-        job.output_base_color_relative = "wood_diffuse_BaseColor.png";
-        job.output_mr_relative = "wood_specular_MetallicRoughness.png";
-        return job;
-    };
-    texture_job_store store;
-    store.try_add(make_pair_job(1.0f));
-    store.try_add(make_pair_job(0.5f));
-    texture_job lone = make_pair_job(1.0f);
-    lone.desc.name = "stone_diffuse.png";
-    lone.output_base_color_relative = "stone_diffuse_BaseColor.png";
-    lone.output_mr_relative = "stone_specular_MetallicRoughness.png";
-    lone.specular_desc.name = "stone_specular.png";
-    store.try_add(lone);
-    disambiguate_shared_pair_outputs(store);
-    const auto& jobs = store.jobs();
-    check(jobs.size() == 3, "pair jobs differing only in factors are distinct");
-    check(jobs[0].output_base_color_relative != jobs[1].output_base_color_relative
-              && jobs[0].output_mr_relative != jobs[1].output_mr_relative,
-          "two materials tinting one texture differently bake separate files");
-    check(jobs[2].output_base_color_relative == "stone_diffuse_BaseColor.png", "an unshared bake keeps its name");
 
     const fs::path dir = fs::temp_directory_path() / "unravel_mesh_import_heuristics";
     fs::error_code err;

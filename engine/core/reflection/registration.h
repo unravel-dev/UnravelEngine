@@ -3,6 +3,8 @@
 
 #include <entt/meta/resolve.hpp>
 
+#include <memory>
+
 
 template<typename T, typename... Args>
 struct crtp_meta_type :  public Args...
@@ -62,5 +64,17 @@ struct crtp_meta_type :  public Args...
         return type.from_void(static_cast<T*>(this));
     }
 };
+
+/**
+ * @brief @p ptr as a shared pointer to @p U when the object is exactly a U (crtp_meta_type::is), else null.
+ *
+ * std::dynamic_pointer_cast for reflected types by one virtual call and a type compare, without the RTTI walk. U must
+ * be the object's most derived type: is<U> compares exact types, so a cast to an intermediate base gives null.
+ */
+template<typename U, typename T>
+auto safe_pointer_cast(const std::shared_ptr<T>& ptr) -> std::shared_ptr<U>
+{
+    return ptr && ptr->template is<U>() ? std::static_pointer_cast<U>(ptr) : nullptr;
+}
 
 #endif // REFLECTION_REGISTRATION_H

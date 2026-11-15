@@ -28,7 +28,7 @@ SAMPLER2D(s_gi_reflection_specular, 8);
 /// The accumulated frame count, -1 = no reflection.
 SAMPLER2D(s_gi_reflection_frames, 9);
 SAMPLER2D(s_gi_depth, 10);
-/// G-buffer target 1: octahedral normal, metalness, roughness.
+/// G-buffer target 1: octahedral normal, metallic, roughness.
 SAMPLER2D(s_gi_normal, 11);
 
 /// The filter's reversible luminance tonemap: heavier with @p disocclusion against fireflies in revealed areas.

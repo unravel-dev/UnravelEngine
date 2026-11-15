@@ -427,6 +427,28 @@ auto model::get_material_instance(uint32_t index) -> material_instance&
 
 auto model::get_render_material(uint32_t index) const -> material::sptr
 {
+    return resolve_render_material(index, true);
+}
+
+auto model::get_shadow_material(uint32_t index) const -> material::sptr
+{
+    const bool casts_as_shared = index < material_instances_.size() && material_instances_[index].get_resolved_shares_shadow();
+    // Never waits: a shared material still loading leaves the shadow with the material the slot draws with.
+    const auto shared = casts_as_shared ? get_shared_material(index).try_get() : nullptr;
+    if(!shared || asset_handle<material>::is_empty(shared))
+    {
+        return get_render_material(index);
+    }
+    return shared;
+}
+
+auto model::find_loaded_render_material(uint32_t index) const -> material::sptr
+{
+    return resolve_render_material(index, false);
+}
+
+auto model::resolve_render_material(uint32_t index, bool wait) const -> material::sptr
+{
     if(index < material_instances_.size())
     {
         const auto& instance = material_instances_[index];
@@ -436,7 +458,11 @@ auto model::get_render_material(uint32_t index) const -> material::sptr
         }
     }
     const auto& shared = get_shared_material(index);
-    return shared.is_valid() ? shared.get() : nullptr;
+    if(!shared.is_valid())
+    {
+        return nullptr;
+    }
+    return wait ? shared.get() : shared.try_get();
 }
 
 auto model::get_slot_batch_material(uint32_t index) const -> slot_batch_material
@@ -1533,7 +1559,8 @@ auto model::submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collect
     const auto data_group_count = mesh->get_data_groups_count();
     for(uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
     {
-        auto group_material = get_render_material(data_group_id);
+        // Overrides a shadow does not read cast with the shared material: one batch with its other casters.
+        auto group_material = get_shadow_material(data_group_id);
         if(!group_material)
         {
             continue;
@@ -1782,7 +1809,7 @@ auto model::submit_for_skinned_shadow_batching_cascaded(std::vector<shadow_batch
     const auto data_group_count = mesh->get_data_groups_count();
     for(uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
     {
-        auto group_material = get_render_material(data_group_id);
+        auto group_material = get_shadow_material(data_group_id);
         if(!group_material)
         {
             continue;

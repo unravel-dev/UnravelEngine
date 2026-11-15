@@ -2,6 +2,12 @@
 #include <engine/assets/impl/asset_extensions.h>
 #include "importers/mesh_importer.h"
 
+#include <engine/meta/rendering/graph_material.hpp>
+#include <engine/meta/rendering/material.hpp>
+#include <engine/meta/rendering/material_graph.hpp>
+#include <engine/rendering/material.h>
+#include <engine/rendering/material_graph/graph_material.h>
+#include <engine/rendering/material_graph/material_graph_compiler.h>
 #include <engine/rendering/mesh.h>
 #include <engine/ui/ui_tree.h>
 #include <graphics/shader.h>
@@ -9,6 +15,8 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iterator>
+#include <mutex>
 #include <unordered_set>
 
 namespace unravel
@@ -221,6 +229,71 @@ void resolve_dependencies<mesh>(const fs::path& file_path, std::vector<fs::path>
     // Root .gltf/.obj is watched separately; only sidecars (.bin, textures, .mtl) are listed.
     const auto deps = importer::collect_mesh_external_dependencies(file_path);
     processed_files.insert(processed_files.end(), deps.begin(), deps.end());
+}
+
+template<>
+void resolve_dependencies<material>(const fs::path& file_path, std::vector<fs::path>& processed_files)
+{
+    // Every material is a graph (a PBR material's file loads as the Standard graph).
+    resolve_graph_material_shader_dependencies(processed_files);
+    resolve_graph_material_function_dependencies(file_path, processed_files);
+}
+
+void resolve_graph_material_function_dependencies(const fs::path& file_path, std::vector<fs::path>& processed_files)
+{
+    std::shared_ptr<material> loaded;
+    load_from_file(file_path.string(), loaded);
+    const auto graph = safe_pointer_cast<graph_material>(loaded);
+    if(!graph)
+    {
+        return;
+    }
+    for(const auto& key : collect_material_function_keys(graph->get_graph(), load_material_function))
+    {
+        processed_files.push_back(fs::resolve_protocol(key));
+    }
+}
+
+void resolve_graph_material_shader_dependencies(std::vector<fs::path>& processed_files)
+{
+    static std::mutex mutex;
+    static std::vector<file_stamp> stamps;
+    static std::vector<fs::path> includes;
+    std::lock_guard<std::mutex> lock(mutex);
+    // The list comes from the files' text: valid as long as they are.
+    if(!are_file_stamps_current(stamps))
+    {
+        includes.clear();
+        std::unordered_set<std::string> visited;
+        const auto shaders = fs::resolve_protocol("engine:/data/shaders");
+        for(const auto& include : get_material_graph_shader_includes())
+        {
+            resolve_shader_dependencies(shaders / include, includes, visited, false);
+        }
+        stamps.clear();
+        std::transform(includes.begin(), includes.end(), std::back_inserter(stamps), make_file_stamp);
+    }
+    processed_files.insert(processed_files.end(), includes.begin(), includes.end());
+}
+
+auto make_file_stamp(const fs::path& file) -> file_stamp
+{
+    fs::error_code ec;
+    file_stamp stamp;
+    stamp.file = file;
+    stamp.write_time = fs::last_write_time(file, ec);
+    stamp.size = ec ? 0 : fs::file_size(file, ec);
+    return stamp;
+}
+
+auto are_file_stamps_current(const std::vector<file_stamp>& stamps) -> bool
+{
+    return !stamps.empty() && std::all_of(stamps.begin(),
+                                          stamps.end(),
+                                          [](const file_stamp& stamp)
+                                          {
+                                              return make_file_stamp(stamp.file) == stamp;
+                                          });
 }
 
 } // namespace asset_compiler

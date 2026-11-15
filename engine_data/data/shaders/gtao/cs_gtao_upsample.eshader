@@ -35,7 +35,7 @@ SAMPLER2D(s_gtao_depth_mips, 1);
 /// Full-resolution G-buffer depth.
 SAMPLER2D(s_gtao_depth, 2);
 IMAGE2D_WO(i_gtao_out, rgba8, 3);
-/// Full-resolution G-buffer normal / metalness / roughness (the shading normal).
+/// Full-resolution G-buffer normal / metallic / roughness (the shading normal).
 SAMPLER2D(s_gtao_normal, 4);
 
 /// Deviation from the pixel's own depth beyond which a tap cannot stand in for it.

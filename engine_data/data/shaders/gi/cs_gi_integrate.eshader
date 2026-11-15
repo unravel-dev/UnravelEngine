@@ -57,7 +57,7 @@ res16      GI_PROBE_TRACE_RES=16
 #include "gi/gi_image_formats.sh"
 
 SAMPLER2D(s_gi_depth, 0);
-/// G-buffer target 1: octahedral normal, metalness, roughness.
+/// G-buffer target 1: octahedral normal, metallic, roughness.
 SAMPLER2D(s_gi_normal, 1);
 SAMPLER2D(s_gi_probe_records, 2);
 /// The probes' SH3 (cs_gi_probe_sh.eshader; texel 0's alpha = the probe's moving fraction).

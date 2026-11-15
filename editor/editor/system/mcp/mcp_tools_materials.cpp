@@ -65,11 +65,15 @@ void register_material_tools(mcp_tool_registry& registry)
              "each item's properties (assets_list_properties type material) become overrides, every other value "
              "keeps following the shared material, and the .mat file and other renderers are untouched. "
              "shares_draw in the result is true while every override is a per-instance property (colors and "
-             "numbers), so the entity still draws together with the shared material's other renderers. Each "
-             "item: entity_id, properties, optional material_index (slot, default 0). All or nothing per item; one undo "
-             "step.",
+             "numbers), so the entity still draws together with the shared material's other renderers. A material "
+             "graph's parameters and texture nodes go by name: parameters {name: number or [x, y, z, w]}, textures "
+             "{node id: texture key, \"\" for the default texture}; null reverts one. A parameter in the graph's "
+             "first four registers shares the draw; a texture, a later parameter, or any override of a graph whose World "
+             "Position Offset moves its vertices does not. "
+             "Each item: entity_id, properties and/or parameters and/or textures, optional material_index (slot, "
+             "default 0). All or nothing per item; one undo step.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"material_index":{"type":"integer","minimum":0},"properties":{"type":"object"}},"required":["entity_id","properties"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"material_index":{"type":"integer","minimum":0},"properties":{"type":"object"},"parameters":{"type":"object"},"textures":{"type":"object"}},"required":["entity_id"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -103,12 +107,12 @@ void register_material_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "Item missing entity_id", .is_error = true};
                  }
-                 if(obj["properties"].error())
+                 if(obj["properties"].error() && obj["parameters"].error() && obj["textures"].error())
                  {
-                     return {.text = "Item missing properties object", .is_error = true};
+                     return {.text = "Item has none of properties, parameters and textures", .is_error = true};
                  }
                  item.item_json = std::string(simdjson::minify(el));
-                 item.props_json = std::string(simdjson::minify(obj["properties"]));
+                 item.props_json = obj["properties"].error() ? std::string("{}") : std::string(simdjson::minify(obj["properties"]));
                  items.push_back(std::move(item));
              }
              if(items.empty())
@@ -169,6 +173,18 @@ void register_material_tools(mcp_tool_registry& registry)
                  auto new_model = old_model;
                  auto& instance = new_model.get_material_instance(*index);
                  auto applied = apply_material_instance_properties(ctx, instance, properties);
+                 if(applied.ok)
+                 {
+                     simdjson::dom::object parameters;
+                     simdjson::dom::object textures;
+                     const bool has_parameters = item_object["parameters"].get(parameters) == simdjson::SUCCESS;
+                     const bool has_textures = item_object["textures"].get(textures) == simdjson::SUCCESS;
+                     apply_material_instance_graph_values(ctx,
+                                                          instance,
+                                                          has_parameters ? &parameters : nullptr,
+                                                          has_textures ? &textures : nullptr,
+                                                          applied);
+                 }
                  if(!applied.ok)
                  {
                      results += fmt::format(R"({{"ok":false,"entity_id":{},"result":{}}})",

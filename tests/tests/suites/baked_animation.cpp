@@ -31,6 +31,7 @@
 #include <engine/rendering/instanced_draw_list.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/material_instance.h>
+#include <engine/rendering/material_graph/standard_material.h>
 #include <engine/rendering/mesh.h>
 
 #include <graphics/vertex_decl.h>
@@ -202,7 +203,7 @@ auto make_fixture() -> fixture
     result.character = am.get_asset_from_instance<mesh>(MESH_KEY, make_character(true));
     result.unskinned_character = am.get_asset_from_instance<mesh>(UNSKINNED_MESH_KEY, make_character(false));
     result.clip = am.get_asset_from_instance<animation_clip>(CLIP_KEY, make_clip());
-    result.surface = am.get_asset_from_instance<material>(MATERIAL_KEY, std::make_shared<pbr_material>());
+    result.surface = am.get_asset_from_instance<material>(MATERIAL_KEY, make_standard_material({}));
     return result;
 }
 
@@ -441,7 +442,7 @@ void test_draw_material_instance(const fixture& assets)
     }
     auto instance = std::make_shared<material_instance>();
     instance->set_shared_material(assets.surface);
-    instance->set_override(entt::hashed_string{"emissive_color"}, entt::meta_any{math::color(1.0f, 0.0f, 0.0f, 1.0f)});
+    instance->set_graph_parameter("Emissive Color", math::vec4(1.0f, 0.0f, 0.0f, 1.0f));
     instanced_draw_list list;
     instanced_draw_list::draw_settings settings;
     settings.render_material = assets.surface;

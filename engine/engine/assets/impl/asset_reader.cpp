@@ -10,6 +10,7 @@
 #include <engine/meta/rendering/mesh.hpp>
 #include <engine/meta/rendering/font.hpp>
 #include <engine/meta/rendering/shader_variants.hpp>
+#include <engine/meta/rendering/graph_material.hpp>
 #include <engine/meta/rendering/standard_material.hpp>
 #include <engine/meta/scripting/script.hpp>
 #include <engine/meta/ui/ui_tree.hpp>
@@ -27,6 +28,9 @@
 #include <graphics/texture.h>
 #include <logging/logging.h>
 #include <string_utils/utils.h>
+
+#include <mutex>
+#include <unordered_map>
 
 namespace unravel::asset_reader
 {
@@ -208,11 +212,12 @@ auto create_shader_variant(const compiled_shader_variant& variant, const std::st
     return shader;
 }
 
-/// A compiled shader as one asset: the default variant is the shader itself, the others its variants.
-auto create_shader_with_variants(const std::string& path, const std::string& key) -> std::shared_ptr<gfx::shader>
+/// Compiled variants as one shader: the default variant is the shader itself, the others its variants. @p path names
+/// where they were read in an error.
+auto create_shader_from_variants(const std::vector<compiled_shader_variant>& compiled,
+                                 const std::string& path,
+                                 const std::string& key) -> std::shared_ptr<gfx::shader>
 {
-    std::vector<compiled_shader_variant> compiled;
-    load_from_file_bin(path, compiled);
     const auto is_default = [](const compiled_shader_variant& variant)
     {
         return variant.name == gfx::shader::DEFAULT_VARIANT;
@@ -238,7 +243,129 @@ auto create_shader_with_variants(const std::string& path, const std::string& key
     return result;
 }
 
+/// A compiled shader as one asset.
+auto create_shader_with_variants(const std::string& path, const std::string& key) -> std::shared_ptr<gfx::shader>
+{
+    std::vector<compiled_shader_variant> compiled;
+    load_from_file_bin(path, compiled);
+    return create_shader_from_variants(compiled, path, key);
+}
+
+/**
+ * @brief The shaders loaded for graph materials, by what they were compiled from (find_or_create_graph_shader). Many
+ * materials share their code (every Standard material of the same switches): one shader each would make one set of
+ * programs each, and bgfx holds a fixed number of programs.
+ */
+struct graph_shader_cache
+{
+    std::mutex mutex;
+    std::unordered_map<std::string, std::weak_ptr<gfx::shader>> shaders;
+};
+
+auto get_graph_shader_cache() -> graph_shader_cache&
+{
+    static graph_shader_cache cache;
+    return cache;
+}
+
+/// The shader of @p variants, compiled from what @p identity names: the one a material of that code loaded while it
+/// lives, else a new one.
+auto find_or_create_graph_shader(const std::string& identity,
+                                 const std::vector<compiled_shader_variant>& variants,
+                                 const std::string& path,
+                                 const std::string& key) -> std::shared_ptr<gfx::shader>
+{
+    auto& cache = get_graph_shader_cache();
+    {
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        const auto found = cache.shaders.find(identity);
+        if(found != cache.shaders.end())
+        {
+            if(auto shared = found->second.lock())
+            {
+                return shared;
+            }
+        }
+    }
+    // Created outside the lock: the loads of other materials go on meanwhile.
+    auto created = create_shader_from_variants(variants, path, key);
+    if(!created)
+    {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(cache.mutex);
+    auto& entry = cache.shaders[identity];
+    if(auto shared = entry.lock())
+    {
+        return shared;
+    }
+    entry = created;
+    std::erase_if(cache.shaders,
+                  [](const auto& cached)
+                  {
+                      return cached.second.expired();
+                  });
+    return created;
+}
+
+/**
+ * @brief Gives graph material @p mat, loaded from the compiled file at @p path, its shaders for the renderer that draws:
+ * the file beside it that the compile of the same graph wrote, with the vertex shader of a graph whose World Position
+ * Offset moves its vertices. Without one, it draws as a default material.
+ */
+void attach_graph_material_shader(tpp::thread_pool& pool, graph_material& mat, const std::string& path, const std::string& key)
+{
+    const auto& renderer = gfx::get_current_renderer_filename_extension();
+    const auto shader_path = get_graph_material_shader_file(path, renderer);
+    compiled_graph_material_shader compiled;
+    if(!fs::is_readable_file(shader_path) || !load_from_file_bin(shader_path, compiled) ||
+       compiled.code_hash != mat.get_shader_hash())
+    {
+        APPLOG_WARNING("{0} has no shader compiled from its graph for this renderer ({1}); it draws as a default material "
+                       "until it has.",
+                       key,
+                       renderer);
+        return;
+    }
+    if(compiled.variants.empty())
+    {
+        APPLOG_WARNING("{0}: the shader its graph generates did not compile ({1}); it draws as a default material until "
+                       "a compile succeeds (the editor tries again at its next start, or when the graph changes). The "
+                       "compile's errors are in the log and the Material Graph window.",
+                       key,
+                       renderer);
+        return;
+    }
+    // One shader per code, whichever material loaded it first: the programs drawing them are made per shader.
+    const auto identity = fmt::format("{}|{}|{}", renderer, compiled.code_hash, compiled.compile_parameters);
+    auto shader = find_or_create_graph_shader("fs|" + identity, compiled.variants, shader_path, key);
+    if(!shader)
+    {
+        return;
+    }
+    // Handles of no asset of their own: the shaders are the material's, reloaded with it.
+    const auto make_handle = [&](std::shared_ptr<gfx::shader> loaded)
+    {
+        asset_handle<gfx::shader> handle;
+        handle.set_internal_ids({}, key);
+        load_from_instance(pool, handle, std::move(loaded));
+        return handle;
+    };
+    auto vertex_shader = compiled.vertex_variants.empty()
+                             ? nullptr
+                             : find_or_create_graph_shader("vs|" + identity, compiled.vertex_variants, shader_path, key);
+    mat.set_vertex_shader(vertex_shader ? make_handle(std::move(vertex_shader)) : asset_handle<gfx::shader>{});
+    mat.set_shader(make_handle(std::move(shader)));
+}
+
 } // namespace detail
+
+auto create_shader_from_variants(const std::vector<compiled_shader_variant>& compiled,
+                                 const std::string& origin,
+                                 const std::string& key) -> std::shared_ptr<gfx::shader>
+{
+    return detail::create_shader_from_variants(compiled, origin, key);
+}
 
 auto load_texture_from_file(tpp::thread_pool& pool,
                             asset_handle<gfx::texture>& output,
@@ -279,10 +406,14 @@ auto load_from_file<material>(tpp::thread_pool& pool, asset_handle<material>& ou
                                const std::string& key, load_mode mode) -> bool
 {
     return detail::schedule_load<material>(pool, output, key, {}, source_fallback::none,
-        [](const std::string& path)
+        [&pool, key](const std::string& path)
         {
             std::shared_ptr<unravel::material> mat;
             load_from_file_bin(path, mat);
+            if(auto* graph = mat ? mat->safe_cast<graph_material>() : nullptr)
+            {
+                detail::attach_graph_material_shader(pool, *graph, path, key);
+            }
             return mat;
         }, mode);
 }

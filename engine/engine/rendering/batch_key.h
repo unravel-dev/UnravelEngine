@@ -100,20 +100,11 @@ struct batch_key
     auto to_string() const -> std::string;
 };
 
-/// Per-draw state for alpha-cutout shadow batches (texture + clip threshold).
-struct shadow_cutout_state
-{
-    std::shared_ptr<gfx::texture> color_map;
-    float alpha_test_value = 1.0f;
-    math::color base_color{};
-    math::vec2 tiling{1.0f, 1.0f};
-};
-
 /**
- * @brief Batch key for shadow depth passes — geometry-first, optional cutout bucket.
+ * @brief Batch key for shadow depth passes, geometry first.
  *
- * Opaque shadows batch on (mesh, lod, submesh, cull). Alpha-cutout shadows additionally
- * split on @ref shadow_cutout_state so instances sharing the same clip texture/threshold batch.
+ * Shadows batch on (mesh, lod, submesh, cull); a graph material that draws its own shadow splits on the material
+ * itself: its own shader clips the shadow by its Opacity Mask or moves it by its World Position Offset.
  */
 struct shadow_batch_key
 {
@@ -121,26 +112,25 @@ struct shadow_batch_key
     uint32_t lod_index = 0;
     uint32_t submesh_index = 0;
     cull_type cull = cull_type::counter_clockwise;
-    hpp::optional<shadow_cutout_state> cutout;
+    /// A graph material (graph_material) that draws its own shadow (graph_material::draws_own_shadow); null for every
+    /// other caster.
+    std::shared_ptr<material> masked_graph;
 
     shadow_batch_key() = default;
 
-    shadow_batch_key(std::shared_ptr<mesh> mesh,
-                     uint32_t lod,
-                     uint32_t submesh,
-                     cull_type cull_type,
-                     hpp::optional<shadow_cutout_state> cutout_state = std::nullopt);
+    shadow_batch_key(std::shared_ptr<mesh> mesh, uint32_t lod, uint32_t submesh, cull_type cull_type);
 
     auto operator<=>(const shadow_batch_key& other) const -> std::strong_ordering;
     auto operator==(const shadow_batch_key& other) const -> bool;
 
     [[nodiscard]] auto hash() const noexcept -> size_t;
     [[nodiscard]] auto is_valid() const -> bool;
-    [[nodiscard]] auto uses_alpha_cutout() const -> bool;
+    /// The caster's graph material draws its shadow with its own shader (masked_graph).
+    [[nodiscard]] auto uses_graph_mask() const -> bool;
     [[nodiscard]] auto to_string() const -> std::string;
 };
 
-/// Build a shadow batch key from mesh geometry and optional material cutout metadata.
+/// Build a shadow batch key from mesh geometry and the caster's material.
 auto make_shadow_batch_key(const std::shared_ptr<mesh>& mesh_ptr,
                            uint32_t lod_index,
                            uint32_t submesh_index,

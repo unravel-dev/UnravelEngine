@@ -29,6 +29,7 @@
 #include <engine/meta/ui/style_sheet.hpp>
 #include <engine/physics/physics_material.h>
 #include <engine/animation/animation_controller.h>
+#include <engine/rendering/material_graph/material_graph.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/font.h>
@@ -984,6 +985,13 @@ void content_browser_panel::setup_path_item(rtti::context& ctx, content_browser_
             em.try_unselect<fs::path>();
         };
     }
+    else if(entry.extension() == MATERIAL_GRAPH_FILE_EXTENSION)
+    {
+        item.on_double_click = [&ctx, entry]()
+        {
+            editor_actions::open_material_graph_file(ctx, entry.string());
+        };
+    }
 }
 
 void content_browser_panel::draw_status_bar(size_t shown_count)
@@ -1096,6 +1104,29 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
                 pending_rename = available;
             }
         }
+
+        if(ImGui::MenuItem("Material Graph"))
+        {
+            const auto available =
+                asset_actions::get_free_copy_path(target_path, "New Material Graph", ex::get_format<material>());
+            if(asset_actions::create_material_graph(ctx, available, asset_actions::make_starter_material_graph()))
+            {
+                pending_rename = available;
+            }
+        }
+        ImGui::SetItemTooltipEx("A material made of nodes. Double-click it to edit it in the Material Graph window.");
+
+        if(ImGui::MenuItem("Material Function"))
+        {
+            const auto available =
+                asset_actions::get_free_copy_path(target_path, "New Material Function", MATERIAL_GRAPH_FILE_EXTENSION);
+            if(asset_actions::create_material_function(available, asset_actions::make_starter_material_function()))
+            {
+                pending_rename = available;
+            }
+        }
+        ImGui::SetItemTooltipEx("Nodes that material graphs use through Material Function nodes. Double-click it to "
+                                "edit it in the Material Graph window.");
 
         if(ImGui::MenuItem(ex::get_type<physics_material>().c_str()))
         {
@@ -1304,6 +1335,14 @@ void content_browser_panel::setup_asset_item(rtti::context& ctx, content_browser
         item.on_double_click = [&ctx, entry]()
         {
             editor_actions::open_animation_controller(ctx, entry);
+        };
+    }
+    else if constexpr(std::is_same_v<AssetType, material>)
+    {
+        // Graph materials open in the Material Graph window; the others have no double-click action.
+        item.on_double_click = [&ctx, entry]()
+        {
+            editor_actions::open_material_graph(ctx, entry);
         };
     }
     else if constexpr(std::is_same_v<AssetType, prefab>)

@@ -32,6 +32,11 @@ target_compile_definitions(${target_name} PRIVATE
     ENGINE_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../engine_data"
 )
 
+# The material graph suite compiles the example graphs the editor ships, from the source tree.
+target_compile_definitions(${target_name} PRIVATE
+    EDITOR_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../editor_data"
+)
+
 set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "unravel-tests")
 unravel_add_windows_manifest(${target_name})
 

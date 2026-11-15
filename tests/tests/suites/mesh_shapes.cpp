@@ -277,7 +277,7 @@ void test_meta_files(const std::vector<built_in_shape>& shapes)
         const auto meta = load_meta(name);
         check(meta.uid == generate_uuid(get_embedded_key(name)), name + ": the .meta holds the id of the generated mesh");
         check(meta.type == ex::get_mesh_shape_format(), name + ": the .meta names the shape format");
-        const auto importer = std::dynamic_pointer_cast<mesh_importer_meta>(meta.importer);
+        const auto importer = safe_pointer_cast<mesh_importer_meta>(meta.importer);
         check(importer != nullptr, name + ": the .meta holds mesh import settings");
         if(!importer)
         {

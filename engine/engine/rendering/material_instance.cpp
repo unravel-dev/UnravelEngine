@@ -1,4 +1,6 @@
 #include "material_instance.h"
+#include "material_graph/named_values.h"
+#include "material_graph/standard_material.h"
 
 #include <reflection/reflection.h>
 
@@ -25,6 +27,45 @@ auto are_equal(const entt::meta_any& lhs, const entt::meta_any& rhs) -> bool
 auto is_loaded(const material::sptr& mat) -> bool
 {
     return mat && !asset_handle<material>::is_empty(mat);
+}
+
+/// Whether two lists of named values hold the same entries, in any order.
+template<typename Value>
+auto are_same_named_values(const std::vector<Value>& lhs, const std::vector<Value>& rhs) -> bool
+{
+    return lhs.size() == rhs.size() && std::all_of(lhs.begin(),
+                                                   lhs.end(),
+                                                   [&rhs](const Value& entry)
+                                                   {
+                                                       return std::find(rhs.begin(), rhs.end(), entry) != rhs.end();
+                                                   });
+}
+
+/// Sets @p value as the entry named @p name of @p values; false when it was already its value.
+template<typename Value, typename Field>
+auto set_named(std::vector<Value>& values, const std::string& name, const Field& value) -> bool
+{
+    const Value wanted{name, value};
+    if(auto* entry = find_named(values, name))
+    {
+        if(*entry == wanted)
+        {
+            return false;
+        }
+        *entry = wanted;
+        return true;
+    }
+    values.push_back(wanted);
+    return true;
+}
+
+/// Notes @p name in @p names once.
+void note_changed_name(std::vector<std::string>& names, hpp::string_view name)
+{
+    if(std::find(names.begin(), names.end(), name) == names.end())
+    {
+        names.emplace_back(name);
+    }
 }
 
 /// The aspects whose revisions differ between two snapshots of one material.
@@ -117,6 +158,7 @@ void copy_material_values(const material& source, material& target)
                                        data.set(target_object, incoming);
                                    }
                                });
+    target.copy_unreflected_values(source);
 }
 
 auto make_instance_values(const material_instance& instance, const material& shared) -> material::sptr
@@ -151,7 +193,10 @@ auto override_changed_values(material_instance& instance, const material& values
 material_instance::material_instance(const material_instance& other)
     : shared_(other.shared_)
     , material_type_(other.material_type_)
+    , graph_parameters_(other.graph_parameters_)
+    , graph_textures_(other.graph_textures_)
     , legacy_copy_(other.legacy_copy_)
+    , are_graph_overrides_changed_(other.has_graph_overrides())
 {
     overrides_.reserve(other.overrides_.size());
     for(const auto& entry : other.overrides_)
@@ -172,7 +217,8 @@ auto material_instance::operator=(const material_instance& other) -> material_in
 auto material_instance::operator==(const material_instance& other) const -> bool
 {
     if(!(shared_ == other.shared_) || overrides_.size() != other.overrides_.size() ||
-       legacy_copy_ != other.legacy_copy_)
+       legacy_copy_ != other.legacy_copy_ || !are_same_named_values(graph_parameters_, other.graph_parameters_) ||
+       !are_same_named_values(graph_textures_, other.graph_textures_))
     {
         return false;
     }
@@ -204,7 +250,7 @@ auto material_instance::set_override(entt::id_type property, const entt::meta_an
     }
     const auto type = make_material_object(*shared).type();
     const auto data = type.data(property);
-    if(!data)
+    if(!data || data.is_const())
     {
         return false;
     }
@@ -269,11 +315,101 @@ void material_instance::revert_all()
     }
     overrides_.clear();
     legacy_copy_.reset();
+    are_graph_overrides_changed_ = are_graph_overrides_changed_ || has_graph_overrides();
+    graph_parameters_.clear();
+    graph_textures_.clear();
 }
 
 auto material_instance::has_overrides() const -> bool
 {
-    return !overrides_.empty() || legacy_copy_ != nullptr;
+    return !overrides_.empty() || legacy_copy_ != nullptr || has_graph_overrides();
+}
+
+auto material_instance::set_graph_parameter(const std::string& name, const math::vec4& value) -> bool
+{
+    const auto shared = get_shared_graph(true);
+    if(!shared || shared->find_parameter(name) == nullptr)
+    {
+        return false;
+    }
+    material_type_ = make_material_object(*shared).type().id();
+    if(set_named(graph_parameters_, name, value))
+    {
+        note_changed_name(changed_graph_parameters_, name);
+    }
+    return true;
+}
+
+auto material_instance::get_graph_parameter(hpp::string_view name) const -> hpp::optional<math::vec4>
+{
+    const auto shared = get_shared_graph(true);
+    if(!shared || shared->find_parameter(name) == nullptr)
+    {
+        return {};
+    }
+    const auto* entry = find_named(graph_parameters_, name);
+    return entry ? entry->value : shared->get_parameter(name);
+}
+
+auto material_instance::is_graph_parameter_overridden(hpp::string_view name) const -> bool
+{
+    return find_named(graph_parameters_, name) != nullptr;
+}
+
+void material_instance::revert_graph_parameter(hpp::string_view name)
+{
+    if(erase_named(graph_parameters_, name))
+    {
+        note_changed_name(changed_graph_parameters_, name);
+    }
+}
+
+auto material_instance::get_graph_parameter_overrides() const -> const std::vector<graph_parameter_value>&
+{
+    return graph_parameters_;
+}
+
+auto material_instance::set_graph_texture(const std::string& name, const asset_handle<gfx::texture>& texture) -> bool
+{
+    const auto shared = get_shared_graph(true);
+    if(!shared || shared->find_texture(name) == nullptr)
+    {
+        return false;
+    }
+    material_type_ = make_material_object(*shared).type().id();
+    if(set_named(graph_textures_, name, texture))
+    {
+        note_changed_name(changed_graph_textures_, name);
+    }
+    return true;
+}
+
+auto material_instance::get_graph_texture(hpp::string_view name) const -> asset_handle<gfx::texture>
+{
+    if(const auto* entry = find_named(graph_textures_, name))
+    {
+        return entry->texture;
+    }
+    const auto shared = get_shared_graph(true);
+    return shared ? shared->get_texture(name) : asset_handle<gfx::texture>{};
+}
+
+auto material_instance::is_graph_texture_overridden(hpp::string_view name) const -> bool
+{
+    return find_named(graph_textures_, name) != nullptr;
+}
+
+void material_instance::revert_graph_texture(hpp::string_view name)
+{
+    if(erase_named(graph_textures_, name))
+    {
+        note_changed_name(changed_graph_textures_, name);
+    }
+}
+
+auto material_instance::get_graph_texture_overrides() const -> const std::vector<graph_texture_value>&
+{
+    return graph_textures_;
 }
 
 auto material_instance::get_overrides() const -> const std::vector<property_override>&
@@ -305,6 +441,22 @@ auto material_instance::get_changes_from(const material_instance& previous) cons
             changes |= get_override_changes(shared, type, entry.property, &entry.value, nullptr);
         }
     }
+    // What each graph value feeds, by the shared graph; every aspect while it is not loaded.
+    const auto* graph = is_loaded(shared) ? shared->safe_cast<graph_material>() : nullptr;
+    changes |= get_named_changes(graph_parameters_,
+                                 previous.graph_parameters_,
+                                 [graph](const std::string& name)
+                                 {
+                                     const auto* parameter = graph ? graph->find_parameter(name) : nullptr;
+                                     return parameter ? parameter->changes : render_change::material_aspects;
+                                 });
+    changes |= get_named_changes(graph_textures_,
+                                 previous.graph_textures_,
+                                 [graph](const std::string& name)
+                                 {
+                                     const auto* texture = graph ? graph->find_texture(name) : nullptr;
+                                     return texture ? texture->changes : render_change::material_aspects;
+                                 });
     return changes;
 }
 
@@ -345,6 +497,10 @@ auto material_instance::shares_draw() const -> bool
     {
         return false;
     }
+    if(has_graph_overrides() && !shares_graph_draw())
+    {
+        return false;
+    }
     if(overrides_.empty())
     {
         return true;
@@ -369,29 +525,46 @@ void material_instance::update_resolved()
     {
         return;
     }
-    if(overrides_.empty())
+    if(overrides_.empty() && !has_graph_overrides())
     {
         resolved_.reset();
         resolved_shared_ = nullptr;
         changed_properties_.clear();
+        changed_graph_parameters_.clear();
+        changed_graph_textures_.clear();
+        are_graph_overrides_changed_ = false;
         return;
     }
-    // Rendering must not wait for the shared material: until it is loaded, the slot draws with it as it is.
+    // Rendering must not wait for the shared material: until it is loaded, the slot draws with it as it is, and its
+    // shadow with the resolved material it draws with.
     const auto shared = shared_.try_get();
     if(!is_loaded(shared))
     {
+        resolved_shares_shadow_ = false;
         return;
     }
-    if(!resolved_ || resolved_shared_ != shared.get() || resolved_shared_revision_ != shared->get_revision())
+    const bool is_rebuilt = !resolved_ || resolved_shared_ != shared.get() ||
+                            resolved_shared_revision_ != shared->get_revision() || are_graph_overrides_changed_;
+    const bool is_synced = !changed_properties_.empty() || !changed_graph_parameters_.empty() || !changed_graph_textures_.empty();
+    if(is_rebuilt)
     {
         rebuild_resolved(shared);
     }
-    else if(!changed_properties_.empty())
+    else
     {
         sync_changed_properties(shared);
+        sync_changed_graph_values(shared);
     }
     changed_properties_.clear();
-    resolved_shares_draw_ = shares_draw();
+    changed_graph_parameters_.clear();
+    changed_graph_textures_.clear();
+    are_graph_overrides_changed_ = false;
+    // What the renderer batches by changes only with the overrides or the shared material.
+    if(is_rebuilt || is_synced)
+    {
+        resolved_shares_draw_ = shares_draw();
+        resolved_shares_shadow_ = shares_shadow();
+    }
 }
 
 auto material_instance::get_resolved() const -> const material::sptr&
@@ -402,6 +575,19 @@ auto material_instance::get_resolved() const -> const material::sptr&
 auto material_instance::get_resolved_shares_draw() const -> bool
 {
     return resolved_shares_draw_;
+}
+
+auto material_instance::get_resolved_shares_shadow() const -> bool
+{
+    return resolved_shares_shadow_;
+}
+
+auto material_instance::shares_shadow() const -> bool
+{
+    // Against no overrides over the same shared material: the aspects every override feeds.
+    material_instance plain;
+    plain.shared_ = shared_;
+    return (get_changes_from(plain) & render_interest::shadow_caster) == 0u;
 }
 
 void material_instance::adopt_resolved(material_instance& previous)
@@ -417,7 +603,7 @@ void material_instance::adopt_resolved(material_instance& previous)
 
 void material_instance::set_legacy_copy(material::sptr copy)
 {
-    legacy_copy_ = std::move(copy);
+    legacy_copy_ = upgrade_legacy_material(std::move(copy));
     if(legacy_copy_)
     {
         material_type_ = make_material_object(*legacy_copy_).type().id();
@@ -445,8 +631,51 @@ auto material_instance::convert_legacy_copy(bool wait) -> bool
         changed_properties_.push_back(entry.property);
         overrides_.push_back(std::move(entry));
     }
+    diff_legacy_graph_copy(shared, graph_parameters_, graph_textures_);
+    are_graph_overrides_changed_ = are_graph_overrides_changed_ || has_graph_overrides();
     legacy_copy_.reset();
     return true;
+}
+
+void material_instance::collect_graph_overrides(std::vector<graph_parameter_value>& parameters,
+                                                std::vector<graph_texture_value>& textures) const
+{
+    parameters = graph_parameters_;
+    textures = graph_textures_;
+    if(legacy_copy_)
+    {
+        diff_legacy_graph_copy(shared_.get(), parameters, textures);
+    }
+}
+
+void material_instance::diff_legacy_graph_copy(const material::sptr& shared,
+                                               std::vector<graph_parameter_value>& parameters,
+                                               std::vector<graph_texture_value>& textures) const
+{
+    const auto* copy = legacy_copy_ ? legacy_copy_->safe_cast<graph_material>() : nullptr;
+    const auto* graph = is_loaded(shared) ? shared->safe_cast<graph_material>() : nullptr;
+    if(copy == nullptr || graph == nullptr)
+    {
+        return;
+    }
+    for(const auto& parameter : copy->get_parameters())
+    {
+        const auto value = copy->get_parameter(parameter.name);
+        const auto own = graph->get_parameter(parameter.name);
+        if(value && own && *value != *own && find_named(parameters, parameter.name) == nullptr)
+        {
+            parameters.push_back({parameter.name, *value});
+        }
+    }
+    for(const auto& texture : copy->get_textures())
+    {
+        const auto value = copy->get_texture(texture.name);
+        if(graph->find_texture(texture.name) != nullptr && value != graph->get_texture(texture.name) &&
+           find_named(textures, texture.name) == nullptr)
+        {
+            textures.push_back({texture.name, value});
+        }
+    }
 }
 
 auto material_instance::find_override(entt::id_type property) -> property_override*
@@ -463,6 +692,54 @@ auto material_instance::find_override(entt::id_type property) -> property_overri
 auto material_instance::find_override(entt::id_type property) const -> const property_override*
 {
     return const_cast<material_instance*>(this)->find_override(property);
+}
+
+auto material_instance::get_shared_graph(bool wait) const -> std::shared_ptr<graph_material>
+{
+    const auto shared = wait ? shared_.get() : shared_.try_get();
+    return is_loaded(shared) ? safe_pointer_cast<graph_material>(shared) : nullptr;
+}
+
+auto material_instance::has_graph_overrides() const -> bool
+{
+    return !graph_parameters_.empty() || !graph_textures_.empty();
+}
+
+auto material_instance::shares_graph_draw() const -> bool
+{
+    const auto shared = get_shared_graph(false);
+    // A vertex shader reads the material's own values. A masked graph's shadow does too, but the shadow casters are
+    // keyed by the material they cast with (model::get_shadow_material), so they clip by the instance's values while
+    // the G-buffer draw stays shared.
+    if(!shared || !graph_textures_.empty() || shared->uses_world_position_offset())
+    {
+        return false;
+    }
+    // An override of a parameter the graph no longer has changes nothing it draws.
+    return std::all_of(graph_parameters_.begin(),
+                       graph_parameters_.end(),
+                       [&shared](const graph_parameter_value& entry)
+                       {
+                           const auto* parameter = shared->find_parameter(entry.name);
+                           return parameter == nullptr || parameter->register_index < material::MAX_INSTANCE_CONSTANTS;
+                       });
+}
+
+void material_instance::apply_graph_overrides()
+{
+    auto* graph = resolved_ ? resolved_->safe_cast<graph_material>() : nullptr;
+    if(graph == nullptr)
+    {
+        return;
+    }
+    for(const auto& entry : graph_parameters_)
+    {
+        graph->set_parameter(entry.name, entry.value);
+    }
+    for(const auto& entry : graph_textures_)
+    {
+        graph->set_texture(entry.name, entry.texture);
+    }
 }
 
 auto material_instance::diff_legacy_copy(const material::sptr& shared) const -> std::vector<property_override>
@@ -500,8 +777,33 @@ void material_instance::rebuild_resolved(const material::sptr& shared)
     {
         set_material_value(*resolved_, entry.property, entry.value);
     }
+    apply_graph_overrides();
     resolved_shared_ = shared.get();
     resolved_shared_revision_ = shared->get_revision();
+}
+
+void material_instance::sync_changed_graph_values(const material::sptr& shared)
+{
+    auto* resolved = resolved_->safe_cast<graph_material>();
+    const auto* source = shared->safe_cast<graph_material>();
+    if(resolved == nullptr || source == nullptr)
+    {
+        return;
+    }
+    for(const auto& name : changed_graph_parameters_)
+    {
+        const auto* entry = find_named(graph_parameters_, name);
+        const auto value = entry ? hpp::optional<math::vec4>(entry->value) : source->get_parameter(name);
+        if(value)
+        {
+            resolved->set_parameter(name, *value);
+        }
+    }
+    for(const auto& name : changed_graph_textures_)
+    {
+        const auto* entry = find_named(graph_textures_, name);
+        resolved->set_texture(name, entry ? entry->texture : source->get_texture(name));
+    }
 }
 
 void material_instance::sync_changed_properties(const material::sptr& shared)
