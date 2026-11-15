@@ -168,8 +168,9 @@ struct prefab_component : public component_crtp<prefab_component, owned_componen
      *
      * Allocated once, when a subtree is written as a prefab file, and preserved from then on:
      * every instance of that file carries the same id for the same slot, which is what lets
-     * the file name a slot and be understood by all of them. Regenerated on clone, because a
-     * copy is a different slot.
+     * the file name a slot and be understood by all of them. On clone the copied root's id is
+     * cleared (the copy is an addition, not a slot), and a nested instance keeps its id only
+     * when the document that placed it is inside the copy (reconcile_cloned_slots).
      *
      * Nil means this instance was added where it stands rather than coming from a file: a
      * document only removes instances it can name, and never names one it did not place.

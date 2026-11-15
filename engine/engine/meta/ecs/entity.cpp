@@ -2672,8 +2672,8 @@ void collect_nested_instance_roots(entt::handle obj, std::vector<entt::handle>& 
  * A slot is kept when the document that placed it is an instance *inside* the clone - the
  * clone root or something below it. The copy is as much an instance of that document as the
  * original, and the document names the same slot in both, for the same reason two fresh
- * instantiates agree on their slots. Regenerating those (as this used to) made every one a
- * named slot the document does not mention, and the clone's next sync rebuilt or removed them.
+ * instantiates agree on their slots. A regenerated id would be a named slot the document does
+ * not mention, which the clone's next sync would rebuild or remove.
  *
  * A slot placed by a document the clone is merely *inside of* goes nil: the copy is an
  * addition to that document, not its slot, and a named, unmentioned copy is what that

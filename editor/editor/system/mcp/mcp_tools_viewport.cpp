@@ -1458,7 +1458,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
          .description =
              "Runtime experiment flags of the global illumination passes (surface_cache_system::get_experiment_flags): each bit "
              "switches one stage for an in-session A/B - the gather's bits are listed in gi_gather_pass.h, the "
-             "reflections' in gi_reflection_pass.h, the surface cache's in gi_surface_cache_pass.h, the global "
+             "reflections' in gi_reflection_pass.h, the surface cache's in gi_surface_cache.h, the global "
              "distance field's in gi_pass_common.h and the deferred pipeline. 0 is production. Returns the new and "
              "previous flags.",
          .input_schema_json =

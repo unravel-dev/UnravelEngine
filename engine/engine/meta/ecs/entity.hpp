@@ -367,10 +367,11 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
  *
  * Its local position and rotation are preserved unconditionally - those are per-placement
  * and treated as implicit overrides - as is its parent. Everything else follows the asset
- * except properties recorded in the instance's `property_overrides`.
+ * except what the statements keep: the instance's own overrides and removals, and those the
+ * documents containing it state about it.
  *
- * Scale and skew deliberately follow the asset unless explicitly overridden; see
- * tasks/lessons.md before "fixing" that asymmetry.
+ * Scale and skew follow the asset unless a statement overrides them; only the placement
+ * (position, rotation) belongs to whoever placed the instance (is_nested_root_placement_path).
  *
  * @return false if the handle is not an instance, has no source asset, or the expansion was
  *         refused because the asset is already being expanded further up (a nesting cycle).

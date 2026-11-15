@@ -100,7 +100,7 @@ public:
                            const feature_limits& limits,
                            delta_t dt);
 
-    /// Produces the per-pixel velocity (motion vector) buffer ("VELOCITY", RG16F, uv delta
+    /// Produces the per-pixel velocity (motion vector) buffer ("VELOCITY", RGBA16F, uv delta
     /// uv_curr - uv_prev): a fullscreen camera-motion pass reconstructed from depth, then the
     /// movers (has_motion models) drawn over it with true per-object motion, depth-tested
     /// EQUAL against the shared G-buffer depth. Removes the buffer when inactive.
