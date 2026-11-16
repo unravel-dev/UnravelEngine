@@ -46,6 +46,8 @@ constexpr float radiosity_max_ray_intensity = 40.0f;
 constexpr uint32_t radiosity_group_threads = 64;
 /// bgfx's per-dimension dispatch limit: larger tile lists go out in several dispatches.
 constexpr uint32_t max_groups_per_dispatch = 65535;
+/// The variants of fs_gi_scene_debug.eshader, in the order of gi_surface_cache::debug_view.
+constexpr std::array<const char*, 4> gi_scene_debug_variants = {"default", "atlas", "coverage", "object_grid"};
 /// Mixes a material's address into its card capture key (gi_scene::source::material_key) before its revisions.
 constexpr uint64_t material_key_multiplier = 0x9E3779B97F4A7C15ull;
 /// Mix the material's two revisions into the key apart, so a step of each cannot cancel out.
@@ -286,7 +288,12 @@ auto gi_surface_cache::init(rtti::context& ctx) -> bool
     radiosity_integrate_program_ = load("cs_gi_radiosity_integrate");
     auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
     auto fs_debug = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_scene_debug.eshader");
-    debug_program_ = std::make_unique<gpu_program>(vs_clip_quad, fs_debug);
+    static_assert(gi_scene_debug_variants.size() == size_t(debug_view::count), "a variant per debug view");
+    for(size_t view = 0; view < debug_programs_.size(); ++view)
+    {
+        debug_programs_[view] =
+            std::make_unique<gpu_program>(vs_clip_quad, gfx::shader::DEFAULT_VARIANT, fs_debug, gi_scene_debug_variants[view]);
+    }
     feedback_.init(ctx);
     // The atlases come with the first update with a user (has_targets).
     scene_.init(gi_scene::settings{});
@@ -405,16 +412,43 @@ auto gi_surface_cache::is_ready() const -> bool
     {
         return program != nullptr && program->is_valid();
     };
+    const bool are_debug_views_valid = std::all_of(debug_programs_.begin(),
+                                                   debug_programs_.end(),
+                                                   [&](const std::unique_ptr<gpu_program>& program)
+                                                   {
+                                                       return valid(program.get());
+                                                   });
     return valid(copy_program_.get()) && valid(resample_program_.get()) && valid(lighting_program_.get()) &&
            valid(radiosity_trace_program_.get()) && valid(radiosity_sh_program_.get()) &&
-           valid(radiosity_integrate_program_.get()) && valid(debug_program_.get());
+           valid(radiosity_integrate_program_.get()) && are_debug_views_valid;
 }
 
 auto gi_surface_cache::begin_programs() -> bool
 {
+    const bool are_debug_views_begun = std::all_of(debug_programs_.begin(),
+                                                   debug_programs_.end(),
+                                                   [](const std::unique_ptr<gpu_program>& program)
+                                                   {
+                                                       return begin_program(program);
+                                                   });
     return begin_program(copy_program_) && begin_program(resample_program_) && begin_program(lighting_program_) &&
            begin_program(radiosity_trace_program_) && begin_program(radiosity_sh_program_) &&
-           begin_program(radiosity_integrate_program_) && begin_program(debug_program_);
+           begin_program(radiosity_integrate_program_) && are_debug_views_begun;
+}
+
+auto gi_surface_cache::get_debug_view(debug_mode mode) -> debug_view
+{
+    switch(mode)
+    {
+        case debug_mode::card_atlas:
+            return debug_view::atlas;
+        case debug_mode::card_coverage:
+            return debug_view::coverage;
+        case debug_mode::object_grid:
+            return debug_view::object_grid;
+        default:
+            return debug_view::scene;
+    }
 }
 
 void gi_surface_cache::create_targets()
@@ -1304,9 +1338,10 @@ auto gi_surface_cache::run_debug(const debug_params& params) -> bool
     gfx::set_uniform(uniforms_.u_gi_debug3, debug3);
     auto topology = gfx::clip_quad(1.0f);
     bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
-    bgfx::submit(pass.id, debug_program_->native_handle());
+    auto& debug_program = *debug_programs_[size_t(get_debug_view(params.mode))];
+    bgfx::submit(pass.id, debug_program.native_handle());
     bgfx::setState(BGFX_STATE_DEFAULT);
-    debug_program_->end();
+    debug_program.end();
     bgfx::discard();
     return true;
 }

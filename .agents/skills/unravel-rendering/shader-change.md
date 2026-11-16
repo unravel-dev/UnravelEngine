@@ -120,6 +120,10 @@ HLSL (fxc, D3D11; D3D12 compiles `s_6_0`):
 - Keywords that compile on GLSL and fail on `s_5_0` / `s_6_0`: `line`, `linear`, `point`, `sample`, `triangle`,
   `centroid`, `precise`, `shared`.
 - fxc inlines every call site: one call site per large helper (select parameters, call once).
+- fxc optimizes the whole inlined `main` at once, at any `-O` level, and its time grows faster than the code: a
+  shader that picks one of several large paths by a uniform (debug views) takes a variant per path, which also
+  compile in parallel (`fs_gi_scene_debug.eshader`: four views in one took fxc about twice as long as each alone
+  added up). Each variant's slowest job prints in suite "eshader files".
 - fxc reports one diagnostic and stops: fixing it can reveal the next. Decide pre-existing vs new by compiling
   the unchanged file (a copy of HEAD's file, not a git operation).
 - After a per-pixel `discard` or early return, no derivative of a `texelFetch` result: fxc may move the fetch

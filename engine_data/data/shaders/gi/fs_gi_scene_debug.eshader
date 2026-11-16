@@ -1,3 +1,9 @@
+[variants]
+default
+atlas         GI_SCENE_DEBUG_ATLAS
+coverage      GI_SCENE_DEBUG_COVERAGE
+object_grid   GI_SCENE_DEBUG_OBJECT_GRID
+
 [inputs]
 vec2 v_texcoord0
 
@@ -5,6 +11,9 @@ vec2 v_texcoord0
 /*
  * Surface cache debug views: the scene views, traced through the global distance field in software, and the card
  * atlas, card coverage and object grid views.
+ * Each view is a variant of its own (default: the scene views; atlas, coverage, object_grid), which the pass picks by
+ * mode (gi_surface_cache::get_debug_view): fxc inlines everything main calls into one function and optimizes it
+ * whole, and all four views in one take it far longer than each alone.
  * The scene views march the global distance field from the camera (expansion by the largest distance seen, step
  * factor dithered over [0.8, 1]) and shade each hit from the cards through the object grid, exactly as the gather's
  * rays are; a ray that hits nothing reads the sky: the environment's radiance SH our rays read.
@@ -583,25 +592,17 @@ void main()
 	{
 		discard;
 	}
+#if GI_SCENE_DEBUG_ATLAS
+	gl_FragColor = GiAtlasView(uv);
+#elif GI_SCENE_DEBUG_COVERAGE
+	gl_FragColor = GiCoverageView(uv);
+#else
 	// The view's pixel this uv falls in, also inside a tile, so a tile dithers as the whole view does.
 	vec2 pixel = floor(uv * u_gi_debug3.zw) + 0.5;
-	int mode = int(u_gi_debug.x + 0.5);
-	// Explicit branches: fxc evaluates both sides of ?:, and the scene views trace.
-	BRANCH
-	if(mode == GI_DEBUG_ATLAS)
-	{
-		gl_FragColor = GiAtlasView(uv);
-	}
-	else if(mode == GI_DEBUG_COVERAGE)
-	{
-		gl_FragColor = GiCoverageView(uv);
-	}
-	else if(mode == GI_DEBUG_OBJECT_GRID)
-	{
-		gl_FragColor = GiObjectGridView(uv, pixel);
-	}
-	else
-	{
-		gl_FragColor = GiSceneView(uv, pixel, mode);
-	}
+#if GI_SCENE_DEBUG_OBJECT_GRID
+	gl_FragColor = GiObjectGridView(uv, pixel);
+#else
+	gl_FragColor = GiSceneView(uv, pixel, int(u_gi_debug.x + 0.5));
+#endif
+#endif
 }

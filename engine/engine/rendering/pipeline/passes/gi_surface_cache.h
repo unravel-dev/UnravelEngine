@@ -415,6 +415,23 @@ private:
     /// The radiosity's trace and SH atlases for @p layout: (atlas / spacing) x the rays per axis, atlas / spacing.
     void ensure_radiosity_targets(const gi_pass::radiosity_layout& layout);
 
+    /// The variants of fs_gi_scene_debug.eshader, a view each, in the order of debug_programs_.
+    enum class debug_view : int
+    {
+        ///< The scene views (the default variant): every mode but the next three.
+        scene,
+        ///< debug_mode::card_atlas.
+        atlas,
+        ///< debug_mode::card_coverage.
+        coverage,
+        ///< debug_mode::object_grid.
+        object_grid,
+        count,
+    };
+
+    /// The variant of fs_gi_scene_debug.eshader that draws @p mode.
+    static auto get_debug_view(debug_mode mode) -> debug_view;
+
     uniforms uniforms_;
     gpu_program::ptr copy_program_;
     gpu_program::ptr resample_program_;
@@ -422,7 +439,8 @@ private:
     gpu_program::ptr radiosity_trace_program_;
     gpu_program::ptr radiosity_sh_program_;
     gpu_program::ptr radiosity_integrate_program_;
-    std::unique_ptr<gpu_program> debug_program_;
+    /// The debug views' programs, by debug_view: fxc optimizes each view on its own.
+    std::array<std::unique_ptr<gpu_program>, size_t(debug_view::count)> debug_programs_;
     gi_scene scene_;
     gi_surface_cache_feedback feedback_;
     ///< The last feedback readback's elements (scratch).
