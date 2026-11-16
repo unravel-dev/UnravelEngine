@@ -91,6 +91,17 @@ auto get_samples() -> const std::vector<sample_info>&
          "editor:/samples/sample_gi.jpg",
          ICON_MDI_WHITE_BALANCE_SUNNY,
          true},
+        {"Material Gallery",
+         "UnravelEngine-Sample-Materials",
+         "Materials",
+         "A gallery hall of eight bays where every surface is a material graph: measured metals, scanned "
+         "texture sets, parallax depth, procedural marble and lava, holograms and force fields, plants and "
+         "water moved in the material, and terrain layered by slope and height. Open any material in the "
+         "Material Graph window to see how it is built.",
+         {"Materials", "Node Graphs", "Shaders"},
+         "editor:/samples/sample_materials.jpg",
+         ICON_MDI_PALETTE,
+         true},
         {"Game UI",
          "UnravelEngine-Sample-UI",
          "User interface",
