@@ -1,7 +1,9 @@
 # Writes samples.json, the sample projects the editor's start page offers, and attaches it to the latest release.
 #
-# It runs only by hand (Actions > samples > Run workflow), after a sample repository was published or changed its
-# sample.json or its picture. Every public repository named UnravelEngine-Sample-* with a sample.json at its root is
+# It runs every day at 10:00 UTC, so a sample repository that was published or changed its sample.json or its
+# picture reaches the editors by the next day, and by hand (Actions > samples > Run workflow) to publish one at
+# once. It is the one workflow with a schedule, by the user's choice: it only reads the sample repositories and
+# replaces one release file. Every public repository named UnravelEngine-Sample-* with a sample.json at its root is
 # listed; what a sample.json holds is in .github/scripts/sample_catalog.py. The editor reads the latest release's
 # samples.json at most once a day, a release download and no API request. The release workflow attaches a copy to
 # every release it publishes as well, so a new latest release answers too.
@@ -9,6 +11,8 @@ name: samples
 
 #on: [push, pull_request]
 on:
+  schedule:
+    - cron: '0 10 * * *'
   workflow_dispatch:
 
 permissions:

@@ -85,7 +85,8 @@ CI and tools
 
 - Run a workflow only when the user asks (runner minutes):
   `gh workflow run <file> --ref <branch>`. Fix what a run does, never when it runs: the
-  commented `#on: [push, pull_request]` line records that choice. When a subagent touched a
+  commented `#on: [push, pull_request]` line records that choice. `samples.yml`'s daily
+  schedule is the one exception the user chose; add no other. When a subagent touched a
   workflow, diff its `on:` block against HEAD.
 - A comment or a CI pin is not proof of a tool limit: run that tool version before writing a
   limit into docs, or call it unverified.

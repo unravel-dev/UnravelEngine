@@ -122,7 +122,8 @@ Designs that span several areas: skill `unravel-architect`.
   Rendering, Deploy, Scripting, Editor, Build, Engine, Assets, Physics, Core, Animation, UI,
   MCP, Audio. Never name a game, an agent, a model or an email.
 - CI workflows (`.github/workflows/`) run by hand only (`workflow_dispatch`); never add push,
-  pull_request or schedule triggers.
+  pull_request or schedule triggers. The one exception, by the user's choice: `samples.yml`
+  also runs daily on a schedule.
 
 ## Working here
 
