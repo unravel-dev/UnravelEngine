@@ -35,23 +35,12 @@
 #include <limits>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_limits_checks = 0;
-int g_limits_failures = 0;
-
-void limits_check(bool condition, const std::string& what)
-{
-    ++g_limits_checks;
-    if(!condition)
-    {
-        ++g_limits_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// The root a settings document is saved under.
 constexpr const char* LIMITS_DOCUMENT_ROOT = "settings";
@@ -78,7 +67,7 @@ void test_default_limits()
     std::printf("test_default_limits\n");
     auto params = make_run_asking_for_everything();
     rendering::pipeline::apply_feature_limits(params, feature_limits{});
-    limits_check(params.fill_gi_params && params.fill_ssr_params && params.fill_ssil_params && params.fill_gtao_params &&
+    check(params.fill_gi_params && params.fill_ssr_params && params.fill_ssil_params && params.fill_gtao_params &&
                      params.fill_assao_params && params.fill_bloom_params && params.fill_taa_params &&
                      params.apply_taa_params && !params.fill_fxaa_params,
                  "the default limits allow everything a run asks for");
@@ -95,11 +84,11 @@ void test_effects_turned_off()
     limits.bloom = false;
     auto params = make_run_asking_for_everything();
     rendering::pipeline::apply_feature_limits(params, limits);
-    limits_check(!params.fill_gi_params && !params.fill_ssr_params && !params.fill_ssil_params, "GI, SSR and SSIL are turned off");
-    limits_check(!params.fill_gtao_params && !params.fill_assao_params, "both ambient occlusion passes are turned off");
-    limits_check(!params.fill_bloom_params, "bloom is turned off");
-    limits_check(params.fill_taa_params && params.apply_taa_params, "and anti-aliasing is left alone");
-    limits_check(params.limits == limits, "the run records the limits");
+    check(!params.fill_gi_params && !params.fill_ssr_params && !params.fill_ssil_params, "GI, SSR and SSIL are turned off");
+    check(!params.fill_gtao_params && !params.fill_assao_params, "both ambient occlusion passes are turned off");
+    check(!params.fill_bloom_params, "bloom is turned off");
+    check(params.fill_taa_params && params.apply_taa_params, "and anti-aliasing is left alone");
+    check(params.limits == limits, "the run records the limits");
 }
 
 void test_anti_aliasing_limits()
@@ -109,19 +98,19 @@ void test_anti_aliasing_limits()
     limits.max_anti_aliasing = anti_aliasing_limit::fxaa;
     auto params = make_run_asking_for_everything();
     rendering::pipeline::apply_feature_limits(params, limits);
-    limits_check(!params.fill_taa_params && !params.apply_taa_params && params.fill_fxaa_params,
+    check(!params.fill_taa_params && !params.apply_taa_params && params.fill_fxaa_params,
                  "under an FXAA limit a view asking for temporal AA gets FXAA");
     params = {};
     params.fill_fxaa_params = [](fxaa_pass::run_params&) {};
     rendering::pipeline::apply_feature_limits(params, limits);
-    limits_check(static_cast<bool>(params.fill_fxaa_params), "and a view asking for FXAA keeps it");
+    check(static_cast<bool>(params.fill_fxaa_params), "and a view asking for FXAA keeps it");
     params = {};
     rendering::pipeline::apply_feature_limits(params, limits);
-    limits_check(!params.fill_fxaa_params && !params.fill_taa_params, "a view asking for no anti-aliasing gets none");
+    check(!params.fill_fxaa_params && !params.fill_taa_params, "a view asking for no anti-aliasing gets none");
     limits.max_anti_aliasing = anti_aliasing_limit::none;
     params = make_run_asking_for_everything();
     rendering::pipeline::apply_feature_limits(params, limits);
-    limits_check(!params.fill_taa_params && !params.apply_taa_params && !params.fill_fxaa_params,
+    check(!params.fill_taa_params && !params.apply_taa_params && !params.fill_fxaa_params,
                  "under no anti-aliasing neither temporal AA nor FXAA runs");
 }
 
@@ -133,7 +122,7 @@ void test_limited_lights()
     source.shadow_params.type = sm_impl::pcss;
     source.contact_shadow.enabled = true;
     const auto allowed = limit_light(source, feature_limits{});
-    limits_check(allowed.shadow_params.resolution == sm_resolution::very_high && allowed.shadow_params.type == sm_impl::pcss &&
+    check(allowed.shadow_params.resolution == sm_resolution::very_high && allowed.shadow_params.type == sm_impl::pcss &&
                      allowed.contact_shadow.enabled,
                  "the default limits leave a light as it is");
     feature_limits limits;
@@ -141,22 +130,22 @@ void test_limited_lights()
     limits.soft_shadows = false;
     limits.contact_shadows = false;
     const auto limited = limit_light(source, limits);
-    limits_check(limited.shadow_params.resolution == sm_resolution::medium, "a larger shadow map is capped");
-    limits_check(limited.shadow_params.type == sm_impl::pcf, "PCSS filters with PCF without soft shadows");
-    limits_check(!limited.contact_shadow.enabled, "contact shadows are dropped without them");
+    check(limited.shadow_params.resolution == sm_resolution::medium, "a larger shadow map is capped");
+    check(limited.shadow_params.type == sm_impl::pcf, "PCSS filters with PCF without soft shadows");
+    check(!limited.contact_shadow.enabled, "contact shadows are dropped without them");
     source.shadow_params.resolution = sm_resolution::low;
     source.shadow_params.type = sm_impl::vsm;
-    limits_check(limit_light(source, limits).shadow_params.type == sm_impl::pcf, "VSM filters with PCF without soft shadows");
+    check(limit_light(source, limits).shadow_params.type == sm_impl::pcf, "VSM filters with PCF without soft shadows");
     source.shadow_params.type = sm_impl::hard;
     const auto kept = limit_light(source, limits);
-    limits_check(kept.shadow_params.resolution == sm_resolution::low && kept.shadow_params.type == sm_impl::hard,
+    check(kept.shadow_params.resolution == sm_resolution::low && kept.shadow_params.type == sm_impl::hard,
                  "a smaller shadow map and hard shadows are kept");
     source.directional_shadow_params.num_splits = 3;
-    limits_check(limit_light(source, feature_limits{}).directional_shadow_params.num_splits == 3, "the default limits keep a light's cascades");
+    check(limit_light(source, feature_limits{}).directional_shadow_params.num_splits == 3, "the default limits keep a light's cascades");
     limits.max_shadow_cascades = 2;
-    limits_check(limit_light(source, limits).directional_shadow_params.num_splits == 2, "more cascades than allowed are capped");
+    check(limit_light(source, limits).directional_shadow_params.num_splits == 2, "more cascades than allowed are capped");
     limits.max_shadow_cascades = 4;
-    limits_check(limit_light(source, limits).directional_shadow_params.num_splits == 3, "fewer cascades than allowed are kept");
+    check(limit_light(source, limits).directional_shadow_params.num_splits == 3, "fewer cascades than allowed are kept");
 }
 
 void test_shadow_filtering_limit()
@@ -167,30 +156,30 @@ void test_shadow_filtering_limit()
     source.shadow_params.type = sm_impl::pcf;
     source.shadow_params.pcf.x_offset = 2.0f;
     source.shadow_params.pcf.y_offset = 0.5f;
-    limits_check(get_pcf_kernel(source) == pcf_kernel::tent7, "a PCF offset of 2 filters a spot light with the 7x7 tent");
-    limits_check(limit_light(source, feature_limits{}).shadow_params.pcf.x_offset == 2.0f,
+    check(get_pcf_kernel(source) == pcf_kernel::tent7, "a PCF offset of 2 filters a spot light with the 7x7 tent");
+    check(limit_light(source, feature_limits{}).shadow_params.pcf.x_offset == 2.0f,
                  "the default limits keep every PCF width");
     feature_limits limits;
     limits.max_shadow_filtering = shadow_filtering_limit::pcf_3x3;
     const auto narrow = limit_light(source, limits);
-    limits_check(narrow.shadow_params.type == sm_impl::pcf && get_pcf_kernel(narrow) == pcf_kernel::tent3,
+    check(narrow.shadow_params.type == sm_impl::pcf && get_pcf_kernel(narrow) == pcf_kernel::tent3,
                  "under PCF 3x3 a wider PCF light filters with the 3x3 tent");
-    limits_check(narrow.shadow_params.pcf.y_offset == 0.5f, "a PCF offset already narrow enough is kept");
+    check(narrow.shadow_params.pcf.y_offset == 0.5f, "a PCF offset already narrow enough is kept");
     source.type = light_type::point;
     source.shadow_params.pcf.x_offset = 8.0f;
-    limits_check(get_pcf_kernel(limit_light(source, limits)) == pcf_kernel::tent3,
+    check(get_pcf_kernel(limit_light(source, limits)) == pcf_kernel::tent3,
                  "a point light's faces narrow to the 3x3 tent too");
     source.shadow_params.type = sm_impl::pcss;
-    limits_check(limit_light(source, limits).shadow_params.type == sm_impl::pcf, "under PCF 3x3 soft shadows filter with PCF");
+    check(limit_light(source, limits).shadow_params.type == sm_impl::pcf, "under PCF 3x3 soft shadows filter with PCF");
     limits.max_shadow_filtering = shadow_filtering_limit::hard;
     for(const auto filter : {sm_impl::pcf, sm_impl::pcss, sm_impl::vsm, sm_impl::esm, sm_impl::hard})
     {
         source.shadow_params.type = filter;
-        limits_check(limit_light(source, limits).shadow_params.type == sm_impl::hard, "under hard every light renders hard shadows");
+        check(limit_light(source, limits).shadow_params.type == sm_impl::hard, "under hard every light renders hard shadows");
     }
     feature_limits other;
     other.max_shadow_filtering = shadow_filtering_limit::pcf_3x3;
-    limits_check(intersect_feature_limits(feature_limits{}, other).max_shadow_filtering == shadow_filtering_limit::pcf_3x3,
+    check(intersect_feature_limits(feature_limits{}, other).max_shadow_filtering == shadow_filtering_limit::pcf_3x3,
                  "two limits keep the narrower shadow filtering");
 }
 
@@ -213,8 +202,8 @@ void test_settings_round_trip()
     saved.graphics.limits.max_shadow_cascades = 2;
     const auto document = serialization::save_to_document(saved, LIMITS_DOCUMENT_ROOT);
     settings loaded;
-    limits_check(serialization::load_from_document(document, LIMITS_DOCUMENT_ROOT, loaded), "a settings document loads");
-    limits_check(loaded.graphics.render_scale == 0.75f && loaded.graphics.limits == saved.graphics.limits,
+    check(serialization::load_from_document(document, LIMITS_DOCUMENT_ROOT, loaded), "a settings document loads");
+    check(loaded.graphics.render_scale == 0.75f && loaded.graphics.limits == saved.graphics.limits,
                  "the render scale and the limits round trip");
 }
 
@@ -222,13 +211,13 @@ void test_render_size()
 {
     std::printf("test_render_size\n");
     const usize32_t view{1920, 1080};
-    limits_check(get_render_size(view, 1.0f) == view && get_render_size(view, 2.0f) == view, "a scale of 1 or more keeps the size");
-    limits_check(get_render_size(view, 0.5f) == usize32_t(960, 540), "half the scale is half the size");
-    limits_check(get_render_size(view, 0.1f) == get_render_size(view, MIN_RENDER_SCALE), "the scale stops at its minimum");
-    limits_check(get_render_size(view, std::numeric_limits<float>::quiet_NaN()) == view, "a scale that is not a number keeps the size");
-    limits_check(get_render_size({0, 0}, 0.5f) == usize32_t(0, 0), "an empty view stays empty");
-    limits_check(get_render_size({1, 3}, MIN_RENDER_SCALE) == usize32_t(1, 1), "a side never goes below one texel");
-    limits_check(get_render_size({1279, 719}, 0.5f) == usize32_t(640, 360), "odd sizes round to the nearest texel");
+    check(get_render_size(view, 1.0f) == view && get_render_size(view, 2.0f) == view, "a scale of 1 or more keeps the size");
+    check(get_render_size(view, 0.5f) == usize32_t(960, 540), "half the scale is half the size");
+    check(get_render_size(view, 0.1f) == get_render_size(view, MIN_RENDER_SCALE), "the scale stops at its minimum");
+    check(get_render_size(view, std::numeric_limits<float>::quiet_NaN()) == view, "a scale that is not a number keeps the size");
+    check(get_render_size({0, 0}, 0.5f) == usize32_t(0, 0), "an empty view stays empty");
+    check(get_render_size({1, 3}, MIN_RENDER_SCALE) == usize32_t(1, 1), "a side never goes below one texel");
+    check(get_render_size({1279, 719}, 0.5f) == usize32_t(640, 360), "odd sizes round to the nearest texel");
 }
 
 void test_view_render_size()
@@ -236,27 +225,23 @@ void test_view_render_size()
     std::printf("test_view_render_size\n");
     const usize32_t viewport{900, 506};
     const usize32_t full_hd{1920, 1080};
-    limits_check(get_view_render_size(viewport, full_hd, 1.0f) == full_hd, "a resolution larger than the viewport renders whole");
-    limits_check(get_view_render_size(viewport, full_hd, 0.5f) == usize32_t(960, 540), "the scale applies to the resolution");
-    limits_check(get_view_render_size(viewport, {}, 0.5f) == usize32_t(450, 253), "without a resolution the viewport is scaled");
-    limits_check(get_view_render_size(viewport, {1920, 0}, 1.0f) == viewport, "a resolution with an empty side is none");
-    limits_check(get_view_render_size(viewport, {640, 360}, 1.0f) == usize32_t(640, 360), "a smaller resolution renders whole");
+    check(get_view_render_size(viewport, full_hd, 1.0f) == full_hd, "a resolution larger than the viewport renders whole");
+    check(get_view_render_size(viewport, full_hd, 0.5f) == usize32_t(960, 540), "the scale applies to the resolution");
+    check(get_view_render_size(viewport, {}, 0.5f) == usize32_t(450, 253), "without a resolution the viewport is scaled");
+    check(get_view_render_size(viewport, {1920, 0}, 1.0f) == viewport, "a resolution with an empty side is none");
+    check(get_view_render_size(viewport, {640, 360}, 1.0f) == usize32_t(640, 360), "a smaller resolution renders whole");
 }
 
-auto run_feature_limits_suite(rtti::context& /*ctx*/) -> int
+void run_feature_limits_suite(rtti::context& /*ctx*/)
 {
-    g_limits_checks = 0;
-    g_limits_failures = 0;
-    test_default_limits();
-    test_effects_turned_off();
-    test_anti_aliasing_limits();
-    test_limited_lights();
-    test_shadow_filtering_limit();
-    test_settings_round_trip();
-    test_render_size();
-    test_view_render_size();
-    std::printf("feature limits: %d checks, %d failures\n", g_limits_checks, g_limits_failures);
-    return g_limits_failures;
+    RUN_CASE(test_default_limits());
+    RUN_CASE(test_effects_turned_off());
+    RUN_CASE(test_anti_aliasing_limits());
+    RUN_CASE(test_limited_lights());
+    RUN_CASE(test_shadow_filtering_limit());
+    RUN_CASE(test_settings_round_trip());
+    RUN_CASE(test_render_size());
+    RUN_CASE(test_view_render_size());
 }
 
 } // namespace

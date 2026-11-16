@@ -26,23 +26,12 @@
 #include <thread>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAILED: %s\n", what.c_str());
-    }
-}
 
 /// A platform that keeps every request until the test answers it.
 struct held_platform
@@ -148,17 +137,13 @@ void test_operating_system()
           "a system without run-time permissions grants a request at once");
 }
 
-auto run_permission_requests_suite(rtti::context& /*ctx*/) -> int
+void run_permission_requests_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_names();
-    test_answers();
-    test_answer_inside_the_request();
-    test_forgotten_requests();
-    test_operating_system();
-    std::printf("permission requests: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_names());
+    RUN_CASE(test_answers());
+    RUN_CASE(test_answer_inside_the_request());
+    RUN_CASE(test_forgotten_requests());
+    RUN_CASE(test_operating_system());
 }
 
 } // namespace

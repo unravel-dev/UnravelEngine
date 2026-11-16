@@ -24,21 +24,10 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 auto contains(const std::vector<std::string>& values, const std::string& value) -> bool
 {
@@ -149,16 +138,12 @@ void test_scan_edge_cases()
           "a style property with a space before ':' is found");
 }
 
-auto run_asset_references_suite(rtti::context&) -> int
+void run_asset_references_suite(rtti::context&)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_quoted_uids();
-    test_quoted_protocol_paths();
-    test_ui_linked_paths();
-    test_scan_edge_cases();
-    std::printf("asset references: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_quoted_uids());
+    RUN_CASE(test_quoted_protocol_paths());
+    RUN_CASE(test_ui_linked_paths());
+    RUN_CASE(test_scan_edge_cases());
 }
 
 } // namespace

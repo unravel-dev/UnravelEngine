@@ -118,6 +118,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
+
+using namespace unravel::test;
 #endif
 
 namespace
@@ -135,22 +137,9 @@ constexpr auto SPAWN_POLL = std::chrono::milliseconds(50);
 constexpr std::size_t SUBPROCESS_OUTPUT_FILE_SIZE = 256 * 1024;
 constexpr std::size_t SUBPROCESS_OUTPUT_LIMIT = 64 * 1024;
 
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
 auto get_temp_folder() -> fs::path
 {
-    return fs::temp_directory_path() / "unravel-tests-deploy-library";
+    return temp_path("unravel-tests-deploy-library");
 }
 
 /// Whether paths in another letter case name the same file here, as the game's lookups see it.
@@ -689,7 +678,7 @@ void test_engine_loaded_keys()
 {
     std::printf("test_engine_loaded_keys\n");
 #if !defined(ENGINE_DATA_DIR)
-    std::printf("  SKIP: the engine_data location is not configured\n");
+    skipped("The engine_data location is not configured, so the engine's loaded keys are not checked.");
 #else
     const fs::path engine_data = ENGINE_DATA_DIR;
     const std::string engine_root = "engine:/";
@@ -3173,96 +3162,94 @@ void test_spawn_detached(const fs::path& root)
     check(static_cast<bool>(failed), "a program that does not exist reports an error");
 }
 
-auto run_deploy_library_suite(rtti::context&) -> int
+void run_deploy_library_suite(rtti::context&)
 {
-    g_checks = 0;
-    g_failures = 0;
     const auto temp = get_temp_folder();
     fs::error_code ec;
     fs::remove_all(temp, ec);
     try
     {
-        test_keys();
+        RUN_CASE(test_keys());
         const auto listed = make_listed_content(temp / "listed");
-        test_rule_precedence(listed);
-        test_set_shipped(listed);
-        test_normalize_and_orphans(listed);
+        RUN_CASE(test_rule_precedence(listed));
+        RUN_CASE(test_set_shipped(listed));
+        RUN_CASE(test_normalize_and_orphans(listed));
         const auto project = make_walk_project(temp / "walk");
         deploy_settings params;
         params.deploy_scenes = {"app:/data/levels/gone.spfb"};
         const auto walked = deployment::detect_content(project.source, params, project.startup_scene);
-        test_walk(walked);
-        test_walk_shipped_settings(project);
-        test_content_references(project);
-        test_walk_engine(temp / "walk_engine");
-        test_walk_engine_edges(temp / "walk_engine_edges");
-        test_engine_loaded_keys();
-        test_tree(walked);
-        test_file_classification(temp / "files");
-        test_shader_variants(temp / "variants");
-        test_cooked_shader_variants();
-        test_web_shader_sets();
-        test_shader_cook_plan(temp / "shader_cook");
-        test_profile_locations();
-        test_deploy_locations(temp / "locations");
-        test_application_ids();
-        test_android_devices();
-        test_android_device_properties();
-        test_logcat_lines();
-        test_game_log_lines();
-        test_device_log_messages();
-        test_merged_devices();
-        test_wireless_debugging_services();
-        test_android_template(temp / "android");
-        test_player_version(temp / "player");
-        test_web_template(temp / "web_template");
-        test_web_chunk_cuts();
-        test_web_site(temp / "web_site");
-        test_web_trim(temp / "web_trim");
-        test_web_chunks(temp / "web_chunks");
-        test_web_addresses();
-        test_web_tunnel();
-        test_write_text(temp / "write_text");
-        test_text_helpers();
-        test_gradle_arguments();
-        test_desktop_graphics();
-        test_extra_files(temp / "extra_files");
-        test_post_command(temp / "post_command");
-        test_android_additions();
-        test_android_java(temp / "android_java");
-        test_android_device_answers();
-        test_android_permissions();
-        test_android_icon(temp / "icon");
-        test_windows_version_numbers();
-        test_windows_icon_group();
-        test_windows_icon_images(temp / "windows_icon");
-        test_window_icon_file(temp / "window_icon");
-        test_windows_version_resource();
-        test_windows_executable_resources(temp / "windows_executable");
-        test_run_arguments();
-        test_subprocess(temp / "subprocess");
-        test_pack_inputs(temp / "inputs");
-        test_cooked_only_pack_inputs(temp / "cooked_only_inputs");
-        test_stale_binaries(temp / "binaries");
-        test_android_build_dirs(temp / "android_build_dirs");
-        test_cancellation();
+        RUN_CASE(test_walk(walked));
+        RUN_CASE(test_walk_shipped_settings(project));
+        RUN_CASE(test_content_references(project));
+        RUN_CASE(test_walk_engine(temp / "walk_engine"));
+        RUN_CASE(test_walk_engine_edges(temp / "walk_engine_edges"));
+        RUN_CASE(test_engine_loaded_keys());
+        RUN_CASE(test_tree(walked));
+        RUN_CASE(test_file_classification(temp / "files"));
+        RUN_CASE(test_shader_variants(temp / "variants"));
+        RUN_CASE(test_cooked_shader_variants());
+        RUN_CASE(test_web_shader_sets());
+        RUN_CASE(test_shader_cook_plan(temp / "shader_cook"));
+        RUN_CASE(test_profile_locations());
+        RUN_CASE(test_deploy_locations(temp / "locations"));
+        RUN_CASE(test_application_ids());
+        RUN_CASE(test_android_devices());
+        RUN_CASE(test_android_device_properties());
+        RUN_CASE(test_logcat_lines());
+        RUN_CASE(test_game_log_lines());
+        RUN_CASE(test_device_log_messages());
+        RUN_CASE(test_merged_devices());
+        RUN_CASE(test_wireless_debugging_services());
+        RUN_CASE(test_android_template(temp / "android"));
+        RUN_CASE(test_player_version(temp / "player"));
+        RUN_CASE(test_web_template(temp / "web_template"));
+        RUN_CASE(test_web_chunk_cuts());
+        RUN_CASE(test_web_site(temp / "web_site"));
+        RUN_CASE(test_web_trim(temp / "web_trim"));
+        RUN_CASE(test_web_chunks(temp / "web_chunks"));
+        RUN_CASE(test_web_addresses());
+        RUN_CASE(test_web_tunnel());
+        RUN_CASE(test_write_text(temp / "write_text"));
+        RUN_CASE(test_text_helpers());
+        RUN_CASE(test_gradle_arguments());
+        RUN_CASE(test_desktop_graphics());
+        RUN_CASE(test_extra_files(temp / "extra_files"));
+        RUN_CASE(test_post_command(temp / "post_command"));
+        RUN_CASE(test_android_additions());
+        RUN_CASE(test_android_java(temp / "android_java"));
+        RUN_CASE(test_android_device_answers());
+        RUN_CASE(test_android_permissions());
+        RUN_CASE(test_android_icon(temp / "icon"));
+        RUN_CASE(test_windows_version_numbers());
+        RUN_CASE(test_windows_icon_group());
+        RUN_CASE(test_windows_icon_images(temp / "windows_icon"));
+        RUN_CASE(test_window_icon_file(temp / "window_icon"));
+        RUN_CASE(test_windows_version_resource());
+        RUN_CASE(test_windows_executable_resources(temp / "windows_executable"));
+        RUN_CASE(test_run_arguments());
+        RUN_CASE(test_subprocess(temp / "subprocess"));
+        RUN_CASE(test_pack_inputs(temp / "inputs"));
+        RUN_CASE(test_cooked_only_pack_inputs(temp / "cooked_only_inputs"));
+        RUN_CASE(test_stale_binaries(temp / "binaries"));
+        RUN_CASE(test_android_build_dirs(temp / "android_build_dirs"));
+        RUN_CASE(test_cancellation());
         auto job = make_protocol_job(temp / "protocol");
-        test_packed_protocol(job);
-        test_loose_protocol(job);
-        test_patch_over_release(job, temp / "protocol");
-        test_packed_protocol_without_library(temp / "scriptless");
-        test_texture_set_packs(temp / "texture_sets");
-        test_shader_set_packs(temp / "shader_sets");
-        test_release_names();
-        test_keep_and_remove_release(temp / "releases");
-        test_debug_files(temp / "debug_files");
-        test_steam_settings();
-        test_steam_build_script();
-        test_steamcmd_output();
-        test_dependency_parse(temp / "dependencies");
-        test_failed_scan_throws(temp / "dependencies");
-        test_folders(temp / "folders");
-        test_spawn_detached(temp / "spawn");
+        RUN_CASE(test_packed_protocol(job));
+        RUN_CASE(test_loose_protocol(job));
+        RUN_CASE(test_patch_over_release(job, temp / "protocol"));
+        RUN_CASE(test_packed_protocol_without_library(temp / "scriptless"));
+        RUN_CASE(test_texture_set_packs(temp / "texture_sets"));
+        RUN_CASE(test_shader_set_packs(temp / "shader_sets"));
+        RUN_CASE(test_release_names());
+        RUN_CASE(test_keep_and_remove_release(temp / "releases"));
+        RUN_CASE(test_debug_files(temp / "debug_files"));
+        RUN_CASE(test_steam_settings());
+        RUN_CASE(test_steam_build_script());
+        RUN_CASE(test_steamcmd_output());
+        RUN_CASE(test_dependency_parse(temp / "dependencies"));
+        RUN_CASE(test_failed_scan_throws(temp / "dependencies"));
+        RUN_CASE(test_folders(temp / "folders"));
+        RUN_CASE(test_spawn_detached(temp / "spawn"));
     }
     catch(const std::exception& ex)
     {
@@ -3270,8 +3257,6 @@ auto run_deploy_library_suite(rtti::context&) -> int
     }
     fs::unmount_packs();
     fs::remove_all(temp, ec);
-    std::printf("deploy library: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 } // namespace

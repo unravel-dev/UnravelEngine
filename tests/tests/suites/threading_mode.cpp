@@ -36,23 +36,12 @@
 #include <thread>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 constexpr uint32_t LOOP_ITEMS = 256;
 /// Longer than a frame at the default minimum fps allows.
@@ -250,19 +239,15 @@ void test_long_frame_counts_as_the_longest_allowed()
     check(sim.get_unscaled_delta_time().count() >= long_frame, "without a minimum fps a long frame counts in full");
 }
 
-auto run_threading_mode_suite(rtti::context& ctx) -> int
+void run_threading_mode_suite(rtti::context& ctx)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_runner_pool_follows_the_switch(ctx);
-    test_waits_on_work_made_from_jobs(ctx);
-    test_loops_run_inline_on_the_calling_thread();
-    test_background_work_runs_before_returning();
-    test_long_frame_counts_as_the_longest_allowed();
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_runner_pool_follows_the_switch(ctx));
+    RUN_CASE(test_waits_on_work_made_from_jobs(ctx));
+    RUN_CASE(test_loops_run_inline_on_the_calling_thread());
+    RUN_CASE(test_background_work_runs_before_returning());
+    RUN_CASE(test_long_frame_counts_as_the_longest_allowed());
 }
 
 } // namespace
 
-REGISTER_TEST_SUITE("threading mode", run_threading_mode_suite)
+REGISTER_TEST_SUITE("threading mode", run_threading_mode_suite, {.lane = ::unravel::suite_lane::exclusive})

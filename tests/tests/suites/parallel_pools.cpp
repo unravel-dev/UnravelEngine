@@ -34,23 +34,12 @@
 #include <string>
 #include <thread>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 using clock_type = std::chrono::steady_clock;
 
@@ -204,24 +193,19 @@ void test_background_scope_covers_its_own_thread_and_block()
     check(!is_on_background(), "leaving the scope restores the frame pool");
 }
 
-auto run_parallel_pools_suite(rtti::context& ctx) -> int
+void run_parallel_pools_suite(rtti::context& ctx)
 {
     (void)ctx;
-    g_checks = 0;
-    g_failures = 0;
     // The single-threaded mode never starts the pools these test; the "threading mode" suite covers it.
     if(is_single_threaded())
     {
-        std::printf("SKIP: the single-threaded mode starts no pools\n");
-        return 0;
+        skip("The single-threaded mode starts no pools; the threading mode suite covers it.");
     }
-    test_background_scope_runs_on_its_own_threads();
-    test_frame_loop_runs_while_background_threads_are_held();
-    test_background_scope_covers_its_own_thread_and_block();
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_background_scope_runs_on_its_own_threads());
+    RUN_CASE(test_frame_loop_runs_while_background_threads_are_held());
+    RUN_CASE(test_background_scope_covers_its_own_thread_and_block());
 }
 
 } // namespace
 
-REGISTER_TEST_SUITE("parallel pools", run_parallel_pools_suite)
+REGISTER_TEST_SUITE("parallel pools", run_parallel_pools_suite, {.lane = ::unravel::suite_lane::exclusive})

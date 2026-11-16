@@ -40,23 +40,12 @@
 #include <thread>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// The asset type the handles under test load.
 struct probe_asset
@@ -141,11 +130,21 @@ void destroy_retired_probe(void* object)
     retired_probe::destroyed.fetch_add(1);
 }
 
-/// Spins until `flag` is set; only for flags another thread sets right away.
+/// The longest a flag another thread sets right away may take before its wait fails.
+constexpr auto FLAG_WAIT_LIMIT = std::chrono::seconds(30);
+
+/// Spins until `flag` is set; only for flags another thread sets right away. A flag still unset after
+/// FLAG_WAIT_LIMIT is a failed check, and the wait ends.
 void wait_for(const std::atomic<bool>& flag)
 {
+    const auto deadline = std::chrono::steady_clock::now() + FLAG_WAIT_LIMIT;
     while(!flag.load())
     {
+        if(std::chrono::steady_clock::now() >= deadline)
+        {
+            check(false, "a flag another thread sets right away is set within 30 seconds");
+            return;
+        }
         std::this_thread::yield();
     }
 }
@@ -675,27 +674,23 @@ void test_visit_waits_when_asked()
     check(none.visit([](probe_asset* asset) { return asset; }, true) == nullptr, "without a task nothing is waited for");
 }
 
-auto run_asset_handle_suite(rtti::context& ctx) -> int
+void run_asset_handle_suite(rtti::context& ctx)
 {
-    g_checks = 0;
-    g_failures = 0;
     g_pool = ctx.get_cached<threader>().pool.get();
-    test_epoch_frees_only_after_earlier_readers_leave();
-    test_epoch_collect_all_waits_for_readers();
-    test_epoch_reuses_slots_of_ended_threads();
-    test_validity_follows_every_published_state();
-    test_validity_matches_the_snapshot_after_racing_writers();
-    test_cache_hits_from_many_threads_return_the_asset();
-    test_last_access_moves_forward_and_never_back();
-    test_waited_get_is_seen_by_peek_and_version();
-    test_reload_during_a_wait_keeps_the_new_asset();
-    test_id_change_keeps_the_loaded_asset();
-    test_readers_never_receive_a_freed_asset();
-    test_visit_passes_what_try_get_returns();
-    test_visited_asset_outlives_a_reload();
-    test_visit_waits_when_asked();
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_epoch_frees_only_after_earlier_readers_leave());
+    RUN_CASE(test_epoch_collect_all_waits_for_readers());
+    RUN_CASE(test_epoch_reuses_slots_of_ended_threads());
+    RUN_CASE(test_validity_follows_every_published_state());
+    RUN_CASE(test_validity_matches_the_snapshot_after_racing_writers());
+    RUN_CASE(test_cache_hits_from_many_threads_return_the_asset());
+    RUN_CASE(test_last_access_moves_forward_and_never_back());
+    RUN_CASE(test_waited_get_is_seen_by_peek_and_version());
+    RUN_CASE(test_reload_during_a_wait_keeps_the_new_asset());
+    RUN_CASE(test_id_change_keeps_the_loaded_asset());
+    RUN_CASE(test_readers_never_receive_a_freed_asset());
+    RUN_CASE(test_visit_passes_what_try_get_returns());
+    RUN_CASE(test_visited_asset_outlives_a_reload());
+    RUN_CASE(test_visit_waits_when_asked());
 }
 
 } // namespace

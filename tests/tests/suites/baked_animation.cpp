@@ -41,23 +41,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 constexpr const char* MESH_KEY = "engine:/embedded/baked_animation_test/character";
 constexpr const char* UNSKINNED_MESH_KEY = "engine:/embedded/baked_animation_test/unskinned_character";
@@ -468,18 +457,14 @@ void test_draw_material_instance(const fixture& assets)
 
 } // namespace
 
-auto run_baked_animation_suite(rtti::context& /*ctx*/) -> int
+void run_baked_animation_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
     const auto assets = make_fixture();
-    test_bake(assets);
-    test_unskinned_mesh(assets);
-    test_release_reclaims_rows(assets);
-    test_draw(assets);
-    test_draw_material_instance(assets);
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_bake(assets));
+    RUN_CASE(test_unskinned_mesh(assets));
+    RUN_CASE(test_release_reclaims_rows(assets));
+    RUN_CASE(test_draw(assets));
+    RUN_CASE(test_draw_material_instance(assets));
 }
 
 REGISTER_TEST_SUITE("baked animation", run_baked_animation_suite)

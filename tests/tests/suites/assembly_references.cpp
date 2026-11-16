@@ -35,6 +35,8 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 namespace
 {
 namespace deployment = unravel::deployment;
@@ -48,22 +50,9 @@ constexpr std::size_t PE_OPTIONAL_HEADER_SIZE = 224;
 constexpr std::size_t PE_CLI_DIRECTORY_OFFSET = 208;
 constexpr std::size_t WEBCIL_HEADERS_SIZE = 28 + 16;
 
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
 auto get_temp_folder() -> fs::path
 {
-    return fs::temp_directory_path() / "unravel-tests-assembly-references";
+    return temp_path("unravel-tests-assembly-references");
 }
 
 using bytes = std::vector<std::uint8_t>;
@@ -528,24 +517,20 @@ void test_real_libraries()
           "a browser build without scripts leaves out part of the runtime, never the player's own libraries");
 }
 
-auto run_assembly_references_suite(rtti::context& /*ctx*/) -> int
+void run_assembly_references_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
     const auto temp = get_temp_folder();
     fs::error_code ec;
     fs::remove_all(temp, ec);
-    test_library(temp / "library");
-    test_browser_module(temp / "browser");
-    test_other_files(temp / "other");
-    test_listing(temp / "listing");
-    test_unused(temp / "unused");
-    test_trim(temp / "trim");
-    test_names();
-    test_real_libraries();
+    RUN_CASE(test_library(temp / "library"));
+    RUN_CASE(test_browser_module(temp / "browser"));
+    RUN_CASE(test_other_files(temp / "other"));
+    RUN_CASE(test_listing(temp / "listing"));
+    RUN_CASE(test_unused(temp / "unused"));
+    RUN_CASE(test_trim(temp / "trim"));
+    RUN_CASE(test_names());
+    RUN_CASE(test_real_libraries());
     fs::remove_all(temp, ec);
-    std::printf("assembly references: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 } // namespace

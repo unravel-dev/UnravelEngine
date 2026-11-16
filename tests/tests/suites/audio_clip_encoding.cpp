@@ -46,13 +46,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
 
 constexpr std::uint32_t TEST_SAMPLE_RATE = 22050;
 constexpr std::uint16_t TEST_CHANNELS = 2;
@@ -93,16 +92,6 @@ struct wav_sample_format
 constexpr std::array<wav_sample_format, 3> OTHER_WAV_FORMATS = {{{WAV_FORMAT_PCM, 8}, {WAV_FORMAT_PCM, 24}, {WAV_FORMAT_FLOAT, 32}}};
 /// 8-bit WAV samples are unsigned around this middle.
 constexpr int WAV_8_BIT_MIDDLE = 128;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 void append_u16(std::vector<std::uint8_t>& out, std::uint16_t value)
 {
@@ -278,7 +267,7 @@ auto decode_vorbis(const std::vector<std::uint8_t>& bytes) -> audio::sound_data
 
 auto get_temp_folder() -> fs::path
 {
-    const auto folder = fs::temp_directory_path() / "unravel-tests-audio-clip-encoding";
+    const auto folder = temp_path("unravel-tests-audio-clip-encoding");
     fs::error_code ec;
     fs::create_directories(folder, ec);
     return folder;
@@ -557,28 +546,24 @@ void test_filtered_database_save(rtti::context& ctx)
     am.unload_group(TEST_PROTOCOL);
 }
 
-auto run_audio_clip_encoding_suite(rtti::context& ctx) -> int
+void run_audio_clip_encoding_suite(rtti::context& ctx)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_decode_wav();
-    test_decode_to_mono();
-    test_decode_failures();
-    test_compiled_file_round_trip();
-    test_other_format_is_refused();
-    test_vorbis_round_trip();
-    test_vorbis_lengths();
-    test_vorbis_formats();
-    test_wav_sample_formats();
-    test_vorbis_quality_order();
-    test_compression_setting();
-    test_clip_compression();
-    test_vorbis_refusals();
-    test_filtered_database_save(ctx);
+    RUN_CASE(test_decode_wav());
+    RUN_CASE(test_decode_to_mono());
+    RUN_CASE(test_decode_failures());
+    RUN_CASE(test_compiled_file_round_trip());
+    RUN_CASE(test_other_format_is_refused());
+    RUN_CASE(test_vorbis_round_trip());
+    RUN_CASE(test_vorbis_lengths());
+    RUN_CASE(test_vorbis_formats());
+    RUN_CASE(test_wav_sample_formats());
+    RUN_CASE(test_vorbis_quality_order());
+    RUN_CASE(test_compression_setting());
+    RUN_CASE(test_clip_compression());
+    RUN_CASE(test_vorbis_refusals());
+    RUN_CASE(test_filtered_database_save(ctx));
     fs::error_code ec;
     fs::remove_all(get_temp_folder(), ec);
-    std::printf("audio clip encoding: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 } // namespace

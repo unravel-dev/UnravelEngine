@@ -83,6 +83,8 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 namespace
 {
 namespace deployment = unravel::deployment;
@@ -115,22 +117,9 @@ constexpr std::uint32_t SRGB_TEXTURE_SIDE = 64;
 /// A power of two, which ASTC 6x6 blocks do not divide.
 constexpr std::uint32_t FLOOR_SIDE = 64;
 
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
 auto get_temp_folder() -> fs::path
 {
-    return fs::temp_directory_path() / "unravel-tests-settings-profiles";
+    return temp_path("unravel-tests-settings-profiles");
 }
 
 void write_text(const fs::path& file, const std::string& text)
@@ -791,7 +780,7 @@ void test_srgb_textures(const fs::path& root)
               ac::select_srgb_format(bgfx::TextureFormat::RG8, ac::texture_compression_family::bc) == bgfx::TextureFormat::RGBA8 &&
               ac::select_srgb_format(bgfx::TextureFormat::BC3, ac::texture_compression_family::bc) == bgfx::TextureFormat::BC3,
           "an sRGB texture takes its family's color format, RGBA8 uncompressed, and keeps a format with a view");
-    if(!is_present(fs::resolve_protocol(std::string("binary:/texturec") + fs::executable_extension())))
+    if(!use_tool("texturec"))
     {
         return;
     }
@@ -895,11 +884,7 @@ void test_engine_texture_plan(const fs::path& root)
 void test_normal_map_variants(rtti::context& ctx, const fs::path& root)
 {
     std::printf("test_normal_map_variants\n");
-    if(!is_present(fs::resolve_protocol(std::string("binary:/texturec") + fs::executable_extension())))
-    {
-        check(false, "texturec is beside the tests: the normal map variants need it");
-        return;
-    }
+    require_tool("texturec");
     cook_fixture fixture;
     fixture.project = root;
     const auto app_root = fs::resolve_protocol("app:/");
@@ -962,11 +947,7 @@ void test_normal_map_variants(rtti::context& ctx, const fs::path& root)
 void test_texture_variants(const fs::path& root)
 {
     std::printf("test_texture_variants\n");
-    if(!is_present(fs::resolve_protocol(std::string("binary:/texturec") + fs::executable_extension())))
-    {
-        check(false, "texturec is beside the tests: the texture variants need it");
-        return;
-    }
+    require_tool("texturec");
     cook_fixture fixture;
     fixture.project = root;
     const auto app_root = fs::resolve_protocol("app:/");
@@ -1319,11 +1300,7 @@ void test_audio_cook_other_sources(const fs::path& root)
 void test_shader_cook(const fs::path& root)
 {
     std::printf("test_shader_cook\n");
-    if(!is_present(fs::resolve_protocol(std::string("binary:/shaderc") + fs::executable_extension())))
-    {
-        check(false, "shaderc is beside the tests: the cooked shaders need it");
-        return;
-    }
+    require_tool("shaderc");
     deployment::shader_cook_protocol engine;
     engine.variants = deployment::get_profile_shaders_folder(root, "Web", "engine");
     engine.shaders.shipped = {"engine:/data/shaders/fs_blit.eshader"};
@@ -1389,41 +1366,37 @@ void test_web_profile(const fs::path& root)
           "a web deploy cooks its textures to the profile's formats");
 }
 
-auto run_settings_profiles_suite(rtti::context& ctx) -> int
+void run_settings_profiles_suite(rtti::context& ctx)
 {
-    g_checks = 0;
-    g_failures = 0;
     const auto temp = get_temp_folder();
     fs::error_code ec;
     fs::remove_all(temp, ec);
     try
     {
-        test_document_paths();
-        test_sparse_overrides();
-        test_profile_files(temp / "files");
-        test_legacy_project(temp / "legacy");
-        test_project_profiles(temp / "project");
-        test_unreadable_profile(temp / "unreadable");
-        test_astc_blocks();
-        test_texture_parameters();
-        test_srgb_textures(temp / "srgb");
-        test_engine_texture_plan(temp / "engine_texture_plan");
-        test_texture_variants(temp / "variants");
-        test_normal_map_variants(ctx, temp / "normal_variants");
-        test_audio_variants(temp / "audio_variants");
-        test_audio_cook_other_sources(temp / "audio_sources");
-        test_shader_cook(temp / "shaders");
-        test_web_profile(temp / "web");
+        RUN_CASE(test_document_paths());
+        RUN_CASE(test_sparse_overrides());
+        RUN_CASE(test_profile_files(temp / "files"));
+        RUN_CASE(test_legacy_project(temp / "legacy"));
+        RUN_CASE(test_project_profiles(temp / "project"));
+        RUN_CASE(test_unreadable_profile(temp / "unreadable"));
+        RUN_CASE(test_astc_blocks());
+        RUN_CASE(test_texture_parameters());
+        RUN_CASE(test_srgb_textures(temp / "srgb"));
+        RUN_CASE(test_engine_texture_plan(temp / "engine_texture_plan"));
+        RUN_CASE(test_texture_variants(temp / "variants"));
+        RUN_CASE(test_normal_map_variants(ctx, temp / "normal_variants"));
+        RUN_CASE(test_audio_variants(temp / "audio_variants"));
+        RUN_CASE(test_audio_cook_other_sources(temp / "audio_sources"));
+        RUN_CASE(test_shader_cook(temp / "shaders"));
+        RUN_CASE(test_web_profile(temp / "web"));
     }
     catch(const std::exception& ex)
     {
         check(false, std::string("unexpected exception: ") + ex.what());
     }
     fs::remove_all(temp, ec);
-    std::printf("settings profiles: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 } // namespace
 
-REGISTER_TEST_SUITE("settings profiles", run_settings_profiles_suite)
+REGISTER_TEST_SUITE("settings profiles", run_settings_profiles_suite, {.lane = ::unravel::suite_lane::tools})

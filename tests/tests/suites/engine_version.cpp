@@ -23,21 +23,10 @@
 #include <cstdio>
 #include <string>
 
+using namespace unravel::test;
+
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 auto is_version(const std::string& text, int major, int minor, int patch, int commit_count, const std::string& sha)
     -> bool
@@ -119,16 +108,12 @@ void test_written_back()
           "this build's own version is one: " + version::get_full());
 }
 
-auto run_engine_version_suite(rtti::context& /*ctx*/) -> int
+void run_engine_version_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_forms();
-    test_refused();
-    test_order();
-    test_written_back();
-    std::printf("engine version: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_forms());
+    RUN_CASE(test_refused());
+    RUN_CASE(test_order());
+    RUN_CASE(test_written_back());
 }
 
 } // namespace

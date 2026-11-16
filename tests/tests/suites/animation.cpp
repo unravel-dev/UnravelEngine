@@ -46,35 +46,14 @@
 #include <tuple>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
 
 using seconds_t = animation_clip::seconds_t;
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
-void check_near(float actual, float expected, float tolerance, const std::string& what)
-{
-    ++g_checks;
-    if(!(std::fabs(actual - expected) <= tolerance))
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %.5f, expected %.5f +/- %.5f)\n", what.c_str(), actual, expected, tolerance);
-    }
-}
 
 // The runner's threader owns the pool (and the tpp lifecycle around it); the
 // suite entry point borrows it for the duration of the run.
@@ -4422,108 +4401,105 @@ void test_controller_numbers_do_not_set_booleans()
     check(rig.instance.get_int("Crouch") == 1 && rig.instance.get_float("Crouch") == 1.0f, "a bool reads as 1 when on");
 }
 
-auto run_animation_suite(rtti::context& ctx) -> int
+void run_animation_suite(rtti::context& ctx)
 {
     g_pool = ctx.get_cached<threader>().pool.get();
 
-    test_pairwise_blend_merges_sorted_nodes();
-    test_multiway_blend_weighted_average();
-    test_blends_cover_a_bone_some_poses_lack();
-    test_blend_space_actually_blends();
-    test_reloaded_clip_plays_on_the_next_step();
-    test_blend_space_time_advances_and_loops();
-    test_blend_space_1d_param_edges();
-    test_blend_space_2d_edges();
-    test_blend_space_2d_directional();
-    test_blend_space_phase_sync();
-    test_blend_space_points_keep_their_root_motion();
-    test_layer_bone_missing_from_base_fades_from_rest();
-    test_crossfade_from_a_target_never_shown();
-    test_crossfade_eases_a_bone_one_clip_lacks();
-    test_switch_puts_a_bone_the_new_clip_lacks_at_rest();
-    test_blend_space_point_animating_an_extra_bone();
-    test_reversed_crossfade_continues_with_any_easing();
-    test_layer_override_with_mask();
-    test_layer_additive_from_first_frame();
-    test_layer_fades_in_and_out();
-    test_events_fire_once_per_crossing();
-    test_events_respect_weights();
-    test_curves_blend_with_the_pose();
-    test_clip_curves_survive_both_archives();
-    test_binding_maps_clips_onto_the_target_skeleton();
-    test_target_skeleton_takes_the_bind_pose();
-    test_rest_aligned_retargeting();
-    test_rest_aligned_scale_follows_the_bone();
-    test_rest_aligned_retargeting_carries_scaled_offsets();
-    test_humanoid_roles_from_structure();
-    test_humanoid_roles_of_common_rigs();
-    test_rest_aligned_matches_humanoid_roles();
-    test_ue_clip_on_a_mixamo_rig();
-    test_names_match_across_namespaces();
-    test_binding_report_explains_a_retarget();
-    test_binding_report_names_and_copy();
-    test_humanoid_overrides();
-    test_t_pose_alignment();
-    test_pose_offsets_are_mirrored();
-    test_retarget_pose_in_playback();
-    test_clip_overrides_choose_the_source_bone();
-    test_proportions_do_not_tilt_the_frame();
-    test_rest_aligned_onto_own_skeleton_is_a_copy();
-    test_blend_space_blends_each_clips_retarget();
-    test_baked_retarget_matches_the_full_retarget();
-    test_retarget_bakes_only_linear_clips();
-    test_root_motion_accumulates_across_loops();
-    test_root_motion_no_teleport_on_replay();
-    test_phase_synced_blend_has_no_motion_spike();
-    test_keep_in_place_preserves_sway();
-    test_root_motion_extract_pose_is_blend_safe();
-    test_root_motion_extract_rotation_is_blend_safe();
-    test_root_motion_unapplied_extraction_keeps_authored_pose();
-    test_root_motion_splits_along_the_clip_up_axis();
-    test_root_motion_root_bone_locks_to_rest();
-    test_root_motion_extracts_only_the_heading();
-    test_zero_duration_blend_and_finite_output();
-    test_force_update_steps_while_paused();
-    test_blend_to_null_clears_layer();
-    test_retarget_blend_keeps_no_pop();
-    test_root_motion_result_weight_blending();
-    test_empty_tracks_have_sane_defaults();
-    test_controller_enters_default_state_and_fires_conditions();
-    test_controller_triggers_and_exit_time();
-    test_controller_exit_time_waits_on_looping_state();
-    test_controller_crossfade_and_blend_state();
-    test_controller_layer_mask_and_curve_parameters();
-    test_controller_validation_and_round_trip();
-    test_crossfade_finishes_without_pose_updates();
-    test_reversal_keeps_the_requested_loop_and_speed();
-    test_phase_sync_follows_an_interrupted_target();
-    test_reversing_a_crossfade_nobody_saw_drops_it();
-    test_override_layer_crossfade_keeps_the_base_for_a_bone_it_lacks();
-    test_blend_space_narrowing_away_from_a_bone_puts_it_at_rest();
-    test_directional_blend_with_opposite_points();
-    test_override_layer_keeps_base_curves();
-    test_seek_starts_root_motion_over();
-    test_switch_travel_does_not_depend_on_the_frame_rate();
-    test_crossfade_target_moves_on_its_first_step();
-    test_culled_character_returns_without_a_jump();
-    test_loop_count_matches_the_time_on_the_clip();
-    test_turning_walk_root_motion_follows_the_clip_path();
-    test_unmapped_root_moves_the_entity_through_the_hips();
-    test_controller_restarts_a_state_sharing_the_clip();
-    test_controller_edit_keeps_the_playing_time();
-    test_controller_edit_dropping_a_layer_clears_it();
-    test_controller_exit_time_one_waits_for_the_cycle_end();
-    test_controller_trigger_reaches_every_layer();
-    test_controller_numbers_do_not_set_booleans();
-    test_controller_exit_time_above_one_on_loops();
-    test_controller_keeps_script_layer_weight_and_reload_state();
-    test_controller_setters_respect_parameter_types();
-    test_controller_survives_binary_archives();
+    RUN_CASE(test_pairwise_blend_merges_sorted_nodes());
+    RUN_CASE(test_multiway_blend_weighted_average());
+    RUN_CASE(test_blends_cover_a_bone_some_poses_lack());
+    RUN_CASE(test_blend_space_actually_blends());
+    RUN_CASE(test_reloaded_clip_plays_on_the_next_step());
+    RUN_CASE(test_blend_space_time_advances_and_loops());
+    RUN_CASE(test_blend_space_1d_param_edges());
+    RUN_CASE(test_blend_space_2d_edges());
+    RUN_CASE(test_blend_space_2d_directional());
+    RUN_CASE(test_blend_space_phase_sync());
+    RUN_CASE(test_blend_space_points_keep_their_root_motion());
+    RUN_CASE(test_layer_bone_missing_from_base_fades_from_rest());
+    RUN_CASE(test_crossfade_from_a_target_never_shown());
+    RUN_CASE(test_crossfade_eases_a_bone_one_clip_lacks());
+    RUN_CASE(test_switch_puts_a_bone_the_new_clip_lacks_at_rest());
+    RUN_CASE(test_blend_space_point_animating_an_extra_bone());
+    RUN_CASE(test_reversed_crossfade_continues_with_any_easing());
+    RUN_CASE(test_layer_override_with_mask());
+    RUN_CASE(test_layer_additive_from_first_frame());
+    RUN_CASE(test_layer_fades_in_and_out());
+    RUN_CASE(test_events_fire_once_per_crossing());
+    RUN_CASE(test_events_respect_weights());
+    RUN_CASE(test_curves_blend_with_the_pose());
+    RUN_CASE(test_clip_curves_survive_both_archives());
+    RUN_CASE(test_binding_maps_clips_onto_the_target_skeleton());
+    RUN_CASE(test_target_skeleton_takes_the_bind_pose());
+    RUN_CASE(test_rest_aligned_retargeting());
+    RUN_CASE(test_rest_aligned_scale_follows_the_bone());
+    RUN_CASE(test_rest_aligned_retargeting_carries_scaled_offsets());
+    RUN_CASE(test_humanoid_roles_from_structure());
+    RUN_CASE(test_humanoid_roles_of_common_rigs());
+    RUN_CASE(test_rest_aligned_matches_humanoid_roles());
+    RUN_CASE(test_ue_clip_on_a_mixamo_rig());
+    RUN_CASE(test_names_match_across_namespaces());
+    RUN_CASE(test_binding_report_explains_a_retarget());
+    RUN_CASE(test_binding_report_names_and_copy());
+    RUN_CASE(test_humanoid_overrides());
+    RUN_CASE(test_t_pose_alignment());
+    RUN_CASE(test_pose_offsets_are_mirrored());
+    RUN_CASE(test_retarget_pose_in_playback());
+    RUN_CASE(test_clip_overrides_choose_the_source_bone());
+    RUN_CASE(test_proportions_do_not_tilt_the_frame());
+    RUN_CASE(test_rest_aligned_onto_own_skeleton_is_a_copy());
+    RUN_CASE(test_blend_space_blends_each_clips_retarget());
+    RUN_CASE(test_baked_retarget_matches_the_full_retarget());
+    RUN_CASE(test_retarget_bakes_only_linear_clips());
+    RUN_CASE(test_root_motion_accumulates_across_loops());
+    RUN_CASE(test_root_motion_no_teleport_on_replay());
+    RUN_CASE(test_phase_synced_blend_has_no_motion_spike());
+    RUN_CASE(test_keep_in_place_preserves_sway());
+    RUN_CASE(test_root_motion_extract_pose_is_blend_safe());
+    RUN_CASE(test_root_motion_extract_rotation_is_blend_safe());
+    RUN_CASE(test_root_motion_unapplied_extraction_keeps_authored_pose());
+    RUN_CASE(test_root_motion_splits_along_the_clip_up_axis());
+    RUN_CASE(test_root_motion_root_bone_locks_to_rest());
+    RUN_CASE(test_root_motion_extracts_only_the_heading());
+    RUN_CASE(test_zero_duration_blend_and_finite_output());
+    RUN_CASE(test_force_update_steps_while_paused());
+    RUN_CASE(test_blend_to_null_clears_layer());
+    RUN_CASE(test_retarget_blend_keeps_no_pop());
+    RUN_CASE(test_root_motion_result_weight_blending());
+    RUN_CASE(test_empty_tracks_have_sane_defaults());
+    RUN_CASE(test_controller_enters_default_state_and_fires_conditions());
+    RUN_CASE(test_controller_triggers_and_exit_time());
+    RUN_CASE(test_controller_exit_time_waits_on_looping_state());
+    RUN_CASE(test_controller_crossfade_and_blend_state());
+    RUN_CASE(test_controller_layer_mask_and_curve_parameters());
+    RUN_CASE(test_controller_validation_and_round_trip());
+    RUN_CASE(test_crossfade_finishes_without_pose_updates());
+    RUN_CASE(test_reversal_keeps_the_requested_loop_and_speed());
+    RUN_CASE(test_phase_sync_follows_an_interrupted_target());
+    RUN_CASE(test_reversing_a_crossfade_nobody_saw_drops_it());
+    RUN_CASE(test_override_layer_crossfade_keeps_the_base_for_a_bone_it_lacks());
+    RUN_CASE(test_blend_space_narrowing_away_from_a_bone_puts_it_at_rest());
+    RUN_CASE(test_directional_blend_with_opposite_points());
+    RUN_CASE(test_override_layer_keeps_base_curves());
+    RUN_CASE(test_seek_starts_root_motion_over());
+    RUN_CASE(test_switch_travel_does_not_depend_on_the_frame_rate());
+    RUN_CASE(test_crossfade_target_moves_on_its_first_step());
+    RUN_CASE(test_culled_character_returns_without_a_jump());
+    RUN_CASE(test_loop_count_matches_the_time_on_the_clip());
+    RUN_CASE(test_turning_walk_root_motion_follows_the_clip_path());
+    RUN_CASE(test_unmapped_root_moves_the_entity_through_the_hips());
+    RUN_CASE(test_controller_restarts_a_state_sharing_the_clip());
+    RUN_CASE(test_controller_edit_keeps_the_playing_time());
+    RUN_CASE(test_controller_edit_dropping_a_layer_clears_it());
+    RUN_CASE(test_controller_exit_time_one_waits_for_the_cycle_end());
+    RUN_CASE(test_controller_trigger_reaches_every_layer());
+    RUN_CASE(test_controller_numbers_do_not_set_booleans());
+    RUN_CASE(test_controller_exit_time_above_one_on_loops());
+    RUN_CASE(test_controller_keeps_script_layer_weight_and_reload_state());
+    RUN_CASE(test_controller_setters_respect_parameter_types());
+    RUN_CASE(test_controller_survives_binary_archives());
 
     g_pool = nullptr;
-
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 REGISTER_TEST_SUITE("animation", run_animation_suite)

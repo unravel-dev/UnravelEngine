@@ -101,6 +101,8 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
@@ -111,19 +113,6 @@ namespace ac = unravel::asset_compiler;
 constexpr const char* SHADER_FOLDER = "data/material_graph_tests";
 constexpr const char* EXAMPLES_FOLDER = "data/material_graphs/examples";
 constexpr const char* GRAPH_EXTENSION = ".mgraph";
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 auto contains(const std::string& text, const std::string& part) -> bool
 {
@@ -963,7 +952,7 @@ constexpr const char* LEGACY_PBR_SOURCE = R"({"material": {"polymorphic_id": 214
 void test_legacy_pbr_material()
 {
     std::printf("test_legacy_pbr_material\n");
-    const fs::path file = fs::temp_directory_path() / "unravel_legacy_pbr_material.mat";
+    const fs::path file = temp_path("unravel_legacy_pbr_material.mat");
     {
         std::ofstream out(file, std::ios::binary);
         out << LEGACY_PBR_SOURCE;
@@ -1448,12 +1437,6 @@ auto make_vertex_graph_of_every_node() -> material_graph
     return graph;
 }
 
-auto is_shaderc_present() -> bool
-{
-    fs::error_code ec;
-    return fs::exists(fs::resolve_protocol(std::string("binary:/shaderc") + fs::executable_extension()), ec);
-}
-
 /// The variants of a generated shader: default, card_capture and instance_material, and the four shadow casters of a
 /// graph that clips or moves its vertices; a preview shader has one; the vertex shader of a graph with a vertex stage
 /// has twelve G-buffer variants, eight velocity ones and three that write the position alone.
@@ -1469,58 +1452,115 @@ auto is_storage_buffer_variant(const std::string& name) -> bool
     return name.find("skinned") != std::string::npos && !name.ends_with("_textures");
 }
 
-/// Compiles the shader text @p text, named @p file_name, with shaderc for each of @p renderers; each compile must give
-/// @p variant_count variants with code, but the storage buffer variants of WebGL 2.
-void check_text_compiles(asset_manager& am,
-                         const std::string& name,
-                         const std::string& file_name,
-                         const std::string& text,
-                         size_t variant_count,
-                         const std::set<std::string>& renderers,
-                         const fs::path& output_folder)
+/// One shader file's compile for one renderer.
+struct shader_compile_job
 {
-    const std::string key = std::string("app:/") + SHADER_FOLDER + "/" + file_name;
-    write_text(fs::resolve_protocol("app:/") / SHADER_FOLDER / file_name, text);
-    for(const auto& extension : renderers)
+    /// What the check names.
+    std::string name;
+    std::string key;
+    fs::path output;
+    std::string extension;
+    size_t variant_count{};
+};
+
+/**
+ * @brief The shaderc compiles of generated graph shaders, run together on every core.
+ *
+ * Each shader's source is written when it is added; check_all compiles everything added, then checks each compile in
+ * the order it was added, so the report reads the same on every run.
+ */
+class shader_compile_batch
+{
+public:
+    explicit shader_compile_batch(fs::path output_folder) : output_folder_(std::move(output_folder))
     {
-        const auto output = output_folder / (file_name + ".asset" + extension);
-        const bool compiled = ac::compile<gfx::shader>(am, key, output);
-        std::vector<compiled_shader_variant> variants;
-        if(compiled)
+    }
+
+    /// Adds the compiles of a generated shader, and of its vertex shader if it has one, for every tested renderer; a
+    /// preview for the renderers of this platform, as the editor compiles it for its own.
+    void add(const std::string& name, const material_graph_compile_result& result)
+    {
+        const bool is_preview = contains(result.shader, "evaluate_preview");
+        const bool has_casters = result.uses_opacity_mask || result.uses_world_position_offset;
+        const size_t variant_count = is_preview ? PREVIEW_VARIANT_COUNT : (has_casters ? MASKED_VARIANT_COUNT : PLAIN_VARIANT_COUNT);
+        const std::string file_name = sanitize_material_graph_identifier(name) + ".eshader";
+        const auto& platform = gfx::get_renderer_platform_supported_filename_extensions();
+        const auto renderers = is_preview ? std::set<std::string>(platform.begin(), platform.end()) : get_tested_renderers();
+        add_text(name, "fs_" + file_name, result.shader, variant_count, renderers);
+        if(!result.vertex_shader.empty())
         {
-            load_from_file_bin(output.string(), variants);
+            add_text(name + "'s vertex shader", "vs_" + file_name, result.vertex_shader, VERTEX_VARIANT_COUNT, renderers);
         }
-        const bool is_webgl2 = extension == gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGLES);
+    }
+
+    /// Compiles every shader added, then checks that each gave its variants with code, but the storage buffer
+    /// variants of WebGL 2.
+    void check_all(asset_manager& am)
+    {
+        std::vector<double> seconds;
+        const auto compiled = run_parallel_map<char>(
+            jobs_.size(),
+            [&](size_t index) -> char
+            {
+                return compiles(am, jobs_[index]) ? 1 : 0;
+            },
+            &seconds);
+        print_slowest(seconds,
+                      [&](size_t index)
+                      {
+                          return jobs_[index].name + " on " + jobs_[index].extension;
+                      });
+        for(size_t index = 0; index < jobs_.size(); ++index)
+        {
+            check(compiled[index] != 0, jobs_[index].name + " compiles with shaderc on " + jobs_[index].extension + ", every variant");
+        }
+        jobs_.clear();
+        file_names_.clear();
+    }
+
+private:
+    void add_text(const std::string& name,
+                  const std::string& file_name,
+                  const std::string& text,
+                  size_t variant_count,
+                  const std::set<std::string>& renderers)
+    {
+        // A second shader of the same name would overwrite the first one's source before it compiles.
+        if(!file_names_.insert(file_name).second)
+        {
+            check(false, name + " has a file name of its own in the batch: " + file_name);
+            return;
+        }
+        const std::string key = std::string("app:/") + SHADER_FOLDER + "/" + file_name;
+        write_text(fs::resolve_protocol("app:/") / SHADER_FOLDER / file_name, text);
+        for(const auto& extension : renderers)
+        {
+            jobs_.push_back({name, key, output_folder_ / (file_name + ".asset" + extension), extension, variant_count});
+        }
+    }
+
+    static auto compiles(asset_manager& am, const shader_compile_job& job) -> bool
+    {
+        if(!ac::compile<gfx::shader>(am, job.key, job.output))
+        {
+            return false;
+        }
+        std::vector<compiled_shader_variant> variants;
+        load_from_file_bin(job.output.string(), variants);
+        const bool is_webgl2 = job.extension == gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGLES);
         const bool has_code = std::all_of(variants.begin(),
                                           variants.end(),
                                           [is_webgl2](const compiled_shader_variant& variant)
                                           {
                                               return !variant.bytes.empty() || (is_webgl2 && is_storage_buffer_variant(variant.name));
                                           });
-        check(compiled && variants.size() == variant_count && has_code,
-              name + " compiles with shaderc on " + extension + ", every variant");
+        return variants.size() == job.variant_count && has_code;
     }
-}
 
-/// Compiles a generated shader, and its vertex shader if it has one, with shaderc for every tested renderer; a preview
-/// for the renderers of this platform, as the editor compiles it for its own.
-void check_shader_compiles(asset_manager& am,
-                           const std::string& name,
-                           const material_graph_compile_result& result,
-                           const fs::path& output_folder)
-{
-    const bool is_preview = contains(result.shader, "evaluate_preview");
-    const bool has_casters = result.uses_opacity_mask || result.uses_world_position_offset;
-    const size_t variant_count = is_preview ? PREVIEW_VARIANT_COUNT : (has_casters ? MASKED_VARIANT_COUNT : PLAIN_VARIANT_COUNT);
-    const std::string file_name = sanitize_material_graph_identifier(name) + ".eshader";
-    const auto& platform = gfx::get_renderer_platform_supported_filename_extensions();
-    const auto renderers = is_preview ? std::set<std::string>(platform.begin(), platform.end()) : get_tested_renderers();
-    check_text_compiles(am, name, "fs_" + file_name, result.shader, variant_count, renderers, output_folder);
-    if(!result.vertex_shader.empty())
-    {
-        check_text_compiles(am, name + "'s vertex shader", "vs_" + file_name, result.vertex_shader, VERTEX_VARIANT_COUNT, renderers, output_folder);
-    }
-}
+    fs::path output_folder_;
+    std::vector<shader_compile_job> jobs_;
+    std::set<std::string> file_names_;
+};
 
 /// A graph lifting its vertices along their normal by a wave of the time and its Height parameter, with a texture and
 /// a Custom node of its own feeding the offset, and others feeding the base color alone.
@@ -1577,6 +1617,7 @@ auto count_reroutes(const material_graph& graph) -> size_t
 void test_examples(asset_manager* am, const fs::path& output_folder)
 {
     std::printf("test_examples\n");
+    shader_compile_batch batch(output_folder);
     const fs::path folder = fs::path(EDITOR_DATA_DIR) / EXAMPLES_FOLDER;
     size_t count = 0;
     fs::error_code ec;
@@ -1609,8 +1650,8 @@ void test_examples(asset_manager* am, const fs::path& output_folder)
               name + " has a preview shader" + describe(preview));
         if(am)
         {
-            check_shader_compiles(*am, name, result, output_folder);
-            check_shader_compiles(*am, name + "_preview", preview, output_folder);
+            batch.add(name, result);
+            batch.add(name + "_preview", preview);
         }
     }
     check(count >= 5, "the examples are found");
@@ -1638,21 +1679,25 @@ void test_examples(asset_manager* am, const fs::path& output_folder)
           "every node with a value has its swatch: the output and Discard have none");
     if(am)
     {
-        check_shader_compiles(*am, "every_node", result, output_folder);
-        check_shader_compiles(*am, "every_node_preview", preview, output_folder);
+        batch.add("every_node", result);
+        batch.add("every_node_preview", preview);
         const auto vertex_every_node = compile_material_graph(make_vertex_graph_of_every_node());
         check(!vertex_every_node.has_errors() && vertex_every_node.uses_world_position_offset,
               "a graph of every node a vertex runs moves the vertices without errors" + describe(vertex_every_node));
-        check_shader_compiles(*am, "vertex_every_node", vertex_every_node, output_folder);
+        batch.add("vertex_every_node", vertex_every_node);
         material_graph_compile_options low;
         low.quality = material_graph_quality::low;
-        check_shader_compiles(*am, "every_node_low", compile_material_graph(every_node, low), output_folder);
-        check_shader_compiles(*am, "wave_offset", compile_material_graph(make_wave_offset_graph()), output_folder);
-        check_shader_compiles(*am, "standard_mapped", compile_material_graph(make_mapped_standard_graph()), output_folder);
-        check_shader_compiles(*am, "standard_specular", compile_material_graph(make_specular_standard_graph()), output_folder);
+        batch.add("every_node_low", compile_material_graph(every_node, low));
+        batch.add("wave_offset", compile_material_graph(make_wave_offset_graph()));
+        batch.add("standard_mapped", compile_material_graph(make_mapped_standard_graph()));
+        batch.add("standard_specular", compile_material_graph(make_specular_standard_graph()));
         standard_surface blended;
         blended.alpha = alpha_mode::blend;
-        check_shader_compiles(*am, "standard_translucent", compile_material_graph(make_standard_material_graph(blended)), output_folder);
+        batch.add("standard_translucent", compile_material_graph(make_standard_material_graph(blended)));
+    }
+    if(am)
+    {
+        batch.check_all(*am);
     }
 }
 
@@ -1758,7 +1803,7 @@ void test_compiled_quality_binding()
     cooked->set_graph(graph);
     cooked->set_compiled_code("low code", make_material_graph_binding(low));
     check(cooked->find_parameter("detail") != nullptr && cooked->get_textures().empty(), "the cooked material binds the Low layout");
-    const fs::path file = fs::temp_directory_path() / "unravel_compiled_quality_binding.mat";
+    const fs::path file = temp_path("unravel_compiled_quality_binding.mat");
     std::shared_ptr<material> saved = cooked;
     save_to_file_bin(file.string(), saved);
     std::shared_ptr<material> loaded;
@@ -2424,60 +2469,52 @@ void test_graph_material_asset(asset_manager& am, bool can_compile)
           "its vertex shader is in the same file, every variant");
 }
 
-auto run_material_graph_suite(rtti::context& ctx) -> int
+void run_material_graph_suite(rtti::context& ctx)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_links_and_ids();
-    test_copy_and_paste();
-    test_library();
-    test_round_trip();
-    test_types();
-    test_components();
-    test_vector_into_float();
-    test_textures();
-    test_conversions();
-    test_errors();
-    test_used_nodes_and_lines();
-    test_parameters();
-    test_graph_defaults();
-    test_standard_material();
-    test_specular_workflow();
-    test_standard_property_resolution();
-    test_graph_naming_and_estimates();
-    test_legacy_pbr_material();
-    test_conditions_and_discard();
-    test_graph_upgrade();
-    test_binding_limits();
-    test_opacity_mask_shadows();
-    test_world_position_offset();
-    test_graph_material_binding();
-    test_flow_nodes();
-    test_material_functions();
-    test_graph_material_values();
-    test_graph_material_copy();
-    test_graph_material_instances(ctx.get_cached<asset_manager>());
-    test_node_code_choices();
-    test_vertex_stage_outputs();
-    test_texture_objects();
-    test_material_attributes();
-    test_quality_switch();
-    test_compiled_quality_binding();
-    const fs::path output_folder = fs::temp_directory_path() / "unravel-tests-material-graphs";
+    RUN_CASE(test_links_and_ids());
+    RUN_CASE(test_copy_and_paste());
+    RUN_CASE(test_library());
+    RUN_CASE(test_round_trip());
+    RUN_CASE(test_types());
+    RUN_CASE(test_components());
+    RUN_CASE(test_vector_into_float());
+    RUN_CASE(test_textures());
+    RUN_CASE(test_conversions());
+    RUN_CASE(test_errors());
+    RUN_CASE(test_used_nodes_and_lines());
+    RUN_CASE(test_parameters());
+    RUN_CASE(test_graph_defaults());
+    RUN_CASE(test_standard_material());
+    RUN_CASE(test_specular_workflow());
+    RUN_CASE(test_standard_property_resolution());
+    RUN_CASE(test_graph_naming_and_estimates());
+    RUN_CASE(test_legacy_pbr_material());
+    RUN_CASE(test_conditions_and_discard());
+    RUN_CASE(test_graph_upgrade());
+    RUN_CASE(test_binding_limits());
+    RUN_CASE(test_opacity_mask_shadows());
+    RUN_CASE(test_world_position_offset());
+    RUN_CASE(test_graph_material_binding());
+    RUN_CASE(test_flow_nodes());
+    RUN_CASE(test_material_functions());
+    RUN_CASE(test_graph_material_values());
+    RUN_CASE(test_graph_material_copy());
+    RUN_CASE(test_graph_material_instances(ctx.get_cached<asset_manager>()));
+    RUN_CASE(test_node_code_choices());
+    RUN_CASE(test_vertex_stage_outputs());
+    RUN_CASE(test_texture_objects());
+    RUN_CASE(test_material_attributes());
+    RUN_CASE(test_quality_switch());
+    RUN_CASE(test_compiled_quality_binding());
+    const fs::path output_folder = temp_path("material-graphs");
     fs::error_code ec;
     fs::create_directories(output_folder, ec);
-    const bool can_compile = is_shaderc_present();
-    if(!can_compile)
-    {
-        std::printf("  SKIP: shaderc is not built beside the tests, so no shader compiles\n");
-    }
-    test_examples(can_compile ? &ctx.get_cached<asset_manager>() : nullptr, output_folder);
-    test_graph_material_asset(ctx.get_cached<asset_manager>(), can_compile);
+    const bool can_compile = use_tool("shaderc");
+    RUN_CASE(test_examples(can_compile ? &ctx.get_cached<asset_manager>() : nullptr, output_folder));
+    RUN_CASE(test_graph_material_asset(ctx.get_cached<asset_manager>(), can_compile));
     fs::remove_all(output_folder, ec);
     fs::remove_all(fs::resolve_protocol("app:/") / SHADER_FOLDER, ec);
-    std::printf("material graphs: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 } // namespace
 
-REGISTER_TEST_SUITE("material graphs", run_material_graph_suite)
+REGISTER_TEST_SUITE("material graphs", run_material_graph_suite, {.lane = ::unravel::suite_lane::tools})

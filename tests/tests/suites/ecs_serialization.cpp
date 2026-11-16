@@ -61,6 +61,8 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
@@ -70,85 +72,23 @@ namespace
 // Harness
 // ---------------------------------------------------------------------------------
 
-int g_checks = 0;
-int g_failures = 0;
-int g_xfail = 0;
-int g_xpass = 0;
-std::vector<std::string> g_xpass_list;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
-void check_eq(size_t actual, size_t expected, const std::string& what)
-{
-    ++g_checks;
-    if(actual != expected)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %zu, expected %zu)\n", what.c_str(), actual, expected);
-    }
-}
-
-void check_eq_str(const std::string& actual, const std::string& expected, const std::string& what)
-{
-    ++g_checks;
-    if(actual != expected)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got \"%s\", expected \"%s\")\n", what.c_str(), actual.c_str(), expected.c_str());
-    }
-}
-
 /// Vectors compared with a tolerance; transforms round-trip through decimal text.
 void check_near(const math::vec3& actual, const math::vec3& expected, const std::string& what)
 {
-    ++g_checks;
     constexpr float epsilon = 1e-4f;
     const bool ok = std::abs(actual.x - expected.x) < epsilon && std::abs(actual.y - expected.y) < epsilon &&
                     std::abs(actual.z - expected.z) < epsilon;
-    if(!ok)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got [%f %f %f], expected [%f %f %f])\n",
-                    what.c_str(),
-                    actual.x,
-                    actual.y,
-                    actual.z,
-                    expected.x,
-                    expected.y,
-                    expected.z);
-    }
-}
-
-/**
- * @brief An expectation that the current implementation is known not to meet.
- *
- * Reports XFAIL (not a failure) while the defect stands, and XPASS once it stops -
- * which is the signal to promote the call to check(). Never fails the suite in either
- * direction: a green run means "nothing regressed", and the summary carries the news
- * that something improved.
- */
-void check_xfail(bool condition, const std::string& what, const char* audit_id)
-{
-    ++g_checks;
-    if(condition)
-    {
-        ++g_xpass;
-        g_xpass_list.push_back(std::string(audit_id) + ": " + what);
-        std::printf("  XPASS [%s]: %s\n", audit_id, what.c_str());
-    }
-    else
-    {
-        ++g_xfail;
-        std::printf("  xfail [%s]: %s\n", audit_id, what.c_str());
-    }
+    char values[160];
+    std::snprintf(values,
+                  sizeof(values),
+                  " (got [%f %f %f], expected [%f %f %f])",
+                  actual.x,
+                  actual.y,
+                  actual.z,
+                  expected.x,
+                  expected.y,
+                  expected.z);
+    check(ok, what + values);
 }
 
 void begin_test(const char* name)
@@ -564,7 +504,7 @@ void test_scene_roundtrip_preserves_hierarchy()
         return;
     }
 
-    check_eq_str(name_of(loaded_root), "root", "the root keeps its name");
+    check_eq(name_of(loaded_root), "root", "the root keeps its name");
     check_eq(loaded_root.get<transform_component>().get_children().size(), 2, "the root keeps both children");
 
     auto child_a = find_child_by_name(loaded_root, "child_a");
@@ -679,7 +619,7 @@ void test_clone_entity_regenerates_uids()
         check(uid_of(clone_child) != child_uid, "cloned children also get fresh uids");
     }
 
-    check_eq_str(name_of(clone), "root", "the clone keeps the source's name");
+    check_eq(name_of(clone), "root", "the clone keeps the source's name");
     check_eq(clone.get<transform_component>().get_children().size(), 2, "the clone keeps both children");
     check(clone.get<transform_component>().get_parent() == root.get<transform_component>().get_parent(),
           "keep_parent puts the clone under the source's parent");
@@ -914,7 +854,7 @@ void test_output_format_scope()
 
     // The point of the whole mechanism: only whitespace differs. Anything else would make
     // a clone or a checkpoint a different document from the one it snapshots.
-    check_eq_str(minify_json(compact), minify_json(readable), "both carry identical data");
+    check_eq(minify_json(compact), minify_json(readable), "both carry identical data");
 
     // And both round-trip to the same scene.
     const auto load_names = [](const std::string& blob) -> std::vector<std::string>
@@ -6804,7 +6744,7 @@ void run_benchmarks()
 
 // ---------------------------------------------------------------------------------
 
-auto run_ecs_serialization_suite(rtti::context& ctx) -> int
+void run_ecs_serialization_suite(rtti::context& ctx)
 {
     // The context comes from the test runner, which boots the engine the way the editor and
     // the game do. That is the whole point of running here: the asset_manager is real, so a
@@ -6816,140 +6756,121 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
 
     if(!bench_only)
     {
-        test_scene_roundtrip_preserves_hierarchy();
-        test_scene_roundtrip_preserves_uids();
-        test_scene_load_leaves_no_orphans();
+        RUN_CASE(test_scene_roundtrip_preserves_hierarchy());
+        RUN_CASE(test_scene_roundtrip_preserves_uids());
+        RUN_CASE(test_scene_load_leaves_no_orphans());
 
-        test_clone_entity_regenerates_uids();
-        test_clone_object_strips_prefab_ids();
-        test_clone_prefab_instance_keeps_prefab_ids();
-        test_clone_entity_leaves_no_orphans();
+        RUN_CASE(test_clone_entity_regenerates_uids());
+        RUN_CASE(test_clone_object_strips_prefab_ids());
+        RUN_CASE(test_clone_prefab_instance_keeps_prefab_ids());
+        RUN_CASE(test_clone_entity_leaves_no_orphans());
 
-        test_instantiate_assigns_fresh_uids_per_instance();
-        test_instantiate_sets_prefab_source();
-        test_output_format_scope();
-        test_absent_components_do_not_throw();
-        test_failed_load_leaves_siblings_readable();
-        test_light_source_shape_round_trip();
-        test_auto_exposure_settings_start_fresh_without_version();
-        test_prefab_asset_does_not_store_prefab_component();
+        RUN_CASE(test_instantiate_assigns_fresh_uids_per_instance());
+        RUN_CASE(test_instantiate_sets_prefab_source());
+        RUN_CASE(test_output_format_scope());
+        RUN_CASE(test_absent_components_do_not_throw());
+        RUN_CASE(test_failed_load_leaves_siblings_readable());
+        RUN_CASE(test_light_source_shape_round_trip());
+        RUN_CASE(test_auto_exposure_settings_start_fresh_without_version());
+        RUN_CASE(test_prefab_asset_does_not_store_prefab_component());
 
-        test_resync_picks_up_prefab_changes();
-        test_resync_keeps_the_same_entities();
-        test_resync_honours_a_property_override();
-        test_resync_honours_particle_emitter_overrides();
-        test_resync_honours_particle_emitter_field_overrides();
-        test_resync_root_position_and_rotation_are_implicit_overrides();
-        test_resync_root_scale_follows_the_prefab();
-        test_resync_root_scale_survives_when_overridden();
-        test_resync_adds_entities_added_to_the_prefab();
-        test_resync_removes_entities_deleted_from_the_prefab();
-        test_resync_honours_removed_entities();
-        test_removing_an_entity_with_children_stays_removed();
-        test_resync_keeps_user_added_children();
+        RUN_CASE(test_resync_picks_up_prefab_changes());
+        RUN_CASE(test_resync_keeps_the_same_entities());
+        RUN_CASE(test_resync_honours_a_property_override());
+        RUN_CASE(test_resync_honours_particle_emitter_overrides());
+        RUN_CASE(test_resync_honours_particle_emitter_field_overrides());
+        RUN_CASE(test_resync_root_position_and_rotation_are_implicit_overrides());
+        RUN_CASE(test_resync_root_scale_follows_the_prefab());
+        RUN_CASE(test_resync_root_scale_survives_when_overridden());
+        RUN_CASE(test_resync_adds_entities_added_to_the_prefab());
+        RUN_CASE(test_resync_removes_entities_deleted_from_the_prefab());
+        RUN_CASE(test_resync_honours_removed_entities());
+        RUN_CASE(test_removing_an_entity_with_children_stays_removed());
+        RUN_CASE(test_resync_keeps_user_added_children());
 
-        test_build_order();
-        test_scene_and_prefab_documents_are_not_interchangeable();
-        test_scene_document_repeats_no_key();
-        test_scene_save_is_in_hierarchy_order_and_stable();
-        test_first_layout_scene_still_loads();
-        test_newer_scene_version_is_refused();
-        test_malformed_scene_documents_leave_the_open_scene();
-        test_baked_first_layout_scene_loads();
-        test_real_first_layout_scene_file();
-        test_prefab_document_version();
-        test_prefab_loaders_refuse_what_they_cannot_read();
-        test_nesting_resolved_marker();
-        test_prefab_dependency_enumeration();
-        test_nested_prefab_instance_keeps_its_link();
-        test_editing_the_inner_asset_reaches_new_outer_instances();
-        test_a_fresh_instantiate_pulls_the_inner_asset_edit();
-        test_nesting_cycle_is_refused();
-        test_outer_resync_preserves_nested_instance_edits();
-        test_removing_a_nested_instance_from_the_asset_propagates();
-        test_a_nested_instance_added_in_the_scene_survives_resync();
-        test_duplicate_nested_instances_of_one_prefab();
-        test_nested_instances_are_named_by_the_containing_prefab();
-        test_deleting_one_of_two_nested_instances_removes_that_one();
-        test_edits_to_content_the_outer_document_added_inside_a_nested_instance_propagate();
-    test_an_addition_applied_into_the_nested_asset_keeps_its_new_name();
-    test_cloning_a_plain_branch_holding_a_nested_instance_drops_the_branch_ids();
-    test_a_local_override_on_one_field_does_not_shield_its_siblings();
-    test_a_replay_applies_only_what_its_document_states_to_nested_content();
-    test_document_statements_live_with_their_author();
-    test_an_outer_statement_wins_over_an_inner_one();
-    test_a_removal_two_levels_down_holds_through_every_replay();
-    test_applying_a_scene_instance_folds_its_statements_into_the_document();
-    test_released_format_overrides_load_as_local();
-    test_issued_ids_name_their_document();
-    test_an_entity_the_container_adds_inside_a_nested_instance_is_the_containers();
-    test_a_nested_instance_the_container_added_is_removed_when_the_container_drops_it();
-    test_released_format_ids_are_attributed_to_their_instances();
-    test_clone_slots_follow_the_documents_inside_the_clone();
-    test_an_instance_added_inside_a_nested_instance_survives_that_instances_sync();
-        test_an_authoring_root_owns_its_statements_at_every_depth();
-        test_a_clone_of_an_instance_keeps_its_nested_slots();
-        test_a_cloned_branch_makes_its_nested_instances_additions();
-        test_a_failed_sync_does_not_poison_the_override_memo();
-        test_override_touching_treats_array_elements_as_below();
-        test_adding_a_nested_instance_to_the_asset_propagates();
-        test_adding_a_different_nested_prefab_to_the_asset_propagates();
-        test_replacing_a_prefab_component_keeps_its_owner();
-        test_fresh_instance_attributes_nested_overrides_and_detach_makes_them_local();
-        test_a_nested_instance_returns_to_where_its_container_placed_it();
-        test_editing_a_prefab_as_its_own_root_keeps_ids_and_instances_stable();
-        test_nested_instance_scale_follows_its_prefab_after_container_is_saved();
-        test_authored_override_on_one_nested_instance_reaches_existing_instances();
-        test_a_local_edit_survives_the_containing_prefab_being_replayed();
-        test_the_containing_prefab_can_take_its_override_back();
-        test_local_and_authored_removals_are_distinguishable();
-        test_removing_an_entity_inside_a_nested_instance_propagates();
-        test_adding_an_entity_under_a_nested_instance_propagates();
-        test_a_locally_cloned_nested_instance_is_not_claimed_by_the_prefab();
-        test_a_locally_deleted_nested_instance_stays_deleted();
-        test_deleting_the_only_nested_instance_stays_deleted();
-        test_removing_an_entity_two_levels_down_stays_removed();
-        test_a_locally_deleted_nested_instance_survives_the_prefab_changing_it();
-        test_authored_override_two_levels_down();
-        test_cloning_a_nested_instance_makes_it_the_users();
-        test_cloning_an_outer_instance_keeps_what_it_inherited();
-        test_promoting_a_clone_into_the_asset_marks_it();
-        test_unpacking_an_outer_instance_leaves_the_nested_one_linked();
-        test_two_instances_of_one_prefab_are_independent();
-        test_sparse_load_keeps_parent();
-        test_sparse_load_keeps_volume_mode();
+        RUN_CASE(test_build_order());
+        RUN_CASE(test_scene_and_prefab_documents_are_not_interchangeable());
+        RUN_CASE(test_scene_document_repeats_no_key());
+        RUN_CASE(test_scene_save_is_in_hierarchy_order_and_stable());
+        RUN_CASE(test_first_layout_scene_still_loads());
+        RUN_CASE(test_newer_scene_version_is_refused());
+        RUN_CASE(test_malformed_scene_documents_leave_the_open_scene());
+        RUN_CASE(test_baked_first_layout_scene_loads());
+        RUN_CASE(test_real_first_layout_scene_file());
+        RUN_CASE(test_prefab_document_version());
+        RUN_CASE(test_prefab_loaders_refuse_what_they_cannot_read());
+        RUN_CASE(test_nesting_resolved_marker());
+        RUN_CASE(test_prefab_dependency_enumeration());
+        RUN_CASE(test_nested_prefab_instance_keeps_its_link());
+        RUN_CASE(test_editing_the_inner_asset_reaches_new_outer_instances());
+        RUN_CASE(test_a_fresh_instantiate_pulls_the_inner_asset_edit());
+        RUN_CASE(test_nesting_cycle_is_refused());
+        RUN_CASE(test_outer_resync_preserves_nested_instance_edits());
+        RUN_CASE(test_removing_a_nested_instance_from_the_asset_propagates());
+        RUN_CASE(test_a_nested_instance_added_in_the_scene_survives_resync());
+        RUN_CASE(test_duplicate_nested_instances_of_one_prefab());
+        RUN_CASE(test_nested_instances_are_named_by_the_containing_prefab());
+        RUN_CASE(test_deleting_one_of_two_nested_instances_removes_that_one());
+        RUN_CASE(test_edits_to_content_the_outer_document_added_inside_a_nested_instance_propagate());
+    RUN_CASE(test_an_addition_applied_into_the_nested_asset_keeps_its_new_name());
+    RUN_CASE(test_cloning_a_plain_branch_holding_a_nested_instance_drops_the_branch_ids());
+    RUN_CASE(test_a_local_override_on_one_field_does_not_shield_its_siblings());
+    RUN_CASE(test_a_replay_applies_only_what_its_document_states_to_nested_content());
+    RUN_CASE(test_document_statements_live_with_their_author());
+    RUN_CASE(test_an_outer_statement_wins_over_an_inner_one());
+    RUN_CASE(test_a_removal_two_levels_down_holds_through_every_replay());
+    RUN_CASE(test_applying_a_scene_instance_folds_its_statements_into_the_document());
+    RUN_CASE(test_released_format_overrides_load_as_local());
+    RUN_CASE(test_issued_ids_name_their_document());
+    RUN_CASE(test_an_entity_the_container_adds_inside_a_nested_instance_is_the_containers());
+    RUN_CASE(test_a_nested_instance_the_container_added_is_removed_when_the_container_drops_it());
+    RUN_CASE(test_released_format_ids_are_attributed_to_their_instances());
+    RUN_CASE(test_clone_slots_follow_the_documents_inside_the_clone());
+    RUN_CASE(test_an_instance_added_inside_a_nested_instance_survives_that_instances_sync());
+        RUN_CASE(test_an_authoring_root_owns_its_statements_at_every_depth());
+        RUN_CASE(test_a_clone_of_an_instance_keeps_its_nested_slots());
+        RUN_CASE(test_a_cloned_branch_makes_its_nested_instances_additions());
+        RUN_CASE(test_a_failed_sync_does_not_poison_the_override_memo());
+        RUN_CASE(test_override_touching_treats_array_elements_as_below());
+        RUN_CASE(test_adding_a_nested_instance_to_the_asset_propagates());
+        RUN_CASE(test_adding_a_different_nested_prefab_to_the_asset_propagates());
+        RUN_CASE(test_replacing_a_prefab_component_keeps_its_owner());
+        RUN_CASE(test_fresh_instance_attributes_nested_overrides_and_detach_makes_them_local());
+        RUN_CASE(test_a_nested_instance_returns_to_where_its_container_placed_it());
+        RUN_CASE(test_editing_a_prefab_as_its_own_root_keeps_ids_and_instances_stable());
+        RUN_CASE(test_nested_instance_scale_follows_its_prefab_after_container_is_saved());
+        RUN_CASE(test_authored_override_on_one_nested_instance_reaches_existing_instances());
+        RUN_CASE(test_a_local_edit_survives_the_containing_prefab_being_replayed());
+        RUN_CASE(test_the_containing_prefab_can_take_its_override_back());
+        RUN_CASE(test_local_and_authored_removals_are_distinguishable());
+        RUN_CASE(test_removing_an_entity_inside_a_nested_instance_propagates());
+        RUN_CASE(test_adding_an_entity_under_a_nested_instance_propagates());
+        RUN_CASE(test_a_locally_cloned_nested_instance_is_not_claimed_by_the_prefab());
+        RUN_CASE(test_a_locally_deleted_nested_instance_stays_deleted());
+        RUN_CASE(test_deleting_the_only_nested_instance_stays_deleted());
+        RUN_CASE(test_removing_an_entity_two_levels_down_stays_removed());
+        RUN_CASE(test_a_locally_deleted_nested_instance_survives_the_prefab_changing_it());
+        RUN_CASE(test_authored_override_two_levels_down());
+        RUN_CASE(test_cloning_a_nested_instance_makes_it_the_users());
+        RUN_CASE(test_cloning_an_outer_instance_keeps_what_it_inherited());
+        RUN_CASE(test_promoting_a_clone_into_the_asset_marks_it());
+        RUN_CASE(test_unpacking_an_outer_instance_leaves_the_nested_one_linked());
+        RUN_CASE(test_two_instances_of_one_prefab_are_independent());
+        RUN_CASE(test_sparse_load_keeps_parent());
+        RUN_CASE(test_sparse_load_keeps_volume_mode());
 
-        test_override_path_parsing();
-        test_add_override_collapses_nested_paths();
-        test_remove_entity_clears_all_of_its_overrides();
+        RUN_CASE(test_override_path_parsing());
+        RUN_CASE(test_add_override_collapses_nested_paths());
+        RUN_CASE(test_remove_entity_clears_all_of_its_overrides());
 
-        test_clone_scene_uses_one_load_context();
-        test_clone_scene_preserves_structure_and_uids();
+        RUN_CASE(test_clone_scene_uses_one_load_context());
+        RUN_CASE(test_clone_scene_preserves_structure_and_uids());
     }
 
     if(bench)
     {
         run_benchmarks();
     }
-
-    std::printf("\n%d checks, %d failures, %d known failures", g_checks, g_failures, g_xfail);
-    if(g_xpass > 0)
-    {
-        std::printf(", %d UNEXPECTED PASSES", g_xpass);
-    }
-    std::printf("\n");
-
-    if(g_xpass > 0)
-    {
-        std::printf("\nThese expectations now hold - promote them from check_xfail to check:\n");
-        for(const auto& entry : g_xpass_list)
-        {
-            std::printf("  %s\n", entry.c_str());
-        }
-    }
-
-    // The runner owns the context and tears it down; this only reports.
-    return g_failures;
 }
 
 REGISTER_TEST_SUITE("ecs serialization / prefabs / cloning", run_ecs_serialization_suite)

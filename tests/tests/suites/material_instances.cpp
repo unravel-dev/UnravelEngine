@@ -49,23 +49,12 @@
 #include <sstream>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 const math::color SHARED_BASE_COLOR{0.2f, 0.4f, 0.6f, 1.0f};
 const math::color INSTANCE_EMISSIVE_COLOR{1.0f, 0.1f, 0.1f, 1.0f};
@@ -622,27 +611,23 @@ void test_material_value_helpers()
           "a copied graph of other code counts as a state edit");
 }
 
-auto run_material_instances_suite(rtti::context& ctx) -> int
+void run_material_instances_suite(rtti::context& ctx)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_material_value_helpers();
-    test_default_material_keys();
-    test_values_follow_the_shared_material();
-    test_override_rules();
-    test_standard_register_layout();
-    test_shares_draw();
-    test_resolved_material();
-    test_shadow_sharing();
-    test_round_trips();
-    test_legacy_copy();
-    test_legacy_model_document();
-    test_legacy_instance_overrides();
-    test_legacy_binary_instance();
-    test_model_saves_an_empty_list_without_overrides();
-    test_reload_keeps_skipped_slots();
-    std::printf("\nmaterial instances: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_material_value_helpers());
+    RUN_CASE(test_default_material_keys());
+    RUN_CASE(test_values_follow_the_shared_material());
+    RUN_CASE(test_override_rules());
+    RUN_CASE(test_standard_register_layout());
+    RUN_CASE(test_shares_draw());
+    RUN_CASE(test_resolved_material());
+    RUN_CASE(test_shadow_sharing());
+    RUN_CASE(test_round_trips());
+    RUN_CASE(test_legacy_copy());
+    RUN_CASE(test_legacy_model_document());
+    RUN_CASE(test_legacy_instance_overrides());
+    RUN_CASE(test_legacy_binary_instance());
+    RUN_CASE(test_model_saves_an_empty_list_without_overrides());
+    RUN_CASE(test_reload_keeps_skipped_slots());
 }
 
 } // namespace

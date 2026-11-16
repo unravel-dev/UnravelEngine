@@ -34,6 +34,8 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 // Named, not anonymous: test sources may be joined into one unit.
@@ -42,29 +44,6 @@ namespace joints_suite
 constexpr float step_seconds = 1.0f / 60.0f;
 constexpr int one_second = 60;
 constexpr int everything = static_cast<int>(layer_reserved::everything_layer);
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
-void check_near(float actual, float expected, float tolerance, const std::string& what)
-{
-    ++g_checks;
-    if(!(std::abs(actual - expected) <= tolerance))
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %f, expected %f +/- %f)\n", what.c_str(), actual, expected, tolerance);
-    }
-}
 
 auto is_finite(const math::vec3& v) -> bool
 {
@@ -1425,51 +1404,49 @@ void test_builder_places_shapes_on_mirrored_bones(rtti::context& ctx)
 }
 } // namespace joints_suite
 
-auto run_joints_suite(rtti::context& ctx) -> int
+void run_joints_suite(rtti::context& ctx)
 {
     using namespace joints_suite;
-    test_damping_and_gravity_scale(ctx);
-    test_rotated_shapes(ctx);
-    test_sleep_and_forces_at_a_point(ctx);
-    test_kinematic_release_lets_bodies_move(ctx);
-    test_gravity_and_explosions(ctx);
-    test_hinge_pendulum_and_limits(ctx);
-    test_hinge_motor(ctx);
-    test_slider_and_rope(ctx);
-    test_breaking(ctx);
-    test_joint_lets_go_of_a_destroyed_body(ctx);
-    test_joint_values_stay_in_range(ctx);
-    test_ball_spring_turns_about_the_joint_axes(ctx);
-    test_overflow_joints_break(ctx);
-    test_ball_cone(ctx);
-    test_wheel(ctx);
-    test_wheel_steers_on_the_ground(ctx);
-    test_car_righted_by_its_chassis_alone(ctx);
-    test_ragdoll_setup(ctx);
-    test_ragdoll_animated_follows_bones(ctx);
-    test_ragdoll_falls_and_holds_together(ctx);
-    test_ragdoll_draws_physics_under_animation(ctx);
-    test_ragdoll_stays_put_when_its_character_moves(ctx);
-    test_ragdoll_turns_as_one(ctx);
-    test_ragdoll_blends_back(ctx);
-    test_ragdoll_powered_stands(ctx);
-    test_ragdoll_partial(ctx);
-    test_ragdoll_blends_back_evenly(ctx);
-    test_ragdoll_hitboxes_follow_the_blend(ctx);
-    test_ragdoll_friction_changes_during_play(ctx);
-    test_ragdoll_bone_simulated_before_the_first_step(ctx);
-    test_ragdoll_keeps_falling_through_a_rebuild(ctx);
-    test_ragdoll_draws_between_steps(ctx);
-    test_destroyed_ragdoll_leaves_no_bodies(ctx);
-    test_ragdoll_without_its_model_leaves_no_bodies(ctx);
-    test_ragdoll_swing_limits_stay_in_range(ctx);
-    test_crouching_keeps_the_own_ragdoll_apart(ctx);
-    test_builder_centres_shoulders_between_bind_and_hanging(ctx);
-    test_builder_refuses_a_limb_without_length(ctx);
-    test_builder_refuses_a_mass_that_is_not_positive(ctx);
-    test_builder_places_shapes_on_mirrored_bones(ctx);
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_damping_and_gravity_scale(ctx));
+    RUN_CASE(test_rotated_shapes(ctx));
+    RUN_CASE(test_sleep_and_forces_at_a_point(ctx));
+    RUN_CASE(test_kinematic_release_lets_bodies_move(ctx));
+    RUN_CASE(test_gravity_and_explosions(ctx));
+    RUN_CASE(test_hinge_pendulum_and_limits(ctx));
+    RUN_CASE(test_hinge_motor(ctx));
+    RUN_CASE(test_slider_and_rope(ctx));
+    RUN_CASE(test_breaking(ctx));
+    RUN_CASE(test_joint_lets_go_of_a_destroyed_body(ctx));
+    RUN_CASE(test_joint_values_stay_in_range(ctx));
+    RUN_CASE(test_ball_spring_turns_about_the_joint_axes(ctx));
+    RUN_CASE(test_overflow_joints_break(ctx));
+    RUN_CASE(test_ball_cone(ctx));
+    RUN_CASE(test_wheel(ctx));
+    RUN_CASE(test_wheel_steers_on_the_ground(ctx));
+    RUN_CASE(test_car_righted_by_its_chassis_alone(ctx));
+    RUN_CASE(test_ragdoll_setup(ctx));
+    RUN_CASE(test_ragdoll_animated_follows_bones(ctx));
+    RUN_CASE(test_ragdoll_falls_and_holds_together(ctx));
+    RUN_CASE(test_ragdoll_draws_physics_under_animation(ctx));
+    RUN_CASE(test_ragdoll_stays_put_when_its_character_moves(ctx));
+    RUN_CASE(test_ragdoll_turns_as_one(ctx));
+    RUN_CASE(test_ragdoll_blends_back(ctx));
+    RUN_CASE(test_ragdoll_powered_stands(ctx));
+    RUN_CASE(test_ragdoll_partial(ctx));
+    RUN_CASE(test_ragdoll_blends_back_evenly(ctx));
+    RUN_CASE(test_ragdoll_hitboxes_follow_the_blend(ctx));
+    RUN_CASE(test_ragdoll_friction_changes_during_play(ctx));
+    RUN_CASE(test_ragdoll_bone_simulated_before_the_first_step(ctx));
+    RUN_CASE(test_ragdoll_keeps_falling_through_a_rebuild(ctx));
+    RUN_CASE(test_ragdoll_draws_between_steps(ctx));
+    RUN_CASE(test_destroyed_ragdoll_leaves_no_bodies(ctx));
+    RUN_CASE(test_ragdoll_without_its_model_leaves_no_bodies(ctx));
+    RUN_CASE(test_ragdoll_swing_limits_stay_in_range(ctx));
+    RUN_CASE(test_crouching_keeps_the_own_ragdoll_apart(ctx));
+    RUN_CASE(test_builder_centres_shoulders_between_bind_and_hanging(ctx));
+    RUN_CASE(test_builder_refuses_a_limb_without_length(ctx));
+    RUN_CASE(test_builder_refuses_a_mass_that_is_not_positive(ctx));
+    RUN_CASE(test_builder_places_shapes_on_mirrored_bones(ctx));
 }
 
 REGISTER_TEST_SUITE("box3d joints and ragdolls", run_joints_suite)

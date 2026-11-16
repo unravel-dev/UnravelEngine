@@ -23,6 +23,8 @@
 #include <cstdio>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
@@ -32,19 +34,6 @@ namespace
 const std::string SECTION_RULE = "\n" + std::string(78, '=') + "\n";
 /// The license texts of OpenAL Soft, its parts under BSD licenses, Oboe, libdwarf-lite and miniaudio.
 constexpr int OPTIONAL_SECTION_COUNT = 5;
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAILED: %s\n", what.c_str());
-    }
-}
 
 auto has_text(const std::string& text, const std::string& part) -> bool
 {
@@ -189,22 +178,18 @@ void test_is_ascii(const std::string& all)
     check(std::all_of(all.begin(), all.end(), is_ascii), "the notices are ASCII");
 }
 
-auto run_third_party_notices_suite(rtti::context& /*ctx*/) -> int
+void run_third_party_notices_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
     const auto all = get_third_party_notices(make_libraries(true, true, true));
-    test_names_the_lgpl_libraries(all);
-    test_leaves_out_the_lgpl_without_its_libraries(all);
-    test_keeps_the_lgpl_library_a_build_links();
-    test_leaves_out_miniaudio_without_it();
-    test_leaves_out_cpptrace_without_it();
-    test_names_the_web_runtime_in_the_browser_only(all);
-    test_follows_this_build();
-    test_names_the_engine_version(all);
-    test_is_ascii(all);
-    std::printf("third party notices: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_names_the_lgpl_libraries(all));
+    RUN_CASE(test_leaves_out_the_lgpl_without_its_libraries(all));
+    RUN_CASE(test_keeps_the_lgpl_library_a_build_links());
+    RUN_CASE(test_leaves_out_miniaudio_without_it());
+    RUN_CASE(test_leaves_out_cpptrace_without_it());
+    RUN_CASE(test_names_the_web_runtime_in_the_browser_only(all));
+    RUN_CASE(test_follows_this_build());
+    RUN_CASE(test_names_the_engine_version(all));
+    RUN_CASE(test_is_ascii(all));
 }
 
 } // namespace

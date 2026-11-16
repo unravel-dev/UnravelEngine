@@ -39,23 +39,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// bgfx's SPIR-V shaderc shifts every binding by kSpirvBindShift (src/shader.h).
 constexpr int SPIRV_BIND_SHIFT = 2;
@@ -287,7 +276,7 @@ void test_compiled_compute_shaders()
 {
     std::printf("every compiled compute shader stays within its feature's requirements\n");
 #if !defined(ENGINE_DATA_DIR)
-    std::printf("  SKIP: the engine_data location is not configured\n");
+    skipped("The engine_data location is not configured, so the compiled shaders are not read.");
 #else
     const fs::path data_dir = ENGINE_DATA_DIR;
     const fs::path source_dir = data_dir / "data" / "shaders";
@@ -345,7 +334,7 @@ void test_hand_bound_stages()
 {
     std::printf("the stages passes bind textures at by number match the compiled shaders\n");
 #if !defined(ENGINE_DATA_DIR)
-    std::printf("  SKIP: the engine_data location is not configured\n");
+    skipped("The engine_data location is not configured, so the compiled shaders are not read.");
 #else
     using stages = auto_exposure_pass::stages;
     const hand_bound_sampler samplers[] = {
@@ -378,14 +367,10 @@ void test_hand_bound_stages()
 #endif
 }
 
-auto run_render_feature_shaders_suite(rtti::context& /*ctx*/) -> int
+void run_render_feature_shaders_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_compiled_compute_shaders();
-    test_hand_bound_stages();
-    std::printf("\nrender feature shaders: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_compiled_compute_shaders());
+    RUN_CASE(test_hand_bound_stages());
 }
 
 } // namespace

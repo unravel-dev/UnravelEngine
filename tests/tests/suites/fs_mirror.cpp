@@ -40,28 +40,17 @@
 #include <thread>
 #include <vector>
 
+using namespace unravel::test;
+
 namespace
 {
 
 /// How long the stand-in for a scanner holds a file: within what a rename waits for.
 constexpr auto HOLD_TIME = std::chrono::milliseconds(60);
 
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
 auto get_temp_folder() -> fs::path
 {
-    return fs::temp_directory_path() / "unravel-tests-fs-mirror";
+    return temp_path("unravel-tests-fs-mirror");
 }
 
 void write_text(const fs::path& file, const std::string& text)
@@ -350,30 +339,26 @@ void test_rename_over(const fs::path& folder)
     check(bool(ec) && std::chrono::steady_clock::now() - begin < HOLD_TIME, "a missing file fails at once");
 }
 
-auto run_fs_mirror_suite(rtti::context&) -> int
+void run_fs_mirror_suite(rtti::context&)
 {
-    g_checks = 0;
-    g_failures = 0;
     fs::error_code ec;
     fs::remove_all(get_temp_folder(), ec);
     const auto source = get_temp_folder() / "source";
     const auto target = get_temp_folder() / "target";
-    test_first_and_repeated_mirror(source, target);
-    test_changed_file_is_copied(source, target);
-    test_removed_files_go(source, target);
-    test_filter(source, target);
-    test_long_paths(get_temp_folder() / "long");
-    test_case_only_rename(get_temp_folder() / "case_target");
-    test_removal_failure(get_temp_folder() / "locked_target");
-    test_missing_source(target);
-    test_nothing_to_mirror(get_temp_folder() / "unmade_target");
-    test_same_content(get_temp_folder() / "compared");
-    test_unlisted_files(get_temp_folder() / "listed" / "root");
-    test_shared_read_file(get_temp_folder() / "shared");
-    test_rename_over(get_temp_folder() / "renamed");
+    RUN_CASE(test_first_and_repeated_mirror(source, target));
+    RUN_CASE(test_changed_file_is_copied(source, target));
+    RUN_CASE(test_removed_files_go(source, target));
+    RUN_CASE(test_filter(source, target));
+    RUN_CASE(test_long_paths(get_temp_folder() / "long"));
+    RUN_CASE(test_case_only_rename(get_temp_folder() / "case_target"));
+    RUN_CASE(test_removal_failure(get_temp_folder() / "locked_target"));
+    RUN_CASE(test_missing_source(target));
+    RUN_CASE(test_nothing_to_mirror(get_temp_folder() / "unmade_target"));
+    RUN_CASE(test_same_content(get_temp_folder() / "compared"));
+    RUN_CASE(test_unlisted_files(get_temp_folder() / "listed" / "root"));
+    RUN_CASE(test_shared_read_file(get_temp_folder() / "shared"));
+    RUN_CASE(test_rename_over(get_temp_folder() / "renamed"));
     fs::remove_all(get_temp_folder(), ec);
-    std::printf("fs mirror: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 } // namespace

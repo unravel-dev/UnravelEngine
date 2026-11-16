@@ -26,27 +26,16 @@
 #include <fstream>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
 
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
 auto get_temp_folder() -> fs::path
 {
-    return fs::temp_directory_path() / "unravel-tests-display-options";
+    return temp_path("unravel-tests-display-options");
 }
 
 auto make_mode(std::uint32_t width, std::uint32_t height, std::uint32_t refresh_rate) -> os::display::mode
@@ -204,23 +193,19 @@ void test_run_window_options()
 
 } // namespace
 
-auto run_display_options_suite(rtti::context& /*ctx*/) -> int
+void run_display_options_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
     const auto temp = get_temp_folder();
     fs::error_code ec;
     fs::remove_all(temp, ec);
     fs::create_directories(temp, ec);
-    test_window_mode_names();
-    test_resolutions();
-    test_saved_options(temp);
-    test_display_modes();
-    test_windowed_sizes();
-    test_run_window_options();
+    RUN_CASE(test_window_mode_names());
+    RUN_CASE(test_resolutions());
+    RUN_CASE(test_saved_options(temp));
+    RUN_CASE(test_display_modes());
+    RUN_CASE(test_windowed_sizes());
+    RUN_CASE(test_run_window_options());
     fs::remove_all(temp, ec);
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 REGISTER_TEST_SUITE("display options", run_display_options_suite)

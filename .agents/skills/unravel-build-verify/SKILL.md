@@ -69,8 +69,10 @@ Running and testing
 - Build in the foreground, or wait for the build's own notification, and confirm the link
   line and the executable's time stamp before any run that depends on the change. A build
   chained into a background run hides its failure, and the run measures the old binary.
-- The runner exits with 1 when any check fails; its last log line counts them
-  ("N failing check(s)").
+- The runner exits with 1 when a suite fails, times out or crashes; its last log line counts them
+  ("N failing check(s); M suite(s) did not pass"). With more than one suite it runs them in
+  worker processes and prints a failing suite's whole output at its end; `--jobs 1` runs them in
+  one process as they go.
 - A runner whose own CPU time stays flat while `shaderc` children run is working, not hung.
 - A test that asserts a duration waits on the clock it checks (loop on `steady_clock::now()`
   with short sleeps); one `sleep_for` can end early by part of a timer tick (15.6 ms on
@@ -113,8 +115,9 @@ Shell ([shell.md](shell.md) has the recipes)
   (`file(GLOB_RECURSE)`).
 - The runner boots the engine as a service (`tests/tests/tests.cpp`) with threading and the
   asset manager only: no window, renderer, audio, scripting or ECS systems; a suite that needs
-  a renderer starts bgfx's Noop one. Test assets live under `<bin>/data/tests` (protocol
-  `app:`). Shader and data suites read the source tree through compile definitions
+  a renderer starts bgfx's Noop one. Each suite's test assets live under
+  `<bin>/test_results/<suite>/app` (protocol `app:`), emptied when the suite starts. Shader and
+  data suites read the source tree through compile definitions
   (`GI_TESTS_SHADER_DIR`, `ENGINE_DATA_DIR`, `EDITOR_DATA_DIR` in `tests/tests/CMakeLists.txt`)
   and run the `shaderc` beside the runner.
 - bgfx is fetched with FetchContent at the pin of the bgfx.cmake fork and patched at every
@@ -164,7 +167,9 @@ and stop an editor and read its log is in `unravel-editor-mcp`.
 |------|---------------|
 | `CMakeLists.txt` | options, data targets, shaderc stack, install layout |
 | `engine/engine/CMakeLists.txt`, `editor/editor/CMakeLists.txt` | source globs, unity settings |
-| `tests/tests/tests.cpp`, `tests/tests/tests.h` | runner boot, options, suite registration |
+| `tests/tests/tests.cpp`, `tests/tests/tests.h` | runner boot, options, the three run modes |
+| `tests/tests/harness.h` | what suites check with, suite registration and lanes |
+| `tests/tests/runner.h` | results, the watchdog, worker protocol, scheduler and report |
 | `tests/tests/CMakeLists.txt` | runner libraries, source-tree paths |
 | `cmake/web_player.cmake`, `cmake/android_player.cmake` | player sub-builds and their options |
 | `cmake/check_package.cmake` | what a runtime folder or a package must hold |

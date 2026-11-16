@@ -19,23 +19,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 void test_documents_follow_sort_order()
 {
@@ -85,13 +74,9 @@ void test_documents_follow_sort_order()
     check(sorted.size() == orders.size() - 1u, "a list passed in again is refilled");
 }
 
-auto run_ui_document_order_suite(rtti::context& /*ctx*/) -> int
+void run_ui_document_order_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_documents_follow_sort_order();
-    std::printf("ui document order: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_documents_follow_sort_order());
 }
 
 } // namespace

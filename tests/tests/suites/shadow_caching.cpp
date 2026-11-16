@@ -32,23 +32,12 @@
 #include <functional>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// A Standard shared material registered under @p name, replacing an earlier one of that name.
 auto make_shared_material(const std::string& name) -> asset_handle<material>
@@ -231,17 +220,13 @@ void test_cached_maps_epoch()
     check(shadow::get_cached_maps_epoch() == initial + 3, "switching back moves it again");
 }
 
-auto run_shadow_caching_suite(rtti::context& ctx) -> int
+void run_shadow_caching_suite(rtti::context& ctx)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_materials_revisions();
-    test_change_stamps();
-    test_model_swap_stamps();
-    test_material_reload_stamps(*ctx.get_cached<threader>().pool);
-    test_cached_maps_epoch();
-    std::printf("\nshadow caching: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_materials_revisions());
+    RUN_CASE(test_change_stamps());
+    RUN_CASE(test_model_swap_stamps());
+    RUN_CASE(test_material_reload_stamps(*ctx.get_cached<threader>().pool));
+    RUN_CASE(test_cached_maps_epoch());
 }
 
 } // namespace

@@ -29,23 +29,12 @@
 #include <cstdio>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// A uid that is not nil, so the document carries the asset handle that crashed the peek.
 constexpr const char* NON_NIL_SCENE_UID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
@@ -130,32 +119,27 @@ void test_missing_settings_peeks_defaults(const fs::path& root)
 
 } // namespace
 
-auto run_boot_config_peek_suite(rtti::context& ctx) -> int
+void run_boot_config_peek_suite(rtti::context& ctx)
 {
     (void)ctx;
-    g_checks = 0;
-    g_failures = 0;
 
-    const fs::path root = fs::temp_directory_path() / "unravel_boot_config_peek";
+    const fs::path root = temp_path("unravel_boot_config_peek");
     fs::error_code err;
     fs::remove_all(root, err);
 
     const settings authored = make_authored_settings();
     if(!write_project_settings(root, authored))
     {
-        std::printf("  FAIL: could not write the settings fixture at %s\n", root.string().c_str());
-        return 1;
+        check(false, "the settings fixture is written at " + root.string());
+        return;
     }
 
-    test_peek_reports_cold_fields(root, authored);
-    test_peek_leaves_asset_sections_untouched(root, authored);
-    test_app_section_loads(root, authored);
-    test_missing_settings_peeks_defaults(root);
+    RUN_CASE(test_peek_reports_cold_fields(root, authored));
+    RUN_CASE(test_peek_leaves_asset_sections_untouched(root, authored));
+    RUN_CASE(test_app_section_loads(root, authored));
+    RUN_CASE(test_missing_settings_peeks_defaults(root));
 
     fs::remove_all(root, err);
-
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 REGISTER_TEST_SUITE("boot config peek", run_boot_config_peek_suite)

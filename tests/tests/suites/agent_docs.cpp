@@ -33,6 +33,8 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
@@ -51,19 +53,6 @@ constexpr const char* PATTERN_CHARACTERS = "*?<>{}$| ";
 /// The skill limits of the Agent Skills format.
 constexpr size_t MAX_DESCRIPTION_LENGTH = 1024;
 constexpr size_t MAX_SKILL_LINES = 500;
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 auto get_repository_dir() -> fs::path
 {
@@ -313,15 +302,11 @@ void test_skills_have_valid_frontmatter()
     check(skill_count > 0, "the skills folder holds skills");
 }
 
-auto run_agent_docs_suite(rtti::context& /*ctx*/) -> int
+void run_agent_docs_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_docs_name_existing_paths();
-    test_skill_scripts_are_ascii();
-    test_skills_have_valid_frontmatter();
-    std::printf("agent docs: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_docs_name_existing_paths());
+    RUN_CASE(test_skill_scripts_are_ascii());
+    RUN_CASE(test_skills_have_valid_frontmatter());
 }
 
 } // namespace

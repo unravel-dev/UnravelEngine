@@ -63,6 +63,7 @@ jobs:
         cmake --build --preset windows-${{matrix.config.arch}}-${{matrix.config.cc}}-release --parallel $env:BUILD_JOBS
     # Every suite of the test runner. None needs a graphics device (a suite that needs a renderer starts bgfx's
     # Noop one), and the tools some suites run (shaderc, texturec, the script bridge, the player) are built
-    # above. The runner ends with a non-zero exit code when a check fails, which fails the job.
+    # above. The suites run in worker processes, several at once. --strict fails a suite whose tool is missing or
+    # whose expected failure passes; the runner ends with a non-zero exit code when a suite fails, which fails the job.
     - name: Test
-      run: ./develop/build/windows-${{matrix.config.arch}}-${{matrix.config.cc}}/bin/unravel-tests.exe
+      run: ./develop/build/windows-${{matrix.config.arch}}-${{matrix.config.cc}}/bin/unravel-tests.exe --strict

@@ -39,38 +39,22 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
 
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
 void check_equal(const std::string& actual, const std::string& expected, const std::string& what)
 {
-    ++g_checks;
-    if(actual != expected)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %s, expected %s)\n", what.c_str(), actual.c_str(), expected.c_str());
-    }
+    check(actual == expected, what + " (got " + actual + ", expected " + expected + ")");
 }
 
 auto get_run_root() -> fs::path
 {
     const char* configured = std::getenv("UNRAVEL_PROTOCOL_TEST_DIR");
-    const fs::path base = configured ? fs::path(configured) : fs::temp_directory_path() / "unravel_protocol_tests";
+    const fs::path base = configured ? fs::path(configured) : temp_path("unravel_protocol_tests");
     const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::system_clock::now().time_since_epoch())
                            .count();
@@ -320,23 +304,19 @@ void test_extended_length_paths(const fs::path& run_root)
     check(!err && !fs::exists(run_root / "long", err), "and removed whole");
 }
 
-auto run_fs_protocols_suite(rtti::context& /*ctx*/) -> int
+void run_fs_protocols_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
     const fs::path run_root = get_run_root();
     std::printf("scratch folder %s\n", run_root.string().c_str());
-    test_differently_cased_root(run_root);
-    test_root_spellings(run_root);
-    test_whole_folder_names(run_root);
-    test_longest_root_wins(run_root);
-    test_protocol_path_unchanged(run_root);
-    test_missing_file_round_trip(run_root);
-    test_utf8_round_trip(run_root);
-    test_narrow_paths(run_root);
-    test_extended_length_paths(run_root);
-    std::printf("fs protocols: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_differently_cased_root(run_root));
+    RUN_CASE(test_root_spellings(run_root));
+    RUN_CASE(test_whole_folder_names(run_root));
+    RUN_CASE(test_longest_root_wins(run_root));
+    RUN_CASE(test_protocol_path_unchanged(run_root));
+    RUN_CASE(test_missing_file_round_trip(run_root));
+    RUN_CASE(test_utf8_round_trip(run_root));
+    RUN_CASE(test_narrow_paths(run_root));
+    RUN_CASE(test_extended_length_paths(run_root));
 }
 
 } // namespace

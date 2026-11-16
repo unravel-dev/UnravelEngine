@@ -35,25 +35,14 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
 
-int g_checks = 0;
-int g_failures = 0;
-
 constexpr float MATRIX_TOLERANCE = 1.0e-5f;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 auto matrices_near(const math::mat4& actual, const math::mat4& expected, float tolerance) -> bool
 {
@@ -261,19 +250,16 @@ void test_owners_are_separate_and_frames_reset()
 
 // ---------------------------------------------------------------------------------
 
-auto run_skinning_palettes_suite(rtti::context& /*ctx*/) -> int
+void run_skinning_palettes_suite(rtti::context& /*ctx*/)
 {
-    test_pack_round_trips();
-    test_rows_transform_like_the_matrix();
-    test_row_blend_matches_matrix_blend();
-    test_append_assigns_consecutive_rows();
-    test_acquire_appends_once_per_frame();
-    test_previous_rows();
-    test_pack_pending_fills_the_rows();
-    test_owners_are_separate_and_frames_reset();
-
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_pack_round_trips());
+    RUN_CASE(test_rows_transform_like_the_matrix());
+    RUN_CASE(test_row_blend_matches_matrix_blend());
+    RUN_CASE(test_append_assigns_consecutive_rows());
+    RUN_CASE(test_acquire_appends_once_per_frame());
+    RUN_CASE(test_previous_rows());
+    RUN_CASE(test_pack_pending_fills_the_rows());
+    RUN_CASE(test_owners_are_separate_and_frames_reset());
 }
 
 REGISTER_TEST_SUITE("skinning palettes", run_skinning_palettes_suite)

@@ -36,6 +36,8 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
@@ -45,29 +47,6 @@ constexpr float step_seconds = 1.0f / 60.0f;
 constexpr int settle_steps = 240;
 constexpr float settle_tolerance = 0.05f;
 constexpr int everything = static_cast<int>(layer_reserved::everything_layer);
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
-void check_near(float actual, float expected, float tolerance, const std::string& what)
-{
-    ++g_checks;
-    if(std::abs(actual - expected) > tolerance)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %f, expected %f +/- %f)\n", what.c_str(), actual, expected, tolerance);
-    }
-}
 
 /**
  * @brief A played scene on the shared game registry.
@@ -1788,19 +1767,19 @@ void run_backend_parity_tests(rtti::context& ctx, physics_backend_type backend)
     test_sleep_takes_the_island(ctx, backend);
 }
 
-auto run_box3d_suite(rtti::context& ctx) -> int
+void run_box3d_suite(rtti::context& ctx)
 {
-    test_dynamic_bodies_settle(ctx);
-    test_gravity_and_constraints(ctx);
-    test_scale_is_baked_into_shapes(ctx);
-    test_sensors_have_no_response(ctx);
-    test_queries(ctx);
-    test_forces(ctx);
-    test_frozen_rotation_keeps_the_authored_mass(ctx);
-    test_kinematic_pushes_dynamic(ctx);
-    test_bodies_come_and_go_during_play(ctx);
-    test_character_controller(ctx);
-    test_moves_are_shared_by_time();
+    RUN_CASE(test_dynamic_bodies_settle(ctx));
+    RUN_CASE(test_gravity_and_constraints(ctx));
+    RUN_CASE(test_scale_is_baked_into_shapes(ctx));
+    RUN_CASE(test_sensors_have_no_response(ctx));
+    RUN_CASE(test_queries(ctx));
+    RUN_CASE(test_forces(ctx));
+    RUN_CASE(test_frozen_rotation_keeps_the_authored_mass(ctx));
+    RUN_CASE(test_kinematic_pushes_dynamic(ctx));
+    RUN_CASE(test_bodies_come_and_go_during_play(ctx));
+    RUN_CASE(test_character_controller(ctx));
+    RUN_CASE(test_moves_are_shared_by_time());
     std::printf("character interpolation: Box3D\n");
     run_character_interpolation_tests(ctx, physics_backend_type::box3d);
     std::printf("character interpolation: Bullet\n");
@@ -1813,11 +1792,8 @@ auto run_box3d_suite(rtti::context& ctx) -> int
     run_backend_parity_tests(ctx, physics_backend_type::box3d);
     std::printf("backend parity: Bullet\n");
     run_backend_parity_tests(ctx, physics_backend_type::bullet);
-    test_bullet_sleepless_body_stays_awake(ctx);
-    test_bullet_world_stats(ctx);
-
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_bullet_sleepless_body_stays_awake(ctx));
+    RUN_CASE(test_bullet_world_stats(ctx));
 }
 
 REGISTER_TEST_SUITE("box3d backend smoke", run_box3d_suite)

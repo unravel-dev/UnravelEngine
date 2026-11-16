@@ -52,11 +52,10 @@
 #include <thread>
 #include <vector>
 
+using namespace unravel::test;
+
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
 
 constexpr const char* TEST_PROTOCOL = "unravel-tests-packs";
 constexpr std::size_t SMALL_FILE_SIZE = 100;
@@ -78,19 +77,9 @@ constexpr std::size_t PACK_TEST_FOOTER_TOC_HASH = 32;
 constexpr std::uint8_t PACK_TEST_FOREIGN_CODEC = 99;
 constexpr std::uint8_t PACK_TEST_OTHER_VERSION = 9;
 
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
 auto get_temp_folder() -> fs::path
 {
-    return fs::temp_directory_path() / "unravel-tests-asset-packs";
+    return temp_path("unravel-tests-asset-packs");
 }
 
 auto get_protocol_root() -> fs::path
@@ -781,37 +770,33 @@ void test_memory_files()
     check(fs::parse_host_memory_files("").empty(), "an empty list names no file");
 }
 
-auto run_asset_packs_suite(rtti::context&) -> int
+void run_asset_packs_suite(rtti::context&)
 {
-    g_checks = 0;
-    g_failures = 0;
     fs::error_code ec;
     fs::remove_all(get_temp_folder(), ec);
     fs::create_directories(get_protocol_root(), ec);
     fs::add_path_protocol(TEST_PROTOCOL, get_protocol_root());
-    test_compression_round_trip();
-    test_round_trip(true);
-    test_round_trip(false);
-    test_disk_fallback_and_later_mount();
-    test_damaged_packs_are_refused();
-    test_deterministic_output();
-    test_stream_seek_and_tell();
-    test_reuse_of_unchanged_entries();
-    test_patch_over_base();
-    test_mixed_and_exact_blocks();
-    test_lifetime_after_unmount();
-    test_parallel_reads_during_mounts();
-    test_parser_errors();
-    test_replace_with_self_reuse();
-    test_lookup_status_and_damaged_reuse();
-    test_patch_rules();
-    test_protocol_path_disk_fallback();
-    test_pack_layout();
-    test_memory_files();
+    RUN_CASE(test_compression_round_trip());
+    RUN_CASE(test_round_trip(true));
+    RUN_CASE(test_round_trip(false));
+    RUN_CASE(test_disk_fallback_and_later_mount());
+    RUN_CASE(test_damaged_packs_are_refused());
+    RUN_CASE(test_deterministic_output());
+    RUN_CASE(test_stream_seek_and_tell());
+    RUN_CASE(test_reuse_of_unchanged_entries());
+    RUN_CASE(test_patch_over_base());
+    RUN_CASE(test_mixed_and_exact_blocks());
+    RUN_CASE(test_lifetime_after_unmount());
+    RUN_CASE(test_parallel_reads_during_mounts());
+    RUN_CASE(test_parser_errors());
+    RUN_CASE(test_replace_with_self_reuse());
+    RUN_CASE(test_lookup_status_and_damaged_reuse());
+    RUN_CASE(test_patch_rules());
+    RUN_CASE(test_protocol_path_disk_fallback());
+    RUN_CASE(test_pack_layout());
+    RUN_CASE(test_memory_files());
     fs::unmount_packs();
     fs::remove_all(get_temp_folder(), ec);
-    std::printf("asset packs: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 } // namespace

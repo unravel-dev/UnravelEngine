@@ -36,33 +36,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
-void check_eq(size_t actual, size_t expected, const std::string& what)
-{
-    ++g_checks;
-    if(actual != expected)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %zu, expected %zu)\n", what.c_str(), actual, expected);
-    }
-}
 
 /// Publishes a scene's document as a scene asset, so handles to it resolve.
 auto make_scene_asset(const scene& source, const std::string& id) -> asset_handle<scene_prefab>
@@ -415,22 +394,20 @@ void test_endless_spawning_teardown_ends()
 
 } // namespace
 
-auto run_scene_groups_suite(rtti::context& /*ctx*/) -> int
+void run_scene_groups_suite(rtti::context& /*ctx*/)
 {
-    test_new_roots_join_the_main_group();
-    test_additive_load_tags_its_roots();
-    test_additive_load_gives_fresh_ids();
-    test_unload_group_removes_only_that_group();
-    test_detached_child_keeps_its_group();
-    test_make_persistent_needs_a_root();
-    test_persistent_roots_survive_load_and_reload();
-    test_load_without_persistent_roots_is_a_bulk_unload();
-    test_main_scene_skylight_wins();
-    test_teardown_takes_what_it_spawns();
-    test_switch_takes_entities_outside_any_hierarchy();
-    test_endless_spawning_teardown_ends();
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_new_roots_join_the_main_group());
+    RUN_CASE(test_additive_load_tags_its_roots());
+    RUN_CASE(test_additive_load_gives_fresh_ids());
+    RUN_CASE(test_unload_group_removes_only_that_group());
+    RUN_CASE(test_detached_child_keeps_its_group());
+    RUN_CASE(test_make_persistent_needs_a_root());
+    RUN_CASE(test_persistent_roots_survive_load_and_reload());
+    RUN_CASE(test_load_without_persistent_roots_is_a_bulk_unload());
+    RUN_CASE(test_main_scene_skylight_wins());
+    RUN_CASE(test_teardown_takes_what_it_spawns());
+    RUN_CASE(test_switch_takes_entities_outside_any_hierarchy());
+    RUN_CASE(test_endless_spawning_teardown_ends());
 }
 
 REGISTER_TEST_SUITE("scene groups", run_scene_groups_suite)

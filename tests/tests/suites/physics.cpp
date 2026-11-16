@@ -39,33 +39,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
-void check_eq(size_t actual, size_t expected, const std::string& what)
-{
-    ++g_checks;
-    if(actual != expected)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %zu, expected %zu)\n", what.c_str(), actual, expected);
-    }
-}
 
 // ---------------------------------------------------------------------------------
 // contact_graph fixture
@@ -1321,41 +1300,38 @@ void test_destroy_without_subscribers()
 
 // ---------------------------------------------------------------------------------
 
-auto run_physics_suite(rtti::context& /*ctx*/) -> int
+void run_physics_suite(rtti::context& /*ctx*/)
 {
-    test_graph_insert_and_erase();
-    test_graph_list_integrity();
-    test_graph_body_on_both_sides();
-    test_graph_flush_counters();
-    test_graph_erase_during_visit();
-    test_graph_generation_guard();
-    test_graph_live_list();
-    test_graph_step_stamp();
-    test_graph_clear_and_unresolvable();
+    RUN_CASE(test_graph_insert_and_erase());
+    RUN_CASE(test_graph_list_integrity());
+    RUN_CASE(test_graph_body_on_both_sides());
+    RUN_CASE(test_graph_flush_counters());
+    RUN_CASE(test_graph_erase_during_visit());
+    RUN_CASE(test_graph_generation_guard());
+    RUN_CASE(test_graph_live_list());
+    RUN_CASE(test_graph_step_stamp());
+    RUN_CASE(test_graph_clear_and_unresolvable());
 
-    test_entt_destroys_in_reverse_pool_order();
-    test_entt_entity_signal_fires_last();
-    test_entt_emplace_from_destroy_hook_leaks();
+    RUN_CASE(test_entt_destroys_in_reverse_pool_order());
+    RUN_CASE(test_entt_entity_signal_fires_last());
+    RUN_CASE(test_entt_emplace_from_destroy_hook_leaks());
 
-    test_contact_event_flag_defaults();
-    test_contact_event_flag_roundtrip();
-    test_contact_end_reason_mirror();
+    RUN_CASE(test_contact_event_flag_defaults());
+    RUN_CASE(test_contact_event_flag_roundtrip());
+    RUN_CASE(test_contact_end_reason_mirror());
 
-    test_script_component_is_torn_down_last();
-    test_destroy_announces_before_teardown();
-    test_destroy_announces_whole_subtree_first();
-    test_destroy_suppression();
-    test_destroy_suppressed_during_teardown();
-    test_destroy_reentrant();
-    test_destroy_self_from_slot();
-    test_destroy_respects_reparent_from_slot();
-    test_destroy_takes_children_added_during_announce();
-    test_destroy_cascade_consumes_all_children();
-    test_raw_destroy_still_takes_the_subtree();
-    test_destroy_without_subscribers();
-
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_script_component_is_torn_down_last());
+    RUN_CASE(test_destroy_announces_before_teardown());
+    RUN_CASE(test_destroy_announces_whole_subtree_first());
+    RUN_CASE(test_destroy_suppression());
+    RUN_CASE(test_destroy_suppressed_during_teardown());
+    RUN_CASE(test_destroy_reentrant());
+    RUN_CASE(test_destroy_self_from_slot());
+    RUN_CASE(test_destroy_respects_reparent_from_slot());
+    RUN_CASE(test_destroy_takes_children_added_during_announce());
+    RUN_CASE(test_destroy_cascade_consumes_all_children());
+    RUN_CASE(test_raw_destroy_still_takes_the_subtree());
+    RUN_CASE(test_destroy_without_subscribers());
 }
 
 REGISTER_TEST_SUITE("physics contacts / destroy funnel", run_physics_suite)

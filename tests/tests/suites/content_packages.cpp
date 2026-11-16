@@ -50,13 +50,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 namespace
 {
 using namespace unravel;
 using namespace unravel::packages;
-
-int g_checks = 0;
-int g_failures = 0;
 
 constexpr const char* PACKAGES_TEST_NAME = "com.tests.kit";
 constexpr const char* PACKAGES_SCRIPT_TYPE = "Kit.ButtonScript";
@@ -64,19 +63,9 @@ constexpr const char* PACKAGES_ENGINE_CUBE_KEY = "engine:/data/meshes/cube.emesh
 /// A layout no build reads.
 constexpr int PACKAGES_FUTURE_DOCUMENT_VERSION = 99;
 
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
 auto get_temp_folder() -> fs::path
 {
-    return fs::temp_directory_path() / "unravel-tests-content-packages";
+    return temp_path("unravel-tests-content-packages");
 }
 
 void write_text(const fs::path& file, const std::string& text)
@@ -811,10 +800,8 @@ void test_removal(const fs::path& target, test_trash& trash)
     check(!is_on_disk(get_registry_path(target)), "the record is gone with the last package");
 }
 
-auto run_content_packages_suite(rtti::context&) -> int
+void run_content_packages_suite(rtti::context&)
 {
-    g_checks = 0;
-    g_failures = 0;
     const auto folder = get_temp_folder();
     fs::error_code ec;
     fs::remove_all(folder, ec);
@@ -826,25 +813,23 @@ auto run_content_packages_suite(rtti::context&) -> int
     fs::create_directories(target_project / "data", ec);
     test_trash trash;
     trash.root = folder / "trash";
-    test_versions();
-    test_paths();
-    test_export(source_project, folder, ids);
-    test_script_lookup(source_project);
-    test_first_import(folder / "kit-1.0.0.unravelpkg", target_project, trash, ids);
-    test_update(source_project, folder, target_project, trash, ids);
-    test_clashes(folder / "kit-1.0.0.unravelpkg", folder, trash, ids);
-    test_compatibility(source_project, folder, ids);
-    test_damage(folder / "kit-1.0.0.unravelpkg", folder, trash);
-    test_failed_trash(source_project, folder, trash, ids);
-    test_script_clash_actions(folder / "kit-1.0.0.unravelpkg", folder, trash, ids);
-    test_no_free_name(folder / "kit-1.0.0.unravelpkg", folder);
-    test_same_plan(folder / "kit-1.0.0.unravelpkg", folder);
-    test_registry_error(folder / "kit-1.0.0.unravelpkg", folder, trash);
-    test_unsafe_manifest(folder);
-    test_removal(target_project, trash);
-    std::printf("  content packages: %d checks, %d failures\n", g_checks, g_failures);
+    RUN_CASE(test_versions());
+    RUN_CASE(test_paths());
+    RUN_CASE(test_export(source_project, folder, ids));
+    RUN_CASE(test_script_lookup(source_project));
+    RUN_CASE(test_first_import(folder / "kit-1.0.0.unravelpkg", target_project, trash, ids));
+    RUN_CASE(test_update(source_project, folder, target_project, trash, ids));
+    RUN_CASE(test_clashes(folder / "kit-1.0.0.unravelpkg", folder, trash, ids));
+    RUN_CASE(test_compatibility(source_project, folder, ids));
+    RUN_CASE(test_damage(folder / "kit-1.0.0.unravelpkg", folder, trash));
+    RUN_CASE(test_failed_trash(source_project, folder, trash, ids));
+    RUN_CASE(test_script_clash_actions(folder / "kit-1.0.0.unravelpkg", folder, trash, ids));
+    RUN_CASE(test_no_free_name(folder / "kit-1.0.0.unravelpkg", folder));
+    RUN_CASE(test_same_plan(folder / "kit-1.0.0.unravelpkg", folder));
+    RUN_CASE(test_registry_error(folder / "kit-1.0.0.unravelpkg", folder, trash));
+    RUN_CASE(test_unsafe_manifest(folder));
+    RUN_CASE(test_removal(target_project, trash));
     fs::remove_all(folder, ec);
-    return g_failures;
 }
 
 } // namespace

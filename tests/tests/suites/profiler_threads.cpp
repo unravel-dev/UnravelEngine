@@ -21,23 +21,12 @@
 #include <thread>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// Names longer than a short-string buffer, so a torn copy shows as a wrong name or a crash.
 const std::string OUTER_SCOPE_NAME = "profiler threads test outer scope, an owned name";
@@ -45,6 +34,8 @@ const std::string INNER_SCOPE_NAME = "profiler threads test inner scope, an owne
 constexpr int INNER_SCOPES = 8;
 /// How long the writer records while the main thread keeps taking its events.
 constexpr std::chrono::milliseconds TAKE_DURATION{1500};
+/// The longest a step another thread takes right away may take before its wait fails.
+constexpr std::chrono::seconds STEP_WAIT_LIMIT{30};
 
 struct taken_events
 {
@@ -91,8 +82,17 @@ void test_taking_events_never_reads_a_buffer_being_written()
                 profile_end(outer);
             }
         });
+    const auto writer_deadline = std::chrono::steady_clock::now() + STEP_WAIT_LIMIT;
     while(writer_data.load() == nullptr)
     {
+        if(std::chrono::steady_clock::now() >= writer_deadline)
+        {
+            check(false, "the writer thread starts within 30 seconds");
+            stop.store(true);
+            writer.join();
+            profiler_process_capture_gate_store(0);
+            return;
+        }
         std::this_thread::yield();
     }
     auto& data = *writer_data.load();
@@ -147,10 +147,18 @@ void test_an_idle_thread_hands_over_at_the_take()
     check(taken.unfinished == 0 && taken.misnamed == 0, "they are finished and named");
 }
 
+/// Spins until `step` reaches `expected`, which another thread sets right away. A step that has not come after
+/// STEP_WAIT_LIMIT is a failed check, and the wait ends.
 void wait_for_step(const std::atomic<int>& step, int expected)
 {
+    const auto deadline = std::chrono::steady_clock::now() + STEP_WAIT_LIMIT;
     while(step.load() != expected)
     {
+        if(std::chrono::steady_clock::now() >= deadline)
+        {
+            check(false, "step " + std::to_string(expected) + " comes within 30 seconds");
+            return;
+        }
         std::this_thread::yield();
     }
 }
@@ -195,18 +203,14 @@ void test_a_full_ring_drops_new_events_until_taken()
     check(is_recorded_after_take && taken_after == 1, "once taken, the ring records again");
 }
 
-auto run_profiler_threads_suite(rtti::context& ctx) -> int
+void run_profiler_threads_suite(rtti::context& ctx)
 {
     (void)ctx;
-    g_checks = 0;
-    g_failures = 0;
-    test_taking_events_never_reads_a_buffer_being_written();
-    test_an_idle_thread_hands_over_at_the_take();
-    test_a_full_ring_drops_new_events_until_taken();
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_taking_events_never_reads_a_buffer_being_written());
+    RUN_CASE(test_an_idle_thread_hands_over_at_the_take());
+    RUN_CASE(test_a_full_ring_drops_new_events_until_taken());
 }
 
 } // namespace
 
-REGISTER_TEST_SUITE("profiler threads", run_profiler_threads_suite)
+REGISTER_TEST_SUITE("profiler threads", run_profiler_threads_suite, {.lane = ::unravel::suite_lane::exclusive})

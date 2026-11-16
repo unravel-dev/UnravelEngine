@@ -33,23 +33,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 constexpr float ROW_HEIGHT = 0.1f;
 constexpr float HALF_WIDTH = 0.1f;
@@ -359,19 +348,15 @@ void test_skinning_matrices_keep_nothing_of_another_palette()
           "a bone without a node is identity, not the matrix the thread's previous palette left");
 }
 
-auto run_mesh_skinning_suite(rtti::context& /*ctx*/) -> int
+void run_mesh_skinning_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_fitting_skin_keeps_its_submesh();
-    test_large_skin_splits_into_fitting_pieces();
-    test_split_keeps_per_submesh_arrays_in_step();
-    test_corner_past_the_vertices_is_refused();
-    test_weight_past_the_vertices_is_skipped();
-    test_weights_are_normalized();
-    test_skinning_matrices_keep_nothing_of_another_palette();
-    std::printf("  %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_fitting_skin_keeps_its_submesh());
+    RUN_CASE(test_large_skin_splits_into_fitting_pieces());
+    RUN_CASE(test_split_keeps_per_submesh_arrays_in_step());
+    RUN_CASE(test_corner_past_the_vertices_is_refused());
+    RUN_CASE(test_weight_past_the_vertices_is_skipped());
+    RUN_CASE(test_weights_are_normalized());
+    RUN_CASE(test_skinning_matrices_keep_nothing_of_another_palette());
 }
 
 } // namespace

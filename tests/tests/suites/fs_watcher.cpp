@@ -51,6 +51,8 @@
 #include <thread>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
@@ -81,19 +83,6 @@ constexpr int LATENCY_TRIALS = 16;
 constexpr int LATENCY_DIRS = 10;
 constexpr int LATENCY_FILES_PER_DIR = 30;
 constexpr int LATENCY_MAX_PHASE_MS = 700;
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 auto to_ms(clock_type::duration duration) -> double
 {
@@ -238,7 +227,7 @@ auto get_run_root() -> const fs::path&
     static const fs::path root = []
     {
         const char* configured = std::getenv("UNRAVEL_WATCH_TEST_DIR");
-        const fs::path base = configured ? fs::path(configured) : fs::temp_directory_path() / "unravel_fs_watcher_tests";
+        const fs::path base = configured ? fs::path(configured) : temp_path("unravel_fs_watcher_tests");
         const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::system_clock::now().time_since_epoch())
                                .count();
@@ -450,7 +439,7 @@ void test_rename_folder_with_children()
     check(rec.wait_for(mark, is_rename(from, to)), "a folder rename is reported as renamed");
     std::this_thread::sleep_for(QUIET_CHECK);
     const auto entries = rec.entries_since(mark);
-    const int failures_before = g_failures;
+    const int failures_before = failure_count();
     check(count_touching(entries, from) == 1, "the renamed folder has one entry");
     for(const auto& child : children)
     {
@@ -459,7 +448,7 @@ void test_rename_folder_with_children()
         check(count_touching(entries, to / child) == 1,
               "child " + child.generic_string() + " of a renamed folder has no other entry");
     }
-    if(g_failures != failures_before)
+    if(failure_count() != failures_before)
     {
         dump_entries(entries);
     }
@@ -987,37 +976,33 @@ void bench_latency()
     print_latency("both hops", both);
 }
 
-auto run_fs_watcher_suite(rtti::context& /*ctx*/) -> int
+void run_fs_watcher_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
     std::printf("scratch folder %s\n", get_run_root().string().c_str());
     if(!tests::wants("bench-only"))
     {
-        test_lifecycle();
-        test_rename_same_folder();
-        test_move_across_folders();
-        test_rename_folder_with_children();
-        test_copy_then_delete();
-        test_delete_then_move_in();
-        test_safe_save();
-        test_replace_with_older_copy();
-        test_copy_is_created();
-        test_pause_resume();
-        test_filters_on_shared_listener();
-        test_subfolder_watch_on_parent_listener();
-        test_recursive_after_non_recursive();
-        test_unwatch_inside_callback();
-        test_unwatch_waits_for_callback();
+        RUN_CASE(test_lifecycle());
+        RUN_CASE(test_rename_same_folder());
+        RUN_CASE(test_move_across_folders());
+        RUN_CASE(test_rename_folder_with_children());
+        RUN_CASE(test_copy_then_delete());
+        RUN_CASE(test_delete_then_move_in());
+        RUN_CASE(test_safe_save());
+        RUN_CASE(test_replace_with_older_copy());
+        RUN_CASE(test_copy_is_created());
+        RUN_CASE(test_pause_resume());
+        RUN_CASE(test_filters_on_shared_listener());
+        RUN_CASE(test_subfolder_watch_on_parent_listener());
+        RUN_CASE(test_recursive_after_non_recursive());
+        RUN_CASE(test_unwatch_inside_callback());
+        RUN_CASE(test_unwatch_waits_for_callback());
     }
     if(tests::wants("bench") || tests::wants("bench-only"))
     {
         bench_latency();
     }
-    std::printf("fs watcher: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 } // namespace
 
-REGISTER_TEST_SUITE("fs watcher", run_fs_watcher_suite)
+REGISTER_TEST_SUITE("fs watcher", run_fs_watcher_suite, {.lane = ::unravel::suite_lane::exclusive})

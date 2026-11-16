@@ -23,26 +23,15 @@
 #include <cstdio>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
 
-int g_checks = 0;
-int g_failures = 0;
-
 /// A work zone away from the screen origin, with an even size so its center is exact.
 const input::zone k_cursor_work_zone{100, 50, 400, 300};
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 auto make_window_event(os::window_event_id type) -> os::event
 {
@@ -149,16 +138,12 @@ void test_the_manager_reports_the_game_input()
     check(cursor.is_lock_active(), "and its release");
 }
 
-auto run_input_cursor_suite(rtti::context& /*ctx*/) -> int
+void run_input_cursor_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_lock_holds_while_the_game_has_input();
-    test_the_hold_puts_the_cursor_in_the_work_zone();
-    test_visibility_changes_are_reported_once();
-    test_the_manager_reports_the_game_input();
-    std::printf("input cursor: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_lock_holds_while_the_game_has_input());
+    RUN_CASE(test_the_hold_puts_the_cursor_in_the_work_zone());
+    RUN_CASE(test_visibility_changes_are_reported_once());
+    RUN_CASE(test_the_manager_reports_the_game_input());
 }
 
 } // namespace

@@ -23,28 +23,17 @@
 #include <cstdio>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
 
-int g_checks = 0;
-int g_failures = 0;
-
 constexpr uint64_t k_device = 7;
 /// The window in global pixels, and the work zone (a game view) inside it.
 const input::zone k_window_zone{100, 50, 400, 300};
 const input::zone k_work_zone{200, 100, 200, 150};
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 auto is_at(const input::coord& position, int x, int y) -> bool
 {
@@ -201,18 +190,14 @@ void test_unmapped_fingers_land_where_asked()
     manager.set_virtual_mouse_position({});
 }
 
-auto run_input_touch_suite(rtti::context& /*ctx*/) -> int
+void run_input_touch_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_a_finger_lives_frame_by_frame();
-    test_a_tap_within_one_frame_begins_first();
-    test_cancels_and_unknown_fingers();
-    test_ids_are_stable_and_lowest_free();
-    test_the_manager_maps_fingers_to_the_work_zone();
-    test_unmapped_fingers_land_where_asked();
-    std::printf("input touch: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_a_finger_lives_frame_by_frame());
+    RUN_CASE(test_a_tap_within_one_frame_begins_first());
+    RUN_CASE(test_cancels_and_unknown_fingers());
+    RUN_CASE(test_ids_are_stable_and_lowest_free());
+    RUN_CASE(test_the_manager_maps_fingers_to_the_work_zone());
+    RUN_CASE(test_unmapped_fingers_land_where_asked());
 }
 
 } // namespace

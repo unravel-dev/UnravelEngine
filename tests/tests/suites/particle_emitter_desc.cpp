@@ -28,23 +28,12 @@
 #include <utility>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 auto has_texture_sheet(const math::vec2& tiles, float cycles, bool randomize) -> bool
 {
@@ -281,30 +270,26 @@ void test_curve_features()
           "a key off 1 makes a speed curve");
 }
 
-auto run_particle_emitter_desc_suite(rtti::context& /*ctx*/) -> int
+void run_particle_emitter_desc_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_texture_sheet_feature();
-    test_curve_features();
-    test_two_key_size_is_linear();
-    test_every_size_key_counts();
-    test_burst_size_scales_the_curve();
+    RUN_CASE(test_texture_sheet_feature());
+    RUN_CASE(test_curve_features());
+    RUN_CASE(test_two_key_size_is_linear());
+    RUN_CASE(test_every_size_key_counts());
+    RUN_CASE(test_burst_size_scales_the_curve());
     bgfx::Init init;
     init.type = bgfx::RendererType::Noop;
     if(!gfx::init(init))
     {
-        std::printf("  FAIL: bgfx did not initialise on the Noop renderer\n");
+        check(false, "bgfx initialises on the Noop renderer");
         gfx::shutdown();
-        return 1;
+        return;
     }
     ps_soa::init(16);
-    test_prewarm();
-    test_auto_play();
+    RUN_CASE(test_prewarm());
+    RUN_CASE(test_auto_play());
     ps_soa::shutdown();
     gfx::shutdown();
-    std::printf("particle emitter desc: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 } // namespace

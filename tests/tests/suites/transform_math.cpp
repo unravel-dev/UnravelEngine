@@ -34,49 +34,34 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
 
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
-void check_near(float actual, float expected, float tolerance, const std::string& what)
-{
-    ++g_checks;
-    if(!(std::fabs(actual - expected) <= tolerance))
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %.6f, expected %.6f +/- %.6f)\n", what.c_str(), actual, expected, tolerance);
-    }
-}
+// The harness's scalar check_near beside this file's vector one.
+using unravel::test::check_near;
 
 void check_near(const math::vec3& actual, const math::vec3& expected, float tolerance, const std::string& what)
 {
-    ++g_checks;
-    if(!(math::length(actual - expected) <= tolerance))
+    if(math::length(actual - expected) <= tolerance)
     {
-        ++g_failures;
-        std::printf("  FAIL: %s (got (%.6f, %.6f, %.6f), expected (%.6f, %.6f, %.6f))\n",
-                    what.c_str(),
-                    actual.x,
-                    actual.y,
-                    actual.z,
-                    expected.x,
-                    expected.y,
-                    expected.z);
+        check(true, what);
+        return;
     }
+    char values[200];
+    std::snprintf(values,
+                  sizeof(values),
+                  " (got (%.6f, %.6f, %.6f), expected (%.6f, %.6f, %.6f))",
+                  actual.x,
+                  actual.y,
+                  actual.z,
+                  expected.x,
+                  expected.y,
+                  expected.z);
+    check(false, what + values);
 }
 
 void check_finite(const math::vec3& v, const std::string& what)
@@ -1377,30 +1362,30 @@ void test_frustum_far_from_origin()
 
 // ---------------------------------------------------------------------------------
 
-auto run_transform_math_suite(rtti::context& /*ctx*/) -> int
+void run_transform_math_suite(rtti::context& /*ctx*/)
 {
     const bool bench_only = tests::wants("bench-only");
     const bool bench = bench_only || tests::wants("bench");
 
     if(!bench_only)
     {
-        test_scale_fix_preserves_sign();
-        test_euler_hint_follows_incremental_rotation();
-        test_euler_hint_restore_after_decompose();
-        test_normals_under_negative_uniform_scale();
-        test_normal_branch_consistency();
-        test_rotate_axis_axis_handling();
-        test_perspective_divide_guard();
-        test_compare_honors_tolerance();
-        test_from_to_rotation();
-        test_from_to_rotation_matches_acos_reference();
-        test_look_rotation();
-        test_look_rotation_matches_lookat_reference();
-        test_recompose_matches_reference();
-        test_operator_multiply_matches_matrix_reference();
-        test_inverse_and_axis_fast_paths();
-        test_vec3_from_vec4_ignores_w();
-        test_frustum_far_from_origin();
+        RUN_CASE(test_scale_fix_preserves_sign());
+        RUN_CASE(test_euler_hint_follows_incremental_rotation());
+        RUN_CASE(test_euler_hint_restore_after_decompose());
+        RUN_CASE(test_normals_under_negative_uniform_scale());
+        RUN_CASE(test_normal_branch_consistency());
+        RUN_CASE(test_rotate_axis_axis_handling());
+        RUN_CASE(test_perspective_divide_guard());
+        RUN_CASE(test_compare_honors_tolerance());
+        RUN_CASE(test_from_to_rotation());
+        RUN_CASE(test_from_to_rotation_matches_acos_reference());
+        RUN_CASE(test_look_rotation());
+        RUN_CASE(test_look_rotation_matches_lookat_reference());
+        RUN_CASE(test_recompose_matches_reference());
+        RUN_CASE(test_operator_multiply_matches_matrix_reference());
+        RUN_CASE(test_inverse_and_axis_fast_paths());
+        RUN_CASE(test_vec3_from_vec4_ignores_w());
+        RUN_CASE(test_frustum_far_from_origin());
         run_property_tests();
     }
 
@@ -1408,9 +1393,6 @@ auto run_transform_math_suite(rtti::context& /*ctx*/) -> int
     {
         run_transform_benches();
     }
-
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 REGISTER_TEST_SUITE("transform math", run_transform_math_suite)

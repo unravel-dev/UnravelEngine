@@ -29,13 +29,12 @@
 #include <unordered_set>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
 
 constexpr std::uint32_t SPIRV_MAGIC = 0x07230203u;
 constexpr std::size_t SPIRV_HEADER_WORDS = 5;
@@ -69,16 +68,6 @@ constexpr std::array<std::uint32_t, IGN_TILE_SIZE * IGN_TILE_SIZE> IGN_TABLE = {
      84, 226, 113, 254, 141,  28, 169,  56, 198,  84, 226, 113, 255, 141,  32, 174,
     163,  50, 191,  78, 220, 106, 248, 135,  22, 163,  50, 192,  78, 220, 111, 253,
 };
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// The ids a SPIR-V module declares that a constant-filled table is made of.
 struct table_ids
@@ -250,7 +239,7 @@ void test_shipped_shaders_fill_no_tables()
 {
     std::printf("test_shipped_shaders_fill_no_tables\n");
 #if !defined(ENGINE_DATA_DIR)
-    std::printf("  SKIP: the engine_data location is not configured\n");
+    skipped("The engine_data location is not configured, so the shipped shaders are not read.");
 #else
     const fs::path data_dir = ENGINE_DATA_DIR;
     const fs::path source_dir = data_dir / "data" / "shaders";
@@ -327,15 +316,11 @@ void test_ign_matches_its_table()
           "its high product from 16-bit halves is the high word of the 64-bit product");
 }
 
-auto run_shader_constant_tables_suite(rtti::context& /*ctx*/) -> int
+void run_shader_constant_tables_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_the_scan_finds_constant_filled_tables();
-    test_shipped_shaders_fill_no_tables();
-    test_ign_matches_its_table();
-    std::printf("\nshader constant tables: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_the_scan_finds_constant_filled_tables());
+    RUN_CASE(test_shipped_shaders_fill_no_tables());
+    RUN_CASE(test_ign_matches_its_table());
 }
 
 } // namespace

@@ -29,13 +29,12 @@
 #include <cstdio>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
 
 constexpr uint64_t k_device = 7;
 /// The window in global pixels, and the work zone (a game view) inside it.
@@ -50,16 +49,6 @@ constexpr auto k_left_x = input::gamepad_axis::left_x;
 constexpr auto k_south = input::gamepad_button::south;
 constexpr auto k_east = input::gamepad_button::east;
 constexpr auto k_left_button = static_cast<uint32_t>(input::mouse_button::left_button);
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 auto is_at(const input::coord& position, int x, int y) -> bool
 {
@@ -380,22 +369,18 @@ void test_releasing_all_input_frees_the_controls()
     manager.set_virtual_mouse_position({});
 }
 
-auto run_input_virtual_controls_suite(rtti::context& /*ctx*/) -> int
+void run_input_virtual_controls_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_the_virtual_gamepad_applies_at_the_frame_boundary();
-    test_a_press_let_go_within_a_frame_still_reads();
-    test_release_all_lets_go_at_once();
-    test_the_action_map_reads_the_virtual_gamepad();
-    test_overlapping_zones_take_the_newest_free_one();
-    test_a_zone_takes_a_finger_from_the_game();
-    test_a_zone_takes_a_left_mouse_press();
-    test_fingers_never_move_the_mouse();
-    test_fingers_press_the_mouse_only_while_simulated();
-    test_releasing_all_input_frees_the_controls();
-    std::printf("input virtual controls: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_the_virtual_gamepad_applies_at_the_frame_boundary());
+    RUN_CASE(test_a_press_let_go_within_a_frame_still_reads());
+    RUN_CASE(test_release_all_lets_go_at_once());
+    RUN_CASE(test_the_action_map_reads_the_virtual_gamepad());
+    RUN_CASE(test_overlapping_zones_take_the_newest_free_one());
+    RUN_CASE(test_a_zone_takes_a_finger_from_the_game());
+    RUN_CASE(test_a_zone_takes_a_left_mouse_press());
+    RUN_CASE(test_fingers_never_move_the_mouse());
+    RUN_CASE(test_fingers_press_the_mouse_only_while_simulated());
+    RUN_CASE(test_releasing_all_input_frees_the_controls());
 }
 
 } // namespace

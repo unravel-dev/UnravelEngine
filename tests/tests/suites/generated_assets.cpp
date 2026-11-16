@@ -43,6 +43,8 @@
 #include <iterator>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
@@ -57,19 +59,6 @@ constexpr const char* k_pixel_image = "data:image/png;base64,"
 constexpr const char* k_material_name = "Brass";
 /// The name the default material of slot 0 had before it was named after its model.
 constexpr const char* k_former_material_file = "[0] Brass.mat";
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 auto get_run_root() -> fs::path
 {
@@ -448,22 +437,18 @@ void test_embedded_texture_binding(asset_manager& am, const fs::path& run_root)
     check(read_text(material) == material_text, "a reimport binds the texture as the first import did");
 }
 
-auto run_generated_assets_suite(rtti::context& ctx) -> int
+void run_generated_assets_suite(rtti::context& ctx)
 {
-    g_checks = 0;
-    g_failures = 0;
     auto& am = ctx.get_cached<asset_manager>();
     const fs::path run_root = get_run_root();
     std::printf("scratch folder %s\n", run_root.string().c_str());
-    test_write_cycle(am, run_root);
-    test_files_without_record(am, run_root);
-    test_adopt_former_file(am, run_root);
-    test_models_in_one_folder(am, run_root);
-    test_embedded_texture_binding(am, run_root);
-    test_older_engine_material(am, run_root);
-    test_former_texture_outputs(am, run_root);
-    std::printf("generated assets: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_write_cycle(am, run_root));
+    RUN_CASE(test_files_without_record(am, run_root));
+    RUN_CASE(test_adopt_former_file(am, run_root));
+    RUN_CASE(test_models_in_one_folder(am, run_root));
+    RUN_CASE(test_embedded_texture_binding(am, run_root));
+    RUN_CASE(test_older_engine_material(am, run_root));
+    RUN_CASE(test_former_texture_outputs(am, run_root));
 }
 
 } // namespace

@@ -36,33 +36,27 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 namespace unravel::gi_tests
 {
 
 namespace
 {
 
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
+/// The longest one shaderc run may take before it counts as hung.
+constexpr auto SHADER_COMPILE_TIMEOUT = std::chrono::seconds(300);
 
 void check_near(double actual, double expected, double tolerance, const std::string& what)
 {
-    ++g_checks;
-    if(!(std::fabs(actual - expected) <= tolerance))
+    if(std::abs(actual - expected) <= tolerance)
     {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %.5f, expected %.5f +/- %.5f)\n", what.c_str(), actual, expected, tolerance);
+        check(true, what);
+        return;
     }
+    char values[160];
+    std::snprintf(values, sizeof(values), " (got %.5f, expected %.5f +/- %.5f)", actual, expected, tolerance);
+    check(false, what + values);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -174,26 +168,24 @@ void test_gi_pass_constants_match_cpp()
 }
 
 /// Compiles every GI shader with shaderc for the SM 5.0 floor - the binding platform
-/// constraint, tested first per the plan. An editor-side compile failure silently keeps the
+/// constraint - and for GLSL 440 and SPIR-V. An editor-side compile failure silently keeps the
 /// previous shader binary, so it presents as wrong RENDERING (black GI, dead debug views)
-/// rather than as an error anywhere; this is the harness's job to catch pre-ship. Skips with a
-/// note when shaderc is not built alongside the tests.
+/// rather than as an error anywhere; this is the harness's job to catch pre-ship. Skips when
+/// shaderc is not built alongside the tests.
 void test_gi_shaders_compile_sm50()
 {
     std::printf("test_gi_shaders_compile_sm50\n");
 #if !defined(GI_TESTS_SHADERC) || !defined(GI_TESTS_SHADER_DIR)
-    std::printf("  SKIP: shaderc location not configured\n");
+    skipped("The build does not configure the shaderc location, so the GI shaders do not compile here.");
 #else
-    namespace fs = std::filesystem;
-    const fs::path shaderc = GI_TESTS_SHADERC;
-    if(!fs::exists(shaderc))
+    if(!use_tool("shaderc"))
     {
-        std::printf("  SKIP: %s not built (build the editor first)\n", shaderc.string().c_str());
         return;
     }
+    const fs::path shaderc = GI_TESTS_SHADERC;
     const fs::path include_dir = GI_TESTS_SHADER_DIR;
     namespace ac = unravel::asset_compiler;
-    const fs::path out_dir = fs::temp_directory_path() / "gi_shader_compile_test";
+    const fs::path out_dir = temp_path("gi_shader_compile_test");
     fs::create_directories(out_dir);
     size_t compiled = 0;
     std::vector<fs::directory_entry> entries;
@@ -205,6 +197,32 @@ void test_gi_shaders_compile_sm50()
             entries.insert(entries.end(), fs::directory_iterator(shader_dir), fs::directory_iterator());
         }
     }
+    // The D3D floor AND the OpenGL profile: the backends disagree on real things -
+    // GLSL reserves `packed`, rejects expressions in local_size, lacks scalar
+    // equal()/notEqual() and legacy *Lod entry points - and every one of those shipped
+    // as a D3D-only-tested regression before this second profile existed.
+    // And SPIR-V: bgfx compiles it through the HLSL front-end, but not with fxc's
+    // overload strictness - a 3D image atomic that fxc rejected outright was silently
+    // matched to the 2D template and emitted a mistyped OpStore that only the Vulkan
+    // runtime compile reported.
+    struct profile_case
+    {
+        const char* platform;
+        const char* profile;
+        const char* label;
+    };
+    const profile_case profiles[] = {
+        {"windows", "s_5_0", "SM 5.0"},
+        {"linux", "440", "GLSL 440"},
+        {"windows", "spirv", "SPIR-V"},
+    };
+    struct compile_job
+    {
+        std::string variant_name;
+        const char* label{};
+        std::vector<std::string> arguments;
+    };
+    std::vector<compile_job> jobs;
     for(const auto& entry : entries)
     {
         const auto name = entry.path().filename().string();
@@ -232,25 +250,6 @@ void test_gi_shaders_compile_sm50()
         const fs::path varying = out_dir / (name + ".varying");
         std::ofstream(source, std::ios::binary) << ac::make_eshader_source_text(file, entry.path());
         std::ofstream(varying, std::ios::binary) << ac::make_eshader_varying_text(file);
-        // The D3D floor AND the OpenGL profile: the backends disagree on real things -
-        // GLSL reserves `packed`, rejects expressions in local_size, lacks scalar
-        // equal()/notEqual() and legacy *Lod entry points - and every one of those shipped
-        // as a D3D-only-tested regression before this second profile existed.
-        struct profile_case
-        {
-            const char* platform;
-            const char* profile;
-            const char* label;
-        };
-        // And SPIR-V: bgfx compiles it through the HLSL front-end, but not with fxc's
-        // overload strictness - a 3D image atomic that fxc rejected outright was silently
-        // matched to the 2D template and emitted a mistyped OpStore that only the Vulkan
-        // runtime compile reported.
-        const profile_case profiles[] = {
-            {"windows", "s_5_0", "SM 5.0"},
-            {"linux", "440", "GLSL 440"},
-            {"windows", "spirv", "SPIR-V"},
-        };
         for(const auto& variant : file.variants)
         {
             std::string defines = "BGFX_CONFIG_MAX_BONES=64";
@@ -262,33 +261,54 @@ void test_gi_shaders_compile_sm50()
             for(const auto& profile : profiles)
             {
                 const fs::path out_bin = out_dir / (variant_name + "." + profile.profile + ".bin");
-                const fs::path out_log = out_dir / (variant_name + "." + profile.profile + ".log");
-                std::string command = "\"\"" + shaderc.string() + "\" -f \"" + source.string() +
-                                      "\" -o \"" + out_bin.string() + "\" -i \"" + entry.path().parent_path().string() + ";" + include_dir.string() +
-                                      "\" --varyingdef \"" + varying.string() +
-                                      "\" --type " + (compute ? "compute" : (vertex ? "vertex" : "fragment")) +
-                                      " --define \"" + defines + "\" --platform " + profile.platform +
-                                      " -p " + profile.profile + " > \"" + out_log.string() + "\" 2>&1\"";
-                const int exit_code = std::system(command.c_str());
-                std::string log;
-                {
-                    std::ifstream log_file(out_log);
-                    std::stringstream buffer;
-                    buffer << log_file.rdbuf();
-                    log = buffer.str();
-                }
-                // shaderc is quiet on success; any output or a non-zero exit is a failure worth
-                // the full log, because the editor would have swallowed it.
-                const bool ok = exit_code == 0 && log.find("Error") == std::string::npos &&
-                                log.find("error") == std::string::npos;
-                if(!ok)
-                {
-                    std::printf("--- %s (%s) ---\n%.2000s\n", variant_name.c_str(), profile.label, log.c_str());
-                }
-                check(ok, variant_name + " compiles for " + profile.label);
+                jobs.push_back({variant_name,
+                                profile.label,
+                                {shaderc.string(),
+                                 "-f",
+                                 source.string(),
+                                 "-o",
+                                 out_bin.string(),
+                                 "-i",
+                                 entry.path().parent_path().string() + ";" + include_dir.string(),
+                                 "--varyingdef",
+                                 varying.string(),
+                                 "--type",
+                                 compute ? "compute" : (vertex ? "vertex" : "fragment"),
+                                 "--define",
+                                 defines,
+                                 "--platform",
+                                 profile.platform,
+                                 "-p",
+                                 profile.profile}});
             }
             ++compiled;
         }
+    }
+    std::vector<double> seconds;
+    const auto results = run_parallel_map<tool_result>(
+        jobs.size(),
+        [&](size_t index)
+        {
+            return run_tool(jobs[index].arguments, SHADER_COMPILE_TIMEOUT);
+        },
+        &seconds);
+    print_slowest(seconds,
+                  [&](size_t index)
+                  {
+                      return jobs[index].variant_name + " for " + jobs[index].label;
+                  });
+    for(size_t index = 0; index < jobs.size(); ++index)
+    {
+        const auto& result = results[index];
+        // shaderc is quiet on success; any output or a non-zero exit is a failure worth
+        // the full log, because the editor would have swallowed it.
+        const bool ok = result.started && !result.timed_out && result.exit_code == 0 &&
+                        result.output.find("Error") == std::string::npos && result.output.find("error") == std::string::npos;
+        if(!ok)
+        {
+            std::printf("--- %s (%s) ---\n%.2000s\n", jobs[index].variant_name.c_str(), jobs[index].label, result.output.c_str());
+        }
+        check(ok, jobs[index].variant_name + " compiles for " + jobs[index].label);
     }
     std::printf("  %zu shaders compiled\n", compiled);
     check(compiled > 0, "the shader directory was found and scanned");
@@ -536,20 +556,18 @@ void test_reference_cornell_bleeds_colour()
 
 } // namespace
 
-auto run_gi_oracle_suite(rtti::context& /*ctx*/) -> int
+void run_gi_oracle_suite(rtti::context& /*ctx*/)
 {
-    test_shader_constants_match_cpp();
-    test_gi_pass_constants_match_cpp();
-    test_gi_shaders_compile_sm50();
-    test_reference_is_deterministic();
-    test_reference_furnace_conserves_energy();
-    test_reference_sealed_room_is_black();
-    test_reference_thin_wall_blocks_light();
-    test_reference_cornell_bleeds_colour();
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_shader_constants_match_cpp());
+    RUN_CASE(test_gi_pass_constants_match_cpp());
+    RUN_CASE(test_gi_shaders_compile_sm50());
+    RUN_CASE(test_reference_is_deterministic());
+    RUN_CASE(test_reference_furnace_conserves_energy());
+    RUN_CASE(test_reference_sealed_room_is_black());
+    RUN_CASE(test_reference_thin_wall_blocks_light());
+    RUN_CASE(test_reference_cornell_bleeds_colour());
 }
 
-REGISTER_TEST_SUITE("gi constants / reference oracle", run_gi_oracle_suite)
+REGISTER_TEST_SUITE("gi constants / reference oracle", run_gi_oracle_suite, {.lane = ::unravel::suite_lane::tools})
 
 } // namespace unravel::gi_tests

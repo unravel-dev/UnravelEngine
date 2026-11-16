@@ -45,6 +45,8 @@
 #include <type_traits>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
@@ -485,19 +487,18 @@ void import_model(digest_writer& out, asset_manager& am, const fs::path& group_r
     write_file_changes(out, group_root, before);
 }
 
-auto run_mesh_import_digest(rtti::context& ctx) -> int
+void run_mesh_import_digest(rtti::context& ctx)
 {
     const std::string corpus_path = get_env("UNRAVEL_MESH_IMPORT_CORPUS");
     if(corpus_path.empty())
     {
-        std::printf("  skipped: set UNRAVEL_MESH_IMPORT_CORPUS to a corpus list to run\n");
-        return 0;
+        skip("Set UNRAVEL_MESH_IMPORT_CORPUS to a corpus list to run this suite.");
     }
     const auto entries = read_corpus(corpus_path);
     if(entries.empty())
     {
-        std::printf("  FAIL: corpus list '%s' has no entries\n", corpus_path.c_str());
-        return 1;
+        check(false, "the corpus list '" + corpus_path + "' has entries");
+        return;
     }
     const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::system_clock::now().time_since_epoch())
@@ -506,7 +507,6 @@ auto run_mesh_import_digest(rtti::context& ctx) -> int
     const fs::path run_root = fs::resolve_protocol("app:/mesh_import") / run_name;
     digest_writer out("app:/mesh_import/" + run_name + "/");
     auto& am = ctx.get_cached<asset_manager>();
-    int failures = 0;
     std::map<std::string, fs::path> group_roots;
     for(const auto& entry : entries)
     {
@@ -520,8 +520,7 @@ auto run_mesh_import_digest(rtti::context& ctx) -> int
             fs::copy(entry.copy_root, group_root, fs::copy_options::recursive | fs::copy_options::overwrite_existing, err);
             if(err)
             {
-                std::printf("  FAIL: copying '%s': %s\n", source_key.c_str(), err.message().c_str());
-                ++failures;
+                check(false, "copying '" + source_key + "' works: " + err.message());
                 continue;
             }
             group = group_roots.emplace(source_key, group_root).first;
@@ -544,7 +543,6 @@ auto run_mesh_import_digest(rtti::context& ctx) -> int
         fs::error_code err;
         fs::remove_all(run_root, err);
     }
-    return failures;
 }
 
 } // namespace

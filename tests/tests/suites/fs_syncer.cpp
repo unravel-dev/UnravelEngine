@@ -34,6 +34,8 @@
 #include <thread>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
@@ -42,23 +44,10 @@ namespace
 constexpr auto EVENT_TIMEOUT = std::chrono::seconds(5);
 constexpr auto POLL_STEP = std::chrono::milliseconds(20);
 
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
 auto get_run_root() -> fs::path
 {
     const char* configured = std::getenv("UNRAVEL_FS_SYNCER_TEST_DIR");
-    const fs::path base = configured ? fs::path(configured) : fs::temp_directory_path() / "unravel_fs_syncer_tests";
+    const fs::path base = configured ? fs::path(configured) : temp_path("unravel_fs_syncer_tests");
     const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::system_clock::now().time_since_epoch())
                            .count();
@@ -241,16 +230,12 @@ void test_same_batch_changes()
     fs::remove_all(root, err);
 }
 
-auto run_fs_syncer_suite(rtti::context& /*ctx*/) -> int
+void run_fs_syncer_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_dotted_names();
-    test_same_batch_changes();
-    std::printf("fs syncer: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_dotted_names());
+    RUN_CASE(test_same_batch_changes());
 }
 
 } // namespace
 
-REGISTER_TEST_SUITE("fs syncer", run_fs_syncer_suite)
+REGISTER_TEST_SUITE("fs syncer", run_fs_syncer_suite, {.lane = ::unravel::suite_lane::exclusive})

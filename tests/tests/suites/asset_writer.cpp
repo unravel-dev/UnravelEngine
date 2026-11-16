@@ -34,6 +34,8 @@
 #include <stdexcept>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
@@ -41,24 +43,11 @@ namespace
 
 constexpr auto stale_age = std::chrono::hours(2);
 
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
 auto get_run_root() -> fs::path
 {
     const char* configured = std::getenv("UNRAVEL_ASSET_WRITER_TEST_DIR");
     const fs::path base =
-        configured ? fs::path(configured) : fs::temp_directory_path() / "unravel_asset_writer_tests";
+        configured ? fs::path(configured) : temp_path("unravel_asset_writer_tests");
     const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::system_clock::now().time_since_epoch())
                            .count();
@@ -263,20 +252,16 @@ void test_stale_sweep(const fs::path& run_root)
     check(fs::exists(uuid_with_suffix, err), "the sweep keeps a uuid temp name with a further extension");
 }
 
-auto run_asset_writer_suite(rtti::context& /*ctx*/) -> int
+void run_asset_writer_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
     const fs::path run_root = get_run_root();
     std::printf("scratch folder %s\n", run_root.string().c_str());
-    test_successful_write(run_root);
-    test_throwing_callback(run_root);
-    test_empty_write(run_root);
-    test_missing_folder(run_root);
-    test_long_paths(run_root);
-    test_stale_sweep(run_root);
-    std::printf("asset writer: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_successful_write(run_root));
+    RUN_CASE(test_throwing_callback(run_root));
+    RUN_CASE(test_empty_write(run_root));
+    RUN_CASE(test_missing_folder(run_root));
+    RUN_CASE(test_long_paths(run_root));
+    RUN_CASE(test_stale_sweep(run_root));
 }
 
 } // namespace

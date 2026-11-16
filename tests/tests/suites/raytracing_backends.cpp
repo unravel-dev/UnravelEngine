@@ -31,21 +31,10 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// The backends this build has: always the native one, Embree when it is part of the build.
 auto get_backends() -> std::vector<raytracing::backend>
@@ -769,19 +758,15 @@ void measure_throughput(const char* name, const mesh& geometry, const std::vecto
           std::string(name) + ": every backend hits with the same rays");
 }
 
-auto run_raytracing_backends_suite(rtti::context& ctx) -> int
+void run_raytracing_backends_suite(rtti::context& ctx)
 {
     (void)ctx;
-    g_checks = 0;
-    g_failures = 0;
-    test_closest_hits_match_brute_force();
-    test_shared_edges_are_watertight();
-    test_skip_and_range();
-    test_batches_answer_as_single_rays();
-    test_region_queries_agree();
-    test_backend_throughput();
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_closest_hits_match_brute_force());
+    RUN_CASE(test_shared_edges_are_watertight());
+    RUN_CASE(test_skip_and_range());
+    RUN_CASE(test_batches_answer_as_single_rays());
+    RUN_CASE(test_region_queries_agree());
+    RUN_CASE(test_backend_throughput());
 }
 
 } // namespace

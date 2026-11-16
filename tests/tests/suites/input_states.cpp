@@ -31,13 +31,12 @@
 #include <cstdio>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
 
 constexpr uint32_t k_left_button = 0;
 /// A window of 640 x 360 points drawn in 1280 x 720 pixels, as at a device pixel ratio of 2.
@@ -46,16 +45,6 @@ const input::input_reference_size k_window_pixels{1280.0f, 720.0f};
 /// The OS ids of the game's window and of another one (an editor panel floating in a window of its own).
 constexpr uint32_t k_game_window_id = 1;
 constexpr uint32_t k_other_window_id = 2;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 auto read_key(const input::key_state_map& keys) -> input::key_state
 {
@@ -213,19 +202,15 @@ void test_press_in_another_window_is_not_placed()
     check(after_own.x == 200 && after_own.y == 100, "one in the game's window is placed where it happened");
 }
 
-auto run_input_states_suite(rtti::context& /*ctx*/) -> int
+void run_input_states_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_held_key();
-    test_key_tap_within_a_frame();
-    test_button_tap_within_a_frame();
-    test_positions_in_window_pixels();
-    test_press_reads_where_it_happened();
-    test_press_anywhere_in_a_window_of_more_pixels_than_points();
-    test_press_in_another_window_is_not_placed();
-    std::printf("input states: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_held_key());
+    RUN_CASE(test_key_tap_within_a_frame());
+    RUN_CASE(test_button_tap_within_a_frame());
+    RUN_CASE(test_positions_in_window_pixels());
+    RUN_CASE(test_press_reads_where_it_happened());
+    RUN_CASE(test_press_anywhere_in_a_window_of_more_pixels_than_points());
+    RUN_CASE(test_press_in_another_window_is_not_placed());
 }
 
 } // namespace

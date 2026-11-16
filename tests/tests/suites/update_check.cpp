@@ -33,23 +33,12 @@
 #include <random>
 #include <string>
 
+using namespace unravel::test;
+
 namespace
 {
 
 using namespace unravel::update_check;
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// A time well after the epoch, so that every offset the cases use stays positive.
 constexpr std::int64_t NOW_SECONDS = 1'800'000'000;
@@ -303,8 +292,7 @@ void test_network_manifest()
     const auto response = https_get(MANIFEST_URL);
     if(!response.body && is_missing_file_answer(response.error))
     {
-        std::printf("  SKIP: the latest release has no latest.json yet (%s)\n", response.error.c_str());
-        return;
+        skip("The latest release has no latest.json yet (" + response.error + ").");
     }
     check(response.body && read_update_manifest(*response.body).has_value(),
           "the latest release's latest.json is fetched and read: " + response.error);
@@ -356,27 +344,23 @@ void test_network_stop()
               std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()) + " ms");
 }
 
-auto run_update_check_suite(rtti::context& /*ctx*/) -> int
+void run_update_check_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_manifest_read();
-    test_manifest_refused();
-    test_manifest_skipped_entries();
-    test_announce();
-    test_schedule();
-    test_record_outcome();
-    test_state();
-    test_addresses();
+    RUN_CASE(test_manifest_read());
+    RUN_CASE(test_manifest_refused());
+    RUN_CASE(test_manifest_skipped_entries());
+    RUN_CASE(test_announce());
+    RUN_CASE(test_schedule());
+    RUN_CASE(test_record_outcome());
+    RUN_CASE(test_state());
+    RUN_CASE(test_addresses());
     if(unravel::tests::wants("network"))
     {
-        test_network_manifest();
-        test_network_whole_body();
-        test_network_size_limit();
-        test_network_stop();
+        RUN_CASE(test_network_manifest());
+        RUN_CASE(test_network_whole_body());
+        RUN_CASE(test_network_size_limit());
+        RUN_CASE(test_network_stop());
     }
-    std::printf("update check: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 } // namespace

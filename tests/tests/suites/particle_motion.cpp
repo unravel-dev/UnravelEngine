@@ -38,23 +38,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 constexpr float k_frame_seconds = 1.0f / 60.0f;
 constexpr float k_position_tolerance = 2.0e-3f;
@@ -1586,55 +1575,51 @@ void test_burst_catch_up_keeps_newest()
     ps_soa::destroy_emitter(run.handle);
 }
 
-auto run_particle_motion_suite(rtti::context& /*ctx*/) -> int
+void run_particle_motion_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_closed_form_matches_integration();
-    test_gravity_is_physical();
-    test_legacy_motion_conversion_is_exact();
-    test_slot_allocator();
-    test_appearance_curves();
-    test_camera_stretch_stays_culled_conservatively();
-    test_trail_reach_holds_the_past_path();
-    test_shader_layout_matches_cpp();
-    test_ribbon_facing_reaches_the_static_row();
-    test_cutout_polygons();
+    RUN_CASE(test_closed_form_matches_integration());
+    RUN_CASE(test_gravity_is_physical());
+    RUN_CASE(test_legacy_motion_conversion_is_exact());
+    RUN_CASE(test_slot_allocator());
+    RUN_CASE(test_appearance_curves());
+    RUN_CASE(test_camera_stretch_stays_culled_conservatively());
+    RUN_CASE(test_trail_reach_holds_the_past_path());
+    RUN_CASE(test_shader_layout_matches_cpp());
+    RUN_CASE(test_ribbon_facing_reaches_the_static_row());
+    RUN_CASE(test_cutout_polygons());
     bgfx::Init init;
     init.type = bgfx::RendererType::Noop;
     if(!gfx::init(init))
     {
-        std::printf("  FAIL: bgfx did not initialise on the Noop renderer\n");
+        check(false, "bgfx initialises on the Noop renderer");
         gfx::shutdown();
-        return 1;
+        return;
     }
     ps_soa::init(64);
-    test_legacy_scene_loads_converted();
-    test_seeds();
-    test_duration();
-    test_sub_frame_ages();
-    test_bursts_and_distance();
-    test_shapes();
-    test_turbulence();
-    test_collision_and_events();
-    test_mesh_transforms();
-    test_mesh_size_axes_curve();
-    test_renamed_keys_load();
-    test_catch_up();
-    test_capacity();
-    test_bounds_hold_every_particle();
-    test_prewarm_spreads_ages();
-    test_early_deaths_free_capacity();
-    test_mesh_spin_rate();
-    test_earliest_plane_wins();
-    test_bounce_keeps_speed_curve();
-    test_scale_edge_cases();
-    test_rate_increase();
-    test_burst_catch_up_keeps_newest();
+    RUN_CASE(test_legacy_scene_loads_converted());
+    RUN_CASE(test_seeds());
+    RUN_CASE(test_duration());
+    RUN_CASE(test_sub_frame_ages());
+    RUN_CASE(test_bursts_and_distance());
+    RUN_CASE(test_shapes());
+    RUN_CASE(test_turbulence());
+    RUN_CASE(test_collision_and_events());
+    RUN_CASE(test_mesh_transforms());
+    RUN_CASE(test_mesh_size_axes_curve());
+    RUN_CASE(test_renamed_keys_load());
+    RUN_CASE(test_catch_up());
+    RUN_CASE(test_capacity());
+    RUN_CASE(test_bounds_hold_every_particle());
+    RUN_CASE(test_prewarm_spreads_ages());
+    RUN_CASE(test_early_deaths_free_capacity());
+    RUN_CASE(test_mesh_spin_rate());
+    RUN_CASE(test_earliest_plane_wins());
+    RUN_CASE(test_bounce_keeps_speed_curve());
+    RUN_CASE(test_scale_edge_cases());
+    RUN_CASE(test_rate_increase());
+    RUN_CASE(test_burst_catch_up_keeps_newest());
     ps_soa::shutdown();
     gfx::shutdown();
-    std::printf("particle motion: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 } // namespace

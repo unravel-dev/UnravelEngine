@@ -35,24 +35,14 @@
 #include <cstdio>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
 
-int g_checks = 0;
-int g_failures = 0;
 int g_texture_count = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// The revisions of one material, per aspect and per kind of value.
 struct revision_snapshot
@@ -325,20 +315,16 @@ void test_content_versions()
           "a change key is the edits plus the content");
 }
 
-auto run_render_change_suite(rtti::context& ctx) -> int
+void run_render_change_suite(rtti::context& ctx)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_revisions_sum();
-    test_every_property_has_traits();
-    test_edits_bump_their_aspects();
-    test_unchanged_values_bump_nothing();
-    test_graph_values();
-    test_graph_value_edits();
-    test_interest_masks();
-    test_content_versions();
-    std::printf("\nrender change: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_revisions_sum());
+    RUN_CASE(test_every_property_has_traits());
+    RUN_CASE(test_edits_bump_their_aspects());
+    RUN_CASE(test_unchanged_values_bump_nothing());
+    RUN_CASE(test_graph_values());
+    RUN_CASE(test_graph_value_edits());
+    RUN_CASE(test_interest_masks());
+    RUN_CASE(test_content_versions());
 }
 
 } // namespace

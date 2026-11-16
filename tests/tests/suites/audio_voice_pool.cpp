@@ -43,13 +43,12 @@
 #include <thread>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
 
 constexpr uint32_t test_sample_rate = 22050;
 constexpr uint8_t test_bits_per_sample = 16;
@@ -60,16 +59,6 @@ constexpr float short_clip_seconds = 0.05f;
 constexpr auto reap_timeout = std::chrono::seconds(3);
 constexpr auto reap_poll = std::chrono::milliseconds(10);
 constexpr float gain_tolerance = 1e-4f;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 auto is_near(float actual, float expected) -> bool
 {
@@ -380,13 +369,11 @@ void test_device_watch_paces_attempts()
     check(!watch.update(false, step).should_reconnect, "then it waits again");
 }
 
-auto run_audio_voice_pool_suite(rtti::context& ctx) -> int
+void run_audio_voice_pool_suite(rtti::context& ctx)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_rank_order();
-    test_distance_range();
-    test_device_watch_paces_attempts();
+    RUN_CASE(test_rank_order());
+    RUN_CASE(test_distance_range());
+    RUN_CASE(test_device_watch_paces_attempts());
     for(const auto backend : audio::get_available_backends())
     {
         std::printf("backend: %s\n", audio::get_backend_name(backend));
@@ -400,7 +387,7 @@ auto run_audio_voice_pool_suite(rtti::context& ctx) -> int
         }
         catch(const audio::exception& e)
         {
-            std::printf("  SKIP device checks: %s\n", e.what());
+            skipped(std::string("No audio device opened, so the device checks did not run: ") + e.what());
         }
         if(device)
         {
@@ -408,21 +395,19 @@ auto run_audio_voice_pool_suite(rtti::context& ctx) -> int
             // Sources must be gone before the device closes: every pool below is scoped inside this block.
             const auto clip = make_clip(long_clip_seconds);
             const auto short_clip = make_clip(short_clip_seconds);
-            test_cap_frees_lowest_rank(clip);
-            test_refused_one_shot_frees_nothing(clip);
-            test_clip_limit_frees_only_its_own(clip);
-            test_handles();
-            test_set_distance(clip);
-            test_update_frees_finished(short_clip);
-            test_component_voices(ctx, clip);
-            test_unheard_voices_end_while_nothing_mixes(*device, clip);
+            RUN_CASE(test_cap_frees_lowest_rank(clip));
+            RUN_CASE(test_refused_one_shot_frees_nothing(clip));
+            RUN_CASE(test_clip_limit_frees_only_its_own(clip));
+            RUN_CASE(test_handles());
+            RUN_CASE(test_set_distance(clip));
+            RUN_CASE(test_update_frees_finished(short_clip));
+            RUN_CASE(test_component_voices(ctx, clip));
+            RUN_CASE(test_unheard_voices_end_while_nothing_mixes(*device, clip));
             ctx.get_cached<audio_system>().get_voices().stop_all();
         }
     }
-    std::printf("audio voice pool: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 } // namespace
 
-REGISTER_TEST_SUITE("audio voice pool", run_audio_voice_pool_suite)
+REGISTER_TEST_SUITE("audio voice pool", run_audio_voice_pool_suite, {.lane = ::unravel::suite_lane::exclusive})

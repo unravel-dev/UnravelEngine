@@ -36,23 +36,12 @@
 #include <sstream>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_curve_checks = 0;
-int g_curve_failures = 0;
-
-void curve_check(bool condition, const std::string& what)
-{
-    ++g_curve_checks;
-    if(!condition)
-    {
-        ++g_curve_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// Tolerance of a sampled scalar. Loose enough for a lookup table to answer like a direct
 /// evaluation at the table's own resolution, tight enough to catch a wrong key or a wrong lerp.
@@ -60,7 +49,7 @@ constexpr float CURVE_SAMPLE_EPSILON = 1e-3f;
 
 void curve_check_near(float actual, float expected, const std::string& what)
 {
-    curve_check(std::fabs(actual - expected) <= CURVE_SAMPLE_EPSILON,
+    check(std::fabs(actual - expected) <= CURVE_SAMPLE_EPSILON,
                 what + " (expected " + std::to_string(expected) + ", got " + std::to_string(actual) + ")");
 }
 
@@ -77,7 +66,7 @@ auto make_ramp() -> math::gradient<float>
 void test_empty_curve_samples_zero()
 {
     const math::gradient<float> curve;
-    curve_check(!curve.is_valid(), "an empty curve is not valid");
+    check(!curve.is_valid(), "an empty curve is not valid");
     curve_check_near(curve.sample(0.5f), 0.0f, "an empty curve samples zero");
 }
 
@@ -88,8 +77,8 @@ void test_keys_sort_on_insertion()
     curve.add_point(0.0f, 0.0f);
     curve.add_point(0.5f, 0.5f);
     const auto points = curve.get_points();
-    curve_check(points.size() == 3, "three keys inserted out of order are all kept");
-    curve_check(points[0].progress <= points[1].progress && points[1].progress <= points[2].progress,
+    check(points.size() == 3, "three keys inserted out of order are all kept");
+    check(points[0].progress <= points[1].progress && points[1].progress <= points[2].progress,
                 "keys are sorted by position whatever order they arrive in");
 }
 
@@ -236,9 +225,9 @@ void test_flat_tangents_level_off_at_the_peak()
     channel.refresh_automatic_tangents();
     // Level at the peak means the curve approaches it from below on both sides instead of
     // overshooting past it.
-    curve_check(curve.sample(0.45f) < 1.0f, "a flat peak is not overshot from the left");
-    curve_check(curve.sample(0.55f) < 1.0f, "a flat peak is not overshot from the right");
-    curve_check(curve.sample(0.25f) > 0.0f && curve.sample(0.25f) < 1.0f, "a flat curve still rises between keys");
+    check(curve.sample(0.45f) < 1.0f, "a flat peak is not overshot from the left");
+    check(curve.sample(0.55f) < 1.0f, "a flat peak is not overshot from the right");
+    check(curve.sample(0.25f) > 0.0f && curve.sample(0.25f) < 1.0f, "a flat curve still rises between keys");
 }
 
 void test_automatic_tangents_level_off_at_the_ends()
@@ -254,8 +243,8 @@ void test_automatic_tangents_level_off_at_the_ends()
     curve_check_near(keys.front().out_tangent, 0.0f, "a smooth curve leaves its first key level");
     curve_check_near(keys.back().in_tangent, 0.0f, "a smooth curve arrives at its last key level");
     curve_check_near(curve.sample(0.5f), 0.5f, "an eased curve still crosses the middle halfway");
-    curve_check(curve.sample(0.25f) < 0.25f, "an eased curve starts slower than a straight line");
-    curve_check(curve.sample(0.75f) > 0.75f, "an eased curve finishes faster than a straight line");
+    check(curve.sample(0.25f) < 0.25f, "an eased curve starts slower than a straight line");
+    check(curve.sample(0.75f) > 0.75f, "an eased curve finishes faster than a straight line");
 }
 
 void test_automatic_tangents_follow_the_neighbours()
@@ -283,8 +272,8 @@ void test_channels_can_be_keyed_independently()
     curve.get_channel(1).refresh_automatic_tangents();
     curve_check_near(curve.sample(0.5f).min, 0.5f, "an unlinked minimum keeps its own ramp");
     curve_check_near(curve.sample(0.5f).max, 100.0f, "an unlinked maximum takes its own key");
-    curve_check(curve.get_channel(0).get_key_count() == 2, "an unlinked channel keeps its own key count");
-    curve_check(curve.get_channel(1).get_key_count() == 3, "the keyed channel gained a key");
+    check(curve.get_channel(0).get_key_count() == 2, "an unlinked channel keeps its own key count");
+    check(curve.get_channel(1).get_key_count() == 3, "the keyed channel gained a key");
 }
 
 void test_linking_keeps_the_shape()
@@ -297,7 +286,7 @@ void test_linking_keeps_the_shape()
     const float min_before = curve.sample(0.25f).min;
     const float max_before = curve.sample(0.25f).max;
     curve.set_linked(true);
-    curve_check(curve.get_channel(0).get_key_count() == 3, "linking gives every channel the same key count");
+    check(curve.get_channel(0).get_key_count() == 3, "linking gives every channel the same key count");
     curve_check_near(curve.sample(0.25f).min, min_before, "linking does not move the minimum");
     curve_check_near(curve.sample(0.25f).max, max_before, "linking does not move the maximum");
 }
@@ -319,9 +308,9 @@ void test_editing_drops_the_bake()
 {
     auto curve = make_ramp();
     curve.bake(256);
-    curve_check(curve.is_baked(), "baking leaves a table behind");
+    check(curve.is_baked(), "baking leaves a table behind");
     curve.add_point(0.5f, 0.5f);
-    curve_check(!curve.is_baked(), "editing a curve drops its table rather than leaving it stale");
+    check(!curve.is_baked(), "editing a curve drops its table rather than leaving it stale");
     curve_check_near(curve.sample(0.5f), 0.5f, "a curve edited after baking samples its new key");
 }
 
@@ -360,9 +349,9 @@ void test_curve_round_trips_through_an_archive()
     written.get_channel(1).add_key(0.5f, 100.0f);
 
     const auto reloaded = load_curve<frange_t>(save_curve(written));
-    curve_check(reloaded.is_linked() == written.is_linked(), "a round trip keeps the linked flag");
-    curve_check(reloaded.get_channel(1).get_key_count() == 3, "a round trip keeps an unlinked channel's keys");
-    curve_check(reloaded.get_interpolation() == math::curve_interpolation::smooth,
+    check(reloaded.is_linked() == written.is_linked(), "a round trip keeps the linked flag");
+    check(reloaded.get_channel(1).get_key_count() == 3, "a round trip keeps an unlinked channel's keys");
+    check(reloaded.get_interpolation() == math::curve_interpolation::smooth,
                 "a round trip keeps the interpolation, which the gradient format never stored");
     for(int step = 0; step <= 10; ++step)
     {
@@ -385,9 +374,9 @@ void test_legacy_point_list_still_loads()
         R"({"progress":1.0,"element":{"r":0.0,"g":0.0,"b":1.0,"a":1.0}}]}})";
 
     const auto curve = load_curve<math::color>(legacy);
-    curve_check(curve.is_valid(), "a legacy point list loads into a curve");
-    curve_check(curve.get_points().size() == 2, "a legacy point list keeps both of its keys");
-    curve_check(curve.is_linked(), "a legacy point list loads as a linked curve");
+    check(curve.is_valid(), "a legacy point list loads into a curve");
+    check(curve.get_points().size() == 2, "a legacy point list keeps both of its keys");
+    check(curve.is_linked(), "a legacy point list loads as a linked curve");
 
     const math::color start = curve.sample(0.0f);
     const math::color middle = curve.sample(0.5f);
@@ -423,36 +412,33 @@ void test_legacy_load_matches_an_equivalent_curve()
 
 // ---------------------------------------------------------------------------------
 
-auto run_curve_suite(rtti::context& /*ctx*/) -> int
+void run_curve_suite(rtti::context& /*ctx*/)
 {
-    test_empty_curve_samples_zero();
-    test_keys_sort_on_insertion();
-    test_sample_on_a_key_returns_that_key();
-    test_ends_hold_outside_the_key_range();
-    test_linear_interpolation();
-    test_constant_interpolation_steps_from_the_left_key();
-    test_reverse_mirrors_positions();
-    test_color_channels_interpolate_independently();
-    test_range_channels_interpolate_independently();
-    test_baked_curve_matches_unbaked_when_linear();
-    test_baked_curve_keeps_constant_steps();
-    test_baked_curve_reaches_keys_outside_zero_to_one();
+    RUN_CASE(test_empty_curve_samples_zero());
+    RUN_CASE(test_keys_sort_on_insertion());
+    RUN_CASE(test_sample_on_a_key_returns_that_key());
+    RUN_CASE(test_ends_hold_outside_the_key_range());
+    RUN_CASE(test_linear_interpolation());
+    RUN_CASE(test_constant_interpolation_steps_from_the_left_key());
+    RUN_CASE(test_reverse_mirrors_positions());
+    RUN_CASE(test_color_channels_interpolate_independently());
+    RUN_CASE(test_range_channels_interpolate_independently());
+    RUN_CASE(test_baked_curve_matches_unbaked_when_linear());
+    RUN_CASE(test_baked_curve_keeps_constant_steps());
+    RUN_CASE(test_baked_curve_reaches_keys_outside_zero_to_one());
 
-    test_smooth_interpolation_passes_through_its_keys();
-    test_flat_tangents_level_off_at_the_peak();
-    test_automatic_tangents_level_off_at_the_ends();
-    test_automatic_tangents_follow_the_neighbours();
-    test_channels_can_be_keyed_independently();
-    test_linking_keeps_the_shape();
-    test_domain_is_not_limited_to_zero_to_one();
-    test_editing_drops_the_bake();
+    RUN_CASE(test_smooth_interpolation_passes_through_its_keys());
+    RUN_CASE(test_flat_tangents_level_off_at_the_peak());
+    RUN_CASE(test_automatic_tangents_level_off_at_the_ends());
+    RUN_CASE(test_automatic_tangents_follow_the_neighbours());
+    RUN_CASE(test_channels_can_be_keyed_independently());
+    RUN_CASE(test_linking_keeps_the_shape());
+    RUN_CASE(test_domain_is_not_limited_to_zero_to_one());
+    RUN_CASE(test_editing_drops_the_bake());
 
-    test_curve_round_trips_through_an_archive();
-    test_legacy_point_list_still_loads();
-    test_legacy_load_matches_an_equivalent_curve();
-
-    std::printf("\n%d checks, %d failures\n", g_curve_checks, g_curve_failures);
-    return g_curve_failures;
+    RUN_CASE(test_curve_round_trips_through_an_archive());
+    RUN_CASE(test_legacy_point_list_still_loads());
+    RUN_CASE(test_legacy_load_matches_an_equivalent_curve());
 }
 
 REGISTER_TEST_SUITE("curve", run_curve_suite)

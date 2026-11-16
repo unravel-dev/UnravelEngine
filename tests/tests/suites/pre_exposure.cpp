@@ -24,23 +24,12 @@
 #include <regex>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_pre_exposure_checks = 0;
-int g_pre_exposure_failures = 0;
-
-void pre_exposure_check(bool condition, const std::string& what)
-{
-    ++g_pre_exposure_checks;
-    if(!condition)
-    {
-        ++g_pre_exposure_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// The shader header that reads the GPU's share.
 constexpr const char* PRE_EXPOSURE_HEADER = "engine:/data/shaders/pre_exposure.sh";
@@ -55,7 +44,7 @@ auto read_shader_text(const char* protocol_path) -> std::string
     const auto path = fs::resolve_protocol(protocol_path);
     std::ifstream stream(path, std::ios::binary);
     std::string text((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
-    pre_exposure_check(!text.empty(), std::string(protocol_path) + " is readable at " + path.string());
+    check(!text.empty(), std::string(protocol_path) + " is readable at " + path.string());
     return text;
 }
 
@@ -78,7 +67,7 @@ void test_gpu_texel_matches_shaders()
     for(const char* shader : {PRE_EXPOSURE_HEADER, PRE_EXPOSURE_SHADER})
     {
         const int actual_texel = read_shader_define(read_shader_text(shader), "PRE_EXPOSURE_GPU_TEXEL");
-        pre_exposure_check(actual_texel == expected_texel,
+        check(actual_texel == expected_texel,
                            std::string("PRE_EXPOSURE_GPU_TEXEL in ") + shader + " (" + std::to_string(actual_texel) +
                                ") equals pre_exposure_state::gpu_texel (" + std::to_string(expected_texel) + ")");
     }
@@ -91,20 +80,16 @@ void test_uniform_layout()
     state.value = 4.0f;
     state.previous = 2.0f;
     const auto uniform = state.to_uniform();
-    pre_exposure_check(std::abs(uniform[0] - 4.0f) < LAYOUT_TOLERANCE, "x is the value");
-    pre_exposure_check(std::abs(uniform[1] - 0.25f) < LAYOUT_TOLERANCE, "y is its inverse");
-    pre_exposure_check(std::abs(uniform[2] - 2.0f) < LAYOUT_TOLERANCE, "z is the history correction");
-    pre_exposure_check(std::abs(uniform[3] - 2.0f) < LAYOUT_TOLERANCE, "w is the previous value");
+    check(std::abs(uniform[0] - 4.0f) < LAYOUT_TOLERANCE, "x is the value");
+    check(std::abs(uniform[1] - 0.25f) < LAYOUT_TOLERANCE, "y is its inverse");
+    check(std::abs(uniform[2] - 2.0f) < LAYOUT_TOLERANCE, "z is the history correction");
+    check(std::abs(uniform[3] - 2.0f) < LAYOUT_TOLERANCE, "w is the previous value");
 }
 
-auto run_pre_exposure_suite(rtti::context& /*ctx*/) -> int
+void run_pre_exposure_suite(rtti::context& /*ctx*/)
 {
-    g_pre_exposure_checks = 0;
-    g_pre_exposure_failures = 0;
-    test_gpu_texel_matches_shaders();
-    test_uniform_layout();
-    std::printf("pre-exposure: %d checks, %d failures\n", g_pre_exposure_checks, g_pre_exposure_failures);
-    return g_pre_exposure_failures;
+    RUN_CASE(test_gpu_texel_matches_shaders());
+    RUN_CASE(test_uniform_layout());
 }
 
 } // namespace

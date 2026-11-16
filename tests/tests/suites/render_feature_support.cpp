@@ -50,23 +50,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 constexpr std::uint32_t ALL_FORMAT_CAPS =
     BGFX_CAPS_FORMAT_TEXTURE_2D | BGFX_CAPS_FORMAT_TEXTURE_3D | BGFX_CAPS_FORMAT_TEXTURE_CUBE |
@@ -610,30 +599,26 @@ void test_requirement_entries()
     }
 }
 
-auto run_render_feature_support_suite(rtti::context& /*ctx*/) -> int
+void run_render_feature_support_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_desktop_runs_everything();
-    test_feature_level_11_0();
-    test_vulkan_without_multi_draw();
-    test_extended_storage_formats();
-    test_webgpu_read_write_formats();
-    test_float_filtering();
-    test_storage_textures_per_stage();
-    test_shaders_of_unavailable_features();
-    test_no_compute();
-    test_no_vertex_storage_buffers();
-    test_shader_buffer_storage();
-    test_script_enums_mirror_the_engine();
-    test_webgl2_device();
-    test_dependency_reason();
-    test_render_target_sample_counts();
-    test_mask_parsing();
-    test_limits_intersection();
-    test_requirement_entries();
-    std::printf("\nrender feature support: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_desktop_runs_everything());
+    RUN_CASE(test_feature_level_11_0());
+    RUN_CASE(test_vulkan_without_multi_draw());
+    RUN_CASE(test_extended_storage_formats());
+    RUN_CASE(test_webgpu_read_write_formats());
+    RUN_CASE(test_float_filtering());
+    RUN_CASE(test_storage_textures_per_stage());
+    RUN_CASE(test_shaders_of_unavailable_features());
+    RUN_CASE(test_no_compute());
+    RUN_CASE(test_no_vertex_storage_buffers());
+    RUN_CASE(test_shader_buffer_storage());
+    RUN_CASE(test_script_enums_mirror_the_engine());
+    RUN_CASE(test_webgl2_device());
+    RUN_CASE(test_dependency_reason());
+    RUN_CASE(test_render_target_sample_counts());
+    RUN_CASE(test_mask_parsing());
+    RUN_CASE(test_limits_intersection());
+    RUN_CASE(test_requirement_entries());
 }
 
 } // namespace

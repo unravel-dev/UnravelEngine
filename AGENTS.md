@@ -35,8 +35,10 @@ where each kind of knowledge goes: `.agents/README.md`.
 - Outside Debug, `engine/engine` and `editor/editor` build as unity batches: names in
   anonymous namespaces must be unique across files. Check a RelWithDebInfo build.
 - Run from `build/<Config>/bin/`, which holds `data/` and `clrpp/`.
-- Tests: `build/<Config>/bin/unravel-tests --suite "<name>"` (substring match). Never run a
-  suite beside a build or a busy editor, and put no hard timeout on shader suites.
+- Tests: `build/<Config>/bin/unravel-tests --suite "<name>"` (substring match); more than one
+  suite runs in parallel worker processes, `--jobs 1` in one. Never run a suite beside a build
+  or a busy editor, and put no hard timeout on shader suites: the runner's watchdog stops a
+  suite that makes no progress. Checks use `tests/tests/harness.h`, never per-file counters.
 - Details, suite list and CI: skill `unravel-build-verify`.
 
 ## Hard rules

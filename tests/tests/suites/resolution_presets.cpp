@@ -29,6 +29,8 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
@@ -40,19 +42,6 @@ using screen_orientation = resolution_settings::screen_orientation;
 
 /// Digits that write a float through a double and read it back unchanged.
 constexpr int EXACT_DIGITS = 17;
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// The default presets of a project created before presets had a device.
 auto make_presets_before_devices() -> std::vector<preset>
@@ -209,23 +198,19 @@ void test_device_screen_round_trip(const fs::path& root)
 
 } // namespace
 
-auto run_resolution_presets_suite(rtti::context& ctx) -> int
+void run_resolution_presets_suite(rtti::context& ctx)
 {
     (void)ctx;
-    g_checks = 0;
-    g_failures = 0;
-    const fs::path root = fs::temp_directory_path() / "unravel_resolution_presets";
+    const fs::path root = temp_path("unravel_resolution_presets");
     fs::error_code err;
     fs::remove_all(root, err);
     fs::create_directories(root, err);
-    test_old_defaults_become_todays(root);
-    test_own_presets_gain_devices(root);
-    test_saved_presets_load_as_they_are(root);
-    test_binary_round_trip(root);
-    test_device_screen_round_trip(root);
+    RUN_CASE(test_old_defaults_become_todays(root));
+    RUN_CASE(test_own_presets_gain_devices(root));
+    RUN_CASE(test_saved_presets_load_as_they_are(root));
+    RUN_CASE(test_binary_round_trip(root));
+    RUN_CASE(test_device_screen_round_trip(root));
     fs::remove_all(root, err);
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 REGISTER_TEST_SUITE("resolution presets", run_resolution_presets_suite)

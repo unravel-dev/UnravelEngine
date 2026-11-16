@@ -69,6 +69,8 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 namespace
 {
 namespace ac = unravel::asset_compiler;
@@ -107,22 +109,9 @@ constexpr std::array<const char*, 1> COMPUTE_FED_VERTEX_SHADERS = {"shader_print
 /// more fails to compile on some devices, and bgfx stops at a failed compile.
 constexpr std::size_t WEBGL2_MIN_VERTEX_UNIFORM_VECTORS = 256;
 
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
 auto get_temp_folder() -> fs::path
 {
-    return fs::temp_directory_path() / "unravel-tests-eshader-files";
+    return temp_path("eshader-files");
 }
 
 void write_text(const fs::path& file, const std::string& text)
@@ -472,12 +461,6 @@ void test_compiled_file_reads_from_a_pack(const fs::path& root)
     fs::unmount_packs();
 }
 
-auto is_shaderc_present() -> bool
-{
-    fs::error_code ec;
-    return fs::exists(fs::resolve_protocol(std::string("binary:/shaderc") + fs::executable_extension()), ec);
-}
-
 auto get_key(const std::string& name) -> std::string
 {
     return std::string("app:/") + SHADER_FOLDER + "/" + name;
@@ -506,6 +489,46 @@ auto compile_variants(unravel::asset_manager& am, const std::string& key, const 
 auto as_string(const unravel::compiled_shader_variant& variant) -> std::string
 {
     return std::string(variant.bytes.begin(), variant.bytes.end());
+}
+
+/// The engine's shader sources, in the order the folder walk finds them.
+auto find_engine_shaders(const fs::path& shaders) -> std::vector<fs::path>
+{
+    std::vector<fs::path> sources;
+    fs::error_code ec;
+    for(const auto& entry : fs::recursive_directory_iterator(shaders, ec))
+    {
+        if(entry.path().extension() == ex::get_format<gfx::shader>())
+        {
+            sources.push_back(entry.path());
+        }
+    }
+    return sources;
+}
+
+/// Compiles every source for `renderer_extension` at once, each into a folder of its own under `output_folder`:
+/// two sources may share a file name.
+auto compile_all(unravel::asset_manager& am,
+                 const std::vector<fs::path>& sources,
+                 const fs::path& output_folder,
+                 const std::string& renderer_extension) -> std::vector<compiled_variants>
+{
+    fs::error_code ec;
+    fs::create_directories(output_folder, ec);
+    std::vector<double> seconds;
+    auto compiled = run_parallel_map<compiled_variants>(
+        sources.size(),
+        [&](size_t index)
+        {
+            return compile_variants(am, sources[index].string(), output_folder / std::to_string(index), renderer_extension);
+        },
+        &seconds);
+    print_slowest(seconds,
+                  [&](size_t index)
+                  {
+                      return sources[index].filename().string() + " on " + renderer_extension;
+                  });
+    return compiled;
 }
 
 void test_compile_matches_sc(unravel::asset_manager& am, const fs::path& root)
@@ -752,17 +775,14 @@ void test_engine_shaders_fit_webgpu(unravel::asset_manager& am, const fs::path& 
     std::size_t variant_count = 0;
     std::size_t looping_variant_count = 0;
     std::size_t tier_storage_textures = 0;
-    fs::error_code ec;
-    for(const auto& entry : fs::recursive_directory_iterator(shaders, ec))
+    const auto sources = find_engine_shaders(shaders);
+    const auto all_compiled = compile_all(am, sources, root / "webgpu", renderer);
+    for(size_t index = 0; index < sources.size(); ++index)
     {
-        const auto relative = entry.path().lexically_relative(shaders);
-        if(entry.path().extension() != ex::get_format<gfx::shader>())
-        {
-            continue;
-        }
+        const auto relative = sources[index].lexically_relative(shaders);
         const bool is_tier_shader = *relative.begin() == WEBGPU_TIER_FOLDER;
         const auto name = relative.generic_string();
-        const auto compiled = compile_variants(am, entry.path().string(), root / "webgpu", renderer);
+        const auto& compiled = all_compiled[index];
         check(!compiled.empty(), name + " compiles to WGSL");
         for(const auto& variant : compiled)
         {
@@ -959,22 +979,20 @@ void test_engine_shaders_compile_for_webgl2(unravel::asset_manager& am, const fs
     const fs::path shaders = fs::path(ENGINE_DATA_DIR) / "data/shaders";
     const auto renderer = gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGLES);
     webgl2_variant_counts counts;
-    fs::error_code ec;
-    for(const auto& entry : fs::recursive_directory_iterator(shaders, ec))
+    const auto sources = find_engine_shaders(shaders);
+    const auto all_compiled = compile_all(am, sources, root / "webgl2", renderer);
+    for(size_t index = 0; index < sources.size(); ++index)
     {
-        if(entry.path().extension() != ex::get_format<gfx::shader>())
-        {
-            continue;
-        }
-        const auto name = entry.path().lexically_relative(shaders).generic_string();
-        const auto compiled = compile_variants(am, entry.path().string(), root / "webgl2", renderer);
+        const auto& source = sources[index];
+        const auto name = source.lexically_relative(shaders).generic_string();
+        const auto& compiled = all_compiled[index];
         check(!compiled.empty(), name + " compiles to GLSL ES");
-        const std::string file_name = entry.path().filename().string();
+        const std::string file_name = source.filename().string();
         const bool is_vertex = file_name.rfind("vs_", 0) == 0;
         check_webgl2_variants(name, compiled, file_name.rfind("cs_", 0) == 0, is_vertex, counts);
         if(is_vertex)
         {
-            check_texture_twins(entry.path(), name, compiled, counts);
+            check_texture_twins(source, name, compiled, counts);
         }
     }
     std::printf("  %zu GLSL ES variants with code, %zu without (compute, or OpenGL ES 3.1 only), %zu with a texture "
@@ -1058,80 +1076,87 @@ void test_shipped_shaders_compile(unravel::asset_manager& am, const fs::path& ro
     std::printf("test_shipped_shaders_compile\n");
     const fs::path engine_data = ENGINE_DATA_DIR;
     const auto output_folder = root / "shipped";
-    std::size_t file_count = 0;
-    std::size_t variant_count = 0;
+    std::vector<fs::path> sources;
     for(const auto& folder : {engine_data / "data/shaders", engine_data / "../editor_data/data/shaders"})
     {
-        fs::error_code ec;
-        for(const auto& entry : fs::recursive_directory_iterator(folder, ec))
+        const auto found = find_engine_shaders(folder);
+        sources.insert(sources.end(), found.begin(), found.end());
+    }
+    const auto& platform = gfx::get_renderer_platform_supported_filename_extensions();
+    const std::vector<std::string> extensions(platform.begin(), platform.end());
+    fs::error_code ec;
+    fs::create_directories(output_folder, ec);
+    // Every file on every renderer at once; each file compiles into a folder of its own, as two may share a name.
+    std::vector<double> seconds;
+    const auto all_compiled = run_parallel_map<compiled_variants>(
+        sources.size() * extensions.size(),
+        [&](size_t index)
         {
-            if(entry.path().extension() != ex::get_format<gfx::shader>())
-            {
-                continue;
-            }
-            ++file_count;
-            const auto name = entry.path().filename().string();
-            ac::eshader_file file;
-            std::string error;
-            check(ac::load_eshader_file(entry.path(), file, error), name + " parses: " + error);
-            std::vector<compiled_variants> per_renderer;
-            for(const auto& extension : gfx::get_renderer_platform_supported_filename_extensions())
-            {
-                auto compiled = compile_variants(am, entry.path().string(), output_folder, extension);
-                check(compiled.size() == file.variants.size(), name + " compiles on " + extension);
-                variant_count += compiled.size();
-                per_renderer.push_back(std::move(compiled));
-            }
-            for(const auto& pair : find_identical_variants(per_renderer))
-            {
-                check(false, name + " has variants that are the same binary everywhere, so their defines change nothing: " + pair);
-            }
+            const size_t file = index / extensions.size();
+            return compile_variants(am, sources[file].string(), output_folder / std::to_string(file), extensions[index % extensions.size()]);
+        },
+        &seconds);
+    print_slowest(seconds,
+                  [&](size_t index)
+                  {
+                      return sources[index / extensions.size()].filename().string() + " on " + extensions[index % extensions.size()];
+                  });
+    std::size_t variant_count = 0;
+    for(size_t file_index = 0; file_index < sources.size(); ++file_index)
+    {
+        const auto name = sources[file_index].filename().string();
+        ac::eshader_file file;
+        std::string error;
+        check(ac::load_eshader_file(sources[file_index], file, error), name + " parses: " + error);
+        std::vector<compiled_variants> per_renderer;
+        for(size_t renderer = 0; renderer < extensions.size(); ++renderer)
+        {
+            const auto& compiled = all_compiled[file_index * extensions.size() + renderer];
+            check(compiled.size() == file.variants.size(), name + " compiles on " + extensions[renderer]);
+            variant_count += compiled.size();
+            per_renderer.push_back(compiled);
+        }
+        for(const auto& pair : find_identical_variants(per_renderer))
+        {
+            check(false, name + " has variants that are the same binary everywhere, so their defines change nothing: " + pair);
         }
     }
-    std::printf("  %zu files, %zu binaries\n", file_count, variant_count);
-    check(file_count > 0, "the editor's shaders are found");
+    std::printf("  %zu files, %zu binaries\n", sources.size(), variant_count);
+    check(!sources.empty(), "the editor's shaders are found");
 }
 
-auto run_eshader_files_suite(rtti::context& ctx) -> int
+void run_eshader_files_suite(rtti::context& ctx)
 {
-    g_checks = 0;
-    g_failures = 0;
     const auto temp = get_temp_folder();
     fs::error_code ec;
     fs::remove_all(temp, ec);
     fs::create_directories(temp, ec);
-    test_parse_sections();
-    test_parse_defaults();
-    test_parse_errors();
-    test_vertex_inputs();
-    test_generated_varyings();
-    test_format();
-    test_find_variant();
-    test_varying_mismatches();
-    test_dependencies(temp);
-    test_compiled_file_reads_from_a_pack(temp);
-    test_language_checks_count_wgsl();
-    if(is_shaderc_present())
+    RUN_CASE(test_parse_sections());
+    RUN_CASE(test_parse_defaults());
+    RUN_CASE(test_parse_errors());
+    RUN_CASE(test_vertex_inputs());
+    RUN_CASE(test_generated_varyings());
+    RUN_CASE(test_format());
+    RUN_CASE(test_find_variant());
+    RUN_CASE(test_varying_mismatches());
+    RUN_CASE(test_dependencies(temp));
+    RUN_CASE(test_compiled_file_reads_from_a_pack(temp));
+    RUN_CASE(test_language_checks_count_wgsl());
+    if(use_tool("shaderc"))
     {
         auto& am = ctx.get_cached<unravel::asset_manager>();
-        test_compile_matches_sc(am, temp);
-        test_every_type_compiles(am, temp);
-        test_failed_compile_keeps_output(am, temp);
-        test_mistyped_define_is_found(am, temp);
-        test_failed_loads_are_retried(am);
-        test_shipped_shaders_compile(am, temp);
-        test_engine_shaders_fit_webgpu(am, temp);
-        test_engine_shaders_compile_for_webgl2(am, temp);
-    }
-    else
-    {
-        std::printf("  SKIP: shaderc is not built beside the tests, so nothing compiles\n");
+        RUN_CASE(test_compile_matches_sc(am, temp));
+        RUN_CASE(test_every_type_compiles(am, temp));
+        RUN_CASE(test_failed_compile_keeps_output(am, temp));
+        RUN_CASE(test_mistyped_define_is_found(am, temp));
+        RUN_CASE(test_failed_loads_are_retried(am));
+        RUN_CASE(test_shipped_shaders_compile(am, temp));
+        RUN_CASE(test_engine_shaders_fit_webgpu(am, temp));
+        RUN_CASE(test_engine_shaders_compile_for_webgl2(am, temp));
     }
     fs::remove_all(temp, ec);
     fs::remove_all(get_source_folder(), ec);
-    std::printf("eshader files: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 } // namespace
 
-REGISTER_TEST_SUITE("eshader files", run_eshader_files_suite)
+REGISTER_TEST_SUITE("eshader files", run_eshader_files_suite, {.lane = ::unravel::suite_lane::tools})

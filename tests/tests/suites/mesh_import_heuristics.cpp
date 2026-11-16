@@ -53,24 +53,13 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 using namespace unravel::importer::mesh_import;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 void add_texture(aiMaterial& material, aiTextureType type, const char* path)
 {
@@ -568,7 +557,7 @@ void test_texture_files()
     std::strcpy(raw.achFormatHint, "rgba8888");
     check(get_texture_extension(&raw, false) == ".png", "raw texel data is written as PNG");
 
-    const fs::path dir = fs::temp_directory_path() / "unravel_mesh_import_heuristics";
+    const fs::path dir = temp_path("unravel_mesh_import_heuristics");
     fs::error_code err;
     fs::create_directories(dir, err);
     const auto write_dds = [&](const char* name, const char* fourcc, uint32_t alpha_mode)
@@ -593,23 +582,19 @@ void test_texture_files()
           "only the trailing compiled suffix is dropped");
 }
 
-auto run_mesh_import_heuristics(rtti::context&) -> int
+void run_mesh_import_heuristics(rtti::context&)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_material_workflows();
-    test_glossiness_maps();
-    test_packed_metallic_roughness();
-    test_material_properties();
-    test_animation_relevance();
-    test_meshless_animation();
-    test_shared_bind_space();
-    test_malformed_indices_are_dropped();
-    test_removed_meshes_leave_nodes_empty();
-    test_import_meshes_setting_is_saved();
-    test_texture_files();
-    std::printf("  %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_material_workflows());
+    RUN_CASE(test_glossiness_maps());
+    RUN_CASE(test_packed_metallic_roughness());
+    RUN_CASE(test_material_properties());
+    RUN_CASE(test_animation_relevance());
+    RUN_CASE(test_meshless_animation());
+    RUN_CASE(test_shared_bind_space());
+    RUN_CASE(test_malformed_indices_are_dropped());
+    RUN_CASE(test_removed_meshes_leave_nodes_empty());
+    RUN_CASE(test_import_meshes_setting_is_saved());
+    RUN_CASE(test_texture_files());
 }
 
 } // namespace

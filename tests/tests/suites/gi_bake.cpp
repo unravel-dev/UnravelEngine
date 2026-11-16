@@ -49,33 +49,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_failures = 0;
-int g_checks = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
-void check_near(float actual, float expected, float tolerance, const std::string& what)
-{
-    ++g_checks;
-    if(!(std::fabs(actual - expected) <= tolerance))
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %.4f, expected %.4f +/- %.4f)\n", what.c_str(), actual, expected, tolerance);
-    }
-}
 
 /// Appends a quad as two triangles. Callers wind them counter-clockwise seen from outside.
 void add_quad(sdf_source_geometry& g,
@@ -6304,90 +6283,88 @@ void test_degenerate_inputs()
 
 // ---------------------------------------------------------------------------------
 
-auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
+void run_gi_bake_suite(rtti::context& /*ctx*/)
 {
-    test_sphere_accuracy();
-    test_field_is_conservative();
-    test_stored_voxels_match_brute_force();
-    test_sign_correctness();
-    test_conservative_empty_bricks();
-    test_conservative_empty_bricks_in_a_shell();
-    test_large_open_submesh_bakes_signed();
-    test_brick_seam_continuity();
-    test_two_sided_shell();
-    test_thin_wall();
-    test_inverted_winding_is_corrected();
-    test_gpu_addressing_matches_cpu();
-    test_bounds_entry_is_not_a_hit();
-    test_trace_from_outside_hits_the_surface_not_the_bounds();
-    test_open_mesh_does_not_produce_inside_regions();
-    test_doubled_sheet_bakes_unsigned();
-    test_engine_plane_primitive_bakes_flat();
-    test_open_sheet_bakes_solid_below();
-    test_serialization_round_trip();
-    test_invalid_field_is_rejected();
-    test_determinism();
-    test_brick_borders_replicate_neighbours();
-    test_sign_vote_matches_reference_rays();
-    test_sampling_cost_does_not_scale_with_field_size();
-    test_clipmap_is_conservative();
-    test_gpu_composed_clipmap_keeps_no_cpu_copy();
-    test_clipmap_bounds_stretched_boxes_per_axis();
-    test_clipmap_rotated_room_matches_boxes();
-    test_engine_plane_composes_a_hittable_sheet();
-    test_instance_grid_never_misses_an_instance();
-    test_instance_grid_shader_walk_matches_cpu();
-    test_instance_grid_cell_clamping_covers_every_instance();
-    test_instance_grid_walk_stops_past_the_nearest_hit();
-    test_instance_grid_handles_degenerate_input();
-    test_instance_grid_skips_bounds_it_cannot_place();
-    test_clipmap_partial_update_follows_moved_geometry();
-    test_clipmap_continuous_edits_update_partially();
-    test_clipmap_full_edit_coalescing();
-    test_clipmap_partial_cadence_is_staggered();
-    test_editing_scales_history_and_trace_budget();
-    test_clipmap_compose_shader_transcription_matches_cpu();
-    test_clipmap_culled_composition_matches_brute_force();
-    test_clipmap_transition_is_continuous();
-    test_clipmap_blend_stays_conservative();
-    test_clipmap_is_world_stable();
-    test_clipmap_scroll_copy_matches_recompose();
-    test_clipmap_sees_offscreen_geometry();
-    test_raw_buffer_extraction_matches_direct_geometry();
-    test_submesh_extraction_selects_only_its_own_submesh();
-    test_unmapped_submesh_reports_no_transforms();
-    test_submesh_bake_pass_cost_is_linear();
-    test_bake_grid_scales_with_world_size();
-    test_voxel_size_is_honoured_and_scale_free();
-    test_mip_chain_is_coarser_cheaper_and_conservative();
-    test_a_coarse_mip_is_resident_where_the_finest_does_not_fit();
-    test_coarsest_mip_answers_the_gi_coverage_band();
-    test_mip_chain_bakes_one_solid();
-    test_total_voxel_budget_bounds_a_field();
-    test_lod_extraction_clamps_rather_than_failing();
-    test_lod_extraction_keeps_each_submesh_to_its_own_bounds();
-    test_degenerate_triangles_do_not_size_the_field();
-    test_scattered_parts_are_detected_and_cannot_be_resolved();
-    test_surface_test_keeps_ordinary_tessellation();
-    test_bake_cost_is_dominated_by_voxels_not_triangles();
-    test_bake_cost_estimate_reads_the_baked_grid();
-    test_parallel_submesh_bake_matches_serial();
-    test_degenerate_inputs();
-    test_gi_cards_box();
-    test_gi_cards_sheet();
-    test_gi_cards_doubled_sheet();
-    test_gi_cards_interior_layers();
-    test_gi_cards_serialization_round_trip();
-    test_gi_scene_reallocation_lists_the_previous_mip();
-    test_gi_scene_reset_leaves_no_cards();
-    test_gi_scene_cards_reach_the_distance_field();
-    test_gi_scene_refresh_recaptures_the_oldest_pages();
-    test_gi_scene_lighting_schedule();
-    test_gi_scene_page_radiosity_indices();
-    test_gi_scene_hi_res_pages();
-    test_gi_scene_hi_res_pages_give_way_to_locked_mips();
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_sphere_accuracy());
+    RUN_CASE(test_field_is_conservative());
+    RUN_CASE(test_stored_voxels_match_brute_force());
+    RUN_CASE(test_sign_correctness());
+    RUN_CASE(test_conservative_empty_bricks());
+    RUN_CASE(test_conservative_empty_bricks_in_a_shell());
+    RUN_CASE(test_large_open_submesh_bakes_signed());
+    RUN_CASE(test_brick_seam_continuity());
+    RUN_CASE(test_two_sided_shell());
+    RUN_CASE(test_thin_wall());
+    RUN_CASE(test_inverted_winding_is_corrected());
+    RUN_CASE(test_gpu_addressing_matches_cpu());
+    RUN_CASE(test_bounds_entry_is_not_a_hit());
+    RUN_CASE(test_trace_from_outside_hits_the_surface_not_the_bounds());
+    RUN_CASE(test_open_mesh_does_not_produce_inside_regions());
+    RUN_CASE(test_doubled_sheet_bakes_unsigned());
+    RUN_CASE(test_engine_plane_primitive_bakes_flat());
+    RUN_CASE(test_open_sheet_bakes_solid_below());
+    RUN_CASE(test_serialization_round_trip());
+    RUN_CASE(test_invalid_field_is_rejected());
+    RUN_CASE(test_determinism());
+    RUN_CASE(test_brick_borders_replicate_neighbours());
+    RUN_CASE(test_sign_vote_matches_reference_rays());
+    RUN_CASE(test_sampling_cost_does_not_scale_with_field_size());
+    RUN_CASE(test_clipmap_is_conservative());
+    RUN_CASE(test_gpu_composed_clipmap_keeps_no_cpu_copy());
+    RUN_CASE(test_clipmap_bounds_stretched_boxes_per_axis());
+    RUN_CASE(test_clipmap_rotated_room_matches_boxes());
+    RUN_CASE(test_engine_plane_composes_a_hittable_sheet());
+    RUN_CASE(test_instance_grid_never_misses_an_instance());
+    RUN_CASE(test_instance_grid_shader_walk_matches_cpu());
+    RUN_CASE(test_instance_grid_cell_clamping_covers_every_instance());
+    RUN_CASE(test_instance_grid_walk_stops_past_the_nearest_hit());
+    RUN_CASE(test_instance_grid_handles_degenerate_input());
+    RUN_CASE(test_instance_grid_skips_bounds_it_cannot_place());
+    RUN_CASE(test_clipmap_partial_update_follows_moved_geometry());
+    RUN_CASE(test_clipmap_continuous_edits_update_partially());
+    RUN_CASE(test_clipmap_full_edit_coalescing());
+    RUN_CASE(test_clipmap_partial_cadence_is_staggered());
+    RUN_CASE(test_editing_scales_history_and_trace_budget());
+    RUN_CASE(test_clipmap_compose_shader_transcription_matches_cpu());
+    RUN_CASE(test_clipmap_culled_composition_matches_brute_force());
+    RUN_CASE(test_clipmap_transition_is_continuous());
+    RUN_CASE(test_clipmap_blend_stays_conservative());
+    RUN_CASE(test_clipmap_is_world_stable());
+    RUN_CASE(test_clipmap_scroll_copy_matches_recompose());
+    RUN_CASE(test_clipmap_sees_offscreen_geometry());
+    RUN_CASE(test_raw_buffer_extraction_matches_direct_geometry());
+    RUN_CASE(test_submesh_extraction_selects_only_its_own_submesh());
+    RUN_CASE(test_unmapped_submesh_reports_no_transforms());
+    RUN_CASE(test_submesh_bake_pass_cost_is_linear());
+    RUN_CASE(test_bake_grid_scales_with_world_size());
+    RUN_CASE(test_voxel_size_is_honoured_and_scale_free());
+    RUN_CASE(test_mip_chain_is_coarser_cheaper_and_conservative());
+    RUN_CASE(test_a_coarse_mip_is_resident_where_the_finest_does_not_fit());
+    RUN_CASE(test_coarsest_mip_answers_the_gi_coverage_band());
+    RUN_CASE(test_mip_chain_bakes_one_solid());
+    RUN_CASE(test_total_voxel_budget_bounds_a_field());
+    RUN_CASE(test_lod_extraction_clamps_rather_than_failing());
+    RUN_CASE(test_lod_extraction_keeps_each_submesh_to_its_own_bounds());
+    RUN_CASE(test_degenerate_triangles_do_not_size_the_field());
+    RUN_CASE(test_scattered_parts_are_detected_and_cannot_be_resolved());
+    RUN_CASE(test_surface_test_keeps_ordinary_tessellation());
+    RUN_CASE(test_bake_cost_is_dominated_by_voxels_not_triangles());
+    RUN_CASE(test_bake_cost_estimate_reads_the_baked_grid());
+    RUN_CASE(test_parallel_submesh_bake_matches_serial());
+    RUN_CASE(test_degenerate_inputs());
+    RUN_CASE(test_gi_cards_box());
+    RUN_CASE(test_gi_cards_sheet());
+    RUN_CASE(test_gi_cards_doubled_sheet());
+    RUN_CASE(test_gi_cards_interior_layers());
+    RUN_CASE(test_gi_cards_serialization_round_trip());
+    RUN_CASE(test_gi_scene_reallocation_lists_the_previous_mip());
+    RUN_CASE(test_gi_scene_reset_leaves_no_cards());
+    RUN_CASE(test_gi_scene_cards_reach_the_distance_field());
+    RUN_CASE(test_gi_scene_refresh_recaptures_the_oldest_pages());
+    RUN_CASE(test_gi_scene_lighting_schedule());
+    RUN_CASE(test_gi_scene_page_radiosity_indices());
+    RUN_CASE(test_gi_scene_hi_res_pages());
+    RUN_CASE(test_gi_scene_hi_res_pages_give_way_to_locked_mips());
 }
 
 REGISTER_TEST_SUITE("gi bake / sdf / clipmap", run_gi_bake_suite)

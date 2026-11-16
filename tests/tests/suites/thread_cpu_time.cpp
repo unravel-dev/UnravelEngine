@@ -33,23 +33,12 @@
 #include <string>
 #include <thread>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 using clock_type = std::chrono::steady_clock;
 
@@ -160,18 +149,14 @@ void test_profiler_scope_is_never_busier_than_its_wall_time()
     check(busier_count == 0, message);
 }
 
-auto run_thread_cpu_time_suite(rtti::context& ctx) -> int
+void run_thread_cpu_time_suite(rtti::context& ctx)
 {
     (void)ctx;
-    g_checks = 0;
-    g_failures = 0;
-    test_spin_is_busy_for_its_wall_time();
-    test_sleep_is_not_busy();
-    test_profiler_scope_is_never_busier_than_its_wall_time();
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_spin_is_busy_for_its_wall_time());
+    RUN_CASE(test_sleep_is_not_busy());
+    RUN_CASE(test_profiler_scope_is_never_busier_than_its_wall_time());
 }
 
 } // namespace
 
-REGISTER_TEST_SUITE("thread cpu time", run_thread_cpu_time_suite)
+REGISTER_TEST_SUITE("thread cpu time", run_thread_cpu_time_suite, {.lane = ::unravel::suite_lane::exclusive})

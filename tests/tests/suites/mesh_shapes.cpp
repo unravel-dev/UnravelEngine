@@ -45,23 +45,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 /// A built-in shape and the generator call the engine made for it at startup while the shapes were generated.
 struct built_in_shape
@@ -473,23 +462,19 @@ void test_field_on_request()
           "a shape built in code takes the same request");
 }
 
-auto run_mesh_shapes_suite(rtti::context& ctx) -> int
+void run_mesh_shapes_suite(rtti::context& ctx)
 {
-    g_checks = 0;
-    g_failures = 0;
     auto& am = ctx.get_cached<asset_manager>();
     const auto shapes = make_built_in_shapes();
     const fs::path run_root = get_run_root();
     std::printf("scratch folder %s\n", run_root.string().c_str());
-    test_kind_names();
-    test_shape_files(shapes);
-    test_meta_files(shapes);
-    test_key_rule(ctx, shapes);
-    test_field_on_request();
-    test_compiled_shapes(am, shapes, run_root);
-    test_plane_gi_geometry(am, run_root);
-    std::printf("mesh shapes: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_kind_names());
+    RUN_CASE(test_shape_files(shapes));
+    RUN_CASE(test_meta_files(shapes));
+    RUN_CASE(test_key_rule(ctx, shapes));
+    RUN_CASE(test_field_on_request());
+    RUN_CASE(test_compiled_shapes(am, shapes, run_root));
+    RUN_CASE(test_plane_gi_geometry(am, run_root));
 }
 
 } // namespace

@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 namespace unravel::specular_occlusion_tests
 {
 namespace
@@ -25,17 +27,17 @@ constexpr double REFERENCE_TOLERANCE = 0.01;
 constexpr double UNORM8_STEP = 1.0 / 255.0;
 /// Mirror-row texels this close to the cone boundary are skipped (the boundary is a step).
 constexpr double MIRROR_BOUNDARY_MARGIN = 0.02;
-int g_checks = 0;
-int g_failures = 0;
 
 void check_near(double actual, double expected, double tolerance, const std::string& label)
 {
-    ++g_checks;
-    if(!(std::abs(actual - expected) <= tolerance))
+    if(std::abs(actual - expected) <= tolerance)
     {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %.6f, expected %.6f +/- %.6f)\n", label.c_str(), actual, expected, tolerance);
+        check(true, label);
+        return;
     }
+    char values[160];
+    std::snprintf(values, sizeof(values), " (got %.6f, expected %.6f +/- %.6f)", actual, expected, tolerance);
+    check(false, label + values);
 }
 
 auto column_cos_beta(uint32_t column) -> double
@@ -184,19 +186,15 @@ void test_limits(const std::vector<uint8_t>& table)
 }
 } // namespace
 
-auto run_specular_occlusion_suite(rtti::context& /*ctx*/) -> int
+void run_specular_occlusion_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
     const auto table = specular_occlusion_lut::build();
     check_near(double(table.size()), double(EDGE) * EDGE * EDGE, 0.0, "table holds resolution^3 texels");
     if(table.size() == size_t(EDGE) * EDGE * EDGE)
     {
-        test_against_reference(table);
-        test_limits(table);
+        RUN_CASE(test_against_reference(table));
+        RUN_CASE(test_limits(table));
     }
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 REGISTER_TEST_SUITE("specular occlusion / GTSO table", run_specular_occlusion_suite)

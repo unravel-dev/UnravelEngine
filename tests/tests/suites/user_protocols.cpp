@@ -25,35 +25,17 @@
 #include <cstdio>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
 
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
 void check_equal(const fs::path& actual, const fs::path& expected, const std::string& what)
 {
-    ++g_checks;
-    if(actual.lexically_normal() != expected.lexically_normal())
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %s, expected %s)\n",
-                    what.c_str(),
-                    actual.generic_string().c_str(),
-                    expected.generic_string().c_str());
-    }
+    check(actual.lexically_normal() == expected.lexically_normal(),
+          what + " (got " + actual.generic_string() + ", expected " + expected.generic_string() + ")");
 }
 
 constexpr const char* TEST_COMPANY = "UnravelTestsCompany";
@@ -114,21 +96,17 @@ void remove_test_folder(const fs::path& folder, const char* name)
 
 } // namespace
 
-auto run_user_protocols_suite(rtti::context& /*ctx*/) -> int
+void run_user_protocols_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
     const fs::path initial_user = resolve_folder("user:/");
     const fs::path initial_cache = resolve_folder("cache:/");
-    test_defaults_in_binary();
+    RUN_CASE(test_defaults_in_binary());
     const fs::path company_folder = test_named_folders();
     const fs::path product_folder = test_empty_company(company_folder);
     fs::add_path_protocol("user", initial_user);
     fs::add_path_protocol("cache", initial_cache);
     remove_test_folder(company_folder, TEST_COMPANY);
     remove_test_folder(product_folder, TEST_PRODUCT_WITHOUT_COMPANY);
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
 }
 
 REGISTER_TEST_SUITE("user protocols", run_user_protocols_suite)

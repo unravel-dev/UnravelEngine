@@ -35,33 +35,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
-void check_near(float actual, float expected, float tolerance, const std::string& what)
-{
-    ++g_checks;
-    if(!(std::fabs(actual - expected) <= tolerance))
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %.5f, expected %.5f +/- %.5f)\n", what.c_str(), actual, expected, tolerance);
-    }
-}
 
 void check_finite(const math::vec3& v, const std::string& what)
 {
@@ -1297,45 +1276,42 @@ void test_rig_look_at_bone_limit_zero_holds_the_bones()
     check_near(std::fabs(math::dot(before, solved)), 1.0f, 1e-6f, "a bone limit of 0 turns nothing");
 }
 
-auto run_ik_suite(rtti::context& /*ctx*/) -> int
+void run_ik_suite(rtti::context& /*ctx*/)
 {
-    test_rejects_invalid_input();
-    test_two_bone_reaches_and_honors_pole();
-    test_two_bone_soften_costs_reach();
-    test_two_bone_unreachable_stays_finite();
-    test_two_bone_requires_three_joints();
-    test_weight_bounds();
-    test_pole_preserves_reach_on_long_chains();
-    test_pole_survives_degenerate_configurations();
-    test_fabrik_and_ccd_reach();
-    test_chain_collection_ignores_skin_bone_index();
-    test_repeated_solves_are_stable();
-    test_effector_rotation_goal();
-    test_aim_respects_bone_axes();
-    test_resolve_facing_axis();
-    test_aim_cone_limit();
-    test_aim_up_reference();
-    test_rig_two_bone_reaches_and_restores();
-    test_rig_chain_ik_reaches();
-    test_rig_chain_ik_eases_to_a_swapped_target();
-    test_rig_look_at_turns_toward_target();
-    test_rig_spring_bone_falls_and_holds_lengths();
-    test_rig_parents_solve_before_children();
-    test_rig_lost_target_fades_out();
-    test_rig_switched_off_rests_and_resumes();
-    test_rig_characters_solve_in_parallel_as_one_alone();
-    test_rig_aiming_at_another_character_sees_its_solved_pose();
-    test_rig_writing_above_its_character_still_solves();
-    test_rig_look_at_follows_a_new_forward_axis();
-    test_rig_spring_moves_every_frame_above_the_step_rate();
-    test_rig_recovers_from_a_target_that_is_not_a_number();
-    test_rig_spring_restarts_after_a_teleport();
-    test_two_bone_turning_the_bend_plane_keeps_the_knee_on_its_hinge();
-    test_rig_goal_follows_a_moving_target_at_once();
-    test_rig_look_at_bone_limit_zero_holds_the_bones();
-
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_rejects_invalid_input());
+    RUN_CASE(test_two_bone_reaches_and_honors_pole());
+    RUN_CASE(test_two_bone_soften_costs_reach());
+    RUN_CASE(test_two_bone_unreachable_stays_finite());
+    RUN_CASE(test_two_bone_requires_three_joints());
+    RUN_CASE(test_weight_bounds());
+    RUN_CASE(test_pole_preserves_reach_on_long_chains());
+    RUN_CASE(test_pole_survives_degenerate_configurations());
+    RUN_CASE(test_fabrik_and_ccd_reach());
+    RUN_CASE(test_chain_collection_ignores_skin_bone_index());
+    RUN_CASE(test_repeated_solves_are_stable());
+    RUN_CASE(test_effector_rotation_goal());
+    RUN_CASE(test_aim_respects_bone_axes());
+    RUN_CASE(test_resolve_facing_axis());
+    RUN_CASE(test_aim_cone_limit());
+    RUN_CASE(test_aim_up_reference());
+    RUN_CASE(test_rig_two_bone_reaches_and_restores());
+    RUN_CASE(test_rig_chain_ik_reaches());
+    RUN_CASE(test_rig_chain_ik_eases_to_a_swapped_target());
+    RUN_CASE(test_rig_look_at_turns_toward_target());
+    RUN_CASE(test_rig_spring_bone_falls_and_holds_lengths());
+    RUN_CASE(test_rig_parents_solve_before_children());
+    RUN_CASE(test_rig_lost_target_fades_out());
+    RUN_CASE(test_rig_switched_off_rests_and_resumes());
+    RUN_CASE(test_rig_characters_solve_in_parallel_as_one_alone());
+    RUN_CASE(test_rig_aiming_at_another_character_sees_its_solved_pose());
+    RUN_CASE(test_rig_writing_above_its_character_still_solves());
+    RUN_CASE(test_rig_look_at_follows_a_new_forward_axis());
+    RUN_CASE(test_rig_spring_moves_every_frame_above_the_step_rate());
+    RUN_CASE(test_rig_recovers_from_a_target_that_is_not_a_number());
+    RUN_CASE(test_rig_spring_restarts_after_a_teleport());
+    RUN_CASE(test_two_bone_turning_the_bend_plane_keeps_the_knee_on_its_hinge());
+    RUN_CASE(test_rig_goal_follows_a_moving_target_at_once());
+    RUN_CASE(test_rig_look_at_bone_limit_zero_holds_the_bones());
 }
 
 REGISTER_TEST_SUITE("ik solvers", run_ik_suite)

@@ -46,13 +46,12 @@
 #include <random>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
 
 constexpr float BOUNDS_TOLERANCE = 1.0e-4f;
 /// First fake mesh address; spaced like real heap blocks so the low bits carry no entropy.
@@ -60,26 +59,6 @@ constexpr std::uintptr_t FAKE_MESH_BASE_ADDRESS = 0x10000;
 constexpr std::uintptr_t FAKE_MESH_ADDRESS_STRIDE = 64;
 /// Far more keys than the collector's initial index, so it has to grow several times.
 constexpr uint32_t MANY_KEYS = 5000;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
-
-void check_near(float actual, float expected, float tolerance, const std::string& what)
-{
-    ++g_checks;
-    if(!(std::fabs(actual - expected) <= tolerance))
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s (got %.6f, expected %.6f +/- %.6f)\n", what.c_str(), actual, expected, tolerance);
-    }
-}
 
 // ---------------------------------------------------------------------------------
 // Light bounds
@@ -604,31 +583,28 @@ void test_mesh_lod_getters_agree_past_the_last_level()
 
 // ---------------------------------------------------------------------------------
 
-auto run_render_culling_suite(rtti::context& /*ctx*/) -> int
+void run_render_culling_suite(rtti::context& /*ctx*/)
 {
-    test_point_light_bounds();
-    test_spot_light_bounds_follow_world_direction();
-    test_directional_light_bounds();
-    test_view_mask_nested_cascade_cases();
-    test_view_mask_submesh_granularity();
-    test_view_mask_matches_old_cascade_loop();
-    test_light_projection_culling_frustum();
-    test_shadow_reach_rejects_casters_that_cannot_shadow_the_view();
-    test_shadow_reach_clears_the_whole_view_mask();
-    test_collector_groups_by_key();
-    test_collector_clear_releases_references_and_instances();
-    test_collector_reuses_instance_storage();
-    test_collector_grows_past_its_initial_index();
-    test_collector_drops_prepared_list_on_new_key();
-    test_material_collector_sorts_and_counts();
-    test_screen_radius_perspective_shrinks_with_distance();
-    test_screen_radius_orthographic_ignores_distance();
-    test_orthographic_projection_stays_finite_without_viewport();
-    test_model_lod_slots_draw_their_own_mesh_whole();
-    test_mesh_lod_getters_agree_past_the_last_level();
-
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_point_light_bounds());
+    RUN_CASE(test_spot_light_bounds_follow_world_direction());
+    RUN_CASE(test_directional_light_bounds());
+    RUN_CASE(test_view_mask_nested_cascade_cases());
+    RUN_CASE(test_view_mask_submesh_granularity());
+    RUN_CASE(test_view_mask_matches_old_cascade_loop());
+    RUN_CASE(test_light_projection_culling_frustum());
+    RUN_CASE(test_shadow_reach_rejects_casters_that_cannot_shadow_the_view());
+    RUN_CASE(test_shadow_reach_clears_the_whole_view_mask());
+    RUN_CASE(test_collector_groups_by_key());
+    RUN_CASE(test_collector_clear_releases_references_and_instances());
+    RUN_CASE(test_collector_reuses_instance_storage());
+    RUN_CASE(test_collector_grows_past_its_initial_index());
+    RUN_CASE(test_collector_drops_prepared_list_on_new_key());
+    RUN_CASE(test_material_collector_sorts_and_counts());
+    RUN_CASE(test_screen_radius_perspective_shrinks_with_distance());
+    RUN_CASE(test_screen_radius_orthographic_ignores_distance());
+    RUN_CASE(test_orthographic_projection_stays_finite_without_viewport());
+    RUN_CASE(test_model_lod_slots_draw_their_own_mesh_whole());
+    RUN_CASE(test_mesh_lod_getters_agree_past_the_last_level());
 }
 
 REGISTER_TEST_SUITE("render culling / batching", run_render_culling_suite)

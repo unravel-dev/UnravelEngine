@@ -38,23 +38,12 @@
 #include <string>
 #include <vector>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 constexpr const char* MESH_KEY = "engine:/embedded/instanced_draws_test/cube";
 constexpr const char* MATERIAL_KEY = "engine:/embedded/instanced_draws_test/material";
@@ -305,20 +294,16 @@ void test_material_instance(const instanced_draw_list::draw_settings& settings)
 
 } // namespace
 
-auto run_instanced_draws_suite(rtti::context& /*ctx*/) -> int
+void run_instanced_draws_suite(rtti::context& /*ctx*/)
 {
-    g_checks = 0;
-    g_failures = 0;
     const auto settings = make_settings();
-    test_clusters_by_tile(settings);
-    test_unaligned_copy(settings);
-    test_tile_order(settings);
-    test_velocity_packs_movers(settings);
-    test_non_finite_positions(settings);
-    test_end_frame_keeps_draws(settings);
-    test_material_instance(settings);
-    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_clusters_by_tile(settings));
+    RUN_CASE(test_unaligned_copy(settings));
+    RUN_CASE(test_tile_order(settings));
+    RUN_CASE(test_velocity_packs_movers(settings));
+    RUN_CASE(test_non_finite_positions(settings));
+    RUN_CASE(test_end_frame_keeps_draws(settings));
+    RUN_CASE(test_material_instance(settings));
 }
 
 REGISTER_TEST_SUITE("instanced draws", run_instanced_draws_suite)

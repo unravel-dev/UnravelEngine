@@ -23,23 +23,12 @@
 #include <cstdio>
 #include <string>
 
+using namespace unravel::test;
+
 using namespace unravel;
 
 namespace
 {
-
-int g_checks = 0;
-int g_failures = 0;
-
-void check(bool condition, const std::string& what)
-{
-    ++g_checks;
-    if(!condition)
-    {
-        ++g_failures;
-        std::printf("  FAIL: %s\n", what.c_str());
-    }
-}
 
 void test_release_without_rmlui()
 {
@@ -77,14 +66,10 @@ void test_dp_ratio_is_the_display_scale(rtti::context& ctx)
     rendering.set_game_view_device(kept_device);
 }
 
-auto run_ui_system_lifecycle_suite(rtti::context& ctx) -> int
+void run_ui_system_lifecycle_suite(rtti::context& ctx)
 {
-    g_checks = 0;
-    g_failures = 0;
-    test_release_without_rmlui();
-    test_dp_ratio_is_the_display_scale(ctx);
-    std::printf("ui system lifecycle: %d checks, %d failures\n", g_checks, g_failures);
-    return g_failures;
+    RUN_CASE(test_release_without_rmlui());
+    RUN_CASE(test_dp_ratio_is_the_display_scale(ctx));
 }
 
 } // namespace
