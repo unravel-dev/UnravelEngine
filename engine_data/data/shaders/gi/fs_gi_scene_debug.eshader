@@ -13,7 +13,9 @@ vec2 v_texcoord0
  * atlas, card coverage and object grid views.
  * Each view is a variant of its own (default: the scene views; atlas, coverage, object_grid), which the pass picks by
  * mode (gi_surface_cache::get_debug_view): fxc inlines everything main calls into one function and optimizes it
- * whole, and all four views in one take it far longer than each alone.
+ * whole, and all four views in one take it far longer than each alone. For the same reason the scene views inline
+ * the card sampling and the tone mapping once each: every mode reads its card value inside one card loop
+ * (GiCardDebugValue), the object grid's four entries are a loop, and the sky and the hits share one finalize.
  * The scene views march the global distance field from the camera (expansion by the largest distance seen, step
  * factor dithered over [0.8, 1]) and shade each hit from the cards through the object grid, exactly as the gather's
  * rays are; a ray that hits nothing reads the sky: the environment's radiance SH our rays read.
@@ -175,12 +177,6 @@ GiDebugHit GiTraceGlobalSdfView(vec2 uv, vec2 pixel)
 	return result;
 }
 
-/// Exposed radiance through the lit image's tone mapping operator.
-vec4 GiDebugToneMap(vec3 radiance)
-{
-	return vec4(apply_tonemapping(radiance * u_gi_debug_exposure, int(u_gi_debug2.w), 1.0), 1.0);
-}
-
 /// A pre-exposed value as @p mode shows it: albedo display encoded, normals as they are, the rest tone mapped.
 vec4 GiDebugFinalize(vec3 value, int mode)
 {
@@ -195,13 +191,13 @@ vec4 GiDebugFinalize(vec3 value, int mode)
 	return vec4(apply_tonemapping(value, int(u_gi_debug2.w), 1.0), 1.0);
 }
 
-/// What a camera ray that hits nothing shows in @p mode: the sky's radiance SH, then the mode's finalize.
-vec4 GiDebugSky(vec2 uv, int mode)
+/// What a camera ray that hits nothing sees: the sky's radiance SH, pre-exposed.
+vec3 GiDebugSkyRadiance(vec2 uv)
 {
 	vec3 origin;
 	vec3 direction;
 	GiDebugCameraRay(uv, origin, direction);
-	return GiDebugFinalize(eval_radiance_sh(s_gi_env_sh, direction) * u_gi_debug_exposure, mode);
+	return eval_radiance_sh(s_gi_env_sh, direction) * u_gi_debug_exposure;
 }
 
 /// How one card covers a hit, as GiSampleCard computes it before it reads the atlases (kept
@@ -282,17 +278,30 @@ float GiCardTileOutline(vec2 atlas_coord)
 	return (grid.x > 0.98 ? 0.0 : 1.0) * (grid.y > 0.98 ? 0.0 : 1.0);
 }
 
-/// True for the modes that read each card sample through GiCardDebugValue.
+/// True for the modes whose card value is a debug value, not lighting.
 bool GiIsCardDebugMode(int mode)
 {
 	return mode == GI_DEBUG_ALBEDO || mode >= GI_DEBUG_NORMALS;
 }
 
-/// The pre-exposed value one card sample contributes in @p mode.
+/// The value one card sample contributes in @p mode: the lighting modes read their atlas (GiSampleSceneHit exposes
+/// the sum, as GiSampleGlobalSdfHit's callers do), the debug modes a pre-exposed value.
 vec3 GiCardDebugValue(int mode, int card_index, GiCardTap tap)
 {
 	BRANCH
-	if(mode == GI_DEBUG_ALBEDO)
+	if(mode == GI_DEBUG_DIRECT)
+	{
+		return GiFetchCardAtlas(s_gi_card_direct, tap.s, tap.weights);
+	}
+	else if(mode == GI_DEBUG_INDIRECT)
+	{
+		return GiFetchCardAtlas(s_gi_card_indirect, tap.s, tap.weights);
+	}
+	else if(!GiIsCardDebugMode(mode))
+	{
+		return GiFetchCardAtlas(s_gi_card_final, tap.s, tap.weights);
+	}
+	else if(mode == GI_DEBUG_ALBEDO)
 	{
 		// The atlas holds albedo in gamma 2: each card's sample is squared back to linear before the cards blend.
 		vec3 encoded = GiFetchCardAtlas(s_gi_card_albedo, tap.s, tap.weights);
@@ -368,16 +377,17 @@ vec4 GiAccumulateObjectDebug(vec4 accumulated, float id, vec3 position, vec3 nor
 	return accumulated;
 }
 
-/// GiSampleGlobalSdfHit with each card's contribution from GiCardDebugValue.
+/// GiSampleGlobalSdfHit with each card's contribution from GiCardDebugValue, its four object grid entries in a loop.
 vec4 GiSampleGlobalSdfHitDebug(vec3 position, vec3 normal, float voxel_extent, int mode)
 {
 	vec4 ids = GiObjectGridInstances(position + normal * voxel_extent);
 	float bias = GI_GLOBAL_SDF_SURFACE_CACHE_BIAS * u_gi_object_grid_params.y * voxel_extent;
 	vec4 accumulated = vec4_splat(0.0);
-	accumulated = GiAccumulateObjectDebug(accumulated, ids.x, position, normal, bias, mode);
-	accumulated = GiAccumulateObjectDebug(accumulated, ids.y, position, normal, bias, mode);
-	accumulated = GiAccumulateObjectDebug(accumulated, ids.z, position, normal, bias, mode);
-	accumulated = GiAccumulateObjectDebug(accumulated, ids.w, position, normal, bias, mode);
+	LOOP
+	for(int entry_index = 0; entry_index < 4; ++entry_index)
+	{
+		accumulated = GiAccumulateObjectDebug(accumulated, ids[entry_index], position, normal, bias, mode);
+	}
 	return accumulated;
 }
 
@@ -399,25 +409,9 @@ bool GiObjectGridHasCards(vec3 p)
 vec4 GiSampleSceneHit(GiDebugHit hit, int mode)
 {
 	float voxel_extent = 0.5 * hit.voxel;
-	vec4 cards = vec4_splat(0.0);
-	BRANCH
-	if(GiIsCardDebugMode(mode))
+	vec4 cards = GiSampleGlobalSdfHitDebug(hit.position, hit.normal, voxel_extent, mode);
+	if(!GiIsCardDebugMode(mode))
 	{
-		cards = GiSampleGlobalSdfHitDebug(hit.position, hit.normal, voxel_extent, mode);
-	}
-	else if(mode == GI_DEBUG_DIRECT)
-	{
-		cards = GiSampleGlobalSdfHit(hit.position, hit.normal, voxel_extent, s_gi_card_direct);
-		cards.xyz *= u_gi_debug_exposure;
-	}
-	else if(mode == GI_DEBUG_INDIRECT)
-	{
-		cards = GiSampleGlobalSdfHit(hit.position, hit.normal, voxel_extent, s_gi_card_indirect);
-		cards.xyz *= u_gi_debug_exposure;
-	}
-	else
-	{
-		cards = GiSampleGlobalSdfHit(hit.position, hit.normal, voxel_extent, s_gi_card_final);
 		cards.xyz *= u_gi_debug_exposure;
 	}
 	return cards;
@@ -427,13 +421,13 @@ vec4 GiSampleSceneHit(GiDebugHit hit, int mode)
 vec4 GiSceneView(vec2 uv, vec2 pixel, int mode)
 {
 	GiDebugHit hit = GiTraceGlobalSdfView(uv, pixel);
-	if(!hit.hit)
-	{
-		return GiDebugSky(uv, mode);
-	}
 	vec3 value = vec3_splat(0.0);
 	BRANCH
-	if(mode == GI_DEBUG_GEOMETRY_NORMALS)
+	if(!hit.hit)
+	{
+		value = GiDebugSkyRadiance(uv);
+	}
+	else if(mode == GI_DEBUG_GEOMETRY_NORMALS)
 	{
 		value = hit.normal * 0.5 + 0.5;
 	}
@@ -452,7 +446,7 @@ vec4 GiSceneView(vec2 uv, vec2 pixel, int mode)
 	}
 	vec4 color = GiDebugFinalize(value, mode);
 	BRANCH
-	if(u_gi_debug_show_coverage)
+	if(hit.hit && u_gi_debug_show_coverage)
 	{
 		color.xyz = mix(color.xyz, vec3(1.0, 0.0, 1.0), 1.0 - SdfSampleClipmapCoverage(hit.position));
 	}

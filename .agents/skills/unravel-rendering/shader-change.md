@@ -119,7 +119,9 @@ HLSL (fxc, D3D11; D3D12 compiles `s_6_0`):
 - Group-shared atomics are integer only: accumulate radiance as fixed point with a per-sample cap.
 - Keywords that compile on GLSL and fail on `s_5_0` / `s_6_0`: `line`, `linear`, `point`, `sample`, `triangle`,
   `centroid`, `precise`, `shared`.
-- fxc inlines every call site: one call site per large helper (select parameters, call once).
+- fxc inlines every call site: one call site per large helper (select parameters, call once). Branches that differ
+  only by the texture they read choose it inside the helper's loop, and a fixed run of calls is a loop
+  (`fs_gi_scene_debug.eshader` reads every mode's card value in one card loop over the object grid's entries).
 - fxc optimizes the whole inlined `main` at once, at any `-O` level, and its time grows faster than the code: a
   shader that picks one of several large paths by a uniform (debug views) takes a variant per path, which also
   compile in parallel (`fs_gi_scene_debug.eshader`: four views in one took fxc about twice as long as each alone
