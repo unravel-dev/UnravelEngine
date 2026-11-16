@@ -202,17 +202,27 @@ REFLECT_INLINE(editor_settings::updates_settings)
             entt::attribute{"tooltip",
                             "Asks GitHub at most every 6 hours whether a newer build of the editor is published. "
                             "Nothing about you or this computer is sent. Help > Check for Updates... works either way."},
+        })
+        .data<&editor_settings::updates_settings::fetch_samples>("fetch_samples"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fetch_samples"},
+            entt::attribute{"pretty_name", "Look for New Samples"},
+            entt::attribute{"tooltip",
+                            "Reads the list of sample projects from GitHub at most once a day, so the start page "
+                            "offers samples published after this editor. Nothing about you or this computer is sent."},
         });
 }
 
 SAVE_INLINE(editor_settings::updates_settings)
 {
     try_save(ar, ser20::make_nvp("check_at_startup", obj.check_at_startup));
+    try_save(ar, ser20::make_nvp("fetch_samples", obj.fetch_samples));
 }
 
 LOAD_INLINE(editor_settings::updates_settings)
 {
     try_load(ar, ser20::make_nvp("check_at_startup", obj.check_at_startup));
+    try_load(ar, ser20::make_nvp("fetch_samples", obj.fetch_samples));
 }
 
 REFLECT(editor_settings)

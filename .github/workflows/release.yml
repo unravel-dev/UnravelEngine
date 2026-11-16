@@ -642,3 +642,28 @@ jobs:
             gh release upload "$latest_tag" manifest/latest/latest.json --clobber
             echo "Updated latest.json of ${latest_tag}, the latest release." >> "$GITHUB_STEP_SUMMARY"
           fi
+      # samples.json: the sample projects the editor's start page offers, read from the sample repositories by
+      # .github/scripts/sample_catalog.py. The editor fetches releases/latest/download/samples.json, so every release
+      # carries a copy and answers once it becomes the latest; the samples workflow refreshes it between releases.
+      # The script is checked out beside the packages, as a checkout empties the folder it fills.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          path: catalog-source
+          sparse-checkout: .github/scripts
+      - name: Write the sample catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          python3 catalog-source/.github/scripts/sample_catalog.py --output catalog/samples.json
+          gh release upload "$RELEASE_TAG" catalog/samples.json --clobber
+          echo "Attached samples.json to ${RELEASE_TAG}." >> "$GITHUB_STEP_SUMMARY"
+          # No published release answers 404; whatever gh prints then is no tag.
+          latest_tag="$(gh api "repos/${GH_REPO}/releases/latest" --jq .tag_name 2> /dev/null || true)"
+          if [[ "$latest_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$latest_tag" != "$RELEASE_TAG" ]; then
+            gh release upload "$latest_tag" catalog/samples.json --clobber
+            echo "Attached samples.json to ${latest_tag}, the latest release." >> "$GITHUB_STEP_SUMMARY"
+          fi

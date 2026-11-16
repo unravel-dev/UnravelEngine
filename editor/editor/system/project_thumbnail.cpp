@@ -27,6 +27,8 @@ namespace project_thumbnail_detail
 namespace
 {
 constexpr const char* PROJECT_THUMBNAIL_FILE_NAME = "thumbnail.png";
+// A project's own picture may also be a JPEG, as the sample projects carry theirs.
+constexpr const char* PROJECT_THUMBNAIL_JPEG_FILE_NAME = "thumbnail.jpg";
 constexpr const char* PROJECT_THUMBNAIL_CACHE_DIRECTORY = "editor/.cache";
 // Twice the largest a card draws it at on a 1x screen, so it stays sharp at 2x.
 constexpr uint32_t PROJECT_THUMBNAIL_MAX_WIDTH = 640;
@@ -156,7 +158,9 @@ auto project_thumbnail::get_captured_path(const fs::path& project_dir) -> fs::pa
 
 auto project_thumbnail::find(const fs::path& project_dir) -> fs::path
 {
-    for(const fs::path& path : {get_custom_path(project_dir), get_captured_path(project_dir)})
+    for(const fs::path& path : {get_custom_path(project_dir),
+                                project_dir / thumbnail_detail::PROJECT_THUMBNAIL_JPEG_FILE_NAME,
+                                get_captured_path(project_dir)})
     {
         fs::error_code error;
         if(fs::is_regular_file(path, error))

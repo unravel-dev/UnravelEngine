@@ -25,7 +25,10 @@ All under `editor/editor/hub/panels/`, owned by `imgui_panels` (`panel.h` / `pan
 | MCP Server | mcp_panel/ | `mcp_panel` | skill `unravel-editor-mcp` |
 | Packages | packages_panel/ | `packages_panel` | content packages |
 
-Outside the panels: `editor/editor/hub/start_page/` (no project open),
+Outside the panels: `editor/editor/hub/start_page/` (no project open; its Samples view lists
+`sample_catalog_manager` in `editor/editor/system/`, which reads the shipped
+`editor_data/samples/samples.json` and the latest release's copy through
+`editor/core/sample_catalog/`),
 `editor/editor/hub/about_window/`, `editor/editor/imgui/loading_page.*` (loading screen),
 `editor/editor/imgui/screen_card.*` (backdrop and card both pages use).
 

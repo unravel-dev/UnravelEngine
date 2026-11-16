@@ -6,7 +6,7 @@
 #include <string>
 
 /// The platform's half of https_get: https_get_windows.cpp or https_get_posix.cpp.
-namespace unravel::update_check::detail
+namespace unravel::https::detail
 {
 
 /// How often a waiting request asks whether to end.
@@ -18,4 +18,4 @@ constexpr std::chrono::milliseconds STOP_POLL_INTERVAL{100};
  */
 auto get_over_https(const std::string& url, const https_limits& limits, const stop_check& should_end) -> https_result;
 
-} // namespace unravel::update_check::detail
+} // namespace unravel::https::detail

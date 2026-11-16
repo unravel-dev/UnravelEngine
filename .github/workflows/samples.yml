@@ -1,0 +1,36 @@
+# Writes samples.json, the sample projects the editor's start page offers, and attaches it to the latest release.
+#
+# It runs only by hand (Actions > samples > Run workflow), after a sample repository was published or changed its
+# sample.json or its picture. Every public repository named UnravelEngine-Sample-* with a sample.json at its root is
+# listed; what a sample.json holds is in .github/scripts/sample_catalog.py. The editor reads the latest release's
+# samples.json at most once a day, a release download and no API request. The release workflow attaches a copy to
+# every release it publishes as well, so a new latest release answers too.
+name: samples
+
+#on: [push, pull_request]
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish the sample catalog
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+      # A sample whose sample.json or picture the editor would refuse fails the run, and the latest release keeps
+      # the samples.json it has.
+      - name: Write samples.json and attach it to the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/sample_catalog.py --output catalog/samples.json
+          latest_tag="$(gh api "repos/${GH_REPO}/releases/latest" --jq .tag_name)"
+          gh release upload "$latest_tag" catalog/samples.json --clobber
+          echo "Attached samples.json to ${latest_tag}, the latest release." >> "$GITHUB_STEP_SUMMARY"

@@ -39,6 +39,7 @@ constexpr float SAMPLES_VIEW_PILL_INSET = 0.7f;
 constexpr float SAMPLES_VIEW_TAG_TEXT_ALPHA = 0.8f;
 constexpr ImU32 SAMPLES_VIEW_INSTALLED_FILL_COLOR = IM_COL32(40, 120, 70, 235);
 constexpr ImU32 SAMPLES_VIEW_TAG_COLOR = IM_COL32(255, 255, 255, 16);
+constexpr ImU32 SAMPLES_VIEW_NEEDS_EDITOR_FILL_COLOR = IM_COL32(150, 100, 20, 235);
 constexpr const char* SAMPLES_VIEW_GITHUB_LABEL = ICON_MDI_GITHUB "  All on GitHub";
 
 constexpr float LEARN_VIEW_ROW_HEIGHT = 4.6f;
@@ -90,21 +91,17 @@ auto calc_sample_info_height() -> float
 }
 
 /// The tags in a row of pills, as many as fit.
-void draw_sample_tags(ImDrawList* draw_list, const ImVec2& pos, float max_x, const sample_catalog::sample_info& sample)
+void draw_sample_tags(ImDrawList* draw_list, const ImVec2& pos, float max_x, const sample_info& sample)
 {
     float x = pos.x;
-    for(const char* tag : sample.tags)
+    for(const std::string& tag : sample.tags)
     {
-        if(tag == nullptr)
-        {
-            continue;
-        }
-        const ImVec2 size = widgets::calc_pill_size(tag);
+        const ImVec2 size = widgets::calc_pill_size(tag.c_str());
         if(x + size.x > max_x)
         {
             return;
         }
-        widgets::draw_pill(draw_list, ImVec2(x, pos.y), tag, SAMPLES_VIEW_TAG_COLOR, widgets::get_text_color(SAMPLES_VIEW_TAG_TEXT_ALPHA));
+        widgets::draw_pill(draw_list, ImVec2(x, pos.y), tag.c_str(), SAMPLES_VIEW_TAG_COLOR, widgets::get_text_color(SAMPLES_VIEW_TAG_TEXT_ALPHA));
         x += size.x + to_pixels(SAMPLES_VIEW_TAG_GAP);
     }
 }
@@ -120,7 +117,7 @@ void draw_samples_eyebrow(ImDrawList* draw_list, const ImVec2& pos, float max_x,
 
 /// The two buttons of a sample: open the copy on disk, or get one. Returns true when the copy
 /// on disk is to be opened.
-auto draw_sample_actions(const sample_catalog::sample_info& sample, const fs::path& installed) -> bool
+auto draw_sample_actions(const sample_info& sample, const fs::path& installed) -> bool
 {
     if(!installed.empty())
     {
@@ -129,22 +126,33 @@ auto draw_sample_actions(const sample_catalog::sample_info& sample, const fs::pa
         ImGui::SameLine();
         if(widgets::draw_button(ICON_MDI_GITHUB "  GitHub", widgets::button_kind::secondary))
         {
-            ImGui::OpenInShell(sample_catalog::get_repository_url(sample).c_str());
+            ImGui::OpenInShell(sample.repository_url.c_str());
         }
         return wants_open;
     }
     if(widgets::draw_button(ICON_MDI_GITHUB "  Get on GitHub", widgets::button_kind::primary))
     {
-        ImGui::OpenInShell(sample_catalog::get_repository_url(sample).c_str());
+        ImGui::OpenInShell(sample.repository_url.c_str());
     }
     ImGui::SetItemTooltipEx("%s", "Clone it, then open its folder with Open...");
     ImGui::SameLine();
     if(widgets::draw_button(ICON_MDI_DOWNLOAD "  ZIP", widgets::button_kind::secondary))
     {
-        ImGui::OpenInShell(sample_catalog::get_download_url(sample).c_str());
+        ImGui::OpenInShell(sample.download_url.c_str());
     }
     ImGui::SetItemTooltipEx("%s", "Download the sample as a ZIP archive in the browser");
     return false;
+}
+
+/// What pressing a sample's picture does, and the editor the sample needs when this one is older.
+auto get_sample_image_tooltip(const sample_info& sample, const fs::path& installed) -> std::string
+{
+    std::string tooltip = installed.empty() ? "Open its page on GitHub." : "Open the sample.";
+    if(!sample.needed_version.empty())
+    {
+        tooltip += " It needs Unravel Engine " + sample.needed_version + " or newer, and this editor is older.";
+    }
+    return tooltip;
 }
 } // namespace
 
@@ -167,7 +175,7 @@ void start_page::draw_samples_view(rtti::context& ctx)
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground;
     if(ImGui::BeginChild("##samples_content", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, flags))
     {
-        const auto& samples = sample_catalog::get_samples();
+        const auto& samples = ctx.get_cached<sample_catalog_manager>().get_samples();
         const float gap = to_pixels(SAMPLES_VIEW_GRID_GAP);
         const float content_width = ImGui::GetContentRegionAvail().x;
         const int fitting_columns = static_cast<int>((content_width + gap) / (to_pixels(SAMPLES_VIEW_CARD_MIN_WIDTH) + gap));
@@ -188,31 +196,31 @@ void start_page::draw_samples_view(rtti::context& ctx)
     ImGui::EndChild();
 }
 
-void start_page::draw_sample_card(rtti::context& ctx, const sample_catalog::sample_info& sample, const ImVec2& size)
+void start_page::draw_sample_card(rtti::context& ctx, const sample_info& sample, const ImVec2& size)
 {
     auto& pm = ctx.get_cached<project_manager>();
-    const fs::path installed = sample_catalog::find_installed(sample, pm.get_editor_settings().projects.recent_projects);
+    const fs::path installed = ctx.get_cached<sample_catalog_manager>().find_installed(sample, pm.get_editor_settings().projects.recent_projects);
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImRect rect(pos, pos + size);
     const float rounding = to_pixels(SAMPLES_VIEW_ROUNDING);
     const float image_height = ImFloor(size.x * SAMPLES_VIEW_IMAGE_ASPECT);
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    ImGui::PushID(sample.repository);
+    ImGui::PushID(sample.repository.c_str());
     ImGui::BeginGroup();
     const bool is_card_hovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(rect.Min, rect.Max);
     widgets::draw_card_frame(draw_list, rect, rounding, is_card_hovered, false);
     // The picture opens the copy on disk, or the page of the sample when there is none.
     const bool is_image_pressed = ImGui::InvisibleButton("##sample_image", ImVec2(size.x, image_height));
-    ImGui::SetItemTooltipEx("%s", installed.empty() ? "Open its page on GitHub" : "Open the sample");
+    ImGui::SetItemTooltipEx("%s", get_sample_image_tooltip(sample, installed).c_str());
     const ImRect image_rect(pos + ImVec2(1.0f, 1.0f), ImVec2(rect.Max.x - 1.0f, pos.y + image_height));
-    const gfx::texture::ptr image = get_sample_image(pm, sample);
+    const gfx::texture::ptr image = get_sample_image(ctx, sample);
     if(image)
     {
         screen_art::draw_image_cover(draw_list, image, image_rect, rounding - 1.0f, ImDrawFlags_RoundCornersTop);
     }
     else
     {
-        screen_art::draw_placeholder(draw_list, image_rect, sample.title, rounding - 1.0f, ImDrawFlags_RoundCornersTop, sample.icon);
+        screen_art::draw_placeholder(draw_list, image_rect, sample.title.c_str(), rounding - 1.0f, ImDrawFlags_RoundCornersTop, sample.icon);
     }
     const float inset = to_pixels(SAMPLES_VIEW_PILL_INSET);
     if(sample.is_new)
@@ -225,19 +233,25 @@ void start_page::draw_sample_card(rtti::context& ctx, const sample_catalog::samp
         const ImVec2 pill_size = widgets::calc_pill_size(installed_text);
         widgets::draw_pill(draw_list, ImVec2(image_rect.Max.x - inset - pill_size.x, image_rect.Min.y + inset), installed_text, SAMPLES_VIEW_INSTALLED_FILL_COLOR, IM_COL32_WHITE);
     }
+    if(!sample.needed_version.empty())
+    {
+        const std::string needs_text = ICON_MDI_ALERT_OUTLINE " Needs " + sample.needed_version;
+        const ImVec2 pill_size = widgets::calc_pill_size(needs_text.c_str());
+        widgets::draw_pill(draw_list, ImVec2(image_rect.Min.x + inset, image_rect.Max.y - inset - pill_size.y), needs_text.c_str(), SAMPLES_VIEW_NEEDS_EDITOR_FILL_COLOR, IM_COL32_WHITE);
+    }
     const float padding = to_pixels(SAMPLES_VIEW_CARD_PADDING);
     const float text_x = pos.x + padding;
     const float max_x = rect.Max.x - padding;
     float text_y = image_rect.Max.y + padding;
-    draw_samples_eyebrow(draw_list, ImVec2(text_x, text_y), max_x, sample.topic);
+    draw_samples_eyebrow(draw_list, ImVec2(text_x, text_y), max_x, sample.topic.c_str());
     text_y += ImFloor(ImGui::GetFontSize() * SAMPLES_VIEW_EYEBROW_SCALE) + to_pixels(SAMPLES_VIEW_LINE_GAP);
     ImGui::PushFont(ImGui::Font::Bold);
     ImGui::PushWindowFontScale(SAMPLES_VIEW_TITLE_SCALE);
-    widgets::draw_text_clipped(draw_list, ImVec2(text_x, text_y), max_x, widgets::get_text_color(1.0f), sample.title);
+    widgets::draw_text_clipped(draw_list, ImVec2(text_x, text_y), max_x, widgets::get_text_color(1.0f), sample.title.c_str());
     ImGui::PopWindowFontScale();
     ImGui::PopFont();
     text_y += ImFloor(ImGui::GetFontSize() * SAMPLES_VIEW_TITLE_SCALE) + to_pixels(SAMPLES_VIEW_BLOCK_GAP);
-    widgets::draw_text_wrapped(draw_list, ImVec2(text_x, text_y), max_x, widgets::get_muted_color(), sample.description, SAMPLES_VIEW_DESCRIPTION_LINES);
+    widgets::draw_text_wrapped(draw_list, ImVec2(text_x, text_y), max_x, widgets::get_muted_color(), sample.description.c_str(), SAMPLES_VIEW_DESCRIPTION_LINES);
     text_y += static_cast<float>(SAMPLES_VIEW_DESCRIPTION_LINES) * ImGui::GetFontSize() + to_pixels(SAMPLES_VIEW_BLOCK_GAP);
     draw_sample_tags(draw_list, ImVec2(text_x, text_y), max_x, sample);
     ImGui::SetCursorScreenPos(ImVec2(text_x, rect.Max.y - padding - widgets::get_button_height()));
@@ -249,7 +263,7 @@ void start_page::draw_sample_card(rtti::context& ctx, const sample_catalog::samp
     ImGui::PopID();
     if(is_image_pressed && installed.empty())
     {
-        ImGui::OpenInShell(sample_catalog::get_repository_url(sample).c_str());
+        ImGui::OpenInShell(sample.repository_url.c_str());
     }
     if((is_image_pressed && !installed.empty()) || wants_open)
     {

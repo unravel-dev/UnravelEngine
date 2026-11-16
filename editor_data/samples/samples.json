@@ -1,0 +1,158 @@
+{
+  "schema": 1,
+  "generated": "2026-11-16T18:55:06Z",
+  "samples": [
+    {
+      "repository": "UnravelEngine-Sample-Survivors",
+      "branch": "main",
+      "title": "Barrowlight",
+      "topic": "Complete game",
+      "description": "A survivors-style game from the title screen to the final boss: four heroes, weapons that fire on their own, an upgrade every level and fifteen minutes against thousands of animated enemies. Shows crowds simulated in parallel in C# and drawn as instances, particles, menus for gamepad and touch, audio buses and save data.",
+      "tags": [
+        "Complete Game",
+        "Crowds",
+        "C# Scripts"
+      ],
+      "icon": "sword-cross",
+      "added": "2026-10-29",
+      "project_guid": "75f9c480-d9b4-6944-8073-edf317c38f7e",
+      "thumbnail": {
+        "path": "thumbnail.jpg",
+        "commit": "7d6565ddd9134446813e9fe54c798e2afc3de60b"
+      }
+    },
+    {
+      "repository": "UnravelEngine-Sample-2048",
+      "branch": "main",
+      "title": "2048",
+      "topic": "Casual game",
+      "description": "The sliding tile puzzle on a glowing 3D board: swipe, use the arrow keys or a gamepad to merge tiles up to 2048. Shows input actions with swipes, pooled prefabs, tiles animated by coroutines, a HUD bound to C#, merge sounds pitched by tile value and a best score saved between sessions.",
+      "tags": [
+        "Puzzle",
+        "Mobile",
+        "C# Scripts"
+      ],
+      "icon": "numeric-2-box",
+      "added": "2026-11-03",
+      "project_guid": "0ea8296e-ec53-be46-bdb2-ee0d0615a730",
+      "thumbnail": {
+        "path": "thumbnail.jpg",
+        "commit": "4366568fbf0bc411d414e5462a85791bb6c3f6d4"
+      }
+    },
+    {
+      "repository": "UnravelEngine-Sample-Physics",
+      "branch": "main",
+      "title": "Physics Playground",
+      "topic": "Physics",
+      "description": "Six stations around a plaza, walked in first person with a tool that pushes, carries and throws. Shows ragdolls that are knocked down and get up again, joints with motors, springs and break forces, physics materials, wind, water, magnets and explosions, a buggy on wheel joints, and ray, shape and overlap queries.",
+      "tags": [
+        "Physics",
+        "Ragdolls",
+        "Joints"
+      ],
+      "icon": "bowling",
+      "added": "2026-11-04",
+      "project_guid": "c940be3d-d21b-8a44-bd28-43a57b0f4246",
+      "thumbnail": {
+        "path": "thumbnail.jpg",
+        "commit": "586596b9c44ec97228bec5701f4047df65811e29"
+      }
+    },
+    {
+      "repository": "UnravelEngine-Sample-Animation",
+      "branch": "main",
+      "title": "Animation Gallery",
+      "topic": "Animation",
+      "description": "A playable hero walks a plaza of exhibits: blend spaces, layers with masks and additive hits, clip events and curves, a state machine controller, root motion, one clip retargeted onto five rigs, foot, hand, chain and look-at IK, and spring bones.",
+      "tags": [
+        "Animation",
+        "IK",
+        "Retargeting"
+      ],
+      "icon": "run",
+      "added": "2026-10-17",
+      "project_guid": "54909083-0a9b-dd46-a500-af98176587ef",
+      "thumbnail": {
+        "path": "thumbnail.jpg",
+        "commit": "474b59b271b2cea7ce63d2340f17cd3479a3d83a"
+      }
+    },
+    {
+      "repository": "UnravelEngine-Sample-VFX",
+      "branch": "main",
+      "title": "Spell Arena",
+      "topic": "Visual effects",
+      "description": "A night arena where spells play out: lightning, fireball, frost nova, arcane vortex and holy light, with braziers, embers, mist, fireflies and a meteor storm. Shows GPU particles with sub-emitters, ribbons, soft and lit particles, and the scripts that cast them.",
+      "tags": [
+        "Particles",
+        "VFX",
+        "C# Scripts"
+      ],
+      "icon": "auto-fix",
+      "added": "2026-10-13",
+      "project_guid": "79db1ea0-dc33-bb4c-a0a2-720a061fc94e",
+      "thumbnail": {
+        "path": "thumbnail.jpg",
+        "commit": "dded42d693d2665e808e451e2e9899ad173b5fef"
+      }
+    },
+    {
+      "repository": "UnravelEngine-Sample-GI",
+      "branch": "main",
+      "title": "GI Showcase",
+      "topic": "Global illumination",
+      "description": "A walk through a grand hall, a light lab, a gallery, a courtyard and a plaza, lit by the sun, emissive surfaces and lights alone. Shows dynamic global illumination and reflections, emissive light and a sun you can sweep through the day.",
+      "tags": [
+        "Global Illumination",
+        "Reflections",
+        "Lighting"
+      ],
+      "icon": "white-balance-sunny",
+      "added": "2026-10-13",
+      "project_guid": "61ae238e-124e-4944-8787-0b9a2487cd55",
+      "thumbnail": {
+        "path": "thumbnail.jpg",
+        "commit": "86014277a54acbdf248e604788df5f2f3f8dad56"
+      }
+    },
+    {
+      "repository": "UnravelEngine-Sample-Materials",
+      "branch": "main",
+      "title": "Material Gallery",
+      "topic": "Materials",
+      "description": "A gallery hall of eight bays where every surface is a material graph: measured metals, scanned texture sets, parallax depth, procedural marble and lava, holograms and force fields, plants and water moved in the material, and terrain layered by slope and height. Open any material in the Material Graph window to see how it is built.",
+      "tags": [
+        "Materials",
+        "Node Graphs",
+        "Shaders"
+      ],
+      "icon": "palette",
+      "added": "2026-11-15",
+      "project_guid": "8c481db9-4b2c-ee46-8909-bb0d0ae93880",
+      "thumbnail": {
+        "path": "thumbnail.jpg",
+        "commit": "504150932bcd3ad9dfada7a18c0e2be70131dacc"
+      }
+    },
+    {
+      "repository": "UnravelEngine-Sample-UI",
+      "branch": "main",
+      "title": "Game UI",
+      "topic": "User interface",
+      "description": "A main menu and three scenes of game UI in an RPG skin: every element and control, data models bound to C# scripts, and UI placed in the world. Built with RmlUi documents and style sheets.",
+      "tags": [
+        "UI",
+        "RmlUi",
+        "Data Binding"
+      ],
+      "icon": "view-dashboard-outline",
+      "added": "2026-10-13",
+      "project_guid": "01e36b29-e711-7245-a20f-0ae631cfc530",
+      "thumbnail": {
+        "path": "thumbnail.jpg",
+        "commit": "8d3150ff41e06abc6c29e04fc4cccb77dddf098f"
+      }
+    }
+  ]
+}

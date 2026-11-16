@@ -455,7 +455,7 @@ void start_page::draw_sidebar(rtti::context& ctx, const ImVec2& size)
         {
             show_view(view_state::projects);
         }
-        const std::string sample_count = std::to_string(sample_catalog::get_samples().size());
+        const std::string sample_count = std::to_string(ctx.get_cached<sample_catalog_manager>().get_samples().size());
         if(draw_nav_item("##nav_samples", ICON_MDI_AUTO_FIX, "Samples", sample_count, "Sample projects to learn from (Ctrl+2)", view_ == view_state::samples, true))
         {
             show_view(view_state::samples);
@@ -544,30 +544,28 @@ auto start_page::draw_nav_item(const char* id,
     return is_pressed;
 }
 
-auto start_page::get_sample_image(project_manager& pm, const sample_catalog::sample_info& sample) -> gfx::texture::ptr
+auto start_page::get_sample_image(rtti::context& ctx, const sample_info& sample) -> gfx::texture::ptr
 {
-    // The picture the editor ships, chosen for the sample; the one a copy on disk captured stands
-    // in when the editor has none.
-    const fs::path shipped = fs::resolve_protocol(sample.thumbnail);
-    fs::error_code error;
-    if(fs::exists(shipped, error))
+    // The picture chosen for the sample; the one a copy on disk shows stands in when there is none.
+    if(!sample.thumbnail.empty())
     {
-        return images_.get(shipped);
+        return images_.get(sample.thumbnail);
     }
-    const fs::path installed = sample_catalog::find_installed(sample, pm.get_editor_settings().projects.recent_projects);
+    const auto& recent_projects = ctx.get_cached<project_manager>().get_editor_settings().projects.recent_projects;
+    const fs::path installed = ctx.get_cached<sample_catalog_manager>().find_installed(sample, recent_projects);
     return installed.empty() ? nullptr : images_.get(project_thumbnail::find(installed));
 }
 
 void start_page::draw_featured_sample(rtti::context& ctx)
 {
-    const auto& samples = sample_catalog::get_samples();
+    const auto& samples = ctx.get_cached<sample_catalog_manager>().get_samples();
     if(samples.empty())
     {
         return;
     }
     const double time = ImGui::GetTime();
     const auto index = static_cast<size_t>(time / START_PAGE_FEATURE_SECONDS) % samples.size();
-    const sample_catalog::sample_info& sample = samples[index];
+    const sample_info& sample = samples[index];
     const float padding = to_pixels(START_PAGE_FEATURE_PADDING);
     const float width = ImGui::GetContentRegionAvail().x;
     const float image_height = ImFloor(width * START_PAGE_IMAGE_ASPECT);
@@ -591,14 +589,14 @@ void start_page::draw_featured_sample(rtti::context& ctx)
     widgets::draw_card_frame(draw_list, rect, rounding, is_hovered, false);
     const ImRect image_rect(pos + ImVec2(1.0f, 1.0f), ImVec2(rect.Max.x - 1.0f, pos.y + image_height));
     const float fade = static_cast<float>(ImMin(1.0, std::fmod(time, START_PAGE_FEATURE_SECONDS) / START_PAGE_FEATURE_FADE_SECONDS));
-    const gfx::texture::ptr image = get_sample_image(ctx.get_cached<project_manager>(), sample);
+    const gfx::texture::ptr image = get_sample_image(ctx, sample);
     if(image)
     {
         screen_art::draw_image_cover(draw_list, image, image_rect, rounding, ImDrawFlags_RoundCornersTop, IM_COL32(255, 255, 255, static_cast<int>(fade * 255.0f)));
     }
     else
     {
-        screen_art::draw_placeholder(draw_list, image_rect, sample.title, rounding, ImDrawFlags_RoundCornersTop, sample.icon);
+        screen_art::draw_placeholder(draw_list, image_rect, sample.title.c_str(), rounding, ImDrawFlags_RoundCornersTop, sample.icon);
     }
     if(sample.is_new)
     {
@@ -610,7 +608,7 @@ void start_page::draw_featured_sample(rtti::context& ctx)
     draw_start_page_eyebrow(draw_list, ImVec2(text_x, text_y), widgets::get_accent_color(1.0f), "FEATURED SAMPLE");
     text_y += ImGui::GetFontSize() + line_gap;
     ImGui::PushFont(ImGui::Font::Bold);
-    widgets::draw_text_clipped(draw_list, ImVec2(text_x, text_y), max_x, widgets::get_text_color(1.0f), sample.title);
+    widgets::draw_text_clipped(draw_list, ImVec2(text_x, text_y), max_x, widgets::get_text_color(1.0f), sample.title.c_str());
     ImGui::PopFont();
     text_y += ImGui::GetFontSize() + line_gap;
     const std::string link = fmt::format("Explore samples  {}", ICON_MDI_ARROW_RIGHT);

@@ -19,6 +19,7 @@ target_link_libraries(${target_name} PUBLIC
     asset_compiler
     packages
     update_check
+    sample_catalog
     imgui
     filedialog 
     httplib

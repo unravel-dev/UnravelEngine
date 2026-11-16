@@ -39,6 +39,9 @@ struct editor_settings
         /// Whether the editor asks GitHub at start, at most every 6 hours, whether a newer build is published.
         /// Help > Check for Updates... asks either way.
         bool check_at_startup = true;
+        /// Whether the editor reads the list of sample projects from GitHub at start, at most once a day, so the
+        /// start page offers samples published after this editor.
+        bool fetch_samples = true;
     } updates;
 
     struct projects_settings

@@ -1,6 +1,6 @@
 # editor/
 
-The editor executable: `core/` (asset compiler, deploy, packages, update check) and
+The editor executable: `core/` (asset compiler, deploy, packages, update check, sample catalog) and
 `editor/` (hub and panels, editing actions, project handling, the MCP server).
 
 - Nothing in `engine/` or `game/` depends on this folder. A feature the game needs at run

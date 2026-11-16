@@ -1,7 +1,7 @@
 #include "https_get.h"
 #include "https_get_platform.h"
 
-namespace unravel::update_check
+namespace unravel::https
 {
 namespace
 {
@@ -29,4 +29,4 @@ auto https_get(const std::string& url, const https_limits& limits, const stop_ch
     return detail::get_over_https(url, limits, should_end);
 }
 
-} // namespace unravel::update_check
+} // namespace unravel::https

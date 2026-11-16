@@ -26,6 +26,7 @@
 #include "system/mcp_manager.h"
 #include "system/project_manager.h"
 #include "system/project_thumbnail.h"
+#include "system/sample_catalog_manager.h"
 #include "system/version_manager.h"
 #include <filedialog/filedialog.h>
 
@@ -95,6 +96,7 @@ auto editor::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<project_thumbnail>();
     ctx.add<asset_watcher>();
     ctx.add<version_manager>();
+    ctx.add<sample_catalog_manager>();
     ctx.add<mcp_manager>(parser);
 
     return true;
@@ -235,6 +237,12 @@ auto editor::init(const cmd_line::parser& parser) -> bool
         return false;
     }
 
+    ls.begin_module("Sample Catalog");
+    if(!ls.check(ctx.get_cached<sample_catalog_manager>().init(ctx)))
+    {
+        return false;
+    }
+
     ls.begin_module("MCP Server");
     if(!ls.check(ctx.get_cached<mcp_manager>().init(ctx, parser)))
     {
@@ -346,6 +354,11 @@ auto editor::deinit() -> bool
         return false;
     }
 
+    if(!ctx.get_cached<sample_catalog_manager>().deinit(ctx))
+    {
+        return false;
+    }
+
     {
         auto& aw = ctx.get_cached<asset_watcher>();
         aw.unwatch_assets(ctx, "editor:/");
@@ -369,6 +382,7 @@ auto editor::destroy() -> bool
     ctx.remove<imgui_interface>();
 
     ctx.remove<project_manager>();
+    ctx.remove<sample_catalog_manager>();
     ctx.remove<version_manager>();
     ctx.remove<mcp_manager>();
 

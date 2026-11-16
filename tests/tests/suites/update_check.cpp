@@ -22,7 +22,7 @@
 
 #include "../tests.h"
 
-#include <update_check/https_get.h>
+#include <https/https_get.h>
 #include <update_check/update_fetch.h>
 #include <update_check/update_manifest.h>
 #include <update_check/update_schedule.h>
@@ -39,6 +39,7 @@ namespace
 {
 
 using namespace unravel::update_check;
+using namespace unravel::https;
 
 /// A time well after the epoch, so that every offset the cases use stays positive.
 constexpr std::int64_t NOW_SECONDS = 1'800'000'000;

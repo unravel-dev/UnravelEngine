@@ -17,7 +17,7 @@
 // The request runs in WinHTTP's asynchronous mode: the waiting thread can end it at any time by closing the request
 // handle, which WinHTTP documents for that mode, and the callbacks keep their state alive until WinHTTP reports
 // the handle closed.
-namespace unravel::update_check::detail
+namespace unravel::https::detail
 {
 namespace
 {
@@ -331,4 +331,4 @@ auto get_over_https(const std::string& url, const https_limits& limits, const st
     return take_result(*state);
 }
 
-} // namespace unravel::update_check::detail
+} // namespace unravel::https::detail

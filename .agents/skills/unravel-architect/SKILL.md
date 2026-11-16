@@ -26,8 +26,8 @@ AGENTS.md ("Changing a shared contract").
 - Service creation order is the order of `engine::create`, `init_core` and `init_systems` in
   `engine/engine/engine.cpp`; read it there before relying on it.
 - The editor libraries under `editor/core/` (`asset_compiler`, `deploy`, `packages`,
-  `update_check`) link into the editor and the test runner only; nothing a player runs may
-  need them.
+  `https_client`, `update_check`, `sample_catalog`) link into the editor and the test runner
+  only; nothing a player runs may need them.
 - Rendering goes through `engine/core/graphics/`; bgfx changes only as patches
   (`deps/AGENTS.md`).
 - A per-object variation reuses the object the engine already has (a material instance of a
@@ -50,7 +50,7 @@ deps/ (ospp, threadpp, audiopp, dotnetpp, hpp, 3rdparty)
   -> engine/core/     context, reflection, serialization, filesystem, graphics, concurrency
   -> engine/engine/   ECS, systems, rendering, assets, physics, audio, scripting, UI
   -> game/            the player
-  -> editor/core/     asset compiler, deploy, packages, update check
+  -> editor/core/     asset compiler, deploy, packages, update check, sample catalog
   -> editor/editor/   hub, panels, gizmos, MCP server
 ```
 

@@ -14,8 +14,8 @@ namespace unravel
 /**
  * @brief The picture of a project on the start page and on the screen that opens it.
  *
- * A project can carry a picture of its own, thumbnail.png in its folder, kept and shared with the
- * project. Without one, the editor shows the view it captured into the cache of the project: once
+ * A project can carry a picture of its own, thumbnail.png (or thumbnail.jpg) in its folder, kept
+ * and shared with the project. Without one, the editor shows the view it captured into the cache of the project: once
  * a while after a project without any thumbnail opens, and again whenever a scene is saved. The
  * view is what the game camera sees, rendered for a few frames first so that it has settled, or
  * the Scene view when the scene has no camera.
@@ -29,7 +29,8 @@ public:
     static auto get_custom_path(const fs::path& project_dir) -> fs::path;
     /// Where the editor keeps the thumbnail it captured.
     static auto get_captured_path(const fs::path& project_dir) -> fs::path;
-    /// The thumbnail to show for the project, the custom one first; empty when there is none.
+    /// The thumbnail to show for the project: thumbnail.png, thumbnail.jpg, then the captured one;
+    /// empty when there is none.
     static auto find(const fs::path& project_dir) -> fs::path;
     /// Copies a PNG image into the project as its custom thumbnail.
     static auto set_custom(const fs::path& project_dir, const fs::path& image_path) -> bool;

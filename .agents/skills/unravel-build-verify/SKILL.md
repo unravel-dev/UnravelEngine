@@ -104,7 +104,8 @@ Shell ([shell.md](shell.md) has the recipes)
 
 - Targets: `deps` -> `engine` (static) -> `editor` (`unravel-editor`), `game`
   (`unravel-player`; `main` on Android) and `tests` (`unravel-tests`, which also links the
-  editor libraries `deploy`, `asset_compiler`, `packages` and `update_check`). The default
+  editor libraries `deploy`, `asset_compiler`, `packages`, `update_check` and
+  `sample_catalog`). The default
   build also builds the data targets and, when their tools are found, the player templates,
   after the editor while `UNRAVEL_PLAYERS_AFTER_EDITOR` is on.
 - The runtime folder is `<tree>/bin` (`<tree>/bin/<Config>` with a multi-config generator):

@@ -8,7 +8,7 @@
 #include <functional>
 #include <string>
 
-namespace unravel::update_check
+namespace unravel::https
 {
 
 /// The product name sent as User-Agent. Nothing about the user, the computer or this build is sent.
@@ -54,4 +54,4 @@ auto is_https_url(hpp::string_view url) -> bool;
 auto https_get(const std::string& url, const https_limits& limits = {}, const stop_check& should_stop = {})
     -> https_result;
 
-} // namespace unravel::update_check
+} // namespace unravel::https

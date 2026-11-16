@@ -47,7 +47,7 @@ build/<Config>/bin/unravel-tests --jobs 1               # every suite in this pr
 | `--worker` | run one suite, named exactly, as a worker (what the parallel run and CTest start) |
 | `--bench`, `-b` | benchmarks as well as checks (`ecs serialization` timings, `fs watcher` latency, `mesh shapes` compiles every shape) |
 | `--bench-only` | benchmarks, no checks |
-| `--network` | also the checks that reach the internet (`update check`) |
+| `--network` | also the checks that reach the internet (`update check`, `sample catalog`) |
 | `--single-threaded` | engine option: every job, parallel loop and frame runs on the main thread, as in the browser (`engine/core/concurrency/threading_mode.h`) |
 
 - One suite, or `--jobs 1`, runs in this process and prints as it goes, as before. More than one
@@ -158,7 +158,8 @@ editor, and never under a hard timeout. Times are a full parallel run, RelWithDe
 | `assembly references` | `editor/core/deploy/assembly_references.cpp`: the .NET assembly reader and framework trim |
 | `settings profiles` | profiles, sparse overrides, texture variant cooks, cooked web shaders |
 | `content packages` | `.unravelpkg` export, import, update, removal |
-| `update check` | `editor/core/update_check/`; `--network` adds the live checks |
+| `update check` | `editor/core/update_check/` and `editor/core/https/`; `--network` adds the live checks |
+| `sample catalog` | `editor/core/sample_catalog/`: samples.json, the shipped copy and its pictures, cache, schedule; `--network` adds the live checks |
 | `third party notices` | the notices compiled into the engine (`THIRD_PARTY_NOTICES.txt`) |
 | `engine version` | `engine/core/version/version.h`: parse and compare by commits since the tag |
 | `boot config peek` | the cold-boot settings read from a project's settings before systems start |

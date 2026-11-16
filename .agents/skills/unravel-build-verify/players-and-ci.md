@@ -54,14 +54,15 @@ Run them after changing `data.js`, `graphics.js`, `audio.js` or what `main.js` t
 
 ## Workflows
 
-All four in `.github/workflows/` run by hand only.
+All five in `.github/workflows/` run by hand only.
 
 | Workflow | What a run does |
 |----------|-----------------|
 | `windows.yml` | MSVC 2022 and clang GNU-driver legs, Release preset, player templates off, then every suite |
 | `linux.yml` | Ubuntu 22.04 and 24.04, GCC and clang legs, then every suite |
 | `macos.yml` | Apple silicon runners, then every suite |
-| `release.yml` | editor packages for Windows and Ubuntu 20.04 to 26.04, uploaded to a GitHub release |
+| `release.yml` | editor packages for Windows and Ubuntu 20.04 to 26.04, uploaded to a GitHub release with `latest.json` and `samples.json` |
+| `samples.yml` | `samples.json`, the start page's sample projects, attached to the latest release |
 
 - `gh workflow run <file> --ref <branch>`. `release.yml` takes `-f version=<version>` (what
   git describe prints, a commit, a branch or a tag) and one checkbox per platform.
@@ -72,6 +73,12 @@ All four in `.github/workflows/` run by hand only.
   container so a package needs no newer glibc than its release. Ubuntu 20.04 builds with
   libstdc++ 10 (no `std::bit_cast`) and a standalone Python for the web player. The Android and
   web players can be built once on Windows and shared by every package.
+- Samples: every public `UnravelEngine-Sample-*` repository with a `sample.json` and a
+  picture (`thumbnail.jpg`) at its root is a sample; `.github/scripts/sample_catalog.py`
+  documents the fields and checks them as the editor does. After a sample is published or its
+  card changes, run `samples.yml`. Before a release, refresh the copy the editor ships from
+  the clones (their `sample.json` and picture committed and pushed):
+  `python .github/scripts/sample_catalog.py --local-root <clones folder> --output editor_data/samples/samples.json --thumbnails-dir editor_data/samples`.
 
 ## Packages
 

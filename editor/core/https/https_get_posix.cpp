@@ -8,7 +8,7 @@
 // There is no HTTPS client in the base system, so the request runs an installed tool: wget, which every Ubuntu
 // desktop has, else curl. Both check certificates against the system's store and read the proxy from the
 // environment. Each is told to print the body and nothing else, as the output and the errors arrive as one stream.
-namespace unravel::update_check::detail
+namespace unravel::https::detail
 {
 namespace
 {
@@ -120,4 +120,4 @@ auto get_over_https(const std::string& url, const https_limits& limits, const st
     return fail("Neither wget nor curl is installed and able to run the request.");
 }
 
-} // namespace unravel::update_check::detail
+} // namespace unravel::https::detail

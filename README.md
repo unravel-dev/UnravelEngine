@@ -77,6 +77,8 @@ Direct3D 11, Vulkan or OpenGL support.
 At start, at most every 6 hours, the editor fetches `latest.json` from the latest release on GitHub to see
 whether a newer build for its platform is published; nothing about you or your computer is sent. Editor
 Settings > Updates turns that off. With a project open, Help > Check for Updates... asks at any time.
+At most once a day it also fetches `samples.json` and the pictures of the sample projects, so the start page
+offers samples published after your editor. Editor Settings > Updates > Look for New Samples turns that off.
 
 ## Platforms
 

@@ -1,11 +1,10 @@
 #pragma once
 
-#include "sample_catalog.h"
-
 #include <context/context.hpp>
 #include <editor/imgui/image_file_cache.h>
 #include <editor/imgui/integration/imgui.h>
 #include <editor/project/project_version_control.h>
+#include <editor/system/sample_catalog_manager.h>
 #include <filesystem/filesystem.h>
 
 #include <string>
@@ -111,7 +110,8 @@ private:
     /// One sample at a time, turning over, at the foot of the sidebar when there is room.
     void draw_featured_sample(rtti::context& ctx);
     void draw_main(rtti::context& ctx);
-    auto get_sample_image(project_manager& pm, const sample_catalog::sample_info& sample) -> gfx::texture::ptr;
+    /// The sample's picture, else the thumbnail of its copy on disk; null when there is neither.
+    auto get_sample_image(rtti::context& ctx, const sample_info& sample) -> gfx::texture::ptr;
 
     // Projects view, start_page_projects.cpp.
     void draw_projects_view(rtti::context& ctx);
@@ -132,7 +132,7 @@ private:
 
     // Samples and Learn views, start_page_samples.cpp.
     void draw_samples_view(rtti::context& ctx);
-    void draw_sample_card(rtti::context& ctx, const sample_catalog::sample_info& sample, const ImVec2& size);
+    void draw_sample_card(rtti::context& ctx, const sample_info& sample, const ImVec2& size);
     void draw_learn_view();
 
     // Pages that replace the main area, start_page_forms.cpp.
