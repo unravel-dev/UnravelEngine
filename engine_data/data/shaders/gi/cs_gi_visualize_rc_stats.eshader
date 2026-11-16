@@ -24,6 +24,136 @@ vec3 GiRcStatsColor(uint value, uint red, uint yellow)
 	return value > red ? vec3(1.0, 0.0, 0.0) : (value > yellow ? vec3(1.0, 1.0, 0.0) : vec3_splat(1.0));
 }
 
+/// The rows after the priority histogram, a label and a value each, and the most four-symbol chunks of a label.
+#define GI_RC_STATS_ROWS 13
+#define GI_RC_STATS_LABEL_CHUNKS 8
+/// The priority histogram's buckets (GI_RC_COUNTER_HISTOGRAM onwards), printed 8 to a line.
+#define GI_RC_STATS_HISTOGRAM_BUCKETS 16
+
+/// Chunk @p chunk of stats row @p row's label: four symbol codes, 0 printing nothing; nothing past the label's end.
+/// The rows print from a loop, so fxc inlines each print helper once rather than at every symbol.
+ivec4 GiRcStatsLabel(int row, int chunk)
+{
+	switch(row * GI_RC_STATS_LABEL_CHUNKS + chunk)
+	{
+	// "MaxBucket "
+	case 0: return ivec4(_M_, _a_, _x_, _B_);
+	case 1: return ivec4(_u_, _c_, _k_, _e_);
+	case 2: return ivec4(_t_, _SPC_, 0, 0);
+	// "MaxTracesFromMaxUpdateBucket "
+	case 8: return ivec4(_M_, _a_, _x_, _T_);
+	case 9: return ivec4(_r_, _a_, _c_, _e_);
+	case 10: return ivec4(_s_, _F_, _r_, _o_);
+	case 11: return ivec4(_m_, _M_, _a_, _x_);
+	case 12: return ivec4(_U_, _p_, _d_, _a_);
+	case 13: return ivec4(_t_, _e_, _B_, _u_);
+	case 14: return ivec4(_c_, _k_, _e_, _t_);
+	case 15: return ivec4(_SPC_, 0, 0, 0);
+	// "Out "
+	case 16: return ivec4(_O_, _u_, _t_, _SPC_);
+	// " TraceCost "
+	case 24: return ivec4(_SPC_, _T_, _r_, _a_);
+	case 25: return ivec4(_c_, _e_, _C_, _o_);
+	case 26: return ivec4(_s_, _t_, _SPC_, 0);
+	// " TraceCostFromMaxUpdateBucket: "
+	case 32: return ivec4(_SPC_, _T_, _r_, _a_);
+	case 33: return ivec4(_c_, _e_, _C_, _o_);
+	case 34: return ivec4(_s_, _t_, _F_, _r_);
+	case 35: return ivec4(_o_, _m_, _M_, _a_);
+	case 36: return ivec4(_x_, _U_, _p_, _d_);
+	case 37: return ivec4(_a_, _t_, _e_, _B_);
+	case 38: return ivec4(_u_, _c_, _k_, _e_);
+	case 39: return ivec4(_t_, _COLON_, _SPC_, 0);
+	// " Min New Probe Trace Cost:     "
+	case 40: return ivec4(_SPC_, _M_, _i_, _n_);
+	case 41: return ivec4(_SPC_, _N_, _e_, _w_);
+	case 42: return ivec4(_SPC_, _P_, _r_, _o_);
+	case 43: return ivec4(_b_, _e_, _SPC_, _T_);
+	case 44: return ivec4(_r_, _a_, _c_, _e_);
+	case 45: return ivec4(_SPC_, _C_, _o_, _s_);
+	case 46: return ivec4(_t_, _COLON_, _SPC_, _SPC_);
+	case 47: return ivec4(_SPC_, _SPC_, _SPC_, 0);
+	// " Traced Probes:  "
+	case 48: return ivec4(_SPC_, _T_, _r_, _a_);
+	case 49: return ivec4(_c_, _e_, _d_, _SPC_);
+	case 50: return ivec4(_P_, _r_, _o_, _b_);
+	case 51: return ivec4(_e_, _s_, _COLON_, _SPC_);
+	case 52: return ivec4(_SPC_, 0, 0, 0);
+	// " Traced tiles/4: "
+	case 56: return ivec4(_SPC_, _T_, _r_, _a_);
+	case 57: return ivec4(_c_, _e_, _d_, _SPC_);
+	case 58: return ivec4(_t_, _i_, _l_, _e_);
+	case 59: return ivec4(_s_, _SLASH_, _4_, _COLON_);
+	case 60: return ivec4(_SPC_, 0, 0, 0);
+	// " Traced tiles:   "
+	case 64: return ivec4(_SPC_, _T_, _r_, _a_);
+	case 65: return ivec4(_c_, _e_, _d_, _SPC_);
+	case 66: return ivec4(_t_, _i_, _l_, _e_);
+	case 67: return ivec4(_s_, _COLON_, _SPC_, _SPC_);
+	case 68: return ivec4(_SPC_, 0, 0, 0);
+	// "MaxProbesInAtlas "
+	case 72: return ivec4(_M_, _a_, _x_, _P_);
+	case 73: return ivec4(_r_, _o_, _b_, _e_);
+	case 74: return ivec4(_s_, _I_, _n_, _A_);
+	case 75: return ivec4(_t_, _l_, _a_, _s_);
+	case 76: return ivec4(_SPC_, 0, 0, 0);
+	// "ProbesInAtlas "
+	case 80: return ivec4(_P_, _r_, _o_, _b_);
+	case 81: return ivec4(_e_, _s_, _I_, _n_);
+	case 82: return ivec4(_A_, _t_, _l_, _a_);
+	case 83: return ivec4(_s_, _SPC_, 0, 0);
+	// "Allocator "
+	case 88: return ivec4(_A_, _l_, _l_, _o_);
+	case 89: return ivec4(_c_, _a_, _t_, _o_);
+	case 90: return ivec4(_r_, _SPC_, 0, 0);
+	// "FreeList "
+	case 96: return ivec4(_F_, _r_, _e_, _e_);
+	case 97: return ivec4(_L_, _i_, _s_, _t_);
+	case 98: return ivec4(_SPC_, 0, 0, 0);
+	default: return ivec4(0, 0, 0, 0);
+	}
+}
+
+/// Stats row @p row's value and its colour; a heading has none.
+struct GiRcStatsRow
+{
+	bool has_value;
+	uint value;
+	vec3 color;
+};
+
+GiRcStatsRow GiRcStatsRowValue(int row, uint budget, uint spent, uint new_probe_cost, uint tiles, uint probes_in_atlas)
+{
+	GiRcStatsRow stats_row;
+	stats_row.has_value = true;
+	stats_row.value = 0u;
+	stats_row.color = vec3_splat(1.0);
+	switch(row)
+	{
+	case 0: stats_row.value = b_gi_rc_counters[GI_RC_COUNTER_MAX_BUCKET]; break;
+	case 1: stats_row.value = b_gi_rc_counters[GI_RC_COUNTER_REMAINDER]; break;
+	case 2: stats_row.has_value = false; break;
+	case 3: stats_row.value = spent; stats_row.color = GiRcStatsColor(spent, 2u * budget, budget); break;
+	case 4: stats_row.value = b_gi_rc_counters[GI_RC_COUNTER_SPENT_LAST]; break;
+	case 5:
+		stats_row.value = new_probe_cost;
+		stats_row.color = GiRcStatsColor(new_probe_cost, budget / 2u, 0xFFFFFFFFu);
+		break;
+	case 6: stats_row.value = b_gi_rc_counters[GI_RC_COUNTER_TRACE_COUNT]; break;
+	case 7: stats_row.value = tiles / 4u; stats_row.color = GiRcStatsColor(tiles, budget, 0xFFFFFFFFu); break;
+	case 8: stats_row.value = tiles; break;
+	case 9: stats_row.value = uint(GI_RADIANCE_CACHE_MAX_PROBES); break;
+	case 10:
+		stats_row.value = probes_in_atlas;
+		stats_row.color = GiRcStatsColor(probes_in_atlas, uint(GI_RADIANCE_CACHE_MAX_PROBES) - 2u, 0xFFFFFFFFu);
+		break;
+	case 11: stats_row.value = b_gi_rc_counters[GI_RC_COUNTER_PROBES]; break;
+	case 12: stats_row.value = b_gi_rc_counters[GI_RC_COUNTER_FREE_LIST]; break;
+	default: stats_row.has_value = false; break;
+	}
+	return stats_row;
+}
+
 NUM_THREADS(1, 1, 1)
 void main()
 {
@@ -39,143 +169,37 @@ void main()
 	}
 	text = ShaderPrintNewline(text);
 	// The priority histogram: the trace cost of the probes in each bucket, 8 to a line.
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 0]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 1]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 2]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 3]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 4]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 5]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 6]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 7]);
+	LOOP
+	for(int bucket = 0; bucket < GI_RC_STATS_HISTOGRAM_BUCKETS; ++bucket)
+	{
+		text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + bucket]);
+		// An explicit branch: fxc runs both sides of ?:, and both print.
+		if((bucket & 7) == 7)
+		{
+			text = ShaderPrintNewline(text);
+		}
+		else
+		{
+			text = ShaderPrintSymbol(text, _SPC_);
+		}
+	}
 	text = ShaderPrintNewline(text);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 8]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 9]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 10]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 11]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 12]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 13]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 14]);
-	text = ShaderPrintSymbol(text, _SPC_);
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_HISTOGRAM + 15]);
-	text = ShaderPrintNewline(text);
-	text = ShaderPrintNewline(text);
-	// "MaxBucket "
-	text = ShaderPrintSymbols(text, ivec4(_M_, _a_, _x_, _B_));
-	text = ShaderPrintSymbols(text, ivec4(_u_, _c_, _k_, _e_));
-	text = ShaderPrintSymbols(text, ivec4(_t_, _SPC_, 0, 0));
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_MAX_BUCKET]);
-	text = ShaderPrintNewline(text);
-	// "MaxTracesFromMaxUpdateBucket "
-	text = ShaderPrintSymbols(text, ivec4(_M_, _a_, _x_, _T_));
-	text = ShaderPrintSymbols(text, ivec4(_r_, _a_, _c_, _e_));
-	text = ShaderPrintSymbols(text, ivec4(_s_, _F_, _r_, _o_));
-	text = ShaderPrintSymbols(text, ivec4(_m_, _M_, _a_, _x_));
-	text = ShaderPrintSymbols(text, ivec4(_U_, _p_, _d_, _a_));
-	text = ShaderPrintSymbols(text, ivec4(_t_, _e_, _B_, _u_));
-	text = ShaderPrintSymbols(text, ivec4(_c_, _k_, _e_, _t_));
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, 0, 0, 0));
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_REMAINDER]);
-	text = ShaderPrintNewline(text);
-	// "Out "
-	text = ShaderPrintSymbols(text, ivec4(_O_, _u_, _t_, _SPC_));
-	text = ShaderPrintNewline(text);
-	// " TraceCost "
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, _T_, _r_, _a_));
-	text = ShaderPrintSymbols(text, ivec4(_c_, _e_, _C_, _o_));
-	text = ShaderPrintSymbols(text, ivec4(_s_, _t_, _SPC_, 0));
-	text.color = GiRcStatsColor(spent, 2u * budget, budget);
-	text = ShaderPrintUint(text, spent);
-	text.color = vec3_splat(1.0);
-	text = ShaderPrintNewline(text);
-	// " TraceCostFromMaxUpdateBucket: "
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, _T_, _r_, _a_));
-	text = ShaderPrintSymbols(text, ivec4(_c_, _e_, _C_, _o_));
-	text = ShaderPrintSymbols(text, ivec4(_s_, _t_, _F_, _r_));
-	text = ShaderPrintSymbols(text, ivec4(_o_, _m_, _M_, _a_));
-	text = ShaderPrintSymbols(text, ivec4(_x_, _U_, _p_, _d_));
-	text = ShaderPrintSymbols(text, ivec4(_a_, _t_, _e_, _B_));
-	text = ShaderPrintSymbols(text, ivec4(_u_, _c_, _k_, _e_));
-	text = ShaderPrintSymbols(text, ivec4(_t_, _COLON_, _SPC_, 0));
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_SPENT_LAST]);
-	text = ShaderPrintNewline(text);
-	// " Min New Probe Trace Cost:     "
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, _M_, _i_, _n_));
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, _N_, _e_, _w_));
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, _P_, _r_, _o_));
-	text = ShaderPrintSymbols(text, ivec4(_b_, _e_, _SPC_, _T_));
-	text = ShaderPrintSymbols(text, ivec4(_r_, _a_, _c_, _e_));
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, _C_, _o_, _s_));
-	text = ShaderPrintSymbols(text, ivec4(_t_, _COLON_, _SPC_, _SPC_));
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, _SPC_, _SPC_, 0));
-	text.color = GiRcStatsColor(new_probe_cost, budget / 2u, 0xFFFFFFFFu);
-	text = ShaderPrintUint(text, new_probe_cost);
-	text.color = vec3_splat(1.0);
-	text = ShaderPrintNewline(text);
-	// " Traced Probes:  "
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, _T_, _r_, _a_));
-	text = ShaderPrintSymbols(text, ivec4(_c_, _e_, _d_, _SPC_));
-	text = ShaderPrintSymbols(text, ivec4(_P_, _r_, _o_, _b_));
-	text = ShaderPrintSymbols(text, ivec4(_e_, _s_, _COLON_, _SPC_));
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, 0, 0, 0));
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_TRACE_COUNT]);
-	text = ShaderPrintNewline(text);
-	// " Traced tiles/4: "
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, _T_, _r_, _a_));
-	text = ShaderPrintSymbols(text, ivec4(_c_, _e_, _d_, _SPC_));
-	text = ShaderPrintSymbols(text, ivec4(_t_, _i_, _l_, _e_));
-	text = ShaderPrintSymbols(text, ivec4(_s_, _SLASH_, _4_, _COLON_));
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, 0, 0, 0));
-	text.color = GiRcStatsColor(tiles, budget, 0xFFFFFFFFu);
-	text = ShaderPrintUint(text, tiles / 4u);
-	text.color = vec3_splat(1.0);
-	text = ShaderPrintNewline(text);
-	// " Traced tiles:   "
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, _T_, _r_, _a_));
-	text = ShaderPrintSymbols(text, ivec4(_c_, _e_, _d_, _SPC_));
-	text = ShaderPrintSymbols(text, ivec4(_t_, _i_, _l_, _e_));
-	text = ShaderPrintSymbols(text, ivec4(_s_, _COLON_, _SPC_, _SPC_));
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, 0, 0, 0));
-	text = ShaderPrintUint(text, tiles);
-	text = ShaderPrintNewline(text);
-	// "MaxProbesInAtlas "
-	text = ShaderPrintSymbols(text, ivec4(_M_, _a_, _x_, _P_));
-	text = ShaderPrintSymbols(text, ivec4(_r_, _o_, _b_, _e_));
-	text = ShaderPrintSymbols(text, ivec4(_s_, _I_, _n_, _A_));
-	text = ShaderPrintSymbols(text, ivec4(_t_, _l_, _a_, _s_));
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, 0, 0, 0));
-	text = ShaderPrintUint(text, uint(GI_RADIANCE_CACHE_MAX_PROBES));
-	text = ShaderPrintNewline(text);
-	// "ProbesInAtlas "
-	text = ShaderPrintSymbols(text, ivec4(_P_, _r_, _o_, _b_));
-	text = ShaderPrintSymbols(text, ivec4(_e_, _s_, _I_, _n_));
-	text = ShaderPrintSymbols(text, ivec4(_A_, _t_, _l_, _a_));
-	text = ShaderPrintSymbols(text, ivec4(_s_, _SPC_, 0, 0));
-	text.color = GiRcStatsColor(probes_in_atlas, uint(GI_RADIANCE_CACHE_MAX_PROBES) - 2u, 0xFFFFFFFFu);
-	text = ShaderPrintUint(text, probes_in_atlas);
-	text.color = vec3_splat(1.0);
-	text = ShaderPrintNewline(text);
-	// "Allocator "
-	text = ShaderPrintSymbols(text, ivec4(_A_, _l_, _l_, _o_));
-	text = ShaderPrintSymbols(text, ivec4(_c_, _a_, _t_, _o_));
-	text = ShaderPrintSymbols(text, ivec4(_r_, _SPC_, 0, 0));
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_PROBES]);
-	text = ShaderPrintNewline(text);
-	// "FreeList "
-	text = ShaderPrintSymbols(text, ivec4(_F_, _r_, _e_, _e_));
-	text = ShaderPrintSymbols(text, ivec4(_L_, _i_, _s_, _t_));
-	text = ShaderPrintSymbols(text, ivec4(_SPC_, 0, 0, 0));
-	text = ShaderPrintUint(text, b_gi_rc_counters[GI_RC_COUNTER_FREE_LIST]);
+	// Each row: its label, then its value in its colour.
+	LOOP
+	for(int row = 0; row < GI_RC_STATS_ROWS; ++row)
+	{
+		// fxc unrolls this loop around the label's switch (a LOOP here is error X3531); the rows stay one loop.
+		for(int chunk = 0; chunk < GI_RC_STATS_LABEL_CHUNKS; ++chunk)
+		{
+			text = ShaderPrintSymbols(text, GiRcStatsLabel(row, chunk));
+		}
+		GiRcStatsRow stats_row = GiRcStatsRowValue(row, budget, spent, new_probe_cost, tiles, probes_in_atlas);
+		if(stats_row.has_value)
+		{
+			text.color = stats_row.color;
+			text = ShaderPrintUint(text, stats_row.value);
+			text.color = vec3_splat(1.0);
+		}
+		text = ShaderPrintNewline(text);
+	}
 }

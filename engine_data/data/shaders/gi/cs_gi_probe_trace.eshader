@@ -2,7 +2,8 @@
 // res4: screen probes of 4 x 4 rays, the final gather quality below 0.39. res16: of 16 x 16 rays, the quality from 1.27 (gi_gather_pass).
 // far_field: the far-field pass: the distance field, the radiance cache and the sky over the rays the screen pass left, one thread each.
 // hit_shade: the hit pass: the surface cache at the distance-field hits the far-field pass stored, one thread per far ray.
-// visualize: for the one probe the view shows, its rays written as lines.
+// visualize: for the one probe the view shows, its rays written as lines; the screen stage, leaving the other rays to
+// visualize_far: their distance field and radiance cache.
 default
 far_field         GI_TRACE_FAR_FIELD
 far_field_res4    GI_PROBE_TRACE_RES=4 GI_TRACE_FAR_FIELD
@@ -15,6 +16,9 @@ res16             GI_PROBE_TRACE_RES=16
 visualize         GI_VISUALIZE_TRACES
 visualize_res4    GI_VISUALIZE_TRACES GI_PROBE_TRACE_RES=4
 visualize_res16   GI_VISUALIZE_TRACES GI_PROBE_TRACE_RES=16
+visualize_far         GI_VISUALIZE_TRACES_FAR
+visualize_far_res4    GI_VISUALIZE_TRACES_FAR GI_PROBE_TRACE_RES=4
+visualize_far_res16   GI_VISUALIZE_TRACES_FAR GI_PROBE_TRACE_RES=16
 
 [code]
 /*
@@ -54,30 +58,35 @@ visualize_res16   GI_VISUALIZE_TRACES GI_PROBE_TRACE_RES=16
  * hit's distance, the trace length for distance-field hits, the cache probes' hit distance for the
  * hand-off, the maximum trace distance for the sky; encoded with the moving flag (GiEncodeTraceDistance).
  *
- * cs_gi_probe_trace.eshader#visualize compiles this file with GI_VISUALIZE_TRACES for the probe trace visualization:
- * one group traces every stage of the probe nearest the visualized pixel again, with this frame's inputs - its rays
- * are the gather's own - and writes each ray as a line instead (gi_visualize.sh), knowing which rays a screen or
- * distance-field hit answered.
+ * The probe trace visualization traces every stage of the probe nearest the visualized pixel again, with this
+ * frame's inputs - its rays are the gather's own - and writes each ray as a line instead (gi_visualize.sh), knowing
+ * which rays a screen or distance-field hit answered. Two groups of one dispatch each, as the passes split the
+ * stages: compiled with GI_VISUALIZE_TRACES (cs_gi_probe_trace.eshader#visualize) the screen stage, which writes
+ * the line of each ray it answers and leaves the others pending; compiled with GI_VISUALIZE_TRACES_FAR
+ * (#visualize_far) the distance field and the radiance cache, which write the pending rays' lines. fxc optimizes a
+ * kernel whole, and every stage in one took it far longer than the two halves.
  */
 
+#if defined(GI_VISUALIZE_TRACES) || defined(GI_VISUALIZE_TRACES_FAR)
+#define GI_VISUALIZING_TRACES 1
+#endif
 #if defined(GI_VISUALIZE_TRACES)
 #define GI_TRACE_SCREEN_STAGE 1
-#define GI_TRACE_FAR_STAGES 1
-#elif defined(GI_TRACE_FAR_FIELD) || defined(GI_TRACE_HIT_SHADE)
+#elif defined(GI_VISUALIZE_TRACES_FAR) || defined(GI_TRACE_FAR_FIELD) || defined(GI_TRACE_HIT_SHADE)
 #define GI_TRACE_FAR_STAGES 1
 #else
 #define GI_TRACE_SCREEN_STAGE 1
 #endif
 // The GPU pre-exposure: at stage 7 for the screen stage, from the environment SH's texel 9 for the distance-field
-// stages, whose visualizing variant has no stage left.
-#if defined(GI_TRACE_FAR_STAGES)
+// stages and the visualization, which reads it as the far stages do in both its halves.
+#if defined(GI_TRACE_FAR_STAGES) || defined(GI_VISUALIZING_TRACES)
 #define PRE_EXPOSURE_ENVIRONMENT s_gi_env_sh
 #else
 #define PRE_EXPOSURE_STAGE 7
 #endif
 
 #include "bgfx_compute.sh"
-#ifdef GI_TRACE_FAR_STAGES
+#if defined(GI_TRACE_FAR_STAGES) || defined(GI_VISUALIZING_TRACES)
 /// The environment SH (texels 0-8), absolute radiance; texel 9 holds the GPU pre-exposure (declared before the
 /// headers that read the pre-exposure).
 SAMPLER2D(s_gi_env_sh, 3);
@@ -106,7 +115,7 @@ SAMPLER2D(s_gi_env_sh, 3);
 SAMPLER2D(s_gi_probe_records, 0);
 /// The probes' importance-sampled ray slots (cs_gi_probe_generate_rays.eshader).
 SAMPLER2D(s_gi_ray_info, 11);
-#ifdef GI_VISUALIZE_TRACES
+#ifdef GI_VISUALIZING_TRACES
 /// The visualized probe's rays (gi_visualize.sh), written in place of the trace radiance.
 BUFFER_RW(b_gi_visualize_traces, vec4, 5);
 #else
@@ -125,7 +134,7 @@ BUFFER_RO(b_gi_rc_indirection, uint, 7);
 SAMPLER2D(s_gi_rc_final, 8);
 #include "gi/gi_radiance_cache_sample.sh"
 #endif
-#if !defined(GI_VISUALIZE_TRACES)
+#if !defined(GI_VISUALIZING_TRACES)
 /// The rays the screen pass leaves to the far-field pass: [0] = their count, then GI_TRACE_RAY_STRIDE uints per ray
 /// - its trace texel (x | y << 16) and the distance the screen vouched for (float bits); the far-field pass replaces
 /// the distance with a distance-field hit's march state for the hit pass (t, then the hit field and voxel in the next
@@ -347,17 +356,21 @@ bool GiIsFieldHitMoving(GiFieldSurface surface, float probe_depth)
 }
 #endif
 
+#ifdef GI_VISUALIZING_TRACES
 #ifdef GI_VISUALIZE_TRACES
 #include "gi/gi_adaptive_probes.sh"
+#endif
 #include "gi/gi_visualize.sh"
-
-/// x, y = the full-resolution pixel whose probe the traces show (the cursor's); x < 0 for the view's centre.
-uniform vec4 u_gi_visualize_traces;
 
 /// A hit closer than GI_VISUALIZE_SELF_HIT_DISTANCE shows as a self-intersection, GI_VISUALIZE_SELF_HIT_LENGTH
 /// long and red (1 cm and 5 cm).
 #define GI_VISUALIZE_SELF_HIT_DISTANCE 0.01
 #define GI_VISUALIZE_SELF_HIT_LENGTH 0.05
+
+#ifdef GI_VISUALIZE_TRACES
+/// x, y = the full-resolution pixel whose probe the traces show (the cursor's); x < 0 for the view's centre.
+uniform vec4 u_gi_visualize_traces;
+
 #define GI_VISUALIZE_GROUP_THREADS (GI_PROBE_TRACE_RES * GI_PROBE_TRACE_RES)
 
 SHARED float s_gi_visualize_distance[GI_VISUALIZE_GROUP_THREADS];
@@ -406,6 +419,13 @@ ivec2 GiVisualizeTracesProbe(int thread)
 	}
 	return best_index >= 0 ? GiAdaptiveAtlasTile(best_index) : ivec2(screen_tile);
 }
+#endif
+
+/// The first vec4 of probe texel @p texel's line in b_gi_visualize_traces.
+int GiVisualizedTraceIndex(ivec2 texel)
+{
+	return (texel.y * GI_PROBE_TRACE_RES + texel.x) * GI_VISUALIZE_TRACE_STRIDE;
+}
 
 /// The ray of probe texel @p texel as a line from the probe at @p position along
 /// @p direction over the filter's distance; a @p hit closer than GI_VISUALIZE_SELF_HIT_DISTANCE shows red.
@@ -417,10 +437,17 @@ void GiStoreVisualizedTrace(ivec2 texel, vec3 radiance, float filter_distance, v
 		filter_distance = GI_VISUALIZE_SELF_HIT_LENGTH;
 		radiance = vec3(1.0, 0.0, 0.0);
 	}
-	int index = (texel.y * GI_PROBE_TRACE_RES + texel.x) * GI_VISUALIZE_TRACE_STRIDE;
+	int index = GiVisualizedTraceIndex(texel);
 	b_gi_visualize_traces[index] = vec4(position, 0.0);
 	b_gi_visualize_traces[index + 1] = vec4(direction * filter_distance, 0.0);
 	b_gi_visualize_traces[index + 2] = vec4(radiance, 0.0);
+}
+
+/// A ray the screen stage left to #visualize_far, in its line's first vec4: its probe's atlas tile, the distance the
+/// screen vouched for and w = 1. #visualize_far writes the ray's line over it.
+void GiStorePendingTrace(ivec2 texel, ivec2 tile, float vouched)
+{
+	b_gi_visualize_traces[GiVisualizedTraceIndex(texel)] = vec4(vec2(tile), vouched, 1.0);
 }
 #endif
 
@@ -641,7 +668,8 @@ NUM_THREADS(GI_PROBE_TRACE_RES, GI_PROBE_TRACE_RES, 1)
 void main()
 {
 	ivec2 texel = ivec2(gl_LocalInvocationID.xy);
-	GiProbeRay ray = GiMakeProbeRay(GiVisualizeTracesProbe(int(gl_LocalInvocationIndex)), texel);
+	ivec2 tile = GiVisualizeTracesProbe(int(gl_LocalInvocationIndex));
+	GiProbeRay ray = GiMakeProbeRay(tile, texel);
 	if(!ray.valid)
 	{
 		GiStoreVisualizedTrace(texel, vec3_splat(0.0), u_gi_max_trace_distance, vec3_splat(0.0),
@@ -649,16 +677,30 @@ void main()
 		return;
 	}
 	GiScreenRay screen = GiTraceProbeScreen(ray);
-	GiRayResult result;
 	BRANCH
 	if(screen.answered)
 	{
-		result = GiScreenResult(screen);
+		GiRayResult result = GiScreenResult(screen);
+		GiStoreVisualizedTrace(texel, GiTraceOutputRadiance(ray, result), result.filter_distance, ray.position,
+		                          ray.direction, result.hit);
 	}
 	else
 	{
-		result = GiTraceFarField(ray, screen.distance);
+		GiStorePendingTrace(texel, tile, screen.distance);
 	}
+}
+#elif defined(GI_VISUALIZE_TRACES_FAR)
+NUM_THREADS(GI_PROBE_TRACE_RES, GI_PROBE_TRACE_RES, 1)
+void main()
+{
+	ivec2 texel = ivec2(gl_LocalInvocationID.xy);
+	vec4 pending = b_gi_visualize_traces[GiVisualizedTraceIndex(texel)];
+	if(pending.w < 0.5)
+	{
+		return;
+	}
+	GiProbeRay ray = GiMakeProbeRay(ivec2(pending.xy), texel);
+	GiRayResult result = GiTraceFarField(ray, pending.z);
 	GiStoreVisualizedTrace(texel, GiTraceOutputRadiance(ray, result), result.filter_distance, ray.position,
 	                          ray.direction, result.hit);
 }

@@ -187,6 +187,7 @@ auto gi_gather_pass::init(rtti::context& ctx) -> bool
         programs.integrate = load("cs_gi_integrate", get_probe_variant({}, resolution));
         programs.integrate_short_range_ao = load("cs_gi_integrate", get_probe_variant("ao", resolution));
         programs.trace_visualize = load("cs_gi_probe_trace", get_probe_variant("visualize", resolution));
+        programs.trace_visualize_far = load("cs_gi_probe_trace", get_probe_variant("visualize_far", resolution));
     }
     adaptive_probes_.init(ctx);
     ray_count_clear_.init(ctx);
@@ -578,7 +579,7 @@ void gi_gather_pass::run_visualize_traces(const gi_run_params& params,
                                           const probe_targets& targets,
                                           bool radiance_cache_ready)
 {
-    if(!begin_program(programs_->trace_visualize))
+    if(!begin_program(programs_->trace_visualize) || !begin_program(programs_->trace_visualize_far))
     {
         return;
     }
@@ -588,16 +589,27 @@ void gi_gather_pass::run_visualize_traces(const gi_run_params& params,
                                                              gi_pass::get_vec4_layout(),
                                                              BGFX_BUFFER_COMPUTE_READ_WRITE);
     }
-    gfx::render_pass pass("GI/Visualize Traces");
-    pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
+    {
+        // One group: the probe's rays. The screen stage writes the lines of the rays it answers and leaves the
+        // others pending.
+        gfx::render_pass pass("GI/Visualize Traces Screen");
+        pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
+        bind_trace_inputs(params, layout, targets, radiance_cache_ready);
+        bgfx::setBuffer(trace_output_stage, visualized_traces_, bgfx::Access::Write);
+        const auto& cursor = params.visualize_traces.cursor;
+        const math::vec4 query(cursor.x, cursor.y, 0.0f, 0.0f);
+        gfx::set_uniform(uniforms_.u_gi_visualize_traces, query);
+        gfx::dispatch(pass.id, programs_->trace_visualize->native_handle(), 1, 1, 1);
+        programs_->trace_visualize->end();
+    }
+    // In a view of its own after the screen stage's, as the far-field pass follows the screen pass: the pending rays'
+    // distance field and radiance cache.
+    gfx::render_pass far_pass("GI/Visualize Traces Far Field");
+    far_pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
     bind_trace_inputs(params, layout, targets, radiance_cache_ready);
-    bgfx::setBuffer(trace_output_stage, visualized_traces_, bgfx::Access::Write);
-    const auto& cursor = params.visualize_traces.cursor;
-    const math::vec4 query(cursor.x, cursor.y, 0.0f, 0.0f);
-    gfx::set_uniform(uniforms_.u_gi_visualize_traces, query);
-    // One group: the probe's rays.
-    gfx::dispatch(pass.id, programs_->trace_visualize->native_handle(), 1, 1, 1);
-    programs_->trace_visualize->end();
+    bgfx::setBuffer(trace_output_stage, visualized_traces_, bgfx::Access::ReadWrite);
+    gfx::dispatch(far_pass.id, programs_->trace_visualize_far->native_handle(), 1, 1, 1);
+    programs_->trace_visualize_far->end();
     has_visualized_traces_ = true;
     visualized_trace_resolution_ = layout.trace_resolution;
 }

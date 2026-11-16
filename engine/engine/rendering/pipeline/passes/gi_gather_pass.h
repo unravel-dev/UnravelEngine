@@ -153,8 +153,11 @@ private:
         gpu_program::ptr integrate;
         ///< cs_gi_integrate.eshader#ao: the integrate with the short-range AO's accumulation.
         gpu_program::ptr integrate_short_range_ao;
-        ///< cs_gi_probe_trace.eshader#visualize; the gather runs without it.
+        ///< cs_gi_probe_trace.eshader#visualize, the visualization's screen stage; the gather runs without it.
         gpu_program::ptr trace_visualize;
+        ///< cs_gi_probe_trace.eshader#visualize_far, the rays the visualization's screen stage left; the gather runs
+        ///< without it.
+        gpu_program::ptr trace_visualize_far;
 
         auto is_valid() const -> bool;
     };

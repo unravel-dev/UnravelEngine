@@ -123,7 +123,12 @@ HLSL (fxc, D3D11; D3D12 compiles `s_6_0`):
 - fxc optimizes the whole inlined `main` at once, at any `-O` level, and its time grows faster than the code: a
   shader that picks one of several large paths by a uniform (debug views) takes a variant per path, which also
   compile in parallel (`fs_gi_scene_debug.eshader`: four views in one took fxc about twice as long as each alone
-  added up). Each variant's slowest job prints in suite "eshader files".
+  added up). A debug kernel that would run several production kernels' stages in one splits as they do
+  (`cs_gi_probe_trace.eshader#visualize` / `#visualize_far`). Each variant's slowest job prints in suite
+  "eshader files".
+- A shader printing many lines prints from loops over its rows, the text a `switch`
+  (`cs_gi_visualize_rc_stats.eshader`): each `ShaderPrint*` call site is inlined with its atomics. fxc must unroll a
+  loop around a `switch` on its counter (a `LOOP` there is error X3531): hint only the outer loop.
 - fxc reports one diagnostic and stops: fixing it can reveal the next. Decide pre-existing vs new by compiling
   the unchanged file (a copy of HEAD's file, not a git operation).
 - After a per-pixel `discard` or early return, no derivative of a `texelFetch` result: fxc may move the fetch
