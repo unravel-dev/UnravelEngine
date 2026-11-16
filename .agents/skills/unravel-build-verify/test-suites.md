@@ -159,7 +159,7 @@ editor, and never under a hard timeout. Times are a full parallel run, RelWithDe
 | `settings profiles` | profiles, sparse overrides, texture variant cooks, cooked web shaders |
 | `content packages` | `.unravelpkg` export, import, update, removal |
 | `update check` | `editor/core/update_check/` and `editor/core/https/`; `--network` adds the live checks |
-| `sample catalog` | `editor/core/sample_catalog/`: samples.json, the shipped copy and its pictures, cache, schedule; `--network` adds the live checks |
+| `sample catalog` | `editor/core/sample_catalog/`: samples.json, which list wins, the shipped copy and its pictures, cache, schedule, copies of samples among projects and their versions; `--network` adds the live checks |
 | `third party notices` | the notices compiled into the engine (`THIRD_PARTY_NOTICES.txt`) |
 | `engine version` | `engine/core/version/version.h`: parse and compare by commits since the tag |
 | `boot config peek` | the cold-boot settings read from a project's settings before systems start |

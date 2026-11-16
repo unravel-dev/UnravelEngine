@@ -3,6 +3,8 @@
 #include "update_manifest.h"
 #include "update_state.h"
 
+#include <https/github_links.h>
+
 #include <hpp/optional.hpp>
 #include <hpp/string_view.hpp>
 
@@ -15,10 +17,9 @@ namespace unravel::update_check
 
 /// The file the release workflow attaches to every release; GitHub serves the latest release's copy here. It is a
 /// release download, not a request to the GitHub API, so the API's limit per address does not apply.
-inline constexpr const char* MANIFEST_URL =
-    "https://github.com/unravel-dev/UnravelEngine/releases/latest/download/latest.json";
+inline constexpr const char* MANIFEST_URL = UNRAVEL_GITHUB_LATEST_DOWNLOAD_URL "latest.json";
 /// A release's page; the tag follows.
-inline constexpr const char* RELEASE_PAGE_URL_PREFIX = "https://github.com/unravel-dev/UnravelEngine/releases/tag/";
+inline constexpr const char* RELEASE_PAGE_URL_PREFIX = UNRAVEL_GITHUB_REPOSITORY_URL "/releases/tag/";
 /// The automatic check asks GitHub at most this often.
 constexpr std::chrono::hours CHECK_INTERVAL{6};
 /// After an attempt that read no manifest, the automatic check asks again this much later.
@@ -40,9 +41,6 @@ auto get_own_platform() -> hpp::string_view;
 /// The version this editor was built as; nothing for a build from sources without their tags, which has no
 /// version to compare.
 auto get_own_version() -> hpp::optional<version::engine_version>;
-
-/// Seconds since the epoch, as the state keeps times.
-auto to_epoch_seconds(std::chrono::system_clock::time_point time) -> std::int64_t;
 
 /**
  * @brief Whether the automatic check asks GitHub at `now`.

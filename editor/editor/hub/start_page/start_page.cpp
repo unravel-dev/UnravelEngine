@@ -546,10 +546,14 @@ auto start_page::draw_nav_item(const char* id,
 
 auto start_page::get_sample_image(rtti::context& ctx, const sample_info& sample) -> gfx::texture::ptr
 {
-    // The picture chosen for the sample; the one a copy on disk shows stands in when there is none.
-    if(!sample.thumbnail.empty())
+    // The first of the sample's pictures on disk; the one a copy on disk shows stands in when there is none.
+    for(const fs::path& thumbnail : sample.thumbnails)
     {
-        return images_.get(sample.thumbnail);
+        fs::error_code error;
+        if(fs::is_regular_file(thumbnail, error))
+        {
+            return images_.get(thumbnail);
+        }
     }
     const auto& recent_projects = ctx.get_cached<project_manager>().get_editor_settings().projects.recent_projects;
     const fs::path installed = ctx.get_cached<sample_catalog_manager>().find_installed(sample, recent_projects);

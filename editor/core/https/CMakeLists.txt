@@ -1,7 +1,8 @@
 file(GLOB_RECURSE libsrc *.h *.cpp *.hpp)
 
-# The editor's HTTPS GET: WinHTTP on Windows, wget or curl elsewhere. Used by the update check and the sample
-# catalog; linked by the editor and by the tests, never by the game.
+# What the editor's online checks share: the HTTPS GET (WinHTTP on Windows, wget or curl elsewhere), the GitHub
+# addresses, when a check asks again and how it keeps its files. Used by the update check and the sample catalog;
+# linked by the editor and by the tests, never by the game.
 set(target_name https_client)
 
 if(WIN32)

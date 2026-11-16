@@ -15,18 +15,18 @@ namespace unravel::sample_catalog
 
 /// The file the sample catalog workflow attaches to the latest release; GitHub serves the latest release's copy
 /// here. It is a release download, not a request to the GitHub API, so the API's limit per address does not apply.
-inline constexpr const char* MANIFEST_URL =
-    "https://github.com/unravel-dev/UnravelEngine/releases/latest/download/samples.json";
+inline constexpr const char* MANIFEST_URL = UNRAVEL_GITHUB_LATEST_DOWNLOAD_URL "samples.json";
 
 /// What one fetch found.
 struct fetch_outcome
 {
-    /// The samples.json it read; nothing when it read none.
+    /// The samples.json it read; nothing when it read none, or one that lists no sample this editor can show.
     hpp::optional<sample_manifest> manifest;
     /// Why no samples.json was read.
     std::string error;
-    /// The pictures that could not be fetched, one line each. For the log only.
-    std::vector<std::string> thumbnail_errors;
+    /// The files of the read samples.json that could not be fetched or kept, one line each: while there is any,
+    /// the attempt is not complete.
+    std::vector<std::string> file_errors;
 };
 
 /**
@@ -43,6 +43,9 @@ auto fetch_missing_thumbnails(const sample_manifest& manifest, const fs::path& d
 /**
  * @brief Fetches samples.json from MANIFEST_URL, keeps it as get_cached_manifest_path(), and fetches the pictures
  * of its samples into get_thumbnails_dir().
+ *
+ * A samples.json that lists no sample this editor can show is no answer: it is neither kept nor listed, and the
+ * pictures stay.
  *
  * Blocks the calling thread for up to the requests' time limits; run it off the frame. `should_stop` ends it
  * earlier. It does not throw: any failure is an outcome without a manifest.

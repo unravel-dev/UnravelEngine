@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 
 namespace unravel::sample_catalog
 {
@@ -31,10 +30,11 @@ auto is_digit(char c) -> bool
     return c >= '0' && c <= '9';
 }
 
-/// A letter, digit, dot, dash or underscore: what a name in an address may hold.
+/// An ASCII letter, digit, dot, dash or underscore: what a name in an address or a file name may hold, whatever
+/// the locale.
 auto is_name_char(char c) -> bool
 {
-    return std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '-' || c == '_';
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || is_digit(c) || c == '.' || c == '-' || c == '_';
 }
 
 /// Whether every part of a slash-separated path is a name, none empty and none "." or "..".
@@ -52,11 +52,6 @@ auto is_relative_name_path(hpp::string_view text) -> bool
         start = end + 1;
     }
     return true;
-}
-
-auto ends_with(hpp::string_view text, hpp::string_view suffix) -> bool
-{
-    return text.size() >= suffix.size() && text.substr(text.size() - suffix.size()) == suffix;
 }
 
 /// Text a card shows: not empty, not longer than `max_size` bytes, no control characters and no space at either end.
@@ -229,6 +224,24 @@ auto read_entry_min_engine(const simdjson::dom::object& object, sample_entry& en
     return true;
 }
 
+/// The optional "version" of a sample.json or of an entry: a whole number from 1 to MAX_SAMPLE_VERSION, left as it
+/// is when the object names none.
+auto read_version_field(const simdjson::dom::object& object, std::uint32_t& version) -> bool
+{
+    auto field = object["version"];
+    if(field.error() == simdjson::NO_SUCH_FIELD)
+    {
+        return true;
+    }
+    std::uint64_t value = 0;
+    if(field.get(value) != simdjson::SUCCESS || value < FIRST_SAMPLE_VERSION || value > MAX_SAMPLE_VERSION)
+    {
+        return false;
+    }
+    version = static_cast<std::uint32_t>(value);
+    return true;
+}
+
 /// The required "thumbnail" object: the picture's path and commit.
 auto read_entry_thumbnail(const simdjson::dom::object& object, sample_entry& entry) -> bool
 {
@@ -251,22 +264,34 @@ auto read_entry(const simdjson::dom::element& element) -> hpp::optional<sample_e
     }
     sample_entry entry;
     if(!read_entry_texts(object, entry) || !read_entry_tags(object, entry) || !read_entry_min_engine(object, entry) ||
-       !read_entry_thumbnail(object, entry))
+       !read_version_field(object, entry.version) || !read_entry_thumbnail(object, entry))
     {
         return hpp::nullopt;
     }
     return entry;
 }
 
+/// Whether the manifest object has the "schema" this editor reads.
+auto has_known_schema(const simdjson::dom::object& object) -> bool
+{
+    std::uint64_t schema = 0;
+    return object["schema"].get(schema) == simdjson::SUCCESS && schema == MANIFEST_SCHEMA;
+}
+
 /// The "generated" time and the "samples" array of a manifest object of the schema this editor reads.
 auto read_manifest_header(const simdjson::dom::element& root, sample_manifest& manifest) -> hpp::optional<simdjson::dom::array>
 {
     simdjson::dom::object object;
-    std::uint64_t schema = 0;
+    if(root.get(object) != simdjson::SUCCESS || !has_known_schema(object))
+    {
+        return hpp::nullopt;
+    }
+    if(!read_text_field(object, "generated", true, is_generated_time, manifest.generated))
+    {
+        return hpp::nullopt;
+    }
     simdjson::dom::array samples;
-    if(root.get(object) != simdjson::SUCCESS || object["schema"].get(schema) != simdjson::SUCCESS ||
-       schema != MANIFEST_SCHEMA || !read_text_field(object, "generated", true, is_generated_time, manifest.generated) ||
-       object["samples"].get(samples) != simdjson::SUCCESS)
+    if(object["samples"].get(samples) != simdjson::SUCCESS)
     {
         return hpp::nullopt;
     }
@@ -319,10 +344,31 @@ auto read_sample_manifest(hpp::string_view text) -> hpp::optional<sample_manifes
     return manifest;
 }
 
-auto is_newer_manifest(const sample_manifest& candidate, const sample_manifest& current) -> bool
+auto read_sample_version(hpp::string_view sample_json) -> hpp::optional<std::uint32_t>
 {
+    if(sample_json.size() > MAX_SAMPLE_JSON_SIZE)
+    {
+        return hpp::nullopt;
+    }
+    const simdjson::padded_string padded(sample_json.data(), sample_json.size());
+    simdjson::dom::parser parser;
+    simdjson::dom::object object;
+    std::uint32_t version = FIRST_SAMPLE_VERSION;
+    if(parser.parse(padded).get(object) != simdjson::SUCCESS || !read_version_field(object, version))
+    {
+        return hpp::nullopt;
+    }
+    return version;
+}
+
+auto is_replacement_manifest(const sample_manifest& candidate, const sample_manifest& current) -> bool
+{
+    if(candidate.samples.empty())
+    {
+        return false;
+    }
     // Both times are "YYYY-MM-DDTHH:MM:SSZ", which order as text.
-    return candidate.generated > current.generated;
+    return current.samples.empty() || candidate.generated >= current.generated;
 }
 
 auto is_repository_name(hpp::string_view text) -> bool
@@ -348,7 +394,7 @@ auto is_thumbnail_path(hpp::string_view text) -> bool
                                                    THUMBNAIL_EXTENSIONS.end(),
                                                    [&](hpp::string_view extension)
                                                    {
-                                                       return ends_with(text, extension);
+                                                       return text.ends_with(extension);
                                                    });
     return !text.empty() && text.size() <= MAX_THUMBNAIL_PATH_SIZE && has_picture_extension && is_relative_name_path(text);
 }
@@ -426,7 +472,7 @@ auto parse_min_engine(hpp::string_view text) -> hpp::optional<version::engine_ve
 
 auto get_repository_url(const sample_entry& sample) -> std::string
 {
-    return std::string(OWNER_URL) + "/" + sample.repository;
+    return UNRAVEL_GITHUB_ACCOUNT_URL "/" + sample.repository;
 }
 
 auto get_download_url(const sample_entry& sample) -> std::string
@@ -436,7 +482,7 @@ auto get_download_url(const sample_entry& sample) -> std::string
 
 auto get_thumbnail_url(const sample_entry& sample) -> std::string
 {
-    return std::string(RAW_FILES_URL) + sample.repository + "/" + sample.thumbnail.commit + "/" + sample.thumbnail.path;
+    return UNRAVEL_GITHUB_RAW_FILES_URL + sample.repository + "/" + sample.thumbnail.commit + "/" + sample.thumbnail.path;
 }
 
 } // namespace unravel::sample_catalog

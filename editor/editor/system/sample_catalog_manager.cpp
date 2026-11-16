@@ -3,6 +3,7 @@
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <editor/meta/project/project_info.hpp>
 #include <editor/system/project_manager.h>
+#include <https/fetch_schedule.h>
 #include <logging/logging.h>
 #include <sample_catalog/sample_cache.h>
 #include <sample_catalog/sample_state.h>
@@ -11,7 +12,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <chrono>
 
 namespace unravel
@@ -77,7 +77,7 @@ auto get_shipped_samples_dir() -> fs::path
     return fs::resolve_protocol(SHIPPED_SAMPLES_DIR);
 }
 
-/// The newer of the samples.json the editor ships and the one it fetched last.
+/// The newer of the samples.json the editor ships and the one it fetched last (sample_catalog::choose_manifest).
 auto load_newest_sample_manifest() -> sample_catalog::sample_manifest
 {
     const fs::path shipped_path = get_shipped_samples_dir() / SHIPPED_SAMPLES_FILE_NAME;
@@ -86,27 +86,15 @@ auto load_newest_sample_manifest() -> sample_catalog::sample_manifest
     {
         APPLOG_WARNING("The list of samples the editor ships could not be read from {}.", shipped_path.string());
     }
-    auto fetched = sample_catalog::load_manifest_file(sample_catalog::get_cached_manifest_path());
-    if(fetched && (!shipped || sample_catalog::is_newer_manifest(*fetched, *shipped)))
-    {
-        return std::move(*fetched);
-    }
-    return shipped ? std::move(*shipped) : sample_catalog::sample_manifest{};
+    return sample_catalog::choose_manifest(std::move(shipped),
+                                           sample_catalog::load_manifest_file(sample_catalog::get_cached_manifest_path()));
 }
 
-/// The fetched picture of the sample, else the one the editor ships; empty when there is neither.
-auto find_sample_thumbnail(const sample_catalog::sample_entry& sample) -> fs::path
+/// Where the sample's picture can be: the fetched copy, then the one the editor ships.
+auto get_sample_thumbnails(const sample_catalog::sample_entry& sample) -> std::vector<fs::path>
 {
-    for(const fs::path& path : {sample_catalog::get_thumbnails_dir() / sample_catalog::get_thumbnail_file_name(sample),
-                                get_shipped_samples_dir() / sample_catalog::get_shipped_thumbnail_file_name(sample)})
-    {
-        fs::error_code error;
-        if(fs::is_regular_file(path, error))
-        {
-            return path;
-        }
-    }
-    return {};
+    return {sample_catalog::get_thumbnails_dir() / sample_catalog::get_thumbnail_file_name(sample),
+            get_shipped_samples_dir() / sample_catalog::get_shipped_thumbnail_file_name(sample)};
 }
 
 /// Whether the sample was published within SAMPLE_NEW_DAYS of today.
@@ -117,7 +105,7 @@ auto is_recent_sample(const sample_catalog::sample_entry& sample) -> bool
     {
         return false;
     }
-    const std::int64_t today = sample_catalog::get_epoch_seconds(std::chrono::system_clock::now()) / SAMPLE_SECONDS_PER_DAY;
+    const std::int64_t today = https::get_epoch_seconds(std::chrono::system_clock::now()) / SAMPLE_SECONDS_PER_DAY;
     return today - *added <= SAMPLE_NEW_DAYS;
 }
 
@@ -143,25 +131,13 @@ auto make_sample_info(const sample_catalog::sample_entry& sample) -> sample_info
     info.tags = sample.tags;
     info.repository_url = sample_catalog::get_repository_url(sample);
     info.download_url = sample_catalog::get_download_url(sample);
-    info.thumbnail = find_sample_thumbnail(sample);
+    info.thumbnails = get_sample_thumbnails(sample);
     info.icon = get_sample_glyph(sample.icon);
     info.project_guid = sample.project_guid;
     info.needed_version = get_needed_editor_version(sample);
+    info.version = sample.version;
     info.is_new = is_recent_sample(sample);
     return info;
-}
-
-auto is_same_folder_name(const std::string& lhs, const std::string& rhs) -> bool
-{
-    return std::equal(lhs.begin(),
-                      lhs.end(),
-                      rhs.begin(),
-                      rhs.end(),
-                      [](char lhs_character, char rhs_character)
-                      {
-                          return std::tolower(static_cast<unsigned char>(lhs_character)) ==
-                                 std::tolower(static_cast<unsigned char>(rhs_character));
-                      });
 }
 
 auto is_existing_folder(const fs::path& path) -> bool
@@ -180,7 +156,7 @@ void log_sample_fetch_outcome(const sample_catalog::fetch_outcome& outcome)
     APPLOG_TRACE("Sample catalog: samples.json of {} lists {} samples.",
                  outcome.manifest->generated,
                  outcome.manifest->samples.size());
-    for(const std::string& error : outcome.thumbnail_errors)
+    for(const std::string& error : outcome.file_errors)
     {
         APPLOG_TRACE("Sample catalog: {}", error);
     }
@@ -217,26 +193,24 @@ auto sample_catalog_manager::get_samples() const -> const std::vector<sample_inf
 auto sample_catalog_manager::find_installed(const sample_info& sample, const std::vector<fs::path>& recent_projects)
     -> fs::path
 {
-    for(const fs::path& project : recent_projects)
+    const sample_catalog::project_lookup lookup{[this](const fs::path& project)
+                                                {
+                                                    return get_project_guid(project);
+                                                },
+                                                is_existing_folder};
+    return sample_catalog::find_sample_copy(sample.repository, sample.project_guid, recent_projects, lookup);
+}
+
+auto sample_catalog_manager::get_copy_version(const fs::path& copy_dir) -> hpp::optional<std::uint32_t>
+{
+    fs::error_code error;
+    const fs::file_time_type write_time = fs::last_write_time(sample_catalog::get_copy_sample_json_path(copy_dir), error);
+    copy_version& entry = copy_versions_[copy_dir.generic_string()];
+    if(!entry.is_read || entry.write_time != write_time)
     {
-        if(is_same_folder_name(project.filename().string(), sample.repository) && is_existing_folder(project))
-        {
-            return project;
-        }
+        entry = {write_time, sample_catalog::load_copy_version(copy_dir), true};
     }
-    if(sample.project_guid.empty())
-    {
-        return {};
-    }
-    // A copy in a folder of another name, such as the one a ZIP download unpacks to.
-    for(const fs::path& project : recent_projects)
-    {
-        if(get_project_guid(project) == sample.project_guid && is_existing_folder(project))
-        {
-            return project;
-        }
-    }
-    return {};
+    return entry.version;
 }
 
 void sample_catalog_manager::start_fetch()
@@ -266,16 +240,18 @@ void sample_catalog_manager::start_fetch()
 void sample_catalog_manager::apply_outcome(const sample_catalog::fetch_outcome& outcome)
 {
     log_sample_fetch_outcome(outcome);
-    // Other editors share the file: the attempt goes onto what it holds now.
+    // Other editors share the file: the attempt goes onto what it holds now. A missing picture makes the next
+    // attempt due as after a failure.
     const fs::path state_path = sample_catalog::get_fetch_state_path();
     auto state = sample_catalog::load_fetch_state(state_path);
-    sample_catalog::record_fetch(state, outcome.manifest.has_value(), std::chrono::system_clock::now());
+    const bool is_complete = outcome.manifest && outcome.file_errors.empty();
+    sample_catalog::record_fetch(state, is_complete, std::chrono::system_clock::now());
     if(!sample_catalog::save_fetch_state(state_path, state))
     {
         APPLOG_TRACE("Sample catalog: {} could not be written.", state_path.string());
     }
     // An editor newer than the latest release's copy ships a newer list.
-    if(outcome.manifest && !sample_catalog::is_newer_manifest(manifest_, *outcome.manifest))
+    if(outcome.manifest && sample_catalog::is_replacement_manifest(*outcome.manifest, manifest_))
     {
         use_manifest(*outcome.manifest);
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <https/github_links.h>
 #include <version/version.h>
 
 #include <hpp/optional.hpp>
@@ -31,13 +32,15 @@ constexpr std::size_t MAX_REPOSITORY_NAME_SIZE = 100;
 constexpr std::size_t MAX_BRANCH_NAME_SIZE = 100;
 constexpr std::size_t MAX_THUMBNAIL_PATH_SIZE = 128;
 constexpr std::size_t MAX_ICON_NAME_SIZE = 48;
+/// The largest sample.json of a copy of a sample that is read.
+constexpr std::size_t MAX_SAMPLE_JSON_SIZE = 64 * 1024;
+/// The highest version a sample may have.
+constexpr std::uint32_t MAX_SAMPLE_VERSION = 1000000;
+/// The version of a sample whose sample.json names none.
+constexpr std::uint32_t FIRST_SAMPLE_VERSION = 1;
 
 /// The name every sample repository starts with.
 inline constexpr const char* REPOSITORY_PREFIX = "UnravelEngine-Sample-";
-/// The account that owns the sample repositories, on GitHub.
-inline constexpr const char* OWNER_URL = "https://github.com/unravel-dev";
-/// Where GitHub serves the files of the account's repositories as they are; repository, commit and path follow.
-inline constexpr const char* RAW_FILES_URL = "https://raw.githubusercontent.com/unravel-dev/";
 
 /// The picture of a sample: a file of its repository at a commit.
 struct sample_thumbnail
@@ -70,6 +73,9 @@ struct sample_entry
     hpp::optional<version::engine_version> min_engine;
     /// The project_guid of the sample's project.cfg, which every copy of it keeps; empty when not given.
     std::string project_guid;
+    /// The sample's version, raised in its sample.json whenever a new version of it is published. A copy of the
+    /// sample keeps the sample.json of its version, so an older copy can be told.
+    std::uint32_t version = FIRST_SAMPLE_VERSION;
     sample_thumbnail thumbnail;
 };
 
@@ -93,8 +99,14 @@ struct sample_manifest
  */
 auto read_sample_manifest(hpp::string_view text) -> hpp::optional<sample_manifest>;
 
-/// Whether `candidate` was written after `current`.
-auto is_newer_manifest(const sample_manifest& candidate, const sample_manifest& current) -> bool;
+/**
+ * @brief Whether the start page lists `candidate` instead of `current`.
+ *
+ * Only a file with samples replaces another, so a list this editor can use none of never empties the page. Of two
+ * such files the one written later wins; at the same time `candidate` does, as the fetched copy of a file brings
+ * its pictures.
+ */
+auto is_replacement_manifest(const sample_manifest& candidate, const sample_manifest& current) -> bool;
 
 /// Whether `text` names a sample repository: REPOSITORY_PREFIX, then letters, digits, dots, dashes and underscores.
 auto is_repository_name(hpp::string_view text) -> bool;
@@ -115,6 +127,14 @@ auto is_generated_time(hpp::string_view text) -> bool;
 /// The days from 1970-01-01 to the date in `text`, "YYYY-MM-DD"; nothing for any other text or a date that does
 /// not exist.
 auto parse_date(hpp::string_view text) -> hpp::optional<std::int64_t>;
+/**
+ * @brief The version a sample.json names: its "version", FIRST_SAMPLE_VERSION when it names none.
+ *
+ * Nothing when the text is larger than MAX_SAMPLE_JSON_SIZE, is not a JSON object, or its "version" is not a
+ * whole number from 1 to MAX_SAMPLE_VERSION.
+ */
+auto read_sample_version(hpp::string_view sample_json) -> hpp::optional<std::uint32_t>;
+
 /// The version a sample names as the oldest editor it opens in ("1.2.0", "1.2.0-450"); nothing for any other
 /// spelling, such as one with a commit or a leading v.
 auto parse_min_engine(hpp::string_view text) -> hpp::optional<version::engine_version>;

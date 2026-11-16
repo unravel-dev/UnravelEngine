@@ -76,7 +76,9 @@ the one schedule the user allows.
   web players can be built once on Windows and shared by every package.
 - Samples: every public `UnravelEngine-Sample-*` repository with a `sample.json` and a
   picture (`thumbnail.jpg`) at its root is a sample; `.github/scripts/sample_catalog.py`
-  documents the fields and checks them as the editor does. The daily `samples.yml` run
+  documents the fields and checks them as the editor does. Publishing a new version of a
+  sample means raising `version` in its `sample.json`: a copy keeps the `sample.json` it was
+  made with, and the start page marks a copy of a lower version "Update available". The daily `samples.yml` run
   publishes a new or changed card; run it by hand to publish one at once. Before a release,
   refresh the copy the editor ships from
   the clones (their `sample.json` and picture committed and pushed):

@@ -13,15 +13,19 @@
  *     is skipped, as is a repository listed twice;
  *   - the copy the editor ships reads, and the picture of each of its samples ships beside it;
  *   - addresses are made from the names in the file, never read from it;
- *   - of two files the later one wins; the automatic fetch asks once a day, 1 hour after an attempt without an
- *     answer, and its state reads back as it was written;
- *   - fetched pictures are named after their commit, and only those the file no longer names are removed.
+ *   - of two files the later one wins, and a file with no sample never replaces one; the automatic fetch asks once
+ *     a day, 1 hour after an attempt without an answer, and its state reads back as it was written;
+ *   - fetched pictures are named after their commit, and only those the file no longer names are removed;
+ *   - a project is a copy of a sample by the repository's name, or by that name with a suffix and the sample's
+ *     project_guid, never by the project_guid alone;
+ *   - a sample's version comes from samples.json and a copy's from its own sample.json, 1 when either names none.
  * With --network it also fetches from GitHub: the latest release's samples.json, when there is one, and a sample's
  * picture at its commit.
  */
 
 #include "../tests.h"
 
+#include <https/fetch_schedule.h>
 #include <https/https_get.h>
 #include <sample_catalog/sample_cache.h>
 #include <sample_catalog/sample_fetch.h>
@@ -29,6 +33,7 @@
 #include <sample_catalog/sample_state.h>
 
 #include <chrono>
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -189,6 +194,11 @@ void test_manifest_skipped_entries()
         {R"("thumbnail":{"path":"shot.jpg","commit":"0123456"},)", "a short commit"},
         {R"("thumbnail":{"path":"shot.jpg","commit":"main"},)", "a branch for a commit"},
         {R"("thumbnail":"thumbnail.jpg",)", "a thumbnail that is no object"},
+        {R"("version":0,)", "version 0"},
+        {R"("version":-2,)", "a negative version"},
+        {R"("version":1.5,)", "a version that is no whole number"},
+        {R"("version":"2",)", "a version that is text"},
+        {R"("version":1000001,)", "a version above the highest"},
     };
     for(const auto& entry : refused)
     {
@@ -226,6 +236,8 @@ void test_names_and_dates()
               !is_project_guid("0ea8296eec53be46bdb2ee0d0615a730") && !is_project_guid(std::string(GOOD_GUID) + "0"),
           "project guids are 8-4-4-4-12 hex digits");
     check(is_icon_name("view-dashboard-outline") && !is_icon_name("") && !is_icon_name("palette!"), "icon names");
+    check(!is_repository_name("UnravelEngine-Sample-\xC3\xA9t\xC3\xA9") && !is_thumbnail_path("\xC3\xA9.jpg"),
+          "names hold ASCII only, whatever the locale");
 
     check(parse_date("1970-01-01") == std::int64_t{0}, "the epoch is day 0");
     check(parse_date("2000-03-01") == std::int64_t{11017}, "2000-03-01 follows the leap day of 2000");
@@ -261,16 +273,38 @@ void test_addresses()
     check_eq(get_shipped_thumbnail_file_name(sample), "UnravelEngine-Sample-2048.jpg", "shipped picture's name");
 }
 
-void test_newer_and_schedule()
+/// A manifest written at `generated` with `count` samples.
+auto make_dated_manifest(const char* generated, std::size_t count) -> sample_manifest
 {
-    std::printf("test_newer_and_schedule\n");
-    sample_manifest older;
-    older.generated = "2026-11-16T12:00:00Z";
-    sample_manifest newer;
-    newer.generated = "2026-11-16T12:00:01Z";
-    check(is_newer_manifest(newer, older) && !is_newer_manifest(older, newer) && !is_newer_manifest(older, older),
-          "the later file is the newer one");
-    check(is_newer_manifest(older, sample_manifest{}), "any file is newer than none");
+    sample_manifest manifest;
+    manifest.generated = generated;
+    for(std::size_t index = 0; index < count; ++index)
+    {
+        sample_entry sample;
+        sample.repository = "UnravelEngine-Sample-" + std::to_string(index);
+        manifest.samples.push_back(sample);
+    }
+    return manifest;
+}
+
+void test_replacement_and_schedule()
+{
+    std::printf("test_replacement_and_schedule\n");
+    const sample_manifest older = make_dated_manifest("2026-11-16T12:00:00Z", 2);
+    const sample_manifest newer = make_dated_manifest("2026-11-16T12:00:01Z", 1);
+    const sample_manifest newer_empty = make_dated_manifest("2026-11-17T00:00:00Z", 0);
+    check(is_replacement_manifest(newer, older) && !is_replacement_manifest(older, newer),
+          "the later file replaces the earlier one, not the other way");
+    check(is_replacement_manifest(older, older), "the same file replaces itself, so its fetched pictures are listed");
+    check(!is_replacement_manifest(newer_empty, older), "a later file with no sample does not empty the list");
+    check(is_replacement_manifest(older, newer_empty) && is_replacement_manifest(older, sample_manifest{}),
+          "any file with samples replaces one without");
+
+    check(choose_manifest(older, newer).generated == newer.generated, "the fetched file when it is later");
+    check(choose_manifest(newer, older).generated == newer.generated, "the shipped file when it is later");
+    check(choose_manifest(older, newer_empty).samples.size() == 2, "the shipped file over a fetched one without samples");
+    check(choose_manifest(hpp::nullopt, older).samples.size() == 2, "the fetched file when none ships");
+    check(choose_manifest(hpp::nullopt, hpp::nullopt).samples.empty(), "no file: no samples");
 
     fetch_state state;
     check(is_fetch_due(state, at_seconds(NOW_SECONDS)), "never asked: due");
@@ -314,13 +348,76 @@ void test_cache_files()
           "only the pictures the file no longer names are removed");
 
     const fs::path manifest_path = dir / "samples.json";
-    check(write_file_atomically(manifest_path, make_manifest(make_entry("UnravelEngine-Sample-2048"))),
+    check(unravel::https::write_file_atomically(manifest_path, make_manifest(make_entry("UnravelEngine-Sample-2048"))),
           "a manifest is written");
     const auto loaded = load_manifest_file(manifest_path);
     check(loaded && loaded->samples.size() == 1, "and loads");
     write_text(manifest_path, make_manifest(make_entry("UnravelEngine-Sample-2048")) + std::string(MAX_MANIFEST_SIZE, ' '));
     check(!load_manifest_file(manifest_path), "a file larger than the limit is not read");
     check(!load_manifest_file(dir / "missing.json"), "a missing file is no manifest");
+}
+
+void test_sample_copies()
+{
+    std::printf("test_sample_copies\n");
+    const std::string repository = "UnravelEngine-Sample-UI";
+    const fs::path clone = "C:/Projects/UnravelEngine-Sample-UI";
+    const fs::path clone_other_case = "C:/Projects/unravelengine-sample-ui";
+    const fs::path zip = "C:/Downloads/UnravelEngine-Sample-UI-main";
+    const fs::path other_sample = "C:/Projects/UnravelEngine-Sample-UI-Advanced";
+    const fs::path game = "C:/Projects/MyGame";
+    const fs::path missing = "C:/Gone/UnravelEngine-Sample-UI";
+    std::vector<fs::path> reads;
+    const project_lookup lookup{[&](const fs::path& project) -> std::string
+                                {
+                                    reads.push_back(project);
+                                    return project == other_sample ? std::string("11111111-1111-1111-1111-111111111111")
+                                                                   : std::string(GOOD_GUID);
+                                },
+                                [&](const fs::path& project)
+                                {
+                                    return project != missing;
+                                }};
+    check(find_sample_copy(repository, GOOD_GUID, {game, clone}, lookup) == clone, "a clone, by its name");
+    check(find_sample_copy(repository, GOOD_GUID, {clone_other_case}, lookup) == clone_other_case,
+          "a clone, by its name in another case");
+    check(find_sample_copy(repository, GOOD_GUID, {zip}, lookup) == zip, "a ZIP copy, by its name and project_guid");
+    check(find_sample_copy(repository, "", {zip}, lookup).empty(), "a ZIP copy needs the sample's project_guid");
+    check(find_sample_copy(repository, GOOD_GUID, {other_sample}, lookup).empty(),
+          "another sample whose name starts with this one's is not a copy");
+    check(find_sample_copy(repository, GOOD_GUID, {game}, lookup).empty(),
+          "a game made from the sample, under its own name, is not a copy");
+    check(find_sample_copy(repository, GOOD_GUID, {missing}, lookup).empty(), "a folder that is gone is not a copy");
+    check(std::none_of(reads.begin(),
+                       reads.end(),
+                       [&](const fs::path& project)
+                       {
+                           return project == game || project == clone;
+                       }),
+          "only folders named as a suffixed copy are read");
+}
+
+void test_versions()
+{
+    std::printf("test_versions\n");
+    const auto plain = read_sample_manifest(make_manifest(make_entry("UnravelEngine-Sample-2048")));
+    check(plain && plain->samples.size() == 1 && plain->samples.front().version == FIRST_SAMPLE_VERSION,
+          "an entry without a version is version 1");
+    const auto third = read_sample_manifest(make_manifest(make_entry("UnravelEngine-Sample-2048", R"("version":3,)")));
+    check(third && third->samples.size() == 1 && third->samples.front().version == 3u, "an entry's version is read");
+
+    check(read_sample_version(R"({"schema":1,"title":"2048"})") == FIRST_SAMPLE_VERSION,
+          "a sample.json without a version is version 1");
+    check(read_sample_version(R"({"version":4})") == 4u, "a sample.json's version is read");
+    check(!read_sample_version(R"({"version":0})") && !read_sample_version(R"({"version":"4"})") &&
+              !read_sample_version("[1]") && !read_sample_version("not json") &&
+              !read_sample_version(R"({"version":4})" + std::string(MAX_SAMPLE_JSON_SIZE, ' ')),
+          "anything else names no version");
+
+    const fs::path copy = temp_path("sample_catalog_copy");
+    check(!load_copy_version(copy), "a copy without a sample.json has no version");
+    write_text(get_copy_sample_json_path(copy), R"({"schema":1,"version":2})");
+    check(load_copy_version(copy) == 2u, "a copy's version comes from its sample.json");
 }
 
 void test_shipped_catalog()
@@ -394,8 +491,10 @@ void run_sample_catalog_suite(rtti::context& /*ctx*/)
     RUN_CASE(test_manifest_skipped_entries());
     RUN_CASE(test_names_and_dates());
     RUN_CASE(test_addresses());
-    RUN_CASE(test_newer_and_schedule());
+    RUN_CASE(test_replacement_and_schedule());
     RUN_CASE(test_cache_files());
+    RUN_CASE(test_sample_copies());
+    RUN_CASE(test_versions());
     RUN_CASE(test_shipped_catalog());
     if(unravel::tests::wants("network"))
     {

@@ -1,5 +1,7 @@
 #include "update_schedule.h"
 
+#include <https/fetch_schedule.h>
+
 namespace unravel::update_check
 {
 
@@ -13,27 +15,14 @@ auto get_own_version() -> hpp::optional<version::engine_version>
     return version::parse(version::get_full());
 }
 
-auto to_epoch_seconds(std::chrono::system_clock::time_point time) -> std::int64_t
-{
-    return std::chrono::duration_cast<std::chrono::seconds>(time.time_since_epoch()).count();
-}
-
 auto is_check_due(const update_state& state, std::chrono::system_clock::time_point now) -> bool
 {
-    const std::int64_t now_seconds = to_epoch_seconds(now);
-    if(state.last_attempt == 0 || state.last_attempt > now_seconds)
-    {
-        return true;
-    }
-    const bool was_answered = state.last_answer >= state.last_attempt;
-    const std::chrono::seconds interval = was_answered ? std::chrono::seconds(CHECK_INTERVAL)
-                                                       : std::chrono::seconds(RETRY_INTERVAL);
-    return std::chrono::seconds(now_seconds - state.last_attempt) >= interval;
+    return https::is_fetch_due(state.last_attempt, state.last_answer, now, CHECK_INTERVAL, RETRY_INTERVAL);
 }
 
 void record_outcome(update_state& state, const check_outcome& outcome, std::chrono::system_clock::time_point now)
 {
-    const std::int64_t now_seconds = to_epoch_seconds(now);
+    const std::int64_t now_seconds = https::get_epoch_seconds(now);
     state.last_attempt = now_seconds;
     if(!outcome.has_answer)
     {

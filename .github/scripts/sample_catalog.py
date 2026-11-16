@@ -14,13 +14,17 @@ at its root is a sample. Its sample.json describes its card:
       "order": 20,
       "added": "2026-11-03",
       "thumbnail": "thumbnail.jpg",
-      "min_engine": "1.2.0-450"
+      "min_engine": "1.2.0-450",
+      "version": 2
     }
 
 tags (at most 3), icon (a Material Design icon name), order (lower first, 1000 when not given), added (the day it
 was published; the start page marks it NEW for 45 days), thumbnail (a JPEG or PNG of 16:9, 800 x 450, at most
-1 MiB; thumbnail.jpg when not given) and min_engine (the oldest editor it opens in) are optional. The picture is
-also the project's own thumbnail in the editor once the sample is cloned.
+1 MiB; thumbnail.jpg when not given), min_engine (the oldest editor it opens in) and version are optional. The
+picture is also the project's own thumbnail in the editor once the sample is cloned.
+
+version is a whole number, 1 when not given. Raise it when a new version of the sample is published: every copy
+keeps the sample.json it was made with, so the editor marks a copy of a lower version "Update available".
 
 samples.json lists each sample with its branch, the project_guid of its project.cfg and the last commit that
 changed its picture, which is where the editor fetches the picture from. The editor checks every field as this
@@ -29,18 +33,20 @@ script does, so a sample this script refuses fails the run instead of vanishing 
     python3 sample_catalog.py --output samples.json
         Reads the samples from GitHub. GH_TOKEN or GITHUB_TOKEN, when set, raises the API's request limit.
     python3 sample_catalog.py --local-root ../ --output editor_data/samples/samples.json --thumbnails-dir editor_data/samples
-        Reads the samples from clones in a folder; their sample.json and picture must be committed. With
+        Reads the samples from clones in a folder; their sample.json and picture must be committed and pushed to
+        the branch origin names as its default (as of each clone's last fetch), which the ZIP buttons take. With
         --thumbnails-dir, the pictures are copied there as <repository>.<extension>, the copies the editor ships.
 """
 
 import argparse
-import base64
 import datetime
+import email.utils
 import json
 import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -50,10 +56,14 @@ REPOSITORY_PREFIX = "UnravelEngine-Sample-"
 API_URL = "https://api.github.com"
 RAW_URL = "https://raw.githubusercontent.com"
 USER_AGENT = "UnravelEngine-sample-catalog"
+HTTP_ATTEMPTS = 3
+HTTP_RETRY_SECONDS = 5
 SCHEMA = 1
 DEFAULT_THUMBNAIL = "thumbnail.jpg"
 DEFAULT_ORDER = 1000
 MAX_ORDER = 100000
+FIRST_VERSION = 1
+MAX_VERSION = 1000000
 MAX_SAMPLES = 64
 MAX_TAGS = 3
 MAX_TITLE_SIZE = 64
@@ -158,6 +168,10 @@ def read_card(repository, text):
         if not isinstance(min_engine, str) or not MIN_ENGINE.match(min_engine):
             problems.append("\"min_engine\" must be a version as 1.2.0 or 1.2.0-450")
         card["min_engine"] = min_engine
+    version = document.get("version", FIRST_VERSION)
+    if not isinstance(version, int) or isinstance(version, bool) or not FIRST_VERSION <= version <= MAX_VERSION:
+        problems.append(f"\"version\" must be a whole number from {FIRST_VERSION} to {MAX_VERSION}")
+    card["version"] = version
     order = document.get("order", DEFAULT_ORDER)
     if not isinstance(order, int) or isinstance(order, bool) or not 0 <= order <= MAX_ORDER:
         problems.append(f"\"order\" must be a whole number from 0 to {MAX_ORDER}")
@@ -205,22 +219,49 @@ def check_picture(repository, path, data):
 # Samples on GitHub.
 # ---------------------------------------------------------------------------------------------------------------
 
-def http_get(url, is_api):
-    """The body of a GET, or None for a 404."""
+def http_request(url, is_api, method="GET"):
+    """The body and headers of a request, or (None, None) for a 404.
+
+    GitHub answers 5xx or 429 at times, and a connection can drop: such a request is tried again, HTTP_ATTEMPTS
+    times in all, before the run fails with a catalog_error.
+    """
     headers = {"User-Agent": USER_AGENT}
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if is_api:
         headers["Accept"] = "application/vnd.github+json"
         if token:
             headers["Authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return response.read(), response.headers
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return None, None
-        raise catalog_error(f"{url} answered {e.code}: {e.read()[:300].decode('utf-8', 'replace')}")
+    request = urllib.request.Request(url, headers=headers, method=method)
+    failure = ""
+    for attempt in range(HTTP_ATTEMPTS):
+        if attempt > 0:
+            time.sleep(HTTP_RETRY_SECONDS * attempt)
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.read(), response.headers
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None, None
+            failure = f"{url} answered {e.code}: {e.read()[:300].decode('utf-8', 'replace')}"
+            if e.code < 500 and e.code != 429:
+                break
+        except (urllib.error.URLError, OSError) as e:
+            failure = f"{url} could not be reached: {e}"
+    raise catalog_error(failure)
+
+
+def http_get(url, is_api):
+    """The body and headers of a GET, or (None, None) for a 404."""
+    return http_request(url, is_api)
+
+
+def get_github_time():
+    """GitHub's clock, from the Date of an answer of github.com: samples.json is dated by it, not by the clock of
+    the computer the script runs on, as editors list the file written later."""
+    _, headers = http_request("https://github.com", False, method="HEAD")
+    if headers is None or not headers.get("Date"):
+        raise catalog_error("github.com gave no Date to date samples.json by.")
+    return email.utils.parsedate_to_datetime(headers["Date"]).astimezone(datetime.timezone.utc)
 
 
 def get_api_json(path):
@@ -280,6 +321,30 @@ def run_git(clone, *arguments):
     return result.stdout.strip()
 
 
+def get_default_branch(clone):
+    """The branch origin serves by default: as the clone recorded it (refs/remotes/origin/HEAD), else as origin
+    answers, for a clone that never recorded it."""
+    recorded = subprocess.run(["git", "-C", str(clone), "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+                              capture_output=True, text=True)
+    if recorded.returncode == 0 and "/" in recorded.stdout:
+        return recorded.stdout.strip().split("/", 1)[1]
+    answer = run_git(clone, "ls-remote", "--symref", "origin", "HEAD")
+    match = re.search(r"^ref: refs/heads/(\S+)\s+HEAD$", answer, re.MULTILINE)
+    if not match:
+        raise catalog_error(f"{clone.name}: origin names no default branch.")
+    return match.group(1)
+
+
+def check_pushed(clone, branch, paths):
+    """Fails unless `paths` are at HEAD as they are on origin's `branch` (as of the clone's last fetch): the editor
+    fetches the picture from GitHub at the commit the file names."""
+    upstream = f"origin/{branch}"
+    if run_git(clone, "log", "--format=%h", f"{upstream}..HEAD", "--", *paths):
+        raise catalog_error(f"{clone.name}: push the commits that change {' and '.join(paths)} to {upstream} first.")
+    if run_git(clone, "log", "--format=%h", f"HEAD..{upstream}", "--", *paths):
+        raise catalog_error(f"{clone.name}: {upstream} has newer {' and '.join(paths)}. Pull them first.")
+
+
 def read_local_sample(clone, skipped):
     repository = clone.name
     sample_path = clone / "sample.json"
@@ -289,14 +354,15 @@ def read_local_sample(clone, skipped):
     card, order, thumbnail_path = read_card(repository, sample_path.read_bytes())
     changed = run_git(clone, "status", "--porcelain", "--", "sample.json", thumbnail_path)
     if changed:
-        raise catalog_error(f"{repository}: commit sample.json and {thumbnail_path} first; the editor fetches the "
+        raise catalog_error(f"{repository}: commit sample.json and {thumbnail_path} first. The editor fetches the "
                             "picture at its commit.")
     thumbnail_commit = run_git(clone, "log", "-1", "--format=%H", "--", thumbnail_path)
     if not thumbnail_commit:
         raise catalog_error(f"{repository}: {thumbnail_path} is not committed.")
+    branch = get_default_branch(clone)
+    check_pushed(clone, branch, ["sample.json", thumbnail_path])
     picture = (clone / thumbnail_path).read_bytes()
     check_picture(repository, thumbnail_path, picture)
-    branch = run_git(clone, "rev-parse", "--abbrev-ref", "HEAD")
     project_path = clone / "project.cfg"
     project_guid = read_project_guid(project_path.read_bytes()) if project_path.is_file() else None
     entry = make_entry(repository, branch, card, thumbnail_path, thumbnail_commit, project_guid)
@@ -367,7 +433,7 @@ def main():
         print(f"error: {len(found)} samples; the editor reads at most {MAX_SAMPLES}.", file=sys.stderr)
         return 1
     found.sort(key=lambda sample: (sample[0], sample[1]["title"]))
-    generated = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    generated = get_github_time().strftime("%Y-%m-%dT%H:%M:%SZ")
     manifest = {"schema": SCHEMA, "generated": generated, "samples": [entry for _, entry, _ in found]}
     options.output.parent.mkdir(parents=True, exist_ok=True)
     options.output.write_bytes((json.dumps(manifest, indent=2, ensure_ascii=True) + "\n").encode("ascii"))

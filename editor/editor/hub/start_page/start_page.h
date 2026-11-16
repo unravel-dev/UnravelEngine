@@ -110,7 +110,8 @@ private:
     /// One sample at a time, turning over, at the foot of the sidebar when there is room.
     void draw_featured_sample(rtti::context& ctx);
     void draw_main(rtti::context& ctx);
-    /// The sample's picture, else the thumbnail of its copy on disk; null when there is neither.
+    /// The first of the sample's pictures on disk, else the thumbnail of its copy on disk; null when there is
+    /// neither.
     auto get_sample_image(rtti::context& ctx, const sample_info& sample) -> gfx::texture::ptr;
 
     // Projects view, start_page_projects.cpp.

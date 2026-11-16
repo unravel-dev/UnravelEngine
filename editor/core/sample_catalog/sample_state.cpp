@@ -1,6 +1,6 @@
 #include "sample_state.h"
-#include "sample_cache.h"
 
+#include <https/fetch_schedule.h>
 #include <serialization/associative_archive.h>
 #include <serialization/serialization.h>
 
@@ -29,27 +29,14 @@ constexpr const char* FETCH_STATE_NODE_NAME = "sample_fetch";
 
 } // namespace
 
-auto get_epoch_seconds(std::chrono::system_clock::time_point time) -> std::int64_t
-{
-    return std::chrono::duration_cast<std::chrono::seconds>(time.time_since_epoch()).count();
-}
-
 auto is_fetch_due(const fetch_state& state, std::chrono::system_clock::time_point now) -> bool
 {
-    const std::int64_t now_seconds = get_epoch_seconds(now);
-    if(state.last_attempt == 0 || state.last_attempt > now_seconds)
-    {
-        return true;
-    }
-    const bool was_answered = state.last_answer >= state.last_attempt;
-    const std::chrono::seconds interval = was_answered ? std::chrono::seconds(FETCH_INTERVAL)
-                                                       : std::chrono::seconds(RETRY_INTERVAL);
-    return std::chrono::seconds(now_seconds - state.last_attempt) >= interval;
+    return https::is_fetch_due(state.last_attempt, state.last_answer, now, FETCH_INTERVAL, RETRY_INTERVAL);
 }
 
 void record_fetch(fetch_state& state, bool has_answer, std::chrono::system_clock::time_point now)
 {
-    const std::int64_t now_seconds = get_epoch_seconds(now);
+    const std::int64_t now_seconds = https::get_epoch_seconds(now);
     state.last_attempt = now_seconds;
     if(has_answer)
     {
@@ -98,7 +85,7 @@ auto load_fetch_state(const fs::path& path) -> fetch_state
 
 auto save_fetch_state(const fs::path& path, const fetch_state& state) -> bool
 {
-    return write_file_atomically(path, write_fetch_state(state));
+    return https::write_file_atomically(path, write_fetch_state(state));
 }
 
 } // namespace unravel::sample_catalog

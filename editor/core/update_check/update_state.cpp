@@ -1,6 +1,6 @@
 #include "update_state.h"
 
-#include <engine/assets/impl/asset_writer.h>
+#include <https/fetch_schedule.h>
 #include <serialization/associative_archive.h>
 #include <serialization/serialization.h>
 #include <serialization/types/string.hpp>
@@ -84,21 +84,7 @@ auto load_update_state(const fs::path& path) -> update_state
 
 auto save_update_state(const fs::path& path, const update_state& state) -> bool
 {
-    fs::error_code err;
-    fs::create_directories(path.parent_path(), err);
-    const auto text = write_update_state(state);
-    bool is_written = false;
-    asset_writer::atomic_write_file(
-        path,
-        [&](const fs::path& temp)
-        {
-            std::ofstream stream(temp, std::ios::binary | std::ios::trunc);
-            stream.write(text.data(), std::streamsize(text.size()));
-            stream.close();
-            is_written = stream.good();
-        },
-        err);
-    return is_written && !err;
+    return https::write_file_atomically(path, write_update_state(state));
 }
 
 } // namespace unravel::update_check

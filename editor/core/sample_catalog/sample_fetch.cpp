@@ -1,6 +1,8 @@
 #include "sample_fetch.h"
 #include "sample_cache.h"
 
+#include <https/fetch_schedule.h>
+
 #include <exception>
 
 namespace unravel::sample_catalog
@@ -23,7 +25,7 @@ auto fetch_thumbnail(const sample_entry& sample, const fs::path& path, const htt
     {
         return url + ": the answer is no JPEG or PNG file.";
     }
-    if(!write_file_atomically(path, *response.body))
+    if(!https::write_file_atomically(path, *response.body))
     {
         return path.string() + " could not be written.";
     }
@@ -44,13 +46,17 @@ auto fetch_manifest_and_thumbnails(const https::stop_check& should_stop) -> fetc
     {
         return {hpp::nullopt, "The answer is not a sample manifest.", {}};
     }
-    fetch_outcome outcome{std::move(manifest), {}, {}};
-    if(!write_file_atomically(get_cached_manifest_path(), *response.body))
+    if(manifest->samples.empty())
     {
-        outcome.thumbnail_errors.push_back(get_cached_manifest_path().string() + " could not be written.");
+        return {hpp::nullopt, "The answer lists no sample this editor can show.", {}};
+    }
+    fetch_outcome outcome{std::move(manifest), {}, {}};
+    if(!https::write_file_atomically(get_cached_manifest_path(), *response.body))
+    {
+        outcome.file_errors.push_back(get_cached_manifest_path().string() + " could not be written.");
     }
     auto thumbnail_errors = fetch_missing_thumbnails(*outcome.manifest, get_thumbnails_dir(), should_stop);
-    outcome.thumbnail_errors.insert(outcome.thumbnail_errors.end(), thumbnail_errors.begin(), thumbnail_errors.end());
+    outcome.file_errors.insert(outcome.file_errors.end(), thumbnail_errors.begin(), thumbnail_errors.end());
     return outcome;
 }
 

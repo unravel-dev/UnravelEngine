@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-11-16T18:55:06Z",
+  "generated": "2026-11-16T19:47:27Z",
   "samples": [
     {
       "repository": "UnravelEngine-Sample-Survivors",
@@ -15,6 +15,7 @@
       ],
       "icon": "sword-cross",
       "added": "2026-10-29",
+      "version": 1,
       "project_guid": "75f9c480-d9b4-6944-8073-edf317c38f7e",
       "thumbnail": {
         "path": "thumbnail.jpg",
@@ -34,6 +35,7 @@
       ],
       "icon": "numeric-2-box",
       "added": "2026-11-03",
+      "version": 1,
       "project_guid": "0ea8296e-ec53-be46-bdb2-ee0d0615a730",
       "thumbnail": {
         "path": "thumbnail.jpg",
@@ -53,6 +55,7 @@
       ],
       "icon": "bowling",
       "added": "2026-11-04",
+      "version": 1,
       "project_guid": "c940be3d-d21b-8a44-bd28-43a57b0f4246",
       "thumbnail": {
         "path": "thumbnail.jpg",
@@ -72,6 +75,7 @@
       ],
       "icon": "run",
       "added": "2026-10-17",
+      "version": 1,
       "project_guid": "54909083-0a9b-dd46-a500-af98176587ef",
       "thumbnail": {
         "path": "thumbnail.jpg",
@@ -91,6 +95,7 @@
       ],
       "icon": "auto-fix",
       "added": "2026-10-13",
+      "version": 1,
       "project_guid": "79db1ea0-dc33-bb4c-a0a2-720a061fc94e",
       "thumbnail": {
         "path": "thumbnail.jpg",
@@ -110,6 +115,7 @@
       ],
       "icon": "white-balance-sunny",
       "added": "2026-10-13",
+      "version": 1,
       "project_guid": "61ae238e-124e-4944-8787-0b9a2487cd55",
       "thumbnail": {
         "path": "thumbnail.jpg",
@@ -129,6 +135,7 @@
       ],
       "icon": "palette",
       "added": "2026-11-15",
+      "version": 1,
       "project_guid": "8c481db9-4b2c-ee46-8909-bb0d0ae93880",
       "thumbnail": {
         "path": "thumbnail.jpg",
@@ -148,6 +155,7 @@
       ],
       "icon": "view-dashboard-outline",
       "added": "2026-10-13",
+      "version": 1,
       "project_guid": "01e36b29-e711-7245-a20f-0ae631cfc530",
       "thumbnail": {
         "path": "thumbnail.jpg",

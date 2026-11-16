@@ -115,15 +115,49 @@ void draw_samples_eyebrow(ImDrawList* draw_list, const ImVec2& pos, float max_x,
     ImGui::PopFont();
 }
 
-/// The two buttons of a sample: open the copy on disk, or get one. Returns true when the copy
-/// on disk is to be opened.
-auto draw_sample_actions(const sample_info& sample, const fs::path& installed) -> bool
+/// The copy of a sample among the recent projects, as its card shows it.
+struct sample_copy
 {
-    if(!installed.empty())
+    /// Empty when there is none on disk.
+    fs::path path;
+    /// From its sample.json; nothing when it has none.
+    hpp::optional<std::uint32_t> version;
+
+    /// Whether a newer version of the sample is published than this copy.
+    auto has_update(const sample_info& sample) const -> bool
+    {
+        return !path.empty() && version && *version < sample.version;
+    }
+};
+
+/// Which version is published and which one the copy is.
+auto get_sample_update_text(const sample_info& sample, const sample_copy& copy) -> std::string
+{
+    return "Version " + std::to_string(sample.version) + " of it is published, and this copy is version " +
+           std::to_string(*copy.version) + ".";
+}
+
+/// The two buttons of a sample: open the copy on disk, or get one; with an update, open it or get the new version.
+/// Returns true when the copy on disk is to be opened.
+auto draw_sample_actions(const sample_info& sample, const sample_copy& copy) -> bool
+{
+    if(!copy.path.empty())
     {
         const bool wants_open = widgets::draw_button(ICON_MDI_FOLDER_OPEN_OUTLINE "  Open", widgets::button_kind::primary);
-        ImGui::SetItemTooltipEx("Open %s", installed.generic_string().c_str());
+        ImGui::SetItemTooltipEx("Open %s", copy.path.generic_string().c_str());
         ImGui::SameLine();
+        if(copy.has_update(sample))
+        {
+            if(widgets::draw_button(ICON_MDI_DOWNLOAD "  Update", widgets::button_kind::secondary))
+            {
+                ImGui::OpenInShell(sample.download_url.c_str());
+            }
+            const std::string tooltip = get_sample_update_text(sample, copy) +
+                                        " A clone gets it with git pull in its folder. This downloads it as a ZIP "
+                                        "archive in the browser.";
+            ImGui::SetItemTooltipEx("%s", tooltip.c_str());
+            return wants_open;
+        }
         if(widgets::draw_button(ICON_MDI_GITHUB "  GitHub", widgets::button_kind::secondary))
         {
             ImGui::OpenInShell(sample.repository_url.c_str());
@@ -144,10 +178,15 @@ auto draw_sample_actions(const sample_info& sample, const fs::path& installed) -
     return false;
 }
 
-/// What pressing a sample's picture does, and the editor the sample needs when this one is older.
-auto get_sample_image_tooltip(const sample_info& sample, const fs::path& installed) -> std::string
+/// What pressing a sample's picture does, the update of the copy, and the editor the sample needs when this one is
+/// older.
+auto get_sample_image_tooltip(const sample_info& sample, const sample_copy& copy) -> std::string
 {
-    std::string tooltip = installed.empty() ? "Open its page on GitHub." : "Open the sample.";
+    std::string tooltip = copy.path.empty() ? "Open its page on GitHub." : "Open the sample.";
+    if(copy.has_update(sample))
+    {
+        tooltip += " " + get_sample_update_text(sample, copy);
+    }
     if(!sample.needed_version.empty())
     {
         tooltip += " It needs Unravel Engine " + sample.needed_version + " or newer, and this editor is older.";
@@ -199,7 +238,14 @@ void start_page::draw_samples_view(rtti::context& ctx)
 void start_page::draw_sample_card(rtti::context& ctx, const sample_info& sample, const ImVec2& size)
 {
     auto& pm = ctx.get_cached<project_manager>();
-    const fs::path installed = ctx.get_cached<sample_catalog_manager>().find_installed(sample, pm.get_editor_settings().projects.recent_projects);
+    auto& catalog = ctx.get_cached<sample_catalog_manager>();
+    sample_copy copy;
+    copy.path = catalog.find_installed(sample, pm.get_editor_settings().projects.recent_projects);
+    if(!copy.path.empty())
+    {
+        copy.version = catalog.get_copy_version(copy.path);
+    }
+    const fs::path& installed = copy.path;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImRect rect(pos, pos + size);
     const float rounding = to_pixels(SAMPLES_VIEW_ROUNDING);
@@ -211,7 +257,7 @@ void start_page::draw_sample_card(rtti::context& ctx, const sample_info& sample,
     widgets::draw_card_frame(draw_list, rect, rounding, is_card_hovered, false);
     // The picture opens the copy on disk, or the page of the sample when there is none.
     const bool is_image_pressed = ImGui::InvisibleButton("##sample_image", ImVec2(size.x, image_height));
-    ImGui::SetItemTooltipEx("%s", get_sample_image_tooltip(sample, installed).c_str());
+    ImGui::SetItemTooltipEx("%s", get_sample_image_tooltip(sample, copy).c_str());
     const ImRect image_rect(pos + ImVec2(1.0f, 1.0f), ImVec2(rect.Max.x - 1.0f, pos.y + image_height));
     const gfx::texture::ptr image = get_sample_image(ctx, sample);
     if(image)
@@ -229,9 +275,11 @@ void start_page::draw_sample_card(rtti::context& ctx, const sample_info& sample,
     }
     if(!installed.empty())
     {
-        const char* installed_text = ICON_MDI_CHECK_CIRCLE " On this computer";
+        const bool has_update = copy.has_update(sample);
+        const char* installed_text = has_update ? ICON_MDI_ARROW_UP_CIRCLE " Update available" : ICON_MDI_CHECK_CIRCLE " On this computer";
+        const ImU32 installed_fill = has_update ? widgets::get_accent_color(1.0f) : SAMPLES_VIEW_INSTALLED_FILL_COLOR;
         const ImVec2 pill_size = widgets::calc_pill_size(installed_text);
-        widgets::draw_pill(draw_list, ImVec2(image_rect.Max.x - inset - pill_size.x, image_rect.Min.y + inset), installed_text, SAMPLES_VIEW_INSTALLED_FILL_COLOR, IM_COL32_WHITE);
+        widgets::draw_pill(draw_list, ImVec2(image_rect.Max.x - inset - pill_size.x, image_rect.Min.y + inset), installed_text, installed_fill, IM_COL32_WHITE);
     }
     if(!sample.needed_version.empty())
     {
@@ -255,7 +303,7 @@ void start_page::draw_sample_card(rtti::context& ctx, const sample_info& sample,
     text_y += static_cast<float>(SAMPLES_VIEW_DESCRIPTION_LINES) * ImGui::GetFontSize() + to_pixels(SAMPLES_VIEW_BLOCK_GAP);
     draw_sample_tags(draw_list, ImVec2(text_x, text_y), max_x, sample);
     ImGui::SetCursorScreenPos(ImVec2(text_x, rect.Max.y - padding - widgets::get_button_height()));
-    const bool wants_open = draw_sample_actions(sample, installed);
+    const bool wants_open = draw_sample_actions(sample, copy);
     // The group spans the whole card, so the next one goes beside it.
     ImGui::SetCursorScreenPos(pos);
     ImGui::Dummy(size);
