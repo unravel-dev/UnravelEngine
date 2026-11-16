@@ -218,9 +218,12 @@ is ASCII, and that each skill's frontmatter names its folder.
 - One file in `tests/tests/suites/` with `REGISTER_TEST_SUITE("name", run_function)`, or
   `REGISTER_TEST_SUITE("name", run_function, {.lane = ::unravel::suite_lane::tools})` for a lane;
   the function takes `rtti::context&` and returns nothing. Re-configure: the sources are globbed.
-- The file says `using namespace unravel::test;` after its includes and calls each case as
-  `RUN_CASE(test_round_trip(temp));`: the case is timed, named in reports, filtered by `--case`,
-  and an exception it throws fails it without ending the suite.
+- The file says `using namespace unravel::test;` after its includes, outside every `#if` (one
+  inside an `#ifdef _WIN32` include block compiles here and fails on Linux and macOS), and calls
+  each case as `RUN_CASE(test_round_trip(temp));`: the case is timed, named in reports, filtered
+  by `--case`, and an exception it throws fails it without ending the suite.
+- A Windows build compiles none of a suite's `#else` / `#ifndef _WIN32` branches. After an edit
+  that reaches them, or an edit made by a script over many suites, the Linux CI job is the check.
 - Suites do not initialise threadpp or the asset manager: the runner already owns them.
 - Nothing the suite does may outlive the process state it changed: a protocol it adds, the
   single-threaded switch, bgfx started on the Noop renderer. Each suite has a process of its own
