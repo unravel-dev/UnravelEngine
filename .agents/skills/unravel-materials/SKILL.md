@@ -82,6 +82,10 @@ draws them: skill `unravel-rendering`. Driving materials through the editor's MC
 - Shader helpers in `material_graph.sh` compile for FXC too: a loop variable stays in the enclosing scope (two
   loops in one function need their own names), and a struct not yet whole cannot be an `inout` argument (the mains
   fill `MaterialInputs` with macros). Derivative helpers stay inside `#if BGFX_SHADER_TYPE_FRAGMENT`.
+- FXC cannot return early from a pixel shader function before code that takes derivatives (texture samples,
+  `dFdx`): it flattens every such return, at any optimization level, and hundreds of them take it minutes. Generated
+  code keeps early returns out of FXC's path: the swatch preview selects its colour there (`PREVIEW_SELECTION` in
+  `material_graph_compiler.cpp`, `BGFX_SHADER_LANGUAGE_HLSL && !BGFX_SHADER_LANGUAGE_DXIL`) and returns elsewhere.
 - Tint (WGSL) asserts on a constant that folds to infinity or NaN: a node's defaults never divide by zero or take
   the log of 0.
 - A compiled material keeps its binding (`material_graph_binding`: parameters and registers, textures, the traits

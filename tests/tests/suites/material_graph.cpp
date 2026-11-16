@@ -1665,7 +1665,7 @@ void test_examples(asset_manager* am, const fs::path& output_folder)
     for(size_t i = 0; i < every_node.nodes.size(); ++i)
     {
         previewed += has_material_graph_preview(every_node, preview, i) &&
-                     contains(preview.shader, "if(abs(node - " + std::to_string(i) + ".0) < 0.5) return")
+                     contains(preview.shader, "MG_PREVIEW(" + std::to_string(i) + ".0, ")
                          ? 1
                          : 0;
     }
@@ -1677,6 +1677,9 @@ void test_examples(asset_manager* am, const fs::path& output_folder)
     const auto without_value = size_t(std::count_if(every_node.nodes.begin(), every_node.nodes.end(), has_no_output));
     check(previewed + without_value >= every_node.nodes.size() - count_reroutes(every_node),
           "every node with a value has its swatch: the output and Discard have none");
+    check(contains(preview.shader, "#if BGFX_SHADER_LANGUAGE_HLSL && !BGFX_SHADER_LANGUAGE_DXIL") &&
+              contains(preview.shader, "return mg_preview;"),
+          "fxc selects a swatch's colour, as it cannot return early before derivatives; the others return");
     if(am)
     {
         batch.add("every_node", result);

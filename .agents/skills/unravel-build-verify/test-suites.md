@@ -82,15 +82,19 @@ output of a suite that did not pass, and a table, slowest first, at the end.
 ## Slow suites
 
 These run `shaderc` (or `texturec`) found beside the runner; never beside a build or a busy
-editor, and never under a hard timeout. Times are RelWithDebInfo on a quiet 32-thread machine,
-in one process before their compiles ran in parallel.
+editor, and never under a hard timeout. Times are a full parallel run, RelWithDebInfo on a quiet
+32-thread machine (about 150 s in all).
 
-- `material graphs` - 543 s: every example graph and every node, every tested renderer.
-- `eshader files` - 246 s: every `.eshader` the engine and editor ship, for every renderer.
-- `gi constants / reference oracle` - 72 s: every GI shader for SM 5.0, GLSL 440 and SPIR-V.
+- `eshader files` - 109 s: every `.eshader` the engine and editor ship, for every renderer; its
+  longest job is one fxc compile (`fs_gi_scene_debug.eshader` on `.dxbc`, about 60 s).
+- `gi constants / reference oracle` - 43 s beside the others, 15 s alone: every GI shader for
+  SM 5.0, GLSL 440 and SPIR-V.
 - `fs watcher` - 37 s, sleeps for quiet periods; the exclusive lane runs it alone.
-- `settings profiles` - cooks web shaders and texture variants, step by step.
-- The compiles of the first three run together (`test::run_parallel`); under `--single-threaded`
+- `material graphs` - 29 s: every example graph and every node, every tested renderer.
+- `settings profiles` - 8 s: cooks web shaders and texture variants, step by step.
+- The compiles of `eshader files`, `gi constants` and `material graphs` run together
+  (`test::run_parallel`) and each prints its slowest jobs: a suite lasts at least as long as its
+  slowest single compile. Under `--single-threaded`
   they run one by one and take hours: run the other suites one by one there.
 
 ## Rendering and shaders

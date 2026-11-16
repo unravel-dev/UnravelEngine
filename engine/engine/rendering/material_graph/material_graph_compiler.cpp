@@ -231,6 +231,15 @@ constexpr const char* PREVIEW_INTERFACE = "[variants]\n"
                                           "\n"
                                           "[code]";
 constexpr const char* PREVIEW_MAIN_INCLUDE = "material_graph/fs_material_graph_preview.sh";
+/// How evaluate_preview gives one node's swatch: MG_PREVIEW(index, colour), in mg_preview. fxc (Direct3D 11) cannot
+/// return early before code that takes derivatives, so it would flatten every early return, which for a graph of
+/// hundreds of nodes takes it minutes; it selects the colour instead and computes every node, as its flattened code
+/// would. The other compilers return, skipping the nodes after the one asked for.
+constexpr const char* PREVIEW_SELECTION = "#if BGFX_SHADER_LANGUAGE_HLSL && !BGFX_SHADER_LANGUAGE_DXIL\n"
+                                          "#define MG_PREVIEW(index, colour) mg_preview = abs(node - (index)) < 0.5 ? (colour) : mg_preview\n"
+                                          "#else\n"
+                                          "#define MG_PREVIEW(index, colour) if(abs(node - (index)) < 0.5) return (colour)\n"
+                                          "#endif";
 
 auto make_include_line(const char* file) -> std::string
 {
@@ -3074,8 +3083,9 @@ private:
         lines.emplace_back("#endif");
     }
 
-    /// Emits every node with a swatch, each followed by the line returning its value as a colour when it is the one
-    /// asked for: a swatch computes what its node reads and what was emitted before it, not the whole graph.
+    /// Emits every node with a swatch, each followed by MG_PREVIEW, which gives its value as a colour when it is the
+    /// one asked for (PREVIEW_SELECTION): where it returns, a swatch computes what its node reads and what was emitted
+    /// before it, not the whole graph.
     void emit_previews()
     {
         // The graph's own nodes have swatches; the nodes calls put in it are computed where they are read.
@@ -3086,7 +3096,7 @@ private:
                 continue;
             }
             emit_node(i);
-            body_.push_back(fmt::format("{}if(abs(node - {}) < 0.5) return {};", INDENT, format_float_literal(float(i)), make_preview_color(i)));
+            body_.push_back(fmt::format("{}MG_PREVIEW({}, {});", INDENT, format_float_literal(float(i)), make_preview_color(i)));
         }
     }
 
@@ -3135,10 +3145,13 @@ private:
         lines.emplace_back();
         add_declarations(lines);
         lines.insert(lines.end(), functions_.begin(), functions_.end());
+        add_lines(lines, PREVIEW_SELECTION);
+        lines.emplace_back();
         lines.push_back("vec4 evaluate_preview(MaterialInputs i, float node)");
         lines.push_back("{");
+        lines.push_back(fmt::format("{}vec4 mg_preview = vec4(0.0, 0.0, 0.0, 1.0);", INDENT));
         lines.insert(lines.end(), body_.begin(), body_.end());
-        lines.push_back(fmt::format("{}return vec4(0.0, 0.0, 0.0, 1.0);", INDENT));
+        lines.push_back(fmt::format("{}return mg_preview;", INDENT));
         lines.push_back("}");
         lines.emplace_back();
         lines.push_back(make_include_line(PREVIEW_MAIN_INCLUDE));
