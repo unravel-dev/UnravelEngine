@@ -93,6 +93,8 @@ where each kind of knowledge goes: `.agents/README.md`.
   reads are full sentences ending with a period; never "x; y".
 - Never "Lumen", "Unreal", "UE" or another engine's name in anything a user can read:
   labels, pass and profiler names, log tags (use `[GI]`), MCP tool descriptions, commits.
+  This is the engine's and editor's own text; content in sample projects keeps the names it
+  has (a rig with UE bone names says so).
 - A field's value does not repeat its label.
 
 ## Changing a shared contract
