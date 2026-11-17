@@ -14,6 +14,8 @@
 
 #include "../tests.h"
 
+#include <engine/assets/asset_manager.h>
+#include <engine/engine.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
 #include <engine/ecs/scene.h>
@@ -24,6 +26,8 @@
 #include <engine/physics/ecs/components/physics_component.h>
 #include <engine/physics/ecs/systems/physics_system.h>
 #include <engine/physics/physics_types.h>
+#include <engine/rendering/mesh.h>
+#include <graphics/vertex_decl.h>
 
 #include <base/basetypes.hpp>
 #include <logging/logging.h>
@@ -261,6 +265,62 @@ void test_scale_is_baked_into_shapes(rtti::context& ctx)
     big.get<transform_component>().set_scale_global(math::vec3{1.0f, 1.0f, 1.0f});
     fx.step(settle_steps);
     check_near(fx.position_of(big).y, 0.5f, settle_tolerance, "a scale change mid-play rebuilds the shape");
+}
+
+/// A mesh made by @p create (system memory only), registered under @p name for mesh shapes to read.
+auto make_test_mesh(const std::string& name, const std::function<bool(mesh&)>& create) -> asset_handle<mesh>
+{
+    auto made = std::make_shared<mesh>();
+    if(!create(*made))
+    {
+        return {};
+    }
+    auto& am = engine::context().get_cached<asset_manager>();
+    const std::string key = "engine:/embedded/box3d_physics_test/" + name;
+    am.unload_asset<mesh>(key);
+    return am.get_asset_from_instance<mesh>(key, made);
+}
+
+/// A convex mesh shape whose full hull would be too large for Box3D (more than 128 faces) gets a smaller hull of
+/// the points that reach farthest instead of no shape; one that fits keeps its exact hull; on Box3D, points that
+/// enclose no volume make no shape.
+void test_convex_mesh_shapes(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_convex_mesh_shapes (%s)\n", backend == physics_backend_type::box3d ? "Box3D" : "Bullet");
+    const auto& layout = gfx::mesh_vertex::get_layout();
+    const auto sphere = make_test_mesh("sphere", [&](mesh& m) { return m.create_sphere(layout, 0.5f, 24, 24, false); });
+    const auto cube = make_test_mesh("cube", [&](mesh& m) { return m.create_cube(layout, 1.0f, 1.0f, 1.0f, 1, 1, 1, false); });
+    const auto plane = make_test_mesh("plane", [&](mesh& m) { return m.create_plane(layout, 1.0f, 1.0f, 1, 1, false); });
+    require(sphere && cube && plane, "the test meshes are made");
+
+    sim_fixture fx(ctx, backend);
+    fx.spawn_ground();
+    const auto add_convex = [&](const std::string& name, const math::vec3& position, const asset_handle<mesh>& shape_mesh)
+    {
+        auto e = fx.spawn(name, position);
+        physics_mesh_shape shape;
+        shape.mesh_asset = shape_mesh;
+        shape.collision_type = mesh_collision_type::convex;
+        fx.add_body(e, rigidbody_type::dynamic, shape);
+        return e;
+    };
+    auto ball = add_convex("ball", {0.0f, 3.0f, 0.0f}, sphere);
+    auto block = add_convex("block", {4.0f, 3.0f, 0.0f}, cube);
+    auto sheet = add_convex("sheet", {-4.0f, 3.0f, 0.0f}, plane);
+
+    fx.begin();
+    fx.step(settle_steps);
+    const float ball_height = fx.position_of(ball).y;
+    // Bullet rests convex hulls on its collision margin, a few centimetres higher.
+    check(ball_height > 0.42f && ball_height < 0.56f, "a detailed sphere's convex hull rests on the ground at about its radius");
+    const auto hit = fx.backend->ray_cast({0.0f, 3.0f, 0.0f}, {0.0f, -1.0f, 0.0f}, 5.0f, everything, false);
+    check(hit && hit->entity == ball.entity(), "a ray down hits the sphere's hull");
+    check_near(fx.position_of(block).y, 0.5f, settle_tolerance, "a hull within the limits keeps every point");
+    // Bullet keeps a flat hull as a plate of its margin's thickness; Box3D makes none and says so.
+    if(backend == physics_backend_type::box3d)
+    {
+        check(fx.position_of(sheet).y < -2.0f, "points that enclose no volume make no shape");
+    }
 }
 
 void test_sensors_have_no_response(rtti::context& ctx)
@@ -1772,6 +1832,8 @@ void run_box3d_suite(rtti::context& ctx)
     RUN_CASE(test_dynamic_bodies_settle(ctx));
     RUN_CASE(test_gravity_and_constraints(ctx));
     RUN_CASE(test_scale_is_baked_into_shapes(ctx));
+    RUN_CASE(test_convex_mesh_shapes(ctx, physics_backend_type::box3d));
+    RUN_CASE(test_convex_mesh_shapes(ctx, physics_backend_type::bullet));
     RUN_CASE(test_sensors_have_no_response(ctx));
     RUN_CASE(test_queries(ctx));
     RUN_CASE(test_forces(ctx));

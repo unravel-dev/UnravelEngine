@@ -263,7 +263,10 @@ turbulence_strength 0.3, scale growing 1 -> 2.6, gray fading alpha); sparks
   cylinder primitive needs [{"type":"cylinder","length":2}]. A shape written with its own type
   keeps the fields you leave out.
 - For meshes, set center/extends from the model AABB (assets_get_mesh_info), or
-  use a mesh shape.
+  use a mesh shape. A convex mesh shape of a detailed mesh keeps its outermost
+  points (at most 128 hull faces on the default backend): close to the mesh,
+  not exact, so a primitive is better where one fits. A flat mesh makes no
+  convex shape (the log says so).
 - freeze_position / freeze_rotation are [x,y,z] booleans; include_layers /
   exclude_layers take layer names, indices or "everything" / "nothing".
 - Nothing simulates in edit mode; test with play mode (verification skill).

@@ -31,6 +31,13 @@ wheels and ragdolls in depth: [joints-and-ragdolls.md](joints-and-ragdolls.md).
 - Box3D bakes entity scale into shapes (a scale change rebuilds them) and gives concave meshes
   contacts on static bodies only. `settings.physics.solver_iterations` is Bullet's; Box3D
   solves with `settings.physics.sub_steps` (4, clamped to 1..16) per fixed step.
+- Box3D takes hulls of at most 128 faces and 128 edges. Every Box3D hull goes through
+  `create_hull_within_limits` (`box3d_backend.cpp`): the full 128 vertices first, then 64, then
+  44 (a hull of V triangle-faced vertices has 3V - 6 edges, so 44 always fits); quickhull keeps
+  the farthest points, so a detailed mesh's convex shape keeps its size. The refused attempts
+  are not logged. Points that enclose no volume (a flat mesh) make no shape on Box3D and a
+  warning that says so; Bullet keeps them as a plate of its collision margin, and rests every
+  convex hull on that margin, about 4 cm higher than Box3D.
 - Box3D kinematic bodies never sleep. A body a moving kinematic body touches gets its sleep
   count restarted (`restart_sleep_count`), as `set_body_awake(true)` (C# `WakeUp`) does;
   without that, a crate a platform lets go of falls asleep in the air.

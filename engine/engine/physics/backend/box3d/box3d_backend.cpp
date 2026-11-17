@@ -42,6 +42,13 @@ constexpr int sub_step_count = 4;
 constexpr int max_sub_step_count = 16;
 /// Tessellation of the cylinder hull. Box3D hulls are capped at 128 vertices.
 constexpr int cylinder_hull_sides = 16;
+/// The most vertices a hull may keep and still fit Box3D's limits whatever its shape: a hull of V vertices made of
+/// triangles has 3V - 6 edges and 2V - 4 faces, and Box3D takes at most B3_MAX_HULL_EDGES edges and
+/// B3_MAX_HULL_FACES faces.
+constexpr int hull_vertices_within_limits = (B3_MAX_HULL_EDGES + 6) / 3;
+static_assert(2 * hull_vertices_within_limits - 4 <= B3_MAX_HULL_FACES, "a hull within the edge limit fits the faces");
+/// Fewer vertices than Box3D's most, tried before hull_vertices_within_limits: most detailed meshes fit with these.
+constexpr int hull_vertices_reduced = 64;
 /// Box3D asserts on degenerate half widths; a collapsed axis is clamped to this.
 constexpr float min_half_extent = 0.005f;
 /// A box has eight corners.
@@ -310,8 +317,16 @@ auto combined_restitution_callback(float restitution_a, uint64_t material_a, flo
 
 // --- box3d diagnostics --------------------------------------------------------------
 
+/// Set while a hull is tried with more vertices than Box3D's limits may allow (create_hull_within_limits): Box3D logs
+/// the refusal, which is expected there, and a smaller hull follows.
+thread_local int quiet_hull_attempts = 0;
+
 void log_callback(const char* message)
 {
+    if(quiet_hull_attempts > 0)
+    {
+        return;
+    }
     APPLOG_WARNING("box3d: {}", message ? message : "");
 }
 
@@ -1744,6 +1759,29 @@ auto get_box_corner(const math::vec3& half, int index) -> math::vec3
 }
 
 /**
+ * @brief The Box3D hull of @p points, within Box3D's limits of faces and edges.
+ *
+ * It keeps as many vertices as Box3D takes. A hull that would be too large for that (a detailed mesh: the built-in
+ * sphere's has hundreds of faces) is made again with fewer, down to hull_vertices_within_limits, which always fits.
+ * Box3D adds the farthest point left at each step, so a smaller hull keeps the points that reach farthest and the
+ * shape keeps its size. Null for points that enclose no volume.
+ */
+auto create_hull_within_limits(const b3Vec3* points, int count) -> b3HullData*
+{
+    for(const int max_vertices : {int(B3_MAX_HULL_VERTICES), hull_vertices_reduced})
+    {
+        ++quiet_hull_attempts;
+        b3HullData* hull = b3CreateHull(points, count, max_vertices);
+        --quiet_hull_attempts;
+        if(hull != nullptr)
+        {
+            return hull;
+        }
+    }
+    return b3CreateHull(points, count, hull_vertices_within_limits);
+}
+
+/**
  * @brief Adds the hull of @p points (in the shape's frame), placed by @p local and then scaled in the body's space.
  *
  * Box3D scales a box and a transformed hull along the shape's own axes, before turning it, which keeps a box a box.
@@ -1762,7 +1800,7 @@ void add_hull_in_body_space(shape_build_context& ctx, const b3Vec3* points, int 
                    {
                        return box3d::to_b3((rotation * box3d::from_b3(point) + offset) * ctx.scale);
                    });
-    b3HullData* hull = b3CreateHull(placed.data(), count, B3_MAX_HULL_VERTICES);
+    b3HullData* hull = create_hull_within_limits(placed.data(), count);
     if(hull == nullptr)
     {
         return;
@@ -1869,10 +1907,13 @@ void create_convex_mesh_shapes(shape_build_context& ctx, const physics_mesh_shap
                               [&](const submesh_geometry& geometry)
                               {
                                   const int point_count = static_cast<int>(geometry.points.size());
-                                  b3HullData* hull =
-                                      b3CreateHull(geometry.points.data(), point_count, B3_MAX_HULL_VERTICES);
+                                  b3HullData* hull = create_hull_within_limits(geometry.points.data(), point_count);
                                   if(hull == nullptr)
                                   {
+                                      APPLOG_WARNING("A convex mesh shape of {} was left out: its points enclose no "
+                                                     "volume. Give the body a box shape, or a concave mesh shape on a "
+                                                     "static body.",
+                                                     shape.mesh_asset.id());
                                       return;
                                   }
                                   add_shape(ctx,
