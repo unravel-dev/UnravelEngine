@@ -6,6 +6,8 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/ecs/components/decal_component.h>
+#include <engine/rendering/ecs/components/post_process_material_component.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/mesh.h>
@@ -40,6 +42,40 @@ auto internal_m2n_model_get_casts_shadow(entt::entity id) -> bool
         return comp->casts_shadow();
     }
     return false;
+}
+
+auto internal_m2n_model_get_receive_decals(entt::entity id) -> int32_t
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        return int32_t(comp->get_decal_receive());
+    }
+    return 0;
+}
+
+auto internal_m2n_model_get_post_process_mask(entt::entity id) -> int32_t
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        return comp->get_post_process_mask();
+    }
+    return 0;
+}
+
+void internal_m2n_model_set_post_process_mask(entt::entity id, int32_t value)
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        comp->set_post_process_mask(value);
+    }
+}
+
+void internal_m2n_model_set_receive_decals(entt::entity id, int32_t mode)
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        comp->set_decal_receive(decal_receive(std::clamp(mode, 0, 2)));
+    }
 }
 
 void internal_m2n_model_set_casts_shadow(entt::entity id, bool casts_shadow)
@@ -153,14 +189,46 @@ auto find_standalone_instance(uint32_t instance_id) -> std::shared_ptr<material_
     return engine::context().get_cached<rendering_system>().find_material_instance(instance_id);
 }
 
-/// The material instance a script's MaterialInstance stands for: model @p id's of slot @p slot, or the material
-/// instance of no renderer @p slot when @p id is none (is_standalone_instance). Null when it is gone.
+/// The slot a decal's MaterialInstance passes (DecalComponent.materialInstance): a decal has one instance, of its
+/// material. Mirrors MaterialInstance.DecalSlot in MaterialInstance.cs.
+constexpr uint32_t DECAL_MATERIAL_INSTANCE_SLOT = 0xFFFFFFFFu;
+/// The first slot a post-process material entry's MaterialInstance passes: entry i passes this plus i
+/// (PostProcessMaterialComponent.GetInstance). Mirrors PostProcessMaterialComponent.InstanceSlotBase.
+constexpr uint32_t POST_PROCESS_MATERIAL_INSTANCE_SLOT_BASE = 0xFF000000u;
+
+/// Whether @p slot names a post-process material entry rather than a model slot or a decal.
+auto is_post_process_entry_slot(uint32_t slot) -> bool
+{
+    return slot >= POST_PROCESS_MATERIAL_INSTANCE_SLOT_BASE && slot != DECAL_MATERIAL_INSTANCE_SLOT;
+}
+
+/// The post-process material entry of entity @p id that @p slot names, or null.
+auto find_post_process_entry_of_slot(entt::entity id, uint32_t slot) -> post_process_material_entry*
+{
+    auto comp = safe_get_component<post_process_material_component>(id);
+    const size_t index = slot - POST_PROCESS_MATERIAL_INSTANCE_SLOT_BASE;
+    return comp && index < comp->entries.size() ? &comp->entries[index] : nullptr;
+}
+
+/// The material instance a script's MaterialInstance stands for: model @p id's of slot @p slot, decal @p id's for
+/// DECAL_MATERIAL_INSTANCE_SLOT, or the material instance of no renderer @p slot when @p id is none
+/// (is_standalone_instance). Null when it is gone.
 auto find_instance(entt::entity id, uint32_t slot) -> const material_instance*
 {
     if(is_standalone_instance(id))
     {
         // rendering_system keeps it alive until its script releases it.
         return find_standalone_instance(slot).get();
+    }
+    if(slot == DECAL_MATERIAL_INSTANCE_SLOT)
+    {
+        auto decal = safe_get_component<decal_component>(id);
+        return decal ? &decal->get_material_instance() : nullptr;
+    }
+    if(is_post_process_entry_slot(slot))
+    {
+        auto* entry = find_post_process_entry_of_slot(id, slot);
+        return entry ? &entry->get_material_instance() : nullptr;
     }
     auto comp = safe_get_component<model_component>(id);
     return comp ? &comp->get_material_instance(slot) : nullptr;
@@ -178,6 +246,28 @@ void change_instance(entt::entity id, uint32_t slot, StandaloneChange&& change_s
         if(const auto instance = find_standalone_instance(slot))
         {
             change_standalone(*instance);
+        }
+        return;
+    }
+    if(slot == DECAL_MATERIAL_INSTANCE_SLOT)
+    {
+        // Through the component, which resolves the instance its draws read.
+        if(auto decal = safe_get_component<decal_component>(id))
+        {
+            auto instance = decal->get_material_instance();
+            change_standalone(instance);
+            decal->set_material_instance(instance);
+        }
+        return;
+    }
+    if(is_post_process_entry_slot(slot))
+    {
+        // Through the entry, which resolves the instance its pass reads.
+        if(auto* entry = find_post_process_entry_of_slot(id, slot))
+        {
+            auto instance = entry->get_material_instance();
+            change_standalone(instance);
+            entry->set_material_instance(instance);
         }
         return;
     }
@@ -505,6 +595,14 @@ void register_model_component_script_bindings()
                           script_internal_call(internal_m2n_model_get_casts_shadow));
     reg.add_internal_call("internal_m2n_model_set_casts_shadow",
                           script_internal_call(internal_m2n_model_set_casts_shadow));
+    reg.add_internal_call("internal_m2n_model_get_receive_decals",
+                          script_internal_call(internal_m2n_model_get_receive_decals));
+    reg.add_internal_call("internal_m2n_model_set_receive_decals",
+                          script_internal_call(internal_m2n_model_set_receive_decals));
+    reg.add_internal_call("internal_m2n_model_get_post_process_mask",
+                          script_internal_call(internal_m2n_model_get_post_process_mask));
+    reg.add_internal_call("internal_m2n_model_set_post_process_mask",
+                          script_internal_call(internal_m2n_model_set_post_process_mask));
     reg.add_internal_call("internal_m2n_model_get_static", script_internal_call(internal_m2n_model_get_static));
     reg.add_internal_call("internal_m2n_model_set_static", script_internal_call(internal_m2n_model_set_static));
     reg.add_internal_call("internal_m2n_model_get_mesh", script_internal_call(internal_m2n_model_get_mesh));

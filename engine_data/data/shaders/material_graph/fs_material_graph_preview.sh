@@ -29,6 +29,7 @@ void main()
 	i.screen_uv = v_texcoord0;
 	i.time = u_material_time.x;
 	i.mip_bias = 0.0;
+	mg_set_domain_input_defaults(i);
 	mg_set_world_object_inputs(i);
 
 	vec4 value = evaluate_preview(i, u_mg_preview.x);

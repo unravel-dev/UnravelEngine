@@ -543,6 +543,9 @@ auto intersect_feature_limits(const feature_limits& lhs, const feature_limits& r
     limits.max_bloom_mips = std::min(lhs.max_bloom_mips, rhs.max_bloom_mips);
     limits.per_frame_exposure_metering = lhs.per_frame_exposure_metering && rhs.per_frame_exposure_metering;
     limits.max_shadow_cascades = std::min(lhs.max_shadow_cascades, rhs.max_shadow_cascades);
+    limits.decals = lhs.decals && rhs.decals;
+    limits.decal_surface_channels = lhs.decal_surface_channels && rhs.decal_surface_channels;
+    limits.post_process_materials = lhs.post_process_materials && rhs.post_process_materials;
     return limits;
 }
 

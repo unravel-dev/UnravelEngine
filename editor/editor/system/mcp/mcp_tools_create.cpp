@@ -424,7 +424,7 @@ void register_create_tools(mcp_tool_registry& registry)
                  create_item item;
                  if(!read_object(element, obj, error) || !read_create_item(ctx, *scn, obj, kind, item, error))
                  {
-                     return {.text = fmt::format("Item {}: {}; nothing was created", items.size(), error),
+                     return {.text = make_batch_item_error(items.size(), error, "Nothing was created."),
                              .is_error = true};
                  }
                  items.emplace_back(kind, std::move(item));

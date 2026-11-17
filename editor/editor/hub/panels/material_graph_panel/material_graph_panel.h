@@ -136,6 +136,11 @@ private:
     /// The way back to the graphs the window came from: a Back button and the trail of their names.
     void draw_back_trail();
     void draw_new_menu();
+    void draw_domain_combo();
+    /// A Post Process material's button that runs it over the view (add_to_scene).
+    void draw_add_to_scene_button();
+    /// Runs the material on the selected volume or camera, or on the scene's global volume.
+    void add_to_scene();
     void draw_status();
     void draw_layout(rtti::context& ctx);
     /// The edge of a side pane a handle moves: its width, kept below max_width, whether it shows, and which way it

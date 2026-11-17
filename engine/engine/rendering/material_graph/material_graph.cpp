@@ -2,6 +2,7 @@
 #include "material_graph_library.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
@@ -129,9 +130,183 @@ auto find_material_graph_output(const material_graph& graph) -> int
                                  graph.nodes.end(),
                                  [](const material_graph_node& node)
                                  {
-                                     return node.type == MATERIAL_GRAPH_OUTPUT_TYPE;
+                                     return is_material_graph_output_type(node.type);
                                  });
     return it == graph.nodes.end() ? -1 : int(it - graph.nodes.begin());
+}
+
+namespace
+{
+struct material_domain_names
+{
+    material_domain domain;
+    const char* output_type;
+    const char* key;
+    const char* label;
+};
+
+constexpr std::array<material_domain_names, MATERIAL_DOMAIN_COUNT> MATERIAL_DOMAIN_NAMES = {{
+    {material_domain::surface, MATERIAL_GRAPH_OUTPUT_TYPE, "surface", "Surface"},
+    {material_domain::decal, MATERIAL_GRAPH_DECAL_OUTPUT_TYPE, "decal", "Decal"},
+    {material_domain::post_process, MATERIAL_GRAPH_POST_PROCESS_OUTPUT_TYPE, "post_process", "Post Process"},
+}};
+
+struct material_post_process_location_names
+{
+    material_post_process_location location;
+    const char* key;
+    const char* label;
+};
+
+constexpr std::array<material_post_process_location_names, MATERIAL_POST_PROCESS_LOCATION_COUNT> MATERIAL_POST_PROCESS_LOCATION_NAMES = {{
+    {material_post_process_location::before_transparent, "before_transparent", "Before Transparent"},
+    {material_post_process_location::before_bloom, "before_bloom", "Before Bloom"},
+    {material_post_process_location::after_tonemapping, "after_tonemapping", "After Tonemapping"},
+}};
+
+auto get_material_domain_names(material_domain domain) -> const material_domain_names&
+{
+    const auto index = size_t(domain);
+    return MATERIAL_DOMAIN_NAMES[index < MATERIAL_DOMAIN_NAMES.size() ? index : 0];
+}
+
+/// The pin of the new output node an input of the old one moves to: its own name, or the opacity of the other domain.
+auto get_domain_moved_pin(const std::string& pin) -> std::string
+{
+    if(pin == "opacity_mask")
+    {
+        return MATERIAL_OPACITY_PIN;
+    }
+    return pin;
+}
+} // namespace
+
+auto get_material_graph_output_type(material_domain domain) -> const char*
+{
+    return get_material_domain_names(domain).output_type;
+}
+
+auto find_material_domain_of_output_type(hpp::string_view type) -> hpp::optional<material_domain>
+{
+    for(const auto& names : MATERIAL_DOMAIN_NAMES)
+    {
+        if(type == names.output_type)
+        {
+            return names.domain;
+        }
+    }
+    return {};
+}
+
+auto is_material_graph_output_type(hpp::string_view type) -> bool
+{
+    return static_cast<bool>(find_material_domain_of_output_type(type));
+}
+
+auto get_material_domain_label(material_domain domain) -> const char*
+{
+    return get_material_domain_names(domain).label;
+}
+
+auto get_material_domain_key(material_domain domain) -> const char*
+{
+    return get_material_domain_names(domain).key;
+}
+
+auto find_material_domain(hpp::string_view key) -> hpp::optional<material_domain>
+{
+    for(const auto& names : MATERIAL_DOMAIN_NAMES)
+    {
+        if(key == names.key)
+        {
+            return names.domain;
+        }
+    }
+    return {};
+}
+
+auto get_material_graph_domain(const material_graph& graph) -> material_domain
+{
+    const int output = find_material_graph_output(graph);
+    if(output < 0)
+    {
+        return material_domain::surface;
+    }
+    return find_material_domain_of_output_type(graph.nodes[size_t(output)].type).value_or(material_domain::surface);
+}
+
+auto set_material_graph_domain(material_graph& graph, material_domain domain) -> bool
+{
+    const char* type = get_material_graph_output_type(domain);
+    const int index = find_material_graph_output(graph);
+    if(index < 0)
+    {
+        if(is_material_function_graph(graph))
+        {
+            return false;
+        }
+        material_graph_node output;
+        output.id = make_unique_material_graph_node_id(graph, OUTPUT_NODE_ID);
+        output.type = type;
+        graph.nodes.push_back(std::move(output));
+        return true;
+    }
+    auto& output = graph.nodes[size_t(index)];
+    if(output.type == type)
+    {
+        return false;
+    }
+    const auto* def = find_material_node_def(type);
+    std::vector<material_graph_input> inputs;
+    for(const auto& input : output.inputs)
+    {
+        const auto entry = parse_material_graph_pin(input.pin);
+        const std::string moved = get_domain_moved_pin(entry.pin);
+        if(def == nullptr || find_material_pin_def(def->inputs, moved) == nullptr)
+        {
+            continue;
+        }
+        material_graph_input copy = input;
+        copy.pin = entry.component < 0 ? moved : moved + input.pin.substr(input.pin.find('.'));
+        inputs.push_back(std::move(copy));
+    }
+    std::vector<material_graph_setting> settings;
+    for(const auto& setting : output.settings)
+    {
+        if(def != nullptr && find_material_setting_def(*def, setting.name) != nullptr)
+        {
+            settings.push_back(setting);
+        }
+    }
+    output.type = type;
+    output.inputs = std::move(inputs);
+    output.settings = std::move(settings);
+    output.split_inputs.clear();
+    return true;
+}
+
+auto get_material_post_process_location_key(material_post_process_location location) -> const char*
+{
+    const auto index = size_t(location);
+    return MATERIAL_POST_PROCESS_LOCATION_NAMES[index < MATERIAL_POST_PROCESS_LOCATION_NAMES.size() ? index : 0].key;
+}
+
+auto get_material_post_process_location_label(material_post_process_location location) -> const char*
+{
+    const auto index = size_t(location);
+    return MATERIAL_POST_PROCESS_LOCATION_NAMES[index < MATERIAL_POST_PROCESS_LOCATION_NAMES.size() ? index : 0].label;
+}
+
+auto find_material_post_process_location(hpp::string_view key) -> hpp::optional<material_post_process_location>
+{
+    for(const auto& names : MATERIAL_POST_PROCESS_LOCATION_NAMES)
+    {
+        if(key == names.key)
+        {
+            return names.location;
+        }
+    }
+    return {};
 }
 
 auto find_material_graph_input(const material_graph_node& node, hpp::string_view pin) -> const material_graph_input*
@@ -443,7 +618,7 @@ void unlink_material_graph_node_outputs(material_graph& graph, hpp::string_view 
 auto remove_material_graph_node(material_graph& graph, hpp::string_view id) -> bool
 {
     const int index = find_material_graph_node(graph, id);
-    if(index < 0 || graph.nodes[size_t(index)].type == MATERIAL_GRAPH_OUTPUT_TYPE)
+    if(index < 0 || is_material_graph_output_type(graph.nodes[size_t(index)].type))
     {
         return false;
     }
@@ -680,7 +855,7 @@ auto copy_material_graph_nodes(const material_graph& graph, const std::vector<st
     material_graph fragment;
     for(const auto& node : graph.nodes)
     {
-        if(node.type != MATERIAL_GRAPH_OUTPUT_TYPE && std::find(ids.begin(), ids.end(), node.id) != ids.end())
+        if(!is_material_graph_output_type(node.type) && std::find(ids.begin(), ids.end(), node.id) != ids.end())
         {
             fragment.nodes.push_back(node);
         }
@@ -721,6 +896,12 @@ void merge_pasted_output(material_graph& graph,
     {
         return;
     }
+    // A whole graph of another domain pasted over an output nothing feeds yet takes the pasted graph's domain.
+    const auto pasted_domain = find_material_domain_of_output_type(pasted.type);
+    if(pasted_domain && graph.nodes[size_t(index)].inputs.empty() && graph.nodes[size_t(index)].settings.empty())
+    {
+        set_material_graph_domain(graph, *pasted_domain);
+    }
     auto& output = graph.nodes[size_t(index)];
     for(auto input : pasted.inputs)
     {
@@ -742,7 +923,7 @@ auto paste_material_graph_nodes(material_graph& graph, const material_graph& fra
     const size_t first = graph.nodes.size();
     for(const auto& node : fragment.nodes)
     {
-        if(node.type == MATERIAL_GRAPH_OUTPUT_TYPE)
+        if(is_material_graph_output_type(node.type))
         {
             continue;
         }
@@ -762,7 +943,7 @@ auto paste_material_graph_nodes(material_graph& graph, const material_graph& fra
     }
     for(const auto& node : fragment.nodes)
     {
-        if(node.type == MATERIAL_GRAPH_OUTPUT_TYPE)
+        if(is_material_graph_output_type(node.type))
         {
             merge_pasted_output(graph, node, renamed);
         }

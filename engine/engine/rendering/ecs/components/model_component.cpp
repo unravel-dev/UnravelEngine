@@ -1164,6 +1164,36 @@ void model_component::set_casts_shadow(bool cast_shadow)
     casts_shadow_ = cast_shadow;
 }
 
+void model_component::set_decal_receive(decal_receive mode)
+{
+    if(decal_receive_ == mode)
+    {
+        return;
+    }
+    touch(render_change::membership);
+    decal_receive_ = mode;
+}
+
+auto model_component::get_decal_receive() const -> decal_receive
+{
+    return decal_receive_;
+}
+
+auto model_component::receives_decals() const -> bool
+{
+    return decal_receive_ == decal_receive::on || (decal_receive_ == decal_receive::automatic && !is_skinned());
+}
+
+void model_component::set_post_process_mask(int value)
+{
+    post_process_mask_ = uint8_t(std::clamp(value, 0, 255));
+}
+
+auto model_component::get_post_process_mask() const -> int
+{
+    return post_process_mask_;
+}
+
 void model_component::set_static(bool is_static)
 {
     is_dynamic_for_skinning_ = false;

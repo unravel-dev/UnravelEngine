@@ -10,6 +10,7 @@
 #include <editor/assets/asset_watcher.h>
 #include <editor/deploy/deploy_pipeline.h>
 #include <editor/editing/prefab_bake.h>
+#include <editor/editing/actions/composite_action.h>
 #include <editor/editing/actions/entity_actions.h>
 #include <editor/editing/animation_preview.h>
 #include <editor/editing/create_scene_modal.h>
@@ -50,7 +51,10 @@
 #include <engine/ui/style_sheet.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
+#include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/ecs/components/post_process_material_component.h>
+#include <engine/rendering/ecs/components/volume_component.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/renderer.h>
 #include <engine/ecs/scene.h>
@@ -2211,6 +2215,202 @@ auto editor_actions::auto_setup_ragdoll(rtti::context& ctx, entt::handle owner, 
     detail::apply_setup(ctx, owner, setup.build);
     setup.is_changed = true;
     return setup;
+}
+
+namespace post_process_material_detail
+{
+/// Adds or changes the entry of @p mat on @p materials. @return The entry's index.
+auto apply_change(post_process_material_component& materials,
+                  const asset_handle<material>& mat,
+                  const post_process_material_change& change) -> size_t
+{
+    auto& entry = materials.add(mat);
+    if(change.weight)
+    {
+        entry.weight = std::clamp(*change.weight, 0.0f, 1.0f);
+    }
+    if(change.enabled)
+    {
+        entry.enabled = *change.enabled;
+    }
+    if(change.overrides)
+    {
+        entry.set_material_instance(*change.overrides);
+    }
+    return size_t(&entry - materials.entries.data());
+}
+
+/// Whether running @p mat on @p target (empty: the scene's global volume) adds an entry rather than changing one.
+auto adds_entry(scene& scn, entt::handle target, const asset_handle<material>& mat) -> bool
+{
+    const entt::handle holder = target ? target : defaults::find_global_volume(scn);
+    const auto* materials = holder ? holder.try_get<post_process_material_component>() : nullptr;
+    return materials == nullptr || materials->find(mat) == nullptr;
+}
+} // namespace post_process_material_detail
+
+auto editor_actions::find_post_process_material_problem(rtti::context& ctx,
+                                                        entt::handle target,
+                                                        const asset_handle<material>& mat) -> std::string
+{
+    if(ctx.get_cached<play_mode>().is_active())
+    {
+        return "Post-process materials are added in edit mode: stop play first.";
+    }
+    const auto loaded = mat ? mat.get() : nullptr;
+    if(asset_handle<material>::is_empty(loaded) || get_material_domain(*loaded) != material_domain::post_process)
+    {
+        return "The material is not a Post Process material: its graph's output node must be Post Process Output.";
+    }
+    if(target && !target.any_of<volume_component, camera_component>())
+    {
+        return "The entity is neither a post process volume nor a camera: post-process materials run on one of those.";
+    }
+    return {};
+}
+
+void editor_actions::add_post_process_material_step(rtti::context& ctx,
+                                                    scene& scn,
+                                                    entt::handle target,
+                                                    const asset_handle<material>& mat,
+                                                    const post_process_material_change& change,
+                                                    sequence_action_t& sequence,
+                                                    post_process_material_placement& placement)
+{
+    namespace detail = post_process_material_detail;
+    // What the first step found or made, for the second.
+    struct step_state
+    {
+        entt::handle holder;
+        bool has_entry{false};
+    };
+    auto state = std::make_shared<step_state>();
+    const auto type = entt::resolve<post_process_material_component>();
+    // The holder: the target or the scene's global volume, with the component added when it lacks it; or, with no
+    // global volume, a Global Volume made with the entry on it.
+    sequence.add_step(
+        [&ctx, &scn, &placement, target, mat, change, state, type]() -> std::shared_ptr<editing_action_t>
+        {
+            state->holder = target ? target : defaults::find_global_volume(scn);
+            placement.entity = state->holder;
+            if(state->holder)
+            {
+                if(state->holder.all_of<post_process_material_component>())
+                {
+                    return nullptr;
+                }
+                return std::make_shared<entity_add_component_action_t>(state->holder, type);
+            }
+            placement.added = true;
+            placement.created_volume = true;
+            state->has_entry = true;
+            return std::make_shared<create_entities_action_t>(
+                [&ctx, &scn, &placement, mat, change]() -> entt::handle
+                {
+                    auto volume = defaults::create_volume_entity(ctx, scn, "Global Volume", volume_mode::global);
+                    placement.index = detail::apply_change(volume.emplace<post_process_material_component>(), mat, change);
+                    placement.entity = volume;
+                    return volume;
+                });
+        });
+    // The entry, added or changed: no step when that changes nothing.
+    sequence.add_step(
+        [&placement, mat, change, state, type]() -> std::shared_ptr<editing_action_t>
+        {
+            if(state->has_entry)
+            {
+                return nullptr;
+            }
+            auto& materials = state->holder.get<post_process_material_component>();
+            placement.added = materials.find(mat) == nullptr;
+            const auto state_before = prefab_override_context::save_component_state(state->holder, type);
+            placement.index = detail::apply_change(materials, mat, change);
+            if(prefab_override_context::save_component_state(state->holder, type) == state_before)
+            {
+                return nullptr;
+            }
+            return std::make_shared<entity_component_state_action_t>(state->holder, type, state_before);
+        });
+}
+
+auto editor_actions::set_post_process_material(rtti::context& ctx,
+                                               scene& scn,
+                                               entt::handle target,
+                                               const asset_handle<material>& mat,
+                                               const post_process_material_change& change)
+    -> post_process_material_placement
+{
+    post_process_material_placement placement;
+    placement.error = find_post_process_material_problem(ctx, target, mat);
+    if(!placement.error.empty())
+    {
+        return placement;
+    }
+    auto& em = ctx.get_cached<editing_manager>();
+    // Undo steps also when the caller opened no undo scope (a panel button).
+    const editing_manager::undo_scope scope(&em);
+    const bool adds = post_process_material_detail::adds_entry(scn, target, mat);
+    auto sequence = std::make_shared<sequence_action_t>();
+    add_post_process_material_step(ctx, scn, target, mat, change, *sequence, placement);
+    em.do_action(adds ? "Add Post Process Material" : "Edit Post Process Material", sequence);
+    return placement;
+}
+
+auto editor_actions::find_post_process_material_removal_problem(rtti::context& ctx,
+                                                                entt::handle target,
+                                                                const asset_handle<material>& mat) -> std::string
+{
+    if(ctx.get_cached<play_mode>().is_active())
+    {
+        return "Post-process materials are removed in edit mode: stop play first.";
+    }
+    const auto* materials = target ? target.try_get<post_process_material_component>() : nullptr;
+    if(materials == nullptr || materials->find(mat) == nullptr)
+    {
+        return "The entity runs no entry of that material.";
+    }
+    return {};
+}
+
+void editor_actions::add_remove_post_process_material_step(entt::handle target,
+                                                           const asset_handle<material>& mat,
+                                                           sequence_action_t& sequence)
+{
+    sequence.add_step(
+        [target, mat]() -> std::shared_ptr<editing_action_t>
+        {
+            auto* materials = target ? target.try_get<post_process_material_component>() : nullptr;
+            if(materials == nullptr)
+            {
+                return nullptr;
+            }
+            const auto type = entt::resolve<post_process_material_component>();
+            const auto state_before = prefab_override_context::save_component_state(target, type);
+            if(!materials->remove(mat))
+            {
+                return nullptr;
+            }
+            return std::make_shared<entity_component_state_action_t>(target, type, state_before);
+        });
+}
+
+auto editor_actions::remove_post_process_material(rtti::context& ctx,
+                                                  entt::handle target,
+                                                  const asset_handle<material>& mat,
+                                                  std::string& error) -> bool
+{
+    error = find_post_process_material_removal_problem(ctx, target, mat);
+    if(!error.empty())
+    {
+        return false;
+    }
+    auto& em = ctx.get_cached<editing_manager>();
+    // Undo steps also when the caller opened no undo scope (a panel button).
+    const editing_manager::undo_scope scope(&em);
+    auto sequence = std::make_shared<sequence_action_t>();
+    add_remove_post_process_material_step(target, mat, *sequence);
+    em.do_action("Remove Post Process Material", sequence);
+    return true;
 }
 
 auto editor_actions::request_main_window_focus(rtti::context& ctx, std::string* error) -> bool

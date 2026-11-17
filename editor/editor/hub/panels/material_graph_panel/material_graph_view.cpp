@@ -1603,7 +1603,7 @@ void material_graph_view::draw_tooltip(const material_graph& graph) const
     text += "\nId: " + graph.nodes[size_t(node)].id;
     if(!is_node_used(node))
     {
-        text += "\nNot used: nothing it feeds reaches the Surface Output.";
+        text += "\nNot used: nothing it feeds reaches the output node.";
     }
     if(is_compiled_current(node))
     {
@@ -1850,9 +1850,10 @@ auto material_graph_view::place_shortcut_node(material_graph& graph, material_gr
     {
         return false;
     }
+    const auto domain = get_material_graph_domain(graph);
     for(const auto& def : get_material_node_library())
     {
-        if(def.shortcut != 0 && ImGui::IsKeyDown(get_shortcut_key(def.shortcut)))
+        if(def.shortcut != 0 && is_material_node_in_domain(def, domain) && ImGui::IsKeyDown(get_shortcut_key(def.shortcut)))
         {
             const int node = create_node(graph, def.type, to_graph(ImGui::GetIO().MousePos));
             selection.clear();
@@ -2217,9 +2218,10 @@ auto material_graph_view::get_search_candidates() const -> std::vector<const mat
     const bool from_output = search_link_.is_valid() && search_link_.side == pin_side::output;
     const bool from_input = search_link_.is_valid() && search_link_.side == pin_side::input;
     std::vector<std::pair<int, const material_node_def*>> scored;
+    const auto domain = compiled_ != nullptr ? compiled_->domain : material_domain::surface;
     for(const auto& def : get_material_node_library())
     {
-        if(def.code == material_node_code::surface_output)
+        if(def.code == material_node_code::surface_output || !is_material_node_in_domain(def, domain))
         {
             continue;
         }
@@ -2447,7 +2449,7 @@ void material_graph_view::draw_context_menus(material_graph& graph, material_gra
         if(index >= 0 && size_t(index) < geometry_.size())
         {
             const auto& node = graph.nodes[size_t(index)];
-            const bool is_output = node.type == MATERIAL_GRAPH_OUTPUT_TYPE;
+            const bool is_output = is_material_graph_output_type(node.type);
             if(ImGui::MenuItem(ICON_MDI_CONTENT_DUPLICATE " Duplicate", "Ctrl+D", false, !is_output))
             {
                 duplicate_selection(graph, selection, out);

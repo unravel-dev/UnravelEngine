@@ -33,6 +33,15 @@ void bump_shadow_caster_revision(entt::registry& registry, entt::entity entity);
  * @class model_component
  * @brief Class that contains core data for meshes.
  */
+/// Whether decals draw on a model. The values are saved: append only.
+enum class decal_receive : uint8_t
+{
+    /// Every model but a skinned one: a decal fixed in the world slides on a moving character.
+    automatic,
+    on,
+    off,
+};
+
 class model_component : public component_crtp<model_component, owned_component>
 {
 public:
@@ -80,6 +89,17 @@ public:
      * @param cast_shadow True if the model casts shadows, false otherwise.
      */
     void set_casts_shadow(bool cast_shadow);
+
+    /// Whether decals draw on the model: Auto (every model but a skinned one), On or Off.
+    void set_decal_receive(decal_receive mode);
+    auto get_decal_receive() const -> decal_receive;
+    /// Whether decals draw on the model now: On, or Auto while it is not skinned.
+    auto receives_decals() const -> bool;
+
+    /// The value the model writes into the post-process mask, 1 to 255, which post-process materials read (Scene
+    /// Texture Custom Mask and Custom Depth, Run Where Mask); 0 leaves it out.
+    void set_post_process_mask(int value);
+    auto get_post_process_mask() const -> int;
 
     /**
      * @brief Sets whether the model is static. Skinned models are never static: the armature build makes them dynamic
@@ -459,6 +479,8 @@ private:
      * @brief Indicates if the model casts shadows.
      */
     bool casts_shadow_ = true;
+    decal_receive decal_receive_ = decal_receive::automatic;
+    uint8_t post_process_mask_ = 0;
 
     /**
      * @brief The model object.

@@ -33,6 +33,12 @@ window (`unravel-editor-mcp`), prefab editing and override paths (`unravel-prefa
 - A drag is one undo step: actions merge while the `merge_session` epoch in
   `editing_manager.cpp` is unchanged (it advances on mouse press, release and focus loss),
   through `is_mergeable` / `merge_with`. A merge keeps the earliest undo state.
+- Several dependent edits that make one undo step go in a `sequence_action_t`
+  (`composite_action.h`): each step's factory runs after the step before it, so a later step can
+  edit an entity an earlier one creates. A step with nothing to do returns null, and a sequence
+  of only such steps records no undo step and leaves the scene saved. A function other callers
+  may group exposes an `add_..._step(sequence)` beside the call that runs it alone
+  (`editor_actions::add_post_process_material_step`).
 - Editor code that rewrites scene content returns while `play_mode::is_active()`: at play end
   the game scene reloads from its play-start checkpoint, and every scene reloads after a
   script recompile, so handles kept into any scene go stale (`unravel-ecs-component`).

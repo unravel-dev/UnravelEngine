@@ -172,11 +172,12 @@ auto deferred::collect_visible_models(scene& scn,
     return visibility_set;
 }
 
-void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
+void deferred::run_g_buffer_pass(hpp::span<const visibility_data> visibility_set,
                                  const camera& camera,
                                  gfx::render_view& rview,
                                  const feature_limits& limits,
-                                 delta_t dt)
+                                 delta_t dt,
+                                 g_buffer_phase phase)
 {
     APP_SCOPE_PERF("Rendering/G-Buffer Pass");
 
@@ -186,20 +187,36 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
 
     const auto& gbuffer = rview.fbo_get(limits.subsurface ? "GBUFFER" : "GBUFFER_NO_SUBSURFACE");
 
-    gfx::render_pass pass("G-Buffer/Pass");
-    pass.clear();
+    const bool is_first_phase = phase == g_buffer_phase::first;
+    gfx::render_pass pass(is_first_phase ? "G-Buffer/Pass" : "G-Buffer/After Decals");
+    if(is_first_phase)
+    {
+        pass.clear();
+    }
     pass.set_view_proj(view, proj);
     pass.bind(gbuffer.get());
 
-    // Clear batch collector for this frame
-    batch_collector_.clear();
-    skinned_batch_collector_.clear();
-    source_runs_.clear();
-    // The limits alone decide it: checking every drawn material would cost a scene with many of them on the CPU.
-    gbuffer_has_subsurface_ = limits.subsurface;
-    skinned_batching_run_ = is_skinned_batching_active();
-    draws_animated_offsets_ = false;
-    graph_material_programs_.release_unused();
+    if(is_first_phase)
+    {
+        // Clear batch collector for this frame
+        batch_collector_.clear();
+        skinned_batch_collector_.clear();
+        source_runs_.clear();
+        decal_receiver_batches_.clear();
+        decal_receiver_skinned_batches_.clear();
+        // The limits alone decide it: checking every drawn material would cost a scene with many of them on the CPU.
+        gbuffer_has_subsurface_ = limits.subsurface;
+        skinned_batching_run_ = is_skinned_batching_active();
+        draws_animated_offsets_ = false;
+        graph_material_programs_.release_unused();
+    }
+    else
+    {
+        // The first phase's batches are drawn: they wait for the velocity pass while this phase collects its own. A
+        // swap with the empty stash, which the first phase cleared, leaves both collectors whole.
+        std::swap(decal_receiver_batches_, batch_collector_);
+        std::swap(decal_receiver_skinned_batches_, skinned_batch_collector_);
+    }
     auto& skinning_palettes = engine::context().get_cached<renderer>().get_skinning_palettes();
 
     const auto& view_frustum = camera.get_frustum();
@@ -394,8 +411,11 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
 
     // Instanced sources (mesh particles, scripted instance draws): drawn with the batches whatever the batching setting.
     // A probe capture only keeps the frame's sources for the shadow maps it shares with the camera.
-    has_source_instances_ = false;
-    if(current_run_->is_camera_run())
+    if(is_first_phase)
+    {
+        has_source_instances_ = false;
+    }
+    if(is_first_phase && current_run_->is_camera_run())
     {
         for(const auto* source : instance_sources_)
         {
@@ -902,9 +922,18 @@ void deferred::submit_batched_velocity(gfx::render_pass& pass, const math::trans
     }
 
     // The batches (and their prepare_batches sorting) are the ones submit_batched_geometry
-    // built this frame; the collector is deliberately not cleared until the end of the run.
-    const auto& prepared_batches = batch_collector_.get_prepared_batches();
-    if(prepared_batches.empty())
+    // built this frame, in both G-buffer phases; the collectors are not cleared until the end of the run.
+    // The batches of a material whose World Position Offset animates draw every instance: a still one moves too.
+    mover_batches_.clear();
+    offset_batches_.clear();
+    for(const auto* collector : {&decal_receiver_batches_, &batch_collector_})
+    {
+        for(const auto* batch : collector->get_prepared_batches())
+        {
+            (draws_animated_offsets_ && is_offset_animated(batch->key.material_ptr.get()) ? offset_batches_ : mover_batches_).push_back(batch);
+        }
+    }
+    if(mover_batches_.empty() && offset_batches_.empty())
     {
         return;
     }
@@ -913,14 +942,6 @@ void deferred::submit_batched_velocity(gfx::render_pass& pass, const math::trans
 
     velocity_program_instanced_.program->begin();
     gfx::set_uniform(velocity_program_instanced_.u_prev_view_proj, prev_vp.get_matrix());
-
-    // The batches of a material whose World Position Offset animates draw every instance: a still one moves too.
-    mover_batches_.clear();
-    offset_batches_.clear();
-    for(const auto* batch : prepared_batches)
-    {
-        (draws_animated_offsets_ && is_offset_animated(batch->key.material_ptr.get()) ? offset_batches_ : mover_batches_).push_back(batch);
-    }
     const auto submit_batch = [&](const auto& /*batch*/, const material& mat, uint32_t /*instance_count*/)
     {
         auto* offset_program = begin_offset_velocity_program(mat, "instanced", camera_position);
@@ -952,8 +973,13 @@ void deferred::submit_batched_skinned_velocity(gfx::render_pass& pass, const mat
     {
         return;
     }
-    // The batches submit_batched_skinned_geometry drew this run; their instances carry the previous palette rows.
-    const auto& prepared_batches = skinned_batch_collector_.get_prepared_batches();
+    // The batches submit_batched_skinned_geometry drew this run, in both G-buffer phases; their instances carry the
+    // previous palette rows.
+    std::vector<const batch_group*> prepared_batches(decal_receiver_skinned_batches_.get_prepared_batches().begin(),
+                                                     decal_receiver_skinned_batches_.get_prepared_batches().end());
+    prepared_batches.insert(prepared_batches.end(),
+                            skinned_batch_collector_.get_prepared_batches().begin(),
+                            skinned_batch_collector_.get_prepared_batches().end());
     if(prepared_batches.empty())
     {
         return;

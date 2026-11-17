@@ -1,4 +1,5 @@
 #include "model.hpp"
+#include <engine/rendering/material_graph/material_graph.h>
 #include "material.hpp"
 #include "material_instance.hpp"
 #include "mesh.hpp"
@@ -111,6 +112,8 @@ REFLECT(model)
             entt::attribute{"tooltip", "One row per material slot: its shared material, which every model using it shares, and "
                                        "under it this model's material instance, its overrides of the shared material."},
             entt::attribute{"element_label", "Slot"},
+            // A slot draws Surface materials; the picker offers those.
+            entt::attribute{"material_domain", get_material_domain_key(material_domain::surface)},
             // The mesh decides how many slots there are: without one there is none to fill.
             entt::attribute{"empty_hint", "Assign a mesh to get its material slots."},
             // The inspector draws each slot's material instance under the slot.

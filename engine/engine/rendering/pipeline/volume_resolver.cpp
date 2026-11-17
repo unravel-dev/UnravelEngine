@@ -6,6 +6,7 @@
 #include <engine/rendering/ecs/components/fog_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/volume_component.h>
+#include <engine/rendering/ecs/components/post_process_material_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/gi_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
@@ -86,14 +87,129 @@ auto compute_blend_factor(const math::bbox& world_bounds,
     return 1.0f - (dist_to_boundary / blend_distance);
 }
 
+/// The volumes the camera at @p camera_pos is in or near, with their contributions, ordered so the most
+/// authoritative is last (resolve_post_process_volumes).
+auto collect_volume_contributions(scene& scn, const math::vec3& camera_pos) -> std::vector<volume_contribution>;
+
+/// Adds @p entry, at @p contribution, to @p draws: a new draw, or the draw of its material moved toward it.
+void add_post_process_material_entry(std::vector<post_process_material_draw>& draws,
+                                     post_process_material_entry& entry,
+                                     float contribution)
+{
+    if(!entry.enabled || contribution <= 0.0f)
+    {
+        return;
+    }
+    const auto shared = entry.get_material().try_get();
+    const auto* graph = shared ? shared->safe_cast<graph_material>() : nullptr;
+    if(graph == nullptr || graph->get_domain() != material_domain::post_process || !graph->is_ready_to_draw())
+    {
+        return;
+    }
+    auto& instance = entry.get_material_instance();
+    if(instance.has_overrides() && !instance.get_resolved())
+    {
+        instance.update_resolved();
+    }
+    const auto resolved_material = instance.get_resolved() ? instance.get_resolved() : shared;
+    auto resolved = safe_pointer_cast<graph_material>(resolved_material);
+    if(!resolved)
+    {
+        return;
+    }
+    const auto& registers = resolved->get_parameter_registers();
+    const float weight = std::clamp(entry.weight, 0.0f, 1.0f);
+    const auto existing = std::find_if(draws.begin(),
+                                       draws.end(),
+                                       [&](const post_process_material_draw& draw)
+                                       {
+                                           return draw.material_key == entry.get_material().id() && draw.registers.size() == registers.size();
+                                       });
+    if(existing == draws.end())
+    {
+        post_process_material_draw draw;
+        draw.material_key = entry.get_material().id();
+        draw.material = resolved;
+        draw.registers = registers;
+        draw.weight = weight * contribution;
+        draw.location = graph->get_post_process_location();
+        draw.priority = graph->get_post_process_priority();
+        draw.order = uint32_t(draws.size());
+        draws.push_back(std::move(draw));
+        return;
+    }
+    blend_post_process_material_draw(*existing, resolved, registers, weight, contribution);
+}
+
 } // namespace
 
-auto resolve_post_process_volumes(scene& scn,
-                                 const math::vec3& camera_pos,
-                                 entt::handle camera_ent) -> resolved_post_process_settings
+auto resolve_post_process_materials(scene& scn, const math::vec3& camera_pos, entt::handle camera_ent)
+    -> std::vector<post_process_material_draw>
 {
-    resolved_post_process_settings result;
+    std::vector<post_process_material_draw> draws;
+    for(const auto& contribution : collect_volume_contributions(scn, camera_pos))
+    {
+        auto handle = scn.create_handle(contribution.entity);
+        if(auto* materials = handle.try_get<post_process_material_component>())
+        {
+            for(auto& entry : materials->entries)
+            {
+                add_post_process_material_entry(draws, entry, contribution.contribution);
+            }
+        }
+    }
+    if(camera_ent)
+    {
+        if(auto* materials = camera_ent.try_get<post_process_material_component>())
+        {
+            for(auto& entry : materials->entries)
+            {
+                add_post_process_material_entry(draws, entry, 1.0f);
+            }
+        }
+    }
+    finish_post_process_material_draws(draws);
+    return draws;
+}
 
+void blend_post_process_material_draw(post_process_material_draw& draw,
+                                      const std::shared_ptr<graph_material>& material,
+                                      const std::vector<math::vec4>& registers,
+                                      float weight,
+                                      float contribution)
+{
+    const float amount = std::clamp(contribution, 0.0f, 1.0f);
+    const size_t count = std::min(draw.registers.size(), registers.size());
+    for(size_t i = 0; i < count; ++i)
+    {
+        draw.registers[i] = math::mix(draw.registers[i], registers[i], amount);
+    }
+    draw.weight = draw.weight * (1.0f - amount) + std::clamp(weight, 0.0f, 1.0f) * amount;
+    if(amount >= 0.5f && material)
+    {
+        draw.material = material;
+    }
+}
+
+void finish_post_process_material_draws(std::vector<post_process_material_draw>& draws)
+{
+    std::erase_if(draws,
+                  [](const post_process_material_draw& draw)
+                  {
+                      return draw.weight <= 0.0f;
+                  });
+    std::stable_sort(draws.begin(),
+                     draws.end(),
+                     [](const post_process_material_draw& a, const post_process_material_draw& b)
+                     {
+                         return std::tie(a.location, a.priority, a.order) < std::tie(b.location, b.priority, b.order);
+                     });
+}
+
+namespace
+{
+auto collect_volume_contributions(scene& scn, const math::vec3& camera_pos) -> std::vector<volume_contribution>
+{
     std::vector<volume_contribution> contributions;
 
     scn.registry->view<transform_component, volume_component, active_component>().each(
@@ -148,6 +264,16 @@ auto resolve_post_process_volumes(scene& scn,
                   }
                   return a.size > b.size;
               });
+    return contributions;
+}
+} // namespace
+
+auto resolve_post_process_volumes(scene& scn,
+                                 const math::vec3& camera_pos,
+                                 entt::handle camera_ent) -> resolved_post_process_settings
+{
+    resolved_post_process_settings result;
+    const auto contributions = collect_volume_contributions(scn, camera_pos);
 
     bool first_auto_exposure = true;
     bool first_bloom = true;

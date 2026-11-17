@@ -10,6 +10,12 @@
 
 namespace unravel
 {
+// material_graph.h
+enum class material_domain : uint8_t;
+} // namespace unravel
+
+namespace unravel
+{
 
 /**
  * @brief Value type of a pin or a node's value.
@@ -263,7 +269,61 @@ struct material_node_def
     bool is_pixel_only{};
     /// The value is cheap (a constant, a built-in input): it is written where it is read instead of into a variable.
     bool is_inline{};
+    /// The material domains the node works in, a bit per material_domain (get_material_domain_bit): every one by
+    /// default. The editor lists only the nodes of the graph's domain, and the compiler reports any other.
+    uint8_t domains{0xFF};
 };
+
+/// The bit of @p domain in material_node_def::domains.
+auto get_material_domain_bit(material_domain domain) -> uint8_t;
+/// Whether nodes of type @p def work in @p domain.
+auto is_material_node_in_domain(const material_node_def& def, material_domain domain) -> bool;
+/// The domains @p def works in, as the editor names them ("Surface and Decal"); empty when it works in every one.
+auto get_material_node_domains_text(const material_node_def& def) -> std::string;
+
+/// What a Scene Texture node reads (its Source setting). The keys are saved in graphs; a source is added, never
+/// renamed.
+struct material_scene_texture_source
+{
+    /// The Source setting's value ("scene_color"), named in the code (mg_scene_texture_<key>).
+    const char* key;
+    const char* label;
+    /// The domains that can read it, a bit per material_domain.
+    uint8_t domains;
+    /// The bit of material_graph_compile_result::scene_textures it sets: the texture the draw binds.
+    uint32_t texture_bit;
+};
+
+/// The textures a material reads through Scene Texture nodes (material_graph_compile_result::scene_textures).
+enum material_scene_texture_bits : uint32_t
+{
+    /// The location's own colour (post).
+    material_scene_texture_color = 1u << 0u,
+    /// The depth of the view's opaque surfaces.
+    material_scene_texture_depth = 1u << 1u,
+    /// G-buffer RT0: base colour and ambient occlusion.
+    material_scene_texture_gbuffer0 = 1u << 2u,
+    /// G-buffer RT1: normal, metallic and roughness.
+    material_scene_texture_gbuffer1 = 1u << 3u,
+    /// G-buffer RT2: emissive.
+    material_scene_texture_gbuffer2 = 1u << 4u,
+    /// The velocity buffer.
+    material_scene_texture_velocity = 1u << 5u,
+    /// The post-process mask: the Post Process Mask of the nearest masked renderer (post).
+    material_scene_texture_custom_mask = 1u << 6u,
+    /// The depth of the nearest masked renderer, hidden or not (post).
+    material_scene_texture_custom_depth = 1u << 7u,
+};
+
+/// Every source a Scene Texture node offers, in the order its Source setting lists them.
+auto get_material_scene_texture_sources() -> const std::vector<material_scene_texture_source>&;
+/// The source of key @p key, or null.
+auto find_material_scene_texture_source(hpp::string_view key) -> const material_scene_texture_source*;
+
+/// The node type reading the view's textures (Scene Texture): decal and post-process materials only.
+inline constexpr const char* MATERIAL_SCENE_TEXTURE_TYPE = "scene_texture";
+/// Scene Texture's setting naming its source (material_scene_texture_source::key).
+inline constexpr const char* MATERIAL_SCENE_TEXTURE_SOURCE_SETTING = "source";
 
 /**
  * @brief Every node type, in the order the editor lists them.

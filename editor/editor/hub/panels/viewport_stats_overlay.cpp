@@ -715,6 +715,33 @@ void draw_particles_section(const rendering::pipeline_stats& pstats)
               "None, need no sort."});
 }
 
+void draw_decals_section(const rendering::pipeline_stats& pstats)
+{
+    if(pstats.drawn_decals == 0 && pstats.post_process_material_passes == 0)
+    {
+        return;
+    }
+    if(!panel_section::draw_header("##decals", ICON_MDI_STICKER_OUTLINE, "Decals and Post Materials", false).is_open)
+    {
+        return;
+    }
+    draw_row({"Decals",
+              fmt::format("{}", pstats.drawn_decals),
+              "Decals this camera drew, after culling by layer, distance and screen size, and after their\n"
+              "lifetime faded them out."});
+    draw_row({"Decal Draws",
+              fmt::format("{}", pstats.decal_draws),
+              "Instanced draws of the decals: decals of one material, Sort Order and side of their box\n"
+              "share one while their overrides stay among the material's first parameters."});
+    draw_row({"Decal Buffers",
+              pstats.decal_buffer_runs > 0 ? std::string("On") : std::string("Off"),
+              "Whether a decal changed a normal, metallic or roughness: those draw into the decal buffers\n"
+              "and a resolve pass applies them. Colour-only decals draw in one pass."});
+    draw_row({"Post Material Passes",
+              fmt::format("{}", pstats.post_process_material_passes),
+              "Full-screen passes of post-process materials this camera ran, one per material entry."});
+}
+
 /// Batching statistics, under a header whose switch turns the project's static mesh batching on
 /// and off, with a row switching the skinned mesh batching: the numbers above show what they save.
 void draw_batching_section(rtti::context& ctx, const batch_stats& batch)
@@ -790,6 +817,7 @@ void draw_content(rtti::context& ctx, const rendering::pipeline_stats& pstats, s
     draw_memory_section();
     draw_pipeline_section(pstats);
     draw_particles_section(pstats);
+    draw_decals_section(pstats);
     draw_batching_section(ctx, pstats.batching_stats);
     ImGui::PopStyleVar();
 }

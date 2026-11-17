@@ -129,11 +129,13 @@ member taking the `run_context`; the steps live in `pipeline_geometry.cpp`, `pip
 begin_camera_frame            stats, instanced sources (camera runs only)
 capture_reflection_probes     each due probe face is a nested run of the pipeline
 prepare_passes                shadow maps, pre-exposure, GI scene, targets, TAA jitter
-render_geometry               G-buffer, velocity buffer, screen-space AO
+render_geometry               G-buffer of the decal receivers, decals, the other renderers; velocity buffer,
+                              screen-space AO, the post-process mask
 render_reflection_layers      probe layer (PBUFFER), Hi-Z, SSR (RBUFFER)
 render_lighting               cloud shadow, irradiance SH, direct lights, GI or SSIL, indirect
 render_sky_fog_and_particles  sky, fog, particles, GI world views
-finish_camera_image           post (TAA, exposure, bloom, tonemapping, FXAA), overlays, upscale, PREV_DEPTH
+finish_camera_image           post (TAA, exposure, bloom, tonemapping, FXAA) with the post-process materials at
+                              their Locations, overlays, upscale, PREV_DEPTH
                               (a probe capture blits its lit image to the output instead)
 finish_run_batches            packs the skinning palette rows the run reserved
 ```
@@ -158,6 +160,15 @@ finish_run_batches            packs the skinning palette rows the run reserved
 - Programs of features the settings may turn off build only while wanted (`gpu_program::set_wanted`; create
   them unwanted with `gpu_program(..., false)`); the object stays, so pointers to it stay valid.
   `gpu_program::begin()` rebuilds from reloaded shaders: gate a frame's work on it, not on `is_valid()`.
+- Decals (`decal_pass`) draw between the two G-buffer phases (`g_buffer_phase`): renderers that do not receive
+  decals draw after them, into the same G-buffer without a clear, and the velocity pass reads both phases' batches.
+  The colour path blends into RT0 and RT2; the full path accumulates DBUFFER_A/B/C and resolves them over the
+  decals' rectangle (the octahedral normal cannot blend in hardware). Decals read a depth copy, never the bound
+  depth. Receiver Layers draw the receivers' layers through `mask_pass` (visible surfaces only).
+- Post-process materials (`post_material_pass`) run per Location from the run's `post_process_materials`
+  (`resolve_post_process_materials`: volume entries weighted by contribution, entries of one material blended,
+  camera entries last), ping-ponging between two targets of the location's format; the last writes back through a
+  colour-only frame buffer, since the location's own may hold the depth the materials read.
 - Post-processing settings are ECS volume components (`engine/engine/rendering/ecs/components/`) merged by
   priority and blend weight in `volume_resolver.cpp`; a camera without volumes uses its own components.
 - The editor's Scene and Game panels run the same pipeline into viewport frame buffers; ImGui, gizmos and the

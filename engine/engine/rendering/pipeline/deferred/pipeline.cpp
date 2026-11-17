@@ -1,6 +1,10 @@
 #include "pipeline_internal.h"
 
+#include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/material_graph/material_graph_library.h>
 #include <engine/rendering/render_feature_support.h>
+
+#include <algorithm>
 
 #include <utility>
 
@@ -354,6 +358,7 @@ void deferred::set_debug_pass(int pass)
 {
     debug_pass_ = pass;
     is_particle_overdraw_view_ = pass == debug_pass_particle_overdraw;
+    decal_pass_.set_overdraw_view(pass == debug_pass_decal_overdraw);
 }
 
 void deferred::set_debug_view_scale(float scale)
@@ -461,10 +466,102 @@ void deferred::prepare_passes(const run_context& run)
 void deferred::render_geometry(const run_context& run)
 {
     begin_velocity_recording(run.params);
-    const auto visibility_set = collect_visible_models(run.scn, run.cam, run.params, run.render_mask, run.dt);
-    run_g_buffer_pass(visibility_set, run.cam, run.rview, run.params.limits, run.dt);
+    auto visibility_set = collect_visible_models(run.scn, run.cam, run.params, run.render_mask, run.dt);
+    decal_pass_.collect(run.scn, run.cam, run.params.limits, run.render_mask);
+    const hpp::span<const visibility_data> visible(visibility_set.data(), visibility_set.size());
+    if(!decal_pass_.has_decals())
+    {
+        run_g_buffer_pass(visible, run.cam, run.rview, run.params.limits, run.dt);
+    }
+    else
+    {
+        // The renderers that receive decals, the decals over them, then the others over the decals: those keep none.
+        const auto receiver_count = size_t(std::distance(visibility_set.begin(), split_decal_receivers(visibility_set)));
+        const auto receivers = visible.first(receiver_count);
+        const auto others = visible.subspan(receiver_count);
+        run_g_buffer_pass(receivers, run.cam, run.rview, run.params.limits, run.dt);
+        decal_pass_.run(run.rview, run.cam, run.params.limits, depth_copy_pass_, mask_pass_, receivers);
+        const auto& decal_stats = decal_pass_.get_stats();
+        stats_.drawn_decals += decal_stats.decals;
+        stats_.decal_draws += decal_stats.draws;
+        stats_.decal_buffer_runs += decal_stats.is_full_path ? 1u : 0u;
+        if(!others.empty())
+        {
+            run_g_buffer_pass(others, run.cam, run.rview, run.params.limits, run.dt, g_buffer_phase::after_decals);
+        }
+    }
     run_velocity_pass(visibility_set, run.cam, run.rview, run.render_size);
     run_screen_ao_pass(run.cam, run.rview, run.dt, run.params);
+    run_post_process_mask_pass(run, visible);
+}
+
+void deferred::run_post_process_mask_pass(const run_context& run, hpp::span<const visibility_data> visible)
+{
+    if(!run.is_camera_run())
+    {
+        return;
+    }
+    const uint32_t mask_bits = material_scene_texture_custom_mask | material_scene_texture_custom_depth;
+    const bool is_read = std::any_of(run.params.post_process_materials.begin(),
+                                     run.params.post_process_materials.end(),
+                                     [&](const post_process_material_draw& draw)
+                                     {
+                                         return draw.material && (draw.material->get_scene_textures() & mask_bits) != 0;
+                                     });
+    if(!is_read)
+    {
+        return;
+    }
+    mask_pass_.run(run.rview,
+                   run.cam,
+                   visible,
+                   [](entt::handle entity) -> hpp::optional<math::vec4>
+                   {
+                       const int mask = entity.get<model_component>().get_post_process_mask();
+                       if(mask == 0)
+                       {
+                           return hpp::nullopt;
+                       }
+                       return math::vec4(float(mask) / 255.0f, 0.0f, 0.0f, 0.0f);
+                   },
+                   {.name = "CUSTOM_MASK", .pass_name = "Post Materials/Custom Mask", .format = bgfx::TextureFormat::R8});
+}
+
+void deferred::run_post_process_materials(const run_context& run,
+                                          material_post_process_location location,
+                                          const gfx::frame_buffer::ptr& color)
+{
+    if(!run.is_camera_run() || run.params.post_process_materials.empty() || !color)
+    {
+        return;
+    }
+    const auto& gbuffer = run.rview.fbo_find("GBUFFER");
+    const auto pre_exposure = get_pre_exposure(run.rview);
+    post_material_pass::run_params params;
+    params.location = location;
+    params.color = color;
+    params.depth = gbuffer ? gbuffer->get_texture(4) : nullptr;
+    params.gbuffer0 = gbuffer ? gbuffer->get_texture(0) : nullptr;
+    params.gbuffer1 = gbuffer ? gbuffer->get_texture(1) : nullptr;
+    params.gbuffer2 = gbuffer ? gbuffer->get_texture(2) : nullptr;
+    params.velocity = run.rview.tex_find("VELOCITY");
+    if(const auto& custom = run.rview.fbo_find("CUSTOM_MASK"))
+    {
+        params.custom_mask = custom->get_texture(0);
+        params.custom_depth = custom->get_texture(1);
+    }
+    params.pre_exposure = location == material_post_process_location::after_tonemapping ? nullptr : &pre_exposure;
+    stats_.post_process_material_passes += post_material_pass_.run(run.rview, run.cam, run.params.post_process_materials, params, blit_pass_);
+}
+
+auto deferred::split_decal_receivers(visibility_set_models_t& visibility_set) -> visibility_set_models_t::iterator
+{
+    return std::stable_partition(visibility_set.begin(),
+                                 visibility_set.end(),
+                                 [](const visibility_data& element)
+                                 {
+                                     return element.entity.get<model_component>().receives_decals();
+                                 });
 }
 
 void deferred::begin_velocity_recording(const run_params& params)
@@ -536,6 +633,8 @@ auto deferred::render_sky_fog_and_particles(const run_context& run, const gfx::f
     }
     // Over the sky and the clouds; the particles drawn next fog themselves with the same fog.
     const fog_pass::shader_params fog = run_fog_pass(run.scn, run.cam, run.rview, color, run.params, run.runs_shadow_step());
+    // Under what is transparent, before TAA smooths it.
+    run_post_process_materials(run, material_post_process_location::before_transparent, color);
     gfx::texture::ptr particle_reactive = render_particles(run, color, fog);
     if(run.is_camera_run())
     {
@@ -598,9 +697,12 @@ void deferred::render_post_processing(const run_context& run,
     // no interface pixels). Only kept while a consumer exists.
     snapshot_prev_scene_color(run.rview, resolved, run.cam, has_scene_history_reader(run.params));
     run_auto_exposure_pass(run.rview, run.cam, resolved, run.params, run.dt);
+    // After the history the reflections read and the exposure meter, so neither feeds back; what they add blooms.
+    run_post_process_materials(run, material_post_process_location::before_bloom, resolved);
     // The tonemapper adds the bloom on top of the scene the exposure pass metered, which local exposure measures.
     const bloom_pass::composite bloom = run_bloom_pass(run.rview, resolved, run.params);
     const gfx::frame_buffer::ptr tonemapped = run_tonemapping_pass(run.rview, resolved, bloom, output, run.params, is_upscaled);
+    run_post_process_materials(run, material_post_process_location::after_tonemapping, tonemapped);
     run_fxaa_pass(run.rview, tonemapped, output, run.params, is_upscaled);
 }
 
@@ -623,6 +725,8 @@ void deferred::finish_run_batches()
     batch_collector_.clear();
     skinned_batch_collector_.clear();
     source_runs_.clear();
+    decal_receiver_batches_.clear();
+    decal_receiver_skinned_batches_.clear();
     // The palettes this run acquired are packed now, while their models certainly hold them: the editor may change or
     // delete entities between this run and the frame's upload.
     engine::context().get_cached<renderer>().get_skinning_palettes().pack_pending();
@@ -921,6 +1025,7 @@ void deferred::update_skinned_batch_programs(bool is_batching)
 
 auto deferred::deinit(rtti::context& ctx) -> bool
 {
+    decal_pass_.deinit();
     return true;
 }
 

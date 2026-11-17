@@ -1,0 +1,40 @@
+{
+ "material": {
+  "polymorphic_id": 2147483649,
+  "polymorphic_name": "graph_material",
+  "ptr_wrapper": {
+   "id": 2147483649,
+   "data": {
+    "graph": {
+     "version": 1,
+     "nodes": [
+      {"id": "output", "type": "decal_output", "inputs": [
+       {"pin": "base_color", "link": "tint.rgb"},
+       {"pin": "opacity", "link": "faded"}
+      ]},
+      {"id": "tint", "type": "color_parameter", "inputs": [{"pin": "value", "value": [1.0, 0.55, 0.12, 1.0]}],
+       "settings": [{"name": "name", "value": "Tint"}, {"name": "description", "value": "The colour of the frame and the arrow."}]},
+      {"id": "opacity", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [0.85]}],
+       "settings": [{"name": "name", "value": "Opacity"}, {"name": "slider_min", "value": "0"}, {"name": "slider_max", "value": "1"}]},
+      {"id": "uv", "type": "texcoord"},
+      {"id": "outer", "type": "rectangle", "inputs": [{"pin": "uv", "link": "uv"}, {"pin": "width", "value": [0.94]}, {"pin": "height", "value": [0.94]}]},
+      {"id": "inner", "type": "rectangle", "inputs": [{"pin": "uv", "link": "uv"}, {"pin": "width", "value": [0.82]}, {"pin": "height", "value": [0.82]}]},
+      {"id": "frame", "type": "subtract", "inputs": [{"pin": "a", "link": "outer"}, {"pin": "b", "link": "inner"}]},
+      {"id": "head_v", "type": "subtract", "inputs": [{"pin": "a", "value": [0.88]}, {"pin": "b", "link": "uv.v"}]},
+      {"id": "head_uv", "type": "append", "inputs": [{"pin": "a", "link": "uv.u"}, {"pin": "b", "link": "head_v"}]},
+      {"id": "head", "type": "polygon", "inputs": [{"pin": "uv", "link": "head_uv"}, {"pin": "sides", "value": [3.0]}, {"pin": "width", "value": [0.42]}, {"pin": "height", "value": [0.42]}]},
+      {"id": "stem_offset", "type": "vector2", "inputs": [{"pin": "value", "value": [0.0, -0.12]}]},
+      {"id": "stem_uv", "type": "add", "inputs": [{"pin": "a", "link": "uv"}, {"pin": "b", "link": "stem_offset"}]},
+      {"id": "stem", "type": "rectangle", "inputs": [{"pin": "uv", "link": "stem_uv"}, {"pin": "width", "value": [0.12]}, {"pin": "height", "value": [0.32]}]},
+      {"id": "arrow", "type": "maximum", "inputs": [{"pin": "a", "link": "head"}, {"pin": "b", "link": "stem"}]},
+      {"id": "shape", "type": "maximum", "inputs": [{"pin": "a", "link": "frame"}, {"pin": "b", "link": "arrow"}]},
+      {"id": "faded", "type": "multiply", "inputs": [{"pin": "a", "link": "shape"}, {"pin": "b", "link": "opacity"}]}
+     ],
+     "comments": [
+      {"text": "The decal a new Decal component starts with: a frame and an arrow pointing to the decal's top, so its size and its turn read at a glance. Pick a Decal material of your own on the component."}
+     ]
+    }
+   }
+  }
+ }
+}

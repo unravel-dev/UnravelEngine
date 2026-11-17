@@ -49,6 +49,8 @@ struct view_render_params
     /// A view whose scene renders at another size than its output also gives the output a depth at its size,
     /// for overlays drawn over it with the scene's depth (pipeline::run_params::needs_output_depth).
     bool needs_output_depth = false;
+    /// The view runs the post-process materials of its volumes and camera.
+    bool post_process_materials = true;
 };
 
 /**

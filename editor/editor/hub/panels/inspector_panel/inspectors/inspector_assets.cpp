@@ -114,17 +114,22 @@ auto process_drag_drop_target(asset_manager& am, asset_handle<T>& entry) -> bool
     return result;
 }
 
-/// What the picker offers: the empty handle first (get_assets_with_predicate always puts it
-/// there), then the assets of the project that pass the search.
+/// Which assets a field takes beyond its type; empty takes every one.
 template<typename T>
-auto find_pickable_assets(asset_manager& am, const ImGuiTextFilter& filter) -> std::vector<asset_handle<T>>
+using asset_acceptor = std::function<bool(const asset_handle<T>&)>;
+
+/// What the picker offers: the empty handle first (get_assets_with_predicate always puts it
+/// there), then the assets of the project that pass the search and @p accepts.
+template<typename T>
+auto find_pickable_assets(asset_manager& am, const ImGuiTextFilter& filter, const asset_acceptor<T>& accepts = {})
+    -> std::vector<asset_handle<T>>
 {
     return am.get_assets_with_predicate<T>(
         [&](const auto& asset)
         {
             const auto& id = asset.id();
             hpp::string_view id_view(id);
-            return !id_view.starts_with("editor:/") && filter.PassFilter(asset.name().c_str());
+            return !id_view.starts_with("editor:/") && filter.PassFilter(asset.name().c_str()) && (!accepts || accepts(asset));
         });
 }
 
@@ -151,7 +156,8 @@ auto pick_asset(ImGuiTextFilter& filter,
                 asset_manager& am,
                 asset_handle<T>& data,
                 const std::string& type,
-                const asset_opener<T>& opener = {}) -> inspect_result
+                const asset_opener<T>& opener = {},
+                const asset_acceptor<T>& accepts = {}) -> inspect_result
 {
     inspect_result result{};
 
@@ -199,7 +205,7 @@ auto pick_asset(ImGuiTextFilter& filter,
         return result;
     }
 
-    const auto assets = find_pickable_assets<T>(am, filter);
+    const auto assets = find_pickable_assets<T>(am, filter, accepts);
     const auto get_tile = [&](std::size_t index) -> asset_picker::tile_content
     {
         const auto& asset = assets[index];
@@ -669,7 +675,25 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
     return result;
 }
 
-auto inspector_asset_handle_material::inspect_as_property(rtti::context& ctx, asset_handle<material>& data)
+namespace
+{
+/// Under a material field of @p expected domain holding one of another: what it draws instead.
+void draw_material_domain_mismatch(material_domain held, material_domain expected)
+{
+    const char* outcome = expected == material_domain::surface ? "the slot draws the default surface"
+                          : expected == material_domain::decal ? "the decal draws nothing"
+                                                               : "the entry runs nothing";
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.3f, 1.0f));
+    ImGui::TextWrapped("%s", fmt::format(ICON_MDI_ALERT " This is a {} material, so {}. Pick a {} material.",
+                                         get_material_domain_label(held),
+                                         outcome,
+                                         get_material_domain_label(expected))
+                                 .c_str());
+    ImGui::PopStyleColor();
+}
+} // namespace
+
+auto inspector_asset_handle_material::inspect_as_property(rtti::context& ctx, asset_handle<material>& data, const std::string& domain_key)
     -> inspect_result
 {
     auto& am = ctx.get_cached<asset_manager>();
@@ -683,7 +707,25 @@ auto inspector_asset_handle_material::inspect_as_property(rtti::context& ctx, as
                                         {
                                             editor_actions::open_material_graph(ctx, asset);
                                         }};
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<material>(), opener);
+    const auto expected = domain_key.empty() ? hpp::nullopt : find_material_domain(domain_key);
+    asset_acceptor<material> accepts;
+    if(expected)
+    {
+        // A material still loading shows: its domain is known a frame later.
+        accepts = [domain = *expected](const asset_handle<material>& asset)
+        {
+            const auto held = find_loaded_material_domain(asset);
+            return !held || *held == domain;
+        };
+    }
+    result |= pick_asset(filter, em, tm, am, data, ex::get_type<material>(), opener, accepts);
+    if(expected && data)
+    {
+        if(const auto held = find_loaded_material_domain(data); held && *held != *expected)
+        {
+            draw_material_domain_mismatch(*held, *expected);
+        }
+    }
 
     return result;
 }
@@ -717,7 +759,7 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
 
     if(info.is_property)
     {
-        return inspect_as_property(ctx, data);
+        return inspect_as_property(ctx, data, entt::get_attribute_as<std::string>(custom, "material_domain"));
     }
 
     inspect_result result{};

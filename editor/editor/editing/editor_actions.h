@@ -7,10 +7,12 @@
 #include <engine/defaults/defaults.h>
 #include <engine/ecs/prefab.h>
 #include <engine/physics/ragdoll_builder.h>
+#include <engine/rendering/material_instance.h>
 #include <engine/threading/threader.h>
 #include <logging/logging.h>
 
 #include <filesystem/filesystem.h>
+#include <hpp/optional.hpp>
 
 #include <chrono>
 #include <functional>
@@ -22,6 +24,7 @@ namespace unravel
 {
 
 struct editing_action_t;
+struct sequence_action_t;
 struct asset_meta;
 struct animation_controller;
 class material;
@@ -87,6 +90,34 @@ struct ragdoll_auto_setup_result
     ragdoll_build_result build;
     /// The ragdoll's bodies or never-colliding pairs changed, as one undo step.
     bool is_changed{false};
+};
+
+/**
+ * @brief What editor_actions::set_post_process_material changes on an entry. Unset fields keep the entry's value; a
+ *        new entry starts enabled at weight 1.
+ */
+struct post_process_material_change
+{
+    hpp::optional<float> weight;
+    hpp::optional<bool> enabled;
+    /// The entry's overrides of the material's parameters and textures, replacing the ones it has.
+    hpp::optional<material_instance> overrides;
+};
+
+/**
+ * @brief Where editor_actions::set_post_process_material put a post-process material.
+ */
+struct post_process_material_placement
+{
+    /// The volume or camera holding the entry; empty when nothing changed, the reason in error.
+    entt::handle entity;
+    /// The entry's index in the entity's Post Process Materials.
+    size_t index{};
+    /// The entity had no entry of the material.
+    bool added{false};
+    /// A global volume was made for it: the scene had none.
+    bool created_volume{false};
+    std::string error;
 };
 
 struct editor_actions
@@ -302,6 +333,69 @@ struct editor_actions
      */
     static auto auto_setup_ragdoll(rtti::context& ctx, entt::handle owner, const ragdoll_build_options& options)
         -> ragdoll_auto_setup_result;
+
+    /**
+     * @brief Runs the Post Process material @p mat on @p target - a volume or a camera - or, with no target, on the
+     *        scene's global volume (defaults::find_global_volume; a Global Volume is made when there is none), as one
+     *        undo step. The entity's entry of the material changes by @p change, or a new entry is added; the Post
+     *        Process Materials component is added when the entity lacks it. A change that changes nothing records no
+     *        undo step. Shared by the Material Graph window, the Scene view drop and MCP.
+     *
+     * Refused, with the reason in error, for what find_post_process_material_problem names.
+     */
+    static auto set_post_process_material(rtti::context& ctx,
+                                          scene& scn,
+                                          entt::handle target,
+                                          const asset_handle<material>& mat,
+                                          const post_process_material_change& change) -> post_process_material_placement;
+
+    /**
+     * @brief Why set_post_process_material would refuse @p mat on @p target (empty: the scene's global volume): play
+     *        mode, a material that is no Post Process material, an entity that is neither a volume nor a camera.
+     *        Empty when it would not.
+     */
+    static auto find_post_process_material_problem(rtti::context& ctx, entt::handle target, const asset_handle<material>& mat)
+        -> std::string;
+
+    /**
+     * @brief Adds set_post_process_material's change to @p sequence, for a caller that makes several such changes one
+     *        undo step. Nothing changes until the sequence runs; the step finds the global volume then, so one an
+     *        earlier step made is used. @p placement is filled when it runs, and @p ctx, @p scn and @p placement must
+     *        outlive that first run. Check find_post_process_material_problem first.
+     */
+    static void add_post_process_material_step(rtti::context& ctx,
+                                               scene& scn,
+                                               entt::handle target,
+                                               const asset_handle<material>& mat,
+                                               const post_process_material_change& change,
+                                               sequence_action_t& sequence,
+                                               post_process_material_placement& placement);
+
+    /**
+     * @brief Takes the entry of @p mat off @p target's Post Process Materials, as one undo step.
+     * @return False, with the reason in @p error, for what find_post_process_material_removal_problem names.
+     */
+    static auto remove_post_process_material(rtti::context& ctx,
+                                             entt::handle target,
+                                             const asset_handle<material>& mat,
+                                             std::string& error) -> bool;
+
+    /**
+     * @brief Why remove_post_process_material would refuse: play mode, or @p target has no entry of @p mat. Empty
+     *        when it would not.
+     */
+    static auto find_post_process_material_removal_problem(rtti::context& ctx,
+                                                           entt::handle target,
+                                                           const asset_handle<material>& mat) -> std::string;
+
+    /**
+     * @brief Adds remove_post_process_material's change to @p sequence, for a caller that makes several such changes
+     *        one undo step. Nothing changes until the sequence runs. Check
+     *        find_post_process_material_removal_problem first.
+     */
+    static void add_remove_post_process_material_step(entt::handle target,
+                                                      const asset_handle<material>& mat,
+                                                      sequence_action_t& sequence);
 
     /**
      * @brief Where import_files copies each of @p paths: target_path / the source's file name,

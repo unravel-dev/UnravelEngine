@@ -219,6 +219,10 @@ auto get_component_icon() -> std::string
     {
         return ICON_MDI_WEATHER_FOG;
     }
+    else if constexpr(std::is_same<T, decal_component>::value)
+    {
+        return ICON_MDI_STICKER_OUTLINE;
+    }
     else if constexpr(std::is_same<T, fog_volume_component>::value)
     {
         return ICON_MDI_WEATHER_FOG;

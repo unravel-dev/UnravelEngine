@@ -251,6 +251,9 @@ void set_android_starting_values(settings& resolved)
     limits.full_precision_light_targets = false;
     limits.max_bloom_mips = std::min(limits.max_bloom_mips, ANDROID_MAX_BLOOM_MIPS);
     limits.per_frame_exposure_metering = false;
+    // Decals lay their colour in one pass over the G-buffer; normals and roughness would add three targets and two
+    // passes.
+    limits.decal_surface_channels = false;
     // The cheaper input of every Quality Switch.
     resolved.graphics.material_quality = material_graph_quality::low;
 }
@@ -262,7 +265,9 @@ void set_android_starting_values(settings& resolved)
 void set_web_starting_values(settings& resolved)
 {
     resolved.graphics.limits.global_illumination = false;
-    // Browsers on phones run the build too: the cheaper input of every Quality Switch.
+    // Browsers on phones run the build too: decals lay their colour alone, and the cheaper input of every Quality
+    // Switch.
+    resolved.graphics.limits.decal_surface_channels = false;
     resolved.graphics.material_quality = material_graph_quality::low;
 }
 

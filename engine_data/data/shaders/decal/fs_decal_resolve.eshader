@@ -1,0 +1,47 @@
+[variants]
+// default: the G-buffer's normal, metallic and roughness into the copy the surface resolve reads.
+// color: DBUFFER_A over the G-buffer's base colour (blend ONE / SRC_ALPHA, its AO kept).
+// surface: DBUFFER_B and DBUFFER_C over the copy, into the G-buffer's normal, metallic and roughness.
+default
+color       DECAL_RESOLVE_COLOR
+surface     DECAL_RESOLVE_SURFACE
+
+[inputs]
+vec2 v_texcoord0
+
+[code]
+#include "../common.sh"
+
+/*
+ * The decal buffers applied to the G-buffer (decal_pass.cpp), over the decals' rectangle of the view. Each buffer
+ * holds the decals premultiplied, with the share of the surface they leave in alpha (the blend ONE / INV_SRC_ALPHA,
+ * alpha ZERO / INV_SRC_ALPHA the decals draw with). DBUFFER_B keeps each world normal biased to 0..1: its sum of
+ * w * (n * 0.5 + 0.5) is half the weighted normals plus half the decals' coverage, which takes the bias back out.
+ * The octahedral normal of the G-buffer cannot blend in the hardware: the resolve decodes it, blends and encodes.
+ */
+
+SAMPLER2D(s_decal_a, 0);
+SAMPLER2D(s_decal_b, 1);
+SAMPLER2D(s_decal_c, 2);
+SAMPLER2D(s_decal_surface, 3);
+
+void main()
+{
+	ivec2 texel = ivec2(gl_FragCoord.xy);
+#if DECAL_RESOLVE_COLOR
+	gl_FragColor = texelFetch(s_decal_a, texel, 0);
+#elif DECAL_RESOLVE_SURFACE
+	vec4 surface = texelFetch(s_decal_surface, texel, 0);
+	vec4 decal_normal = texelFetch(s_decal_b, texel, 0);
+	vec4 decal_surface = texelFetch(s_decal_c, texel, 0);
+	vec3 surface_normal = decodeNormalOctahedron(surface.xy);
+	vec3 weighted_normals = decal_normal.rgb * 2.0 - vec3_splat(1.0 - decal_normal.a);
+	vec3 normal = weighted_normals + surface_normal * decal_normal.a;
+	float normal_length = length(normal);
+	normal = normal_length > 0.0001 ? normal / normal_length : surface_normal;
+	vec2 metallic_roughness = decal_surface.rg + surface.zw * decal_surface.a;
+	gl_FragColor = vec4(encodeNormalOctahedron(normal), metallic_roughness);
+#else
+	gl_FragColor = texelFetch(s_decal_surface, texel, 0);
+#endif
+}

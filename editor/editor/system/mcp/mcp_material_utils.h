@@ -5,6 +5,7 @@
 #include <engine/assets/asset_handle.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/material_instance.h>
+#include <engine/rendering/material_graph/material_graph.h>
 
 #include <context/context.hpp>
 #include <ser20/external/simdjson/simdjson.h>
@@ -20,6 +21,11 @@ auto list_material_property_schema_json() -> std::string;
 
 /// The material asset a key (or a path relative to app:/data) or uid names, when it exists.
 auto resolve_material_asset(rtti::context& ctx, const std::string& key, const std::string& uid, std::string& error)
+    -> asset_handle<material>;
+
+/// The material asset @p key names, loaded, when it is a material of @p domain; empty with a reason in @p error
+/// otherwise (one that says which output node the graph needs).
+auto resolve_domain_material(rtti::context& ctx, const std::string& key, material_domain domain, std::string& error)
     -> asset_handle<material>;
 
 /// The reflected type name of @p mat ("graph_material").

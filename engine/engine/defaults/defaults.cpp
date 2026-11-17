@@ -24,6 +24,8 @@
 #include <engine/rendering/ecs/components/gi_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/ecs/components/decal_component.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
@@ -954,6 +956,70 @@ auto defaults::create_reflection_probe_entity(rtti::context& ctx, scene& scn, pr
     return object;
 }
 
+namespace
+{
+/// The width over the height of the first texture a decal material reads, 1 when it reads none or it is not loaded.
+auto get_decal_material_aspect(const asset_handle<material>& decal_material) -> float
+{
+    const auto loaded = decal_material.get();
+    const auto* graph = loaded ? loaded->safe_cast<graph_material>() : nullptr;
+    if(graph == nullptr)
+    {
+        return 1.0f;
+    }
+    for(const auto& texture : graph->get_textures())
+    {
+        const auto handle = graph->get_texture(texture.name);
+        const auto image = handle ? handle.get() : nullptr;
+        if(image && image->get_size().height > 0)
+        {
+            return float(image->get_size().width) / float(image->get_size().height);
+        }
+    }
+    return 1.0f;
+}
+} // namespace
+
+auto defaults::create_decal_entity(rtti::context& ctx, scene& scn, const std::string& name, const asset_handle<material>& decal_material)
+    -> entt::handle
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    const auto chosen = decal_material ? decal_material : am.get_asset<material>(DEFAULT_DECAL_MATERIAL_KEY);
+    auto object = scn.create_entity(name);
+    auto& decal = object.emplace<decal_component>();
+    decal.set_material(chosen);
+    const float aspect = std::clamp(get_decal_material_aspect(chosen), 0.05f, 20.0f);
+    decal.resize(aspect >= 1.0f ? math::vec2(aspect, 1.0f) : math::vec2(1.0f, 1.0f / aspect));
+    return object;
+}
+
+void defaults::place_decal_on_surface(entt::handle decal, const math::vec3& point, const math::vec3& normal, float roll_degrees)
+{
+    if(!decal || !decal.all_of<transform_component>())
+    {
+        return;
+    }
+    const math::vec3 forward = math::length(normal) > 0.0f ? -math::normalize(normal) : math::vec3(0.0f, -1.0f, 0.0f);
+    const math::vec3 world_up(0.0f, 1.0f, 0.0f);
+    const math::vec3 up_hint = std::abs(math::dot(forward, world_up)) > 0.98f ? math::vec3(0.0f, 0.0f, 1.0f) : world_up;
+    const math::vec3 x_axis = math::normalize(math::cross(up_hint, forward));
+    const math::vec3 y_axis = math::cross(forward, x_axis);
+    const math::quat facing = math::quat_cast(math::mat3(x_axis, y_axis, forward));
+    const math::quat roll = math::angleAxis(math::radians(roll_degrees), math::vec3(0.0f, 0.0f, 1.0f));
+    auto& transform = decal.get<transform_component>();
+    transform.set_position_global(point);
+    transform.set_rotation_global(facing * roll);
+}
+
+auto defaults::create_decal_at(rtti::context& ctx, scene& scn, const asset_handle<material>& decal_material, const camera& cam, math::vec2 pos)
+    -> entt::handle
+{
+    const auto placement = compute_drop_placement(scn, cam, pos);
+    auto object = create_decal_entity(ctx, scn, decal_material ? decal_material.name() : std::string("Decal"), decal_material);
+    place_decal_on_surface(object, placement.contact, placement.normal);
+    return object;
+}
+
 auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::string& name, volume_mode mode) -> entt::handle
 {
     auto object = scn.create_entity(name);
@@ -971,6 +1037,26 @@ auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::s
                                     gi_component,
                                     fog_component>(object);
     return object;
+}
+
+auto defaults::find_global_volume(scene& scn) -> entt::handle
+{
+    entt::handle best;
+    int best_priority = 0;
+    // Only an active volume runs its materials (resolve_post_process_materials).
+    for(auto [entity, volume, active] : scn.registry->view<volume_component, active_component>().each())
+    {
+        if(volume.mode != volume_mode::global)
+        {
+            continue;
+        }
+        if(!best || volume.priority > best_priority)
+        {
+            best = scn.create_handle(entity);
+            best_priority = volume.priority;
+        }
+    }
+    return best;
 }
 
 auto defaults::create_default_volume_entity_for_preview(rtti::context& ctx, scene& scn, const std::string& name, volume_mode mode) -> entt::handle

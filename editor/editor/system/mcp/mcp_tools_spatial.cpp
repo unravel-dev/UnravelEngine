@@ -1,6 +1,16 @@
+#include "mcp_asset_lookup.h"
+#include "mcp_material_utils.h"
+#include "mcp_project_paths.h"
 #include "mcp_tools_common.h"
 #include "mcp_viewport_utils.h"
 
+#include <engine/defaults/defaults.h>
+#include <engine/ecs/components/transform_component.h>
+#include <engine/rendering/ecs/components/decal_component.h>
+#include <engine/rendering/material_graph/graph_material.h>
+
+#include <editor/editing/actions/entity_actions.h>
+#include <editor/editing/editing_manager.h>
 #include <editor/editing/scene_raycast.h>
 
 #include <algorithm>
@@ -109,8 +119,196 @@ auto projected_point_json(const camera& cam, const math::vec3& point) -> std::st
 
 } // namespace
 
+namespace
+{
+/// One decal of a scene_place_decals_batch call, read and checked before any is made.
+struct decal_placement
+{
+    asset_handle<material> material;
+    math::vec3 point{};
+    math::vec3 normal{0.0f, 1.0f, 0.0f};
+    std::string hit_entity;
+    entt::handle parent;
+    std::string name;
+    float rotation{};
+    hpp::optional<math::vec2> size;
+    hpp::optional<float> depth;
+};
+
+/// Reads one item: its material (the Default Decal when it names none), where it goes (a ray or a point and normal), its
+/// size and parent. False, with the reason, for an item that cannot be placed.
+auto read_decal_placement(rtti::context& ctx, scene& scn, const simdjson::dom::object& item, decal_placement& out, std::string& error)
+    -> bool
+{
+    std::string key;
+    if(read_string(item, "material", key) && !key.empty())
+    {
+        out.material = resolve_domain_material(ctx, key, material_domain::decal, error);
+        if(!out.material)
+        {
+            return false;
+        }
+    }
+    simdjson::dom::element point_value;
+    if(!item["point"].get(point_value))
+    {
+        simdjson::dom::element normal_value;
+        if(item["normal"].get(normal_value) || !parse_vec3(point_value, out.point, error) || !parse_vec3(normal_value, out.normal, error))
+        {
+            error = error.empty() ? std::string("Pass normal with point") : error;
+            return false;
+        }
+        if(math::length(out.normal) < k_min_direction_length)
+        {
+            error = "The normal must not be zero";
+            return false;
+        }
+    }
+    else
+    {
+        scene_ray ray;
+        if(!read_ray(ctx, item, ray, error))
+        {
+            return false;
+        }
+        ray.max_distance = k_default_reach;
+        const auto hits = raycast_scene_models(scn, ray, {});
+        if(hits.empty())
+        {
+            error = "The ray hits no model surface: aim it at one, or pass point and normal";
+            return false;
+        }
+        out.point = hits.front().point;
+        out.normal = hits.front().normal;
+        out.hit_entity = entity_id_string(hits.front().entity);
+    }
+    std::string parent_id;
+    if(read_string(item, "parent_id", parent_id) && !parent_id.empty())
+    {
+        std::vector<entt::handle> found;
+        if(!resolve_entities(scn, {parent_id}, found, error) || found.empty())
+        {
+            return false;
+        }
+        out.parent = found.front();
+    }
+    out.name = out.material ? out.material.name() : std::string("Decal");
+    read_string(item, "name", out.name);
+    double rotation = 0.0;
+    read_double(item, "rotation", rotation);
+    out.rotation = float(rotation);
+    simdjson::dom::element size_value;
+    if(!item["size"].get(size_value))
+    {
+        math::vec2 size{};
+        if(!parse_vec2(size_value, size, error))
+        {
+            return false;
+        }
+        out.size = size;
+    }
+    double depth = 0.0;
+    if(read_double(item, "depth", depth))
+    {
+        out.depth = float(depth);
+    }
+    return true;
+}
+
+/// The decal of @p placement, made in @p scn and laid onto its surface.
+auto make_placed_decal(rtti::context& ctx, scene& scn, const decal_placement& placement) -> entt::handle
+{
+    auto decal = defaults::create_decal_entity(ctx, scn, placement.name, placement.material);
+    auto& comp = decal.get<decal_component>();
+    if(placement.size)
+    {
+        comp.resize(*placement.size);
+    }
+    if(placement.depth)
+    {
+        comp.depth = std::max(*placement.depth, 0.001f);
+    }
+    defaults::place_decal_on_surface(decal, placement.point, placement.normal, placement.rotation);
+    if(placement.parent)
+    {
+        decal.get<transform_component>().set_parent(placement.parent, true);
+    }
+    return decal;
+}
+} // namespace
+
 void register_spatial_tools(mcp_tool_registry& registry)
 {
+    registry.add(
+        {.name = "scene_place_decals_batch",
+         .description =
+             "Place decals on surfaces, as dragging a Decal material onto them in the Scene view does. Each item: a ray "
+             "(origin + direction, or screen: a Scene view pixel) that finds the nearest model surface, or point and "
+             "normal; material (a Decal material, default the engine's Default Decal); size (width and height in metres, "
+             "default 1 high and the material's texture aspect wide), depth (how deep the box reaches, default half the "
+             "smaller side), rotation (degrees about the normal), name, parent_id (an entity the decal moves with). "
+             "Every item is checked first: one that cannot be placed places none. Returns each decal's entity_id and "
+             "where it lies. One undo step.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"material":{"type":"string","description":"Key or uid of a Decal material"},"origin":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"direction":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"screen":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"Scene view pixel [x,y], top-left origin"},"point":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"Where on a surface, with normal: instead of a ray"},"normal":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"size":{"type":"array","items":{"type":"number","exclusiveMinimum":0},"minItems":2,"maxItems":2},"depth":{"type":"number","exclusiveMinimum":0},"rotation":{"type":"number"},"name":{"type":"string"},"parent_id":{"type":"string","description":"An entity the decal moves with; its world pose stays"}}}}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             std::string error;
+             scene* scn = nullptr;
+             if(!require_edit_scene(ctx, scn, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             simdjson::dom::array items;
+             if(!read_required_array(args, "items", items, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::vector<decal_placement> placements;
+             for(auto element : items)
+             {
+                 simdjson::dom::object item;
+                 decal_placement placement;
+                 if(!read_object(element, item, error) || !read_decal_placement(ctx, *scn, item, placement, error))
+                 {
+                     return {.text = make_batch_item_error(placements.size(), error, "Nothing was placed."), .is_error = true};
+                 }
+                 placements.push_back(std::move(placement));
+             }
+             std::vector<entt::handle> decals;
+             ctx.get_cached<editing_manager>().do_action<create_entities_action_t>(
+                 "MCP Place Decals",
+                 [&]()
+                 {
+                     decals.clear();
+                     for(const auto& placement : placements)
+                     {
+                         decals.push_back(make_placed_decal(ctx, *scn, placement));
+                     }
+                     return decals;
+                 });
+             std::string created = "[";
+             for(size_t i = 0; i < decals.size(); ++i)
+             {
+                 const auto& comp = decals[i].get<decal_component>();
+                 const auto& placement = placements[i];
+                 created += fmt::format(R"({}{{"entity_id":{},"name":{},"point":{},"normal":{},"size":[{},{}],"depth":{},"on_entity_id":{}}})",
+                                        i == 0 ? "" : ",",
+                                        make_json_string(entity_id_string(decals[i])),
+                                        make_json_string(placement.name),
+                                        vec3_to_json(placement.point),
+                                        vec3_to_json(math::normalize(placement.normal)),
+                                        comp.size.x,
+                                        comp.size.y,
+                                        comp.depth,
+                                        placement.hit_entity.empty() ? std::string("null") : make_json_string(placement.hit_entity));
+             }
+             created += "]";
+             return {.text = fmt::format(R"({{"created":{},"count":{}}})", created, decals.size()), .is_error = false};
+         },
+         .mutates_scene = true});
+
     registry.add(
         {.name = "scene_raycast",
          .description =

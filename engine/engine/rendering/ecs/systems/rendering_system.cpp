@@ -18,6 +18,7 @@
 
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/ecs/components/decal_component.h>
 
 #include <engine/rendering/ecs/systems/camera_system.h>
 #include <engine/rendering/ecs/systems/model_system.h>
@@ -57,6 +58,10 @@ void apply_view_params(rtti::context& ctx, rendering::pipeline::run_params& para
     {
         params.render_scale = *view.render_scale;
     }
+    if(!view.post_process_materials)
+    {
+        params.post_process_materials.clear();
+    }
 }
 } // namespace
 
@@ -92,6 +97,7 @@ void rendering_system::on_play_end(rtti::context& ctx)
     instanced_draws_.clear();
     baked_animations_.clear();
     material_instances_.clear();
+    decal_component::max_transient_decals = decal_component::DEFAULT_MAX_TRANSIENT_DECALS;
 }
 
 void rendering_system::reset_script_draws(rtti::context& ctx, const frame_times& times)
@@ -152,6 +158,72 @@ void rendering_system::set_debug_pass(const hpp::optional<int>& pass)
     debug_pass_ = pass;
 }
 
+namespace
+{
+/// Ages the decals that fade over time (Fade In, Lifetime) while the simulation runs, and destroys those whose Remove
+/// After Fade holds once they have faded out. Edit mode and a paused play leave every age alone.
+void update_decal_lifetimes(rtti::context& ctx, scene& scn, const frame_times& times)
+{
+    if(!ctx.has<play_mode>())
+    {
+        return;
+    }
+    const auto& play = ctx.get_cached<play_mode>();
+    if(!play.is_simulation_running() || play.is_simulation_paused())
+    {
+        return;
+    }
+    const float dt = times.scaled.count();
+    std::vector<entt::entity> faded;
+    std::vector<decal_component*> transient;
+    scn.registry->view<decal_component>().each(
+        [&](entt::entity entity, decal_component& decal)
+        {
+            if(decal.is_transient)
+            {
+                transient.push_back(&decal);
+            }
+            if(decal.lifetime <= 0.0f && decal.fade_in <= 0.0f && !decal.is_transient)
+            {
+                return;
+            }
+            decal.age += dt;
+            if(decal.remove_after_fade && decal.has_faded_out())
+            {
+                faded.push_back(entity);
+            }
+        });
+    // Past the budget, the oldest transient decals fade out now and go.
+    if(transient.size() > decal_component::max_transient_decals)
+    {
+        const size_t excess = transient.size() - decal_component::max_transient_decals;
+        std::partial_sort(transient.begin(),
+                          transient.begin() + std::ptrdiff_t(excess),
+                          transient.end(),
+                          [](const decal_component* a, const decal_component* b)
+                          {
+                              return a->age > b->age;
+                          });
+        for(size_t i = 0; i < excess; ++i)
+        {
+            auto& decal = *transient[i];
+            const float fading_since = decal.age - decal.fade_in;
+            if(decal.lifetime <= 0.0f || fading_since < decal.lifetime)
+            {
+                decal.lifetime = std::max(fading_since, 0.0001f);
+                decal.fade_out = std::min(decal.fade_out > 0.0f ? decal.fade_out : decal_component::TRANSIENT_OVERFLOW_FADE_OUT,
+                                          decal_component::TRANSIENT_OVERFLOW_FADE_OUT);
+                decal.remove_after_fade = true;
+            }
+        }
+    }
+    for(const auto entity : faded)
+    {
+        scene::destroy_entity(scn.create_handle(entity));
+    }
+}
+} // namespace
+
 void rendering_system::on_frame_update(scene& scn, const frame_times& times)
 {
     APP_SCOPE_PERF("Rendering/On Frame Update");
@@ -164,6 +236,7 @@ void rendering_system::on_frame_update(scene& scn, const frame_times& times)
     ctx.get_cached<animation_system>().on_frame_update(scn, times);
     ctx.get_cached<reflection_probe_system>().on_frame_update(scn, times);
     ctx.get_cached<skylight_system>().on_frame_update(scn, times);
+    update_decal_lifetimes(ctx, scn, times);
 }
 
 void rendering_system::on_frame_before_render(scene& scn, const frame_times& times)

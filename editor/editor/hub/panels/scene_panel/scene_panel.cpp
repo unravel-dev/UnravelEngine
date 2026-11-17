@@ -8,7 +8,9 @@
 #include "imgui_widgets/utils.h"
 #include <editor/editing/actions/entity_actions.h>
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/editor_actions.h>
 #include <editor/editing/picking_manager.h>
+#include <editor/imgui/integration/imgui_notify.h>
 #include <editor/editing/thumbnail_manager.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <editor/shortcuts.h>
@@ -17,6 +19,7 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/defaults/defaults.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
@@ -57,6 +60,7 @@ namespace
 
 // Forward declarations
 void restore_original_materials(entt::handle entity, const std::vector<asset_handle<material>>& original_materials);
+void reset_preview_state();
 void apply_material_preview(rtti::context& ctx,
                             entt::handle entity,
                             const std::string& material_path,
@@ -102,10 +106,31 @@ auto check_material_drag(std::string& out_material_path) -> bool
     return false;
 }
 
+// The domain of the material at @p material_path: what dropping it in the Scene view does.
+/// The domain of the material at @p material_path. A drop waits for it to load (@p wait); the drag preview, every
+/// frame, does not, and takes Surface meanwhile.
+auto get_dropped_material_domain(rtti::context& ctx, const std::string& material_path, bool wait) -> material_domain
+{
+    const auto asset = ctx.get_cached<asset_manager>().get_asset<material>(material_path);
+    if(!wait)
+    {
+        return find_loaded_material_domain(asset).value_or(material_domain::surface);
+    }
+    const auto loaded = asset.get();
+    return asset_handle<material>::is_empty(loaded) ? material_domain::surface : get_material_domain(*loaded);
+}
+
 // Handle material preview during drag
 void handle_material_preview(rtti::context& ctx, const camera_component& camera_comp, const std::string& material_path)
 {
     auto& pick_manager = ctx.get_cached<picking_manager>();
+    // A decal or post-process material is never a model's: its drop places a decal or runs it on the view. Until it
+    // has loaded it previews as a surface; the preview goes once its domain is known.
+    if(get_dropped_material_domain(ctx, material_path, false) != material_domain::surface)
+    {
+        reset_preview_state();
+        return;
+    }
 
     // Check if the material path changed
     if(g_preview_state.current_drag_material != material_path)
@@ -137,9 +162,48 @@ void handle_material_preview(rtti::context& ctx, const camera_component& camera_
                             });
 }
 
+void queue_create_at_cursor(rtti::context& ctx,
+                            const camera_component& camera_comp,
+                            const std::string& action_name,
+                            std::function<entt::handle(rtti::context&, scene&, const camera&, const math::vec2&)> producer);
+
 // Handle material drop on entity
 void handle_material_drop(rtti::context& ctx, const camera_component& camera_comp, const std::string& material_path)
 {
+    // A Decal material dropped on a surface places a decal there, laid onto it.
+    const auto domain = get_dropped_material_domain(ctx, material_path, true);
+    if(domain == material_domain::decal)
+    {
+        auto decal_material = ctx.get_cached<asset_manager>().get_asset<material>(material_path);
+        queue_create_at_cursor(ctx,
+                               camera_comp,
+                               "Drop Decal",
+                               [decal_material](rtti::context& ctx, scene& scn, const camera& cam, const math::vec2& cursor) -> entt::handle
+                               {
+                                   return defaults::create_decal_at(ctx, scn, decal_material, cam, cursor);
+                               });
+        return;
+    }
+    // A Post Process material runs over the whole view, wherever it lands: on the scene's global volume.
+    if(domain == material_domain::post_process)
+    {
+        auto& em = ctx.get_cached<editing_manager>();
+        if(auto* scn = em.get_active_scene(ctx))
+        {
+            const auto post_material = ctx.get_cached<asset_manager>().get_asset<material>(material_path);
+            // Dropped to show: an entry of the material switched off is switched on.
+            const auto placement = editor_actions::set_post_process_material(ctx, *scn, {}, post_material, {.enabled = true});
+            if(placement.entity)
+            {
+                em.select(placement.entity);
+            }
+            else
+            {
+                ImGui::PushNotification(ImGuiToast(ImGuiToastType_Warning, 4000, "%s", placement.error.c_str()));
+            }
+        }
+        return;
+    }
     auto cursor_pos = ImGui::GetMousePos();
     auto& pick_manager = ctx.get_cached<picking_manager>();
     auto& am = ctx.get_cached<asset_manager>();
@@ -1500,6 +1564,7 @@ void scene_panel::draw_scene(rtti::context& ctx, const frame_times& times)
         view.render_resolution = get_render_resolution(ctx);
         // The gizmos, the grid and the selection outline draw over the image with the scene's depth.
         view.needs_output_depth = true;
+        view.post_process_materials = visualization_menu_state_.show_post_process_materials;
         path.render_scene(handle, camera_comp, *target_scene, times, view);
         gizmos_.on_frame_render(ctx, *target_scene, handle, dd_2d_);
     }

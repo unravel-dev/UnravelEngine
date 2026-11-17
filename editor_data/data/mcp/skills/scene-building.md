@@ -113,6 +113,12 @@ assets_get_mesh_info for the local AABB, then:
 scene_get_bounds_batch gives the world AABB of placed entities (an entity with
 nothing to measure reports its position as a point).
 
+Decals (signs, stains, road markings, bullet holes) are placed the same way:
+scene_place_decals_batch casts each item's ray, makes a Decal entity on the
+surface it hits and turns it to project into that surface; parent_id makes it move with a moving
+object. Prefer a decal to a thin quad: it follows the surface exactly and never
+flickers against it.
+
 ## Changing what an entity is
 
 - scene_set_models_batch swaps the mesh an entity shows (asset), keeping its

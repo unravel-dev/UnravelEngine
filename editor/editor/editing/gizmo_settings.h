@@ -89,6 +89,8 @@ struct gizmos_data
     bool show_light {true};
     bool show_reflection_probe {true};
     bool show_volume {true};
+    /// A decal's box, the direction it projects in and its projected face.
+    bool show_decal {true};
     /// World bounds, colored by the current LOD.
     bool show_model_bounds {false};
     /// Bounds of every submesh. Drawn while show_model_bounds is on.
@@ -150,6 +152,7 @@ inline auto merge_gizmo_change(gizmo_setup saved, const gizmo_setup& before, con
     carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_light);
     carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_reflection_probe);
     carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_volume);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_decal);
     carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_model_bounds);
     carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_model_submesh_bounds);
     carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_text);

@@ -1116,6 +1116,30 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
         }
         ImGui::SetItemTooltipEx("A material made of nodes. Double-click it to edit it in the Material Graph window.");
 
+        if(ImGui::MenuItem("Decal Material"))
+        {
+            const auto available =
+                asset_actions::get_free_copy_path(target_path, "New Decal Material", ex::get_format<material>());
+            if(asset_actions::create_material_graph(ctx, available, asset_actions::make_starter_material_graph(material_domain::decal)))
+            {
+                pending_rename = available;
+            }
+        }
+        ImGui::SetItemTooltipEx("A material a Decal component projects onto the surfaces in its box: a tinted colour map to "
+                                "start from. Drag it onto a surface in the Scene view to place a decal there.");
+
+        if(ImGui::MenuItem("Post Process Material"))
+        {
+            const auto available =
+                asset_actions::get_free_copy_path(target_path, "New Post Process Material", ex::get_format<material>());
+            if(asset_actions::create_material_graph(ctx, available, asset_actions::make_starter_material_graph(material_domain::post_process)))
+            {
+                pending_rename = available;
+            }
+        }
+        ImGui::SetItemTooltipEx("A material that changes the colour of the view: a volume's or a camera's Post Process "
+                                "Materials run it. It starts as the scene's colour tinted.");
+
         if(ImGui::MenuItem("Material Function"))
         {
             const auto available =

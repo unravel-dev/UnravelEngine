@@ -2,7 +2,10 @@
 #include "material_graph_style.h"
 
 #include <editor/assets/asset_actions.h>
+#include <editor/editing/editing_manager.h>
+#include <editor/editing/editor_actions.h>
 #include <editor/events.h>
+#include <editor/imgui/integration/imgui_notify.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <editor/shortcuts.h>
@@ -13,6 +16,8 @@
 #include <engine/meta/rendering/graph_material.hpp>
 #include <engine/meta/rendering/material.hpp>
 #include <engine/meta/rendering/material_graph.hpp>
+#include <engine/rendering/ecs/components/camera_component.h>
+#include <engine/rendering/ecs/components/volume_component.h>
 
 #include <filedialog/filedialog.h>
 #include <filesystem/filesystem.h>
@@ -951,6 +956,9 @@ void material_graph_panel::draw_toolbar()
         ImGui::TextDisabled("*");
     }
     ImGui::SameLine();
+    draw_domain_combo();
+    draw_add_to_scene_button();
+    ImGui::SameLine();
     draw_new_menu();
     ImGui::SameLine();
     if(ImGui::Button(ICON_MDI_FOLDER_OPEN))
@@ -994,7 +1002,7 @@ void material_graph_panel::draw_toolbar()
     {
         lay_out();
     }
-    set_wrapped_item_tooltip("Arranges every node in columns flowing into the Surface Output.");
+    set_wrapped_item_tooltip("Arranges every node in columns flowing into the output node.");
     ImGui::SameLine();
     if(ImGui::Button(ICON_MDI_FIT_TO_PAGE_OUTLINE))
     {
@@ -1002,6 +1010,74 @@ void material_graph_panel::draw_toolbar()
     }
     set_wrapped_item_tooltip("Frame the whole graph (F frames the selection).");
     draw_status();
+}
+
+void material_graph_panel::draw_domain_combo()
+{
+    if(is_material_function_graph(graph_))
+    {
+        return;
+    }
+    const auto domain = get_material_graph_domain(graph_);
+    ImGui::SetNextItemWidth(ImGui::CalcTextSize(get_material_domain_label(material_domain::post_process)).x + ImGui::GetFrameHeight() * 2.0f);
+    if(ImGui::BeginCombo("##material_domain", get_material_domain_label(domain)))
+    {
+        for(uint32_t i = 0; i < MATERIAL_DOMAIN_COUNT; ++i)
+        {
+            const auto option = material_domain(i);
+            if(ImGui::Selectable(get_material_domain_label(option), option == domain) && option != domain)
+            {
+                begin_edit();
+                set_material_graph_domain(graph_, option);
+                apply_edit(true, true);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    set_wrapped_item_tooltip("What the material draws. Surface: the surface of a mesh. Decal: what a Decal component's box "
+                             "lays onto the surfaces it projects onto. Post Process: the colour of the view, from a volume or "
+                             "a camera. Changing it keeps every link the new output node has a pin for.");
+}
+
+void material_graph_panel::draw_add_to_scene_button()
+{
+    if(is_material_function_graph(graph_) || get_material_graph_domain(graph_) != material_domain::post_process)
+    {
+        return;
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!material_);
+    if(ImGui::Button(ICON_MDI_PLUS_BOX_OUTLINE " Add to Scene"))
+    {
+        add_to_scene();
+    }
+    ImGui::EndDisabled();
+    set_wrapped_item_tooltip("Runs this material over the view: on the selected post process volume or camera, or on the "
+                             "scene's global volume, which is made when the scene has none. Save an untitled graph first.");
+}
+
+void material_graph_panel::add_to_scene()
+{
+    auto& em = ctx_->get_cached<editing_manager>();
+    auto* scn = em.get_active_scene(*ctx_);
+    if(scn == nullptr || !material_)
+    {
+        return;
+    }
+    entt::handle target;
+    if(auto* selected = em.try_get_active_selection_as<entt::handle>();
+       selected != nullptr && *selected && selected->any_of<volume_component, camera_component>())
+    {
+        target = *selected;
+    }
+    // Added to show: an entry of the material switched off is switched on.
+    const auto placement = editor_actions::set_post_process_material(*ctx_, *scn, target, material_, {.enabled = true});
+    if(!placement.entity)
+    {
+        ImGui::PushNotification(ImGuiToast(ImGuiToastType_Warning, 4000, "%s", placement.error.c_str()));
+        return;
+    }
+    em.select(placement.entity);
 }
 
 void material_graph_panel::draw_new_menu()
@@ -1019,6 +1095,18 @@ void material_graph_panel::draw_new_menu()
     {
         new_graph();
     }
+    if(ImGui::MenuItem(ICON_MDI_STICKER_OUTLINE " Decal Material") && confirm_discard())
+    {
+        set_untitled_graph(asset_actions::make_starter_material_graph(material_domain::decal), "Untitled Decal");
+    }
+    set_wrapped_item_tooltip("A decal: a colour map tinted, its alpha the opacity. A Decal component projects it onto the "
+                             "surfaces in its box.");
+    if(ImGui::MenuItem(ICON_MDI_IMAGE_FILTER_VINTAGE " Post Process Material") && confirm_discard())
+    {
+        set_untitled_graph(asset_actions::make_starter_material_graph(material_domain::post_process), "Untitled Post Process");
+    }
+    set_wrapped_item_tooltip("A post-process material: the scene's colour tinted. A volume's or a camera's Post Process "
+                             "Materials run it.");
     if(ImGui::MenuItem(ICON_MDI_FUNCTION_VARIANT " Empty Material Function") && confirm_discard())
     {
         set_untitled_graph(asset_actions::make_starter_material_function(), "Untitled Function");
@@ -1213,9 +1301,10 @@ void material_graph_panel::draw_palette()
     ImGui::BeginChild("##palette_list");
     int category = -1;
     bool is_open = true;
+    const auto domain = get_material_graph_domain(graph_);
     for(const auto& def : get_material_node_library())
     {
-        if(def.code == material_node_code::surface_output)
+        if(def.code == material_node_code::surface_output || !is_material_node_in_domain(def, domain))
         {
             continue;
         }
@@ -1383,7 +1472,7 @@ void material_graph_panel::draw_node_details(rtti::context& ctx, size_t index)
     draw_diagnostics(compiled_.get_node_diagnostics(graph_.nodes[index].id));
     if(index < compiled_.nodes.size() && !compiled_.nodes[index].is_used)
     {
-        ImGui::TextColored(COL_WARNING_TEXT, ICON_MDI_INFORMATION_OUTLINE " Not used: nothing it feeds reaches the Surface Output.");
+        ImGui::TextColored(COL_WARNING_TEXT, ICON_MDI_INFORMATION_OUTLINE " Not used: nothing it feeds reaches the output node.");
     }
     if(holds_material_graph_texture(graph_.nodes[index]))
     {

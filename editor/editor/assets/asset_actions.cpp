@@ -92,6 +92,39 @@ constexpr const char* STARTER_MATERIAL_GRAPH = R"({"material_graph": {"nodes": [
     {"id": "metallic", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [0.0]}]},
     {"id": "roughness", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [0.5]}]}
 ]}})";
+/// A new decal material: a colour map tinted into Base Color, its alpha times Opacity into Opacity, and a normal map and
+/// a roughness ready to link.
+constexpr const char* STARTER_DECAL_MATERIAL_GRAPH = R"({"material_graph": {"nodes": [
+    {"id": "output", "type": "decal_output", "inputs": [
+        {"pin": "base_color", "link": "tinted"},
+        {"pin": "opacity", "link": "faded"}]},
+    {"id": "color_map", "type": "texture_sample", "settings": [{"name": "name", "value": "Color Map"}]},
+    {"id": "tint", "type": "color_parameter", "inputs": [{"pin": "value", "value": [1.0, 1.0, 1.0, 1.0]}],
+     "settings": [{"name": "name", "value": "Tint"}]},
+    {"id": "tinted", "type": "multiply", "inputs": [{"pin": "a", "link": "color_map.rgb"}, {"pin": "b", "link": "tint.rgb"}]},
+    {"id": "opacity", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [1.0]}],
+     "settings": [{"name": "name", "value": "Opacity"}, {"name": "slider_min", "value": "0"}, {"name": "slider_max", "value": "1"}]},
+    {"id": "faded", "type": "multiply", "inputs": [{"pin": "a", "link": "color_map.a"}, {"pin": "b", "link": "opacity"}]},
+    {"id": "normal_map", "type": "normal_map", "settings": [{"name": "name", "value": "Normal Map"}]},
+    {"id": "roughness", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [0.5]}],
+     "settings": [{"name": "name", "value": "Roughness"}]}
+], "comments": [
+    {"text": "Pick the Color Map in its node's Details. Link Normal Map into Normal, or Roughness into Roughness, and the decal changes those too: an unlinked channel is left as the surface has it."}
+]}})";
+/// A new post-process material: the scene's colour tinted, its strength a parameter.
+constexpr const char* STARTER_POST_PROCESS_MATERIAL_GRAPH = R"({"material_graph": {"nodes": [
+    {"id": "output", "type": "post_process_output", "inputs": [
+        {"pin": "color", "link": "tinted"},
+        {"pin": "opacity", "link": "strength"}]},
+    {"id": "scene", "type": "scene_texture", "settings": [{"name": "source", "value": "scene_color"}]},
+    {"id": "tint", "type": "color_parameter", "inputs": [{"pin": "value", "value": [1.0, 0.85, 0.7, 1.0]}],
+     "settings": [{"name": "name", "value": "Tint"}]},
+    {"id": "tinted", "type": "multiply", "inputs": [{"pin": "a", "link": "scene.rgb"}, {"pin": "b", "link": "tint.rgb"}]},
+    {"id": "strength", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [1.0]}],
+     "settings": [{"name": "name", "value": "Strength"}, {"name": "slider_min", "value": "0"}, {"name": "slider_max", "value": "1"}]}
+], "comments": [
+    {"text": "Scene Texture reads the view: its colour, depth and G-buffer. The output's Location says where in the frame the material runs."}
+]}})";
 /// A new material function: one input passed to one output, as the window lays them out.
 constexpr const char* STARTER_MATERIAL_FUNCTION = R"({"material_graph": {"nodes": [
     {"id": "value", "type": "function_input", "settings": [{"name": "name", "value": "Value"}, {"name": "type", "value": "vec3"}]},
@@ -121,6 +154,20 @@ auto make_starter_material_graph() -> material_graph
     {
         ensure_material_graph_output(graph);
     }
+    return graph;
+}
+
+auto make_starter_material_graph(material_domain domain) -> material_graph
+{
+    const char* text = domain == material_domain::decal          ? STARTER_DECAL_MATERIAL_GRAPH
+                       : domain == material_domain::post_process ? STARTER_POST_PROCESS_MATERIAL_GRAPH
+                                                                 : STARTER_MATERIAL_GRAPH;
+    material_graph graph;
+    if(!load_from_string(text, graph))
+    {
+        graph = {};
+    }
+    set_material_graph_domain(graph, domain);
     return graph;
 }
 

@@ -160,6 +160,15 @@ void save_binding(Archive& ar, const material_graph_binding& binding)
     try_save(ar, ser20::make_nvp("max_world_position_offset", binding.max_world_position_offset));
     try_save(ar, ser20::make_nvp("reads_vertex_outputs", binding.reads_vertex_outputs));
     try_save(ar, ser20::make_nvp("computes_vertex_values", binding.computes_vertex_values));
+    auto domain = uint8_t(binding.domain);
+    try_save(ar, ser20::make_nvp("domain", domain));
+    try_save(ar, ser20::make_nvp("decal_writes", binding.decal_writes));
+    try_save(ar, ser20::make_nvp("decal_reads_surface", binding.decal_reads_surface));
+    auto post_location = uint8_t(binding.post_location);
+    try_save(ar, ser20::make_nvp("post_location", post_location));
+    try_save(ar, ser20::make_nvp("post_priority", binding.post_priority));
+    try_save(ar, ser20::make_nvp("scene_textures", binding.scene_textures));
+    try_save(ar, ser20::make_nvp("samples_scene_neighbours", binding.samples_scene_neighbours));
 }
 
 template<typename Archive>
@@ -180,6 +189,18 @@ void load_binding(Archive& ar, material_graph_binding& binding)
     try_load(ar, ser20::make_nvp("max_world_position_offset", binding.max_world_position_offset));
     try_load(ar, ser20::make_nvp("reads_vertex_outputs", binding.reads_vertex_outputs));
     try_load(ar, ser20::make_nvp("computes_vertex_values", binding.computes_vertex_values));
+    uint8_t domain = 0;
+    try_load(ar, ser20::make_nvp("domain", domain));
+    binding.domain = domain < MATERIAL_DOMAIN_COUNT ? material_domain(domain) : material_domain::surface;
+    try_load(ar, ser20::make_nvp("decal_writes", binding.decal_writes));
+    try_load(ar, ser20::make_nvp("decal_reads_surface", binding.decal_reads_surface));
+    uint8_t post_location = 0;
+    try_load(ar, ser20::make_nvp("post_location", post_location));
+    binding.post_location = post_location < MATERIAL_POST_PROCESS_LOCATION_COUNT ? material_post_process_location(post_location)
+                                                                                 : material_post_process_location::after_tonemapping;
+    try_load(ar, ser20::make_nvp("post_priority", binding.post_priority));
+    try_load(ar, ser20::make_nvp("scene_textures", binding.scene_textures));
+    try_load(ar, ser20::make_nvp("samples_scene_neighbours", binding.samples_scene_neighbours));
 }
 } // namespace
 

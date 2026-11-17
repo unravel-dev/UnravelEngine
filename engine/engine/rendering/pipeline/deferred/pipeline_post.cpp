@@ -53,6 +53,14 @@ void deferred::run_debug_passes(const camera& camera,
     {
         run_particle_overdraw_debug_pass(rview, output);
     }
+    else if(debug_pass_ == debug_pass_decal_overdraw)
+    {
+        // This run's count: a run without decals leaves the image as it is.
+        if(decal_pass_.has_decals())
+        {
+            run_overdraw_debug_pass(rview.tex_find("DECAL_OVERDRAW"), output, "Debug/Decal Overdraw Pass");
+        }
+    }
     else if(debug_pass_ == debug_pass_ao_bent_normals)
     {
         run_debug_visualization_pass(camera, rview, output, rparams);
@@ -143,13 +151,17 @@ void deferred::run_velocity_debug_pass(const camera& camera,
 
 void deferred::run_particle_overdraw_debug_pass(gfx::render_view& rview, const gfx::frame_buffer::ptr& output)
 {
-    const auto& overdraw = rview.tex_find("PARTICLE_OVERDRAW");
+    run_overdraw_debug_pass(rview.tex_find("PARTICLE_OVERDRAW"), output, "Debug/Particle Overdraw Pass");
+}
+
+void deferred::run_overdraw_debug_pass(const gfx::texture::ptr& overdraw, const gfx::frame_buffer::ptr& output, const char* pass_name)
+{
     if(!output || !overdraw || !particle_overdraw_debug_program_.program ||
        !particle_overdraw_debug_program_.program->is_valid())
     {
         return;
     }
-    gfx::render_pass pass("Debug/Particle Overdraw Pass");
+    gfx::render_pass pass(pass_name);
     pass.bind(output.get());
     const auto output_size = output->get_size();
     particle_overdraw_debug_program_.program->begin();

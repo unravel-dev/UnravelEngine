@@ -1,0 +1,36 @@
+[variants]
+default
+// skinned: the bone palette comes from the palettes (skinning_palette.sh) at u_skin_rows.x; skinned_textures reads them
+// from a texture (shader_buffer.sh), for devices whose vertex shaders read no storage buffers.
+skinned            SKINNED
+skinned_textures   SKINNED SHADER_BUFFER_TEXTURES
+
+[inputs]
+vec3 a_position
+#if SKINNED
+vec4 a_weight
+vec4 a_indices
+#endif
+
+[code]
+#include "../common.sh"
+#if SKINNED
+#include "../skinning_palette.sh"
+#endif
+
+/*
+ * A renderer's position alone, for the mask passes (mask_pass.cpp): what a pixel of the mask holds is the value the
+ * fragment shader writes for the whole draw. A material whose World Position Offset moves its vertices draws with its
+ * own vertex shader's position_only variant instead.
+ */
+void main()
+{
+#if SKINNED
+	mat4 model = skin_palette_matrix(u_skin_rows.x, a_indices, a_weight);
+#else
+	mat4 model = u_world[0];
+#endif
+
+	vec4 world_position = mul(model, vec4(a_position, 1.0));
+	gl_Position = mul(u_viewProj, world_position);
+}

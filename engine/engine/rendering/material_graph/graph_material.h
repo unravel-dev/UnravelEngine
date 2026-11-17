@@ -4,6 +4,7 @@
 #include "material_graph.h"
 #include "material_graph_compiler.h"
 
+#include <engine/assets/asset_handle.h>
 #include <engine/rendering/material.h>
 
 #include <hpp/optional.hpp>
@@ -206,6 +207,18 @@ public:
     /// The material casts a shadow: every one but a translucent one.
     auto casts_shadow() const -> bool;
 
+    /// What the material draws: a surface of a mesh, a decal, or a post-process pass (its graph's output node).
+    auto get_domain() const -> material_domain;
+    /// Decals: the channels the decal writes (material_decal_write_bits).
+    auto get_decal_writes() const -> uint32_t;
+    /// Decals: the material reads the surface it lies on, so it draws through the decal buffers.
+    auto decal_reads_surface() const -> bool;
+    /// Post-process: where in the frame the material runs, and its order there.
+    auto get_post_process_location() const -> material_post_process_location;
+    auto get_post_process_priority() const -> int;
+    /// Decal and post-process: the view textures its Scene Texture nodes read (material_scene_texture_bits).
+    auto get_scene_textures() const -> uint32_t;
+
     /// The shadow changes every frame without an edit: an animated Opacity Mask or World Position Offset.
     auto is_shadow_animated() const -> bool;
 
@@ -292,5 +305,11 @@ private:
     live_count_registration offset_bounds_registration_{live_count_kind::offset_bounds};
     live_count_registration animated_shadow_registration_{live_count_kind::animated_shadow};
 };
+
+/// The domain @p mat draws in: its graph's (surface, decal or post process); Surface for any other material.
+auto get_material_domain(const material& mat) -> material_domain;
+
+/// The domain of @p mat once it is loaded, without waiting for it: none while it loads, or when it failed to.
+auto find_loaded_material_domain(const asset_handle<material>& mat) -> hpp::optional<material_domain>;
 
 } // namespace unravel

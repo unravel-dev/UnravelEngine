@@ -69,6 +69,8 @@ enum class visualization_mode : int
     gi_performance_overview = 61,
     /// The particle layers each pixel shaded, blended over the finished image.
     particle_overdraw = 62,
+    /// The decal box fragments each pixel shaded, blended over the finished image.
+    decal_overdraw = 63,
 };
 
 /// Menu grouping. Ordering here is the order the groups appear in the viewport menu.

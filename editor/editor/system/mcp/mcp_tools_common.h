@@ -403,6 +403,21 @@ inline auto read_required_array(const simdjson::dom::object& args,
     return true;
 }
 
+/// The error of a batch call that refused item @p index for @p reason and changed nothing: "Item 2: <reason>. Nothing
+/// was placed." The reason gets the period it lacks; @p outcome is the closing sentence.
+inline auto make_batch_item_error(size_t index, std::string reason, hpp::string_view outcome) -> std::string
+{
+    while(!reason.empty() && (reason.back() == ' ' || reason.back() == ';' || reason.back() == ','))
+    {
+        reason.pop_back();
+    }
+    if(!reason.empty() && reason.back() != '.')
+    {
+        reason += '.';
+    }
+    return fmt::format("Item {}: {} {}", index, reason, outcome);
+}
+
 inline auto read_object(const simdjson::dom::element& value, simdjson::dom::object& out, std::string& error) -> bool
 {
     if(value.get(out))

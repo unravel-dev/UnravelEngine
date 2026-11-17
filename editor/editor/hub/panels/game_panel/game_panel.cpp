@@ -265,7 +265,10 @@ void game_panel::on_frame_render(rtti::context& ctx, const frame_times& times)
         return;
     }
 
-    path.render_scene(scene, times, {.render_scale = view_render_scale::get_render_scale(render_scale_)});
+    path.render_scene(scene,
+                      times,
+                      {.render_scale = view_render_scale::get_render_scale(render_scale_),
+                       .post_process_materials = visualization_menu_state_.show_post_process_materials});
 
     end_forced_frame();
 }

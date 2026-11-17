@@ -1,9 +1,14 @@
 #include "material_graph_scene_preview.h"
 
+#include <engine/assets/asset_manager.h>
 #include <engine/defaults/defaults.h>
+#include <engine/defaults/engine_asset_keys.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
+#include <engine/rendering/ecs/components/decal_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/ecs/components/post_process_material_component.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <editor/imgui/integration/imgui.h>
 #include <engine/rendering/material.h>
@@ -28,6 +33,10 @@ constexpr float MAX_PREVIEW_ZOOM = 4.0f;
 constexpr float WHEEL_ZOOM_STEP = 0.9f;
 /// Degrees the camera turns per pixel dragged.
 constexpr float ORBIT_DEGREES_PER_PIXEL = 0.4f;
+/// The preview decal's face and depth, in radii of the sphere around the shape: it covers the shape's front.
+constexpr float PREVIEW_DECAL_SIZE_IN_RADII = 1.6f;
+constexpr float PREVIEW_DECAL_DEPTH_IN_RADII = 2.2f;
+
 /// The camera never looks straight down or up, where the orbit's up turns over.
 constexpr float MAX_PREVIEW_PITCH = 85.0f;
 
@@ -77,7 +86,7 @@ void material_graph_scene_preview::render(rtti::context& ctx, const frame_times&
     {
         create_object(ctx);
     }
-    set_material(mat);
+    set_material(ctx, mat);
     if(!camera_ || !object_)
     {
         return;
@@ -145,6 +154,7 @@ void material_graph_scene_preview::unload_scene(rtti::context& ctx)
     has_scene_ = false;
     camera_ = {};
     object_ = {};
+    decal_ = {};
     material_ = {};
 }
 
@@ -177,14 +187,53 @@ void material_graph_scene_preview::frame_object()
     radius_ = std::max(bounds.radius, math::epsilon<float>());
 }
 
-void material_graph_scene_preview::set_material(const asset_handle<material>& mat)
+void material_graph_scene_preview::set_material(rtti::context& ctx, const asset_handle<material>& mat)
 {
-    if(!object_ || material_ == mat)
+    const auto domain = find_loaded_material_domain(mat).value_or(material_domain::surface);
+    if(!object_ || !camera_ || (material_ == mat && shown_domain_ == domain))
     {
         return;
     }
     material_ = mat;
-    object_.get<model_component>().set_shared_material(mat, 0);
+    shown_domain_ = domain;
+    const auto surface = domain == material_domain::surface
+                             ? mat
+                             : ctx.get_cached<asset_manager>().get_asset<material>(STANDARD_MATERIAL_KEY);
+    object_.get<model_component>().set_shared_material(surface, 0);
+    if(decal_)
+    {
+        scene::destroy_entity(decal_);
+        decal_ = {};
+    }
+    auto& post_materials = camera_.get_or_emplace<post_process_material_component>();
+    post_materials.entries.clear();
+    if(domain == material_domain::decal)
+    {
+        create_decal(ctx, mat);
+    }
+    else if(domain == material_domain::post_process)
+    {
+        post_materials.add(mat);
+    }
+}
+
+void material_graph_scene_preview::create_decal(rtti::context& ctx, const asset_handle<material>& mat)
+{
+    decal_ = defaults::create_decal_entity(ctx, scene_, "Preview Decal", mat);
+    if(!decal_)
+    {
+        return;
+    }
+    // From the first view, where the camera starts; straight down onto the plane, which the first view grazes.
+    const float yaw = math::radians(INITIAL_YAW);
+    const float pitch = math::radians(INITIAL_PITCH);
+    const math::vec3 toward_view =
+        object_shape_ == shape::plane ? math::vec3(0.0f, 1.0f, 0.0f)
+                                      : math::vec3(std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw));
+    auto& decal = decal_.get<decal_component>();
+    decal.size = math::vec2(radius_ * PREVIEW_DECAL_SIZE_IN_RADII);
+    decal.depth = radius_ * PREVIEW_DECAL_DEPTH_IN_RADII;
+    defaults::place_decal_on_surface(decal_, target_, toward_view, 0.0f);
 }
 
 void material_graph_scene_preview::update_camera()

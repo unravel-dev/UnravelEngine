@@ -1,0 +1,33 @@
+[variants]
+default
+// visible: only where the drawn surface is the one the view shows, its depth the scene's (the decal layers).
+visible   MASK_VISIBLE_ONLY
+
+[code]
+#include "../common.sh"
+
+/*
+ * Writes one value per renderer into a mask target (mask_pass.cpp): u_mask_value as it is, a byte per channel.
+ *
+ * The post-process mask (default) draws with a depth of its own, so the nearest masked renderer wins wherever it
+ * is, hidden or not. The decal layers (MASK_VISIBLE_ONLY) keep only the fragments of the surface the view shows: the
+ * depth copy at the pixel holds that surface, and a fragment of it lies at that depth within the depth's own slope.
+ */
+
+uniform vec4 u_mask_value;
+#if MASK_VISIBLE_ONLY
+SAMPLER2D(s_mask_scene_depth, 0);
+#endif
+
+void main()
+{
+#if MASK_VISIBLE_ONLY
+	float scene_depth = texelFetch(s_mask_scene_depth, ivec2(gl_FragCoord.xy), 0).x;
+	float tolerance = max(fwidth(gl_FragCoord.z) * 2.0, 0.00001);
+	if(abs(gl_FragCoord.z - scene_depth) > tolerance)
+	{
+		discard;
+	}
+#endif
+	gl_FragColor = u_mask_value;
+}

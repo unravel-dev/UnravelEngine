@@ -9,6 +9,9 @@
 namespace unravel
 {
 
+/// The Decal material a new Decal component starts with: a frame and an arrow toward the decal's top.
+inline constexpr const char* DEFAULT_DECAL_MATERIAL_KEY = "engine:/data/materials/default_decal.mat";
+
 /// The folder of the engine's built-in shapes (cube.emesh, sphere.emesh, ...), which the editor's Create menu
 /// offers by name.
 inline constexpr const char* BUILT_IN_MESH_FOLDER = "engine:/data/meshes";

@@ -156,7 +156,7 @@ auto pipeline_stats_json(const rendering::pipeline_stats& stats) -> std::string
         R"("direct_invalidated":{}}},)"
         R"("particle_emitters":{{"active":{},"simulated":{},)"
         R"("drawn":{},"skipped":{}}},"particles":{{"active":{},"simulated":{},"drawn":{},"skipped":{}}},)"
-        R"("particle_batches":{}}})",
+        R"("particle_batches":{},"decals":{{"drawn":{},"draws":{},"decal_buffers":{}}},"post_process_material_passes":{}}})",
         stats.drawn_models,
         stats.drawn_static_submeshes,
         stats.drawn_skinned_models,
@@ -182,7 +182,11 @@ auto pipeline_stats_json(const rendering::pipeline_stats& stats) -> std::string
         stats.simulated_particles,
         stats.drawn_particles,
         stats.skipped_particles,
-        stats.drawn_particles_batches);
+        stats.drawn_particles_batches,
+        stats.drawn_decals,
+        stats.decal_draws,
+        stats.decal_buffer_runs > 0 ? "true" : "false",
+        stats.post_process_material_passes);
 }
 
 /// The frame as the viewport statistics overlay shows it: time, draw counts without the editor UI,
@@ -1211,7 +1215,7 @@ void register_editor_tools(mcp_tool_registry& registry)
              "Frame statistics, as the viewport statistics overlay shows them: fps, CPU and GPU ms, triangles and "
              "draw calls without the editor UI, GPU memory, the shaders and programs alive (bgfx holds at most "
              "max_programs), live entities, and per view (scene_view, game) the "
-             "models, lights, shadow casters and particles drawn. Last frame's values; with vsync on, times "
+             "models, lights, shadow casters, particles and decals drawn and the post-process material passes run. Last frame's values; with vsync on, times "
              "include waiting for the display.",
          .input_schema_json = empty_object_schema(),
          .handler =

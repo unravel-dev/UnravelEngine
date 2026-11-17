@@ -482,7 +482,7 @@ a viewer standing on -Z reads it; rotate the entity 180 in yaw for viewers on
   extents fitted to the room interior plus transition_distance for the blend
   skirt; type sphere uses range. update_mode once is right for static
   showcases; resolution res_16 ... res_1024.
-- Volume: mode local + extents (full size) + blend_distance scopes co-located
+- Volume: mode local + extents (half size, from the centre) + blend_distance scopes co-located
   post components (e.g. Bloom) to a region; higher priority wins over the
   global volume. Put Volume and Bloom on the same entity, then raise bloom
   settings.intensity (global default 0.15; a strong local glow zone is
@@ -494,6 +494,26 @@ a viewer standing on -Z reads it; rotate the entity 180 in yaw for viewers on
   projection_mode, orthographic_size, include_layers / exclude_layers.
 - Audio Source: clip, volume, pitch, loop, range [min,max], bus, priority,
   spatial; is_playing (read-only) tells whether it holds a voice in play mode.
+
+## Decal / Post Process Materials / masks
+
+- Decal: material (a Decal material), material_overrides (its per-decal
+  parameters), size [w, h] and depth in metres, opacity, sort_order (higher
+  draws over lower), receiver_layers (the layers of the models it lays onto;
+  everything by default), angle_fade [start, end] degrees (60-85: walls a floor
+  decal reaches fade out), fade_screen_size, max_distance, and in play
+  lifetime, fade_in, fade_out, remove_after_fade. It projects along the
+  entity's forward axis (-normal of the surface): scene_place_decals_batch
+  sets that up.
+- Model: receive_decals (Auto: every model but a skinned one; On; Off for
+  water, glass and characters) and post_process_mask (1-255: post-process
+  materials find it by that value, also through walls; 0 none).
+- Post Process Materials (on a Volume or a Camera): entries [{material, weight,
+  enabled, material_overrides}]. Entries of one material in overlapping
+  volumes blend their weights and parameters by the volumes' contributions; a
+  camera's entries apply after every volume's.
+  scene_set_post_process_materials_batch and
+  scene_remove_post_process_materials_batch edit them, one undo step a call.
 
 ## Do
 

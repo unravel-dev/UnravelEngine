@@ -5,6 +5,7 @@
 #include <engine/assets/asset_handle.h>
 #include <engine/ecs/scene.h>
 #include <engine/frame_times.h>
+#include <engine/rendering/material_graph/material_graph.h>
 
 #include <graphics/frame_buffer.h>
 #include <imgui/imgui.h>
@@ -19,6 +20,10 @@ class material;
 /**
  * @brief The Material Graph window's 3D preview: a shape wearing the graph's material in a scene of its own, lit by a
  * sun and a sky, under a camera the user turns around it.
+ *
+ * A Decal material is laid onto the shape (wearing the Standard material) by a decal projecting from the first view,
+ * or straight down onto the plane; a Post Process material runs on the preview camera at its Location over the shape
+ * in the Standard material.
  *
  * The scene renders only for a frame whose window drew the preview the frame before (render() runs before the UI),
  * at the size it was drawn at, with the engine's default graphics settings rather than the project's.
@@ -57,7 +62,10 @@ private:
     void create_object(rtti::context& ctx);
     /// Aims the camera at the shape's bounds.
     void frame_object();
-    void set_material(const asset_handle<material>& mat);
+    /// Shows @p mat as its domain draws: on the shape, as a decal onto it, or over the view.
+    void set_material(rtti::context& ctx, const asset_handle<material>& mat);
+    /// The decal that lays a Decal material onto the shape, sized to its bounds.
+    void create_decal(rtti::context& ctx, const asset_handle<material>& mat);
     void update_camera();
     void handle_input();
     void reset_view();
@@ -69,8 +77,12 @@ private:
     scene scene_{"material_graph_preview"};
     entt::handle camera_;
     entt::handle object_;
+    /// The decal a Decal material is shown with; empty for the other domains.
+    entt::handle decal_;
     gfx::frame_buffer::ptr output_;
     asset_handle<material> material_;
+    /// The domain material_ was shown as: a recompile can change it under the same asset.
+    material_domain shown_domain_{material_domain::surface};
     shape shape_{shape::sphere};
     shape object_shape_{shape::sphere};
     bool has_scene_{};

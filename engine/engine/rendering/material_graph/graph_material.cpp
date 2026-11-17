@@ -566,9 +566,39 @@ auto graph_material::is_translucent() const -> bool
     return binding_.is_translucent;
 }
 
+auto graph_material::get_domain() const -> material_domain
+{
+    return binding_.domain;
+}
+
+auto graph_material::get_decal_writes() const -> uint32_t
+{
+    return binding_.decal_writes;
+}
+
+auto graph_material::decal_reads_surface() const -> bool
+{
+    return binding_.decal_reads_surface;
+}
+
+auto graph_material::get_post_process_location() const -> material_post_process_location
+{
+    return binding_.post_location;
+}
+
+auto graph_material::get_post_process_priority() const -> int
+{
+    return binding_.post_priority;
+}
+
+auto graph_material::get_scene_textures() const -> uint32_t
+{
+    return binding_.scene_textures;
+}
+
 auto graph_material::casts_shadow() const -> bool
 {
-    return !binding_.is_translucent;
+    return !binding_.is_translucent && binding_.domain == material_domain::surface;
 }
 
 auto graph_material::is_shadow_animated() const -> bool
@@ -653,6 +683,22 @@ auto graph_material::find_parameter_value(hpp::string_view name) -> graph_parame
 auto graph_material::find_texture_value(hpp::string_view name) -> graph_texture_value*
 {
     return find_named(texture_values_, name);
+}
+
+auto get_material_domain(const material& mat) -> material_domain
+{
+    const auto* graph = mat.safe_cast<graph_material>();
+    return graph != nullptr ? graph->get_domain() : material_domain::surface;
+}
+
+auto find_loaded_material_domain(const asset_handle<material>& mat) -> hpp::optional<material_domain>
+{
+    const auto loaded = mat ? mat.try_get() : nullptr;
+    if(asset_handle<material>::is_empty(loaded))
+    {
+        return hpp::nullopt;
+    }
+    return get_material_domain(*loaded);
 }
 
 } // namespace unravel

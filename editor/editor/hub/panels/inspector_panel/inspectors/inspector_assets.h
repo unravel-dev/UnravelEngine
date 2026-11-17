@@ -52,7 +52,9 @@ REFLECT_INSPECTOR_INLINE(inspector_asset_handle_texture, asset_handle<gfx::textu
 
 struct inspector_asset_handle_material : public crtp_meta_type<inspector_asset_handle_material, inspector_asset_handle>
 {
-    auto inspect_as_property(rtti::context& ctx, asset_handle<material>& data) -> inspect_result;
+    /// The field of a material property. With a @p domain_key (the property's "material_domain" attribute: surface,
+    /// decal or post_process), the picker offers materials of that domain and the field says when it holds another.
+    auto inspect_as_property(rtti::context& ctx, asset_handle<material>& data, const std::string& domain_key = {}) -> inspect_result;
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 
 private:

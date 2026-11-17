@@ -29,6 +29,8 @@ void register_reflection_probe_component_script_bindings();
 void register_submesh_component_script_bindings();
 void register_bone_component_script_bindings();
 void register_volume_component_script_bindings();
+void register_decal_component_script_bindings();
+void register_post_process_material_script_bindings();
 void register_audio_source_component_script_bindings();
 void register_ui_document_component_script_bindings();
 void register_ui_document_script_bindings();

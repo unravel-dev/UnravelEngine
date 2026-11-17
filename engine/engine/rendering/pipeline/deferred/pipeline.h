@@ -12,6 +12,7 @@
 #include <engine/rendering/instanced_mesh_source.h>
 #include <engine/rendering/material_graph/graph_material_programs.h>
 #include <hpp/optional.hpp>
+#include <hpp/span.hpp>
 
 #include <graphics/utils/font/font_manager.h>
 #include <graphics/utils/font/text_buffer_manager.h>
@@ -92,13 +93,25 @@ public:
                         const gfx::frame_buffer::ptr& input,
                         const gfx::frame_buffer::ptr& output);
 
+    /// Which of a run's G-buffer draws a run_g_buffer_pass call makes (render_geometry).
+    enum class g_buffer_phase : uint8_t
+    {
+        /// The first: it clears the G-buffer and starts the run's batches. With decals in view, the renderers that
+        /// receive them alone.
+        first,
+        /// The renderers that receive no decals, drawn over the decals: no clear, and the first phase's batches kept
+        /// for the velocity pass.
+        after_decals,
+    };
+
     /// Draws the visible models into the G-buffer; without subsurface in `limits` (feature_limits::subsurface), with
     /// every subsurface color black.
-    void run_g_buffer_pass(const visibility_set_models_t& visibility_set,
+    void run_g_buffer_pass(hpp::span<const visibility_data> visibility_set,
                            const camera& camera,
                            gfx::render_view& rview,
                            const feature_limits& limits,
-                           delta_t dt);
+                           delta_t dt,
+                           g_buffer_phase phase = g_buffer_phase::first);
 
     /// Produces the per-pixel velocity (motion vector) buffer ("VELOCITY", RGBA16F, uv delta
     /// uv_curr - uv_prev): a fullscreen camera-motion pass reconstructed from depth, then the
@@ -118,6 +131,8 @@ public:
     /// Renders the particle overdraw (debug view @c debug_pass_particle_overdraw): the particle layers each
     /// pixel shaded as a heat ramp over the darkened image.
     void run_particle_overdraw_debug_pass(gfx::render_view& rview, const gfx::frame_buffer::ptr& output);
+    /// Draws the layer count @p overdraw (particles or decal boxes per pixel) as a heat ramp over @p output.
+    void run_overdraw_debug_pass(const gfx::texture::ptr& overdraw, const gfx::frame_buffer::ptr& output, const char* pass_name);
 
     void run_assao_pass(const camera& camera,
                         gfx::render_view& rview,
@@ -308,6 +323,8 @@ public:
     /// The particle layers each pixel shaded (the particle pass counts them, fs_particle_overdraw_debug.eshader
     /// draws them blended over the finished image).
     static constexpr int debug_pass_particle_overdraw = 62;
+    /// The decal box fragments each pixel shaded (decal_pass counts them; the overdraw debug pass draws them).
+    static constexpr int debug_pass_decal_overdraw = 63;
     void run_exposure_debug_pass(gfx::render_view& rview,
                                  const gfx::frame_buffer::ptr& output,
                                  const run_params& rparams);
@@ -399,6 +416,15 @@ private:
     void prepare_passes(const run_context& run);
     /// The visible models into the G-buffer and the velocity buffer, then the screen-space AO over them.
     void render_geometry(const run_context& run);
+    /// The run's post-process materials of @p location over @p color, which the last one writes back
+    /// (post_material_pass). Camera runs only.
+    void run_post_process_materials(const run_context& run, material_post_process_location location, const gfx::frame_buffer::ptr& color);
+    /// The post-process mask (CUSTOM_MASK and its depth) of the renderers with a Post Process Mask among @p
+    /// visible, while a post-process material of the run reads it. Camera runs only.
+    void run_post_process_mask_pass(const run_context& run, hpp::span<const visibility_data> visible);
+    /// Moves the models that receive decals to the front of @p visibility_set, keeping their order.
+    /// @return The end of the receivers.
+    static auto split_decal_receivers(visibility_set_models_t& visibility_set) -> visibility_set_models_t::iterator;
     /// Decides whether this run has a velocity buffer, and asks the models to record their motion for it.
     void begin_velocity_recording(const run_params& params);
     /// The reflections ahead of the lighting: the probe layer, then SSR's traced layer over the Hi-Z pyramid it marches.
@@ -1035,6 +1061,10 @@ private:
     batch_collector skinned_batch_collector_;
     /// The runs of packed instances the G-buffer draws, then the velocity pass; cleared with batch_collector_.
     instanced_run_list source_runs_;
+    /// The batches of the G-buffer's first phase while its after-decals phase collects its own: the velocity pass draws
+    /// both. Cleared with batch_collector_.
+    batch_collector decal_receiver_batches_;
+    batch_collector decal_receiver_skinned_batches_;
 
     /// Every shadow caster of the scene, split by how often it has to be refreshed. Both are
     /// rebuilt WHOLESALE (clear + refill) by refresh_shadow_casters, so a destroyed entity

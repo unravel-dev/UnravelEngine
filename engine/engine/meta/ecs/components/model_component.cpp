@@ -16,6 +16,28 @@ namespace unravel
 
 REFLECT(model_component)
 {
+    entt::meta_factory<decal_receive>{}
+        .type("decal_receive"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "decal_receive"},
+            entt::attribute{"pretty_name", "Decal Receive"},
+        })
+        .data<decal_receive::automatic>("automatic"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "automatic"},
+            entt::attribute{"pretty_name", "Auto"},
+        })
+        .data<decal_receive::on>("on"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "on"},
+            entt::attribute{"pretty_name", "On"},
+        })
+        .data<decal_receive::off>("off"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "off"},
+            entt::attribute{"pretty_name", "Off"},
+        });
+
     entt::meta_factory<model_component>{}
         .type("model_component"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -46,6 +68,26 @@ REFLECT(model_component)
             entt::attribute{"pretty_name", "Casts Shadow"},
             entt::attribute{"tooltip", "Is the model casting shadows?"},
         })
+        .data<&model_component::set_decal_receive, &model_component::get_decal_receive>("receive_decals"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "receive_decals"},
+            entt::attribute{"pretty_name", "Receive Decals"},
+            entt::attribute{"tooltip", "Whether decals draw on the model. Auto: every model but a skinned one, as a decal fixed "
+                                       "in the world slides on a moving character and a puddle should not paint the feet "
+                                       "walking through it. Off suits water, glass and anything a level's decals must leave "
+                                       "alone."},
+        })
+        .data<&model_component::set_post_process_mask, &model_component::get_post_process_mask>("post_process_mask"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "post_process_mask"},
+            entt::attribute{"pretty_name", "Post Process Mask"},
+            entt::attribute{"min", 0},
+            entt::attribute{"max", 255},
+            entt::attribute{"tooltip", "A value from 1 to 255 that post-process materials find the model by, also where "
+                                       "something hides it: outlines on what the player can use, silhouettes seen through "
+                                       "walls. They read it with Scene Texture's Custom Mask and Custom Depth, or run only "
+                                       "over it with Run Where Mask. 0 leaves the model out."},
+        })
         .data<nullptr, &model_component::get_world_bounds>("world_bounds"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "world_bounds"},
@@ -66,6 +108,8 @@ SAVE(model_component)
     try_save(ar, ser20::make_nvp("enabled", obj.is_enabled()));
     try_save(ar, ser20::make_nvp("static", obj.is_static()));
     try_save(ar, ser20::make_nvp("casts_shadow", obj.casts_shadow()));
+    try_save(ar, ser20::make_nvp("receive_decals", obj.get_decal_receive()));
+    try_save(ar, ser20::make_nvp("post_process_mask", obj.get_post_process_mask()));
     try_save(ar, ser20::make_nvp("model", obj.get_model()));
 }
 SAVE_INSTANTIATE(model_component, ser20::oarchive_associative_t);
@@ -89,6 +133,18 @@ LOAD(model_component)
     if(try_load(ar, ser20::make_nvp("casts_shadow", casts_shadow)))
     {
         obj.set_casts_shadow(casts_shadow);
+    }
+
+    decal_receive receive_decals{decal_receive::automatic};
+    if(try_load(ar, ser20::make_nvp("receive_decals", receive_decals)))
+    {
+        obj.set_decal_receive(receive_decals);
+    }
+
+    int post_process_mask{};
+    if(try_load(ar, ser20::make_nvp("post_process_mask", post_process_mask)))
+    {
+        obj.set_post_process_mask(post_process_mask);
     }
 
     auto mod = obj.get_model();

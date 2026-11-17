@@ -463,6 +463,34 @@ struct editing_manager
 
     void push_undo_stack_enabled(bool enabled);
     void pop_undo_stack_enabled();
+
+    /**
+     * @brief Records the actions done while it lives as undo steps (push_undo_stack_enabled(true)), and restores what
+     * was in force when it ends. With no manager it does nothing, for callers that may run without one.
+     */
+    class undo_scope
+    {
+    public:
+        explicit undo_scope(editing_manager* manager) : em_(manager)
+        {
+            if(em_ != nullptr)
+            {
+                em_->push_undo_stack_enabled(true);
+            }
+        }
+        ~undo_scope()
+        {
+            if(em_ != nullptr)
+            {
+                em_->pop_undo_stack_enabled();
+            }
+        }
+        undo_scope(const undo_scope&) = delete;
+        auto operator=(const undo_scope&) -> undo_scope& = delete;
+
+    private:
+        editing_manager* em_{};
+    };
     
     // Execute all pending actions (called automatically each frame)
     void execute_actions();

@@ -398,6 +398,42 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
         }
     }
 
+    if(e.all_of<decal_component>() && em.gizmos.show_decal)
+    {
+        const auto& decal = e.get<decal_component>();
+        // The unit box stretched to the decal's size and depth, under the entity's transform.
+        const math::mat4 box_transform = decal.get_box_to_world(world_transform);
+        DebugDrawEncoderScopePush scope(dd.encoder);
+        dd.encoder.pushTransform(glm::value_ptr(box_transform));
+        dd.encoder.setWireframe(true);
+        dd.encoder.setColor(0xff40c0ff);
+        bx::Aabb box;
+        box.min = bx::Vec3(-0.5f, -0.5f, -0.5f);
+        box.max = bx::Vec3(0.5f, 0.5f, 0.5f);
+        dd.encoder.draw(box);
+        // The face it projects from, filled faintly, and an arrow along its projection.
+        dd.encoder.setWireframe(false);
+        dd.encoder.setState(true, false, true);
+        dd.encoder.setColor(0x3340c0ff);
+        bx::Aabb face;
+        face.min = bx::Vec3(-0.5f, -0.5f, -0.5f);
+        face.max = bx::Vec3(0.5f, 0.5f, -0.5f);
+        dd.encoder.draw(face);
+        dd.encoder.setState(false, false, true);
+        dd.encoder.popTransform();
+        const math::vec3 center = math::vec3(box_transform[3]);
+        const math::vec3 forward = math::vec3(box_transform[2]);
+        const float arrow_length = std::max(math::length(forward) * 0.5f, 0.05f);
+        const math::vec3 direction = math::length(forward) > 0.0f ? math::normalize(forward) : math::vec3(0.0f, 0.0f, 1.0f);
+        dd.encoder.setColor(0xff40c0ff);
+        const math::vec3 from = center - direction * arrow_length;
+        const math::vec3 tip = center + direction * arrow_length * 0.6f;
+        bx::Cylinder shaft = {vec3_to_bx(from), vec3_to_bx(tip), arrow_length * 0.03f};
+        dd.encoder.draw(shaft);
+        bx::Cone cone = {vec3_to_bx(tip), vec3_to_bx(center + direction * arrow_length), arrow_length * 0.1f};
+        dd.encoder.draw(cone);
+    }
+
     if(e.all_of<fog_volume_component>() && em.gizmos.show_volume)
     {
         const auto& volume_comp = e.get<fog_volume_component>();

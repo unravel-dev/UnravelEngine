@@ -383,12 +383,201 @@ auto make_output_node() -> material_node_def
     return def;
 }
 
+auto domain_bits(std::initializer_list<material_domain> domains) -> uint8_t
+{
+    uint8_t bits = 0;
+    for(const auto domain : domains)
+    {
+        bits = uint8_t(bits | get_material_domain_bit(domain));
+    }
+    return bits;
+}
+
+/// @p def as a node of @p domains alone.
+auto in_domains(material_node_def def, std::initializer_list<material_domain> domains) -> material_node_def
+{
+    def.domains = domain_bits(domains);
+    return def;
+}
+
+auto make_decal_output_node() -> material_node_def
+{
+    material_node_def def = make_node(MATERIAL_GRAPH_DECAL_OUTPUT_TYPE,
+                                      "Decal Output",
+                                      category::output,
+                                      "What the decal lays onto the surfaces its box projects onto. A channel is written when "
+                                      "it is linked or given a value of its own; one left at its default keeps the surface's.");
+    def.code = material_node_code::surface_output;
+    def.domains = get_material_domain_bit(material_domain::decal);
+    def.inputs = {
+        with_tooltip(in_color("base_color", "Base Color", vt::float3, math::vec4(DEFAULT_GREY, DEFAULT_GREY, DEFAULT_GREY, 1.0f)),
+                     "The colour laid onto the surface, in linear colour. Written when linked or set; at its default, "
+                     "the surface keeps its own."),
+        with_tooltip(in_unit(MATERIAL_OPACITY_PIN, "Opacity", vt::float1, math::vec4(1.0f)),
+                     "How much of the decal shows: every channel the decal writes is scaled by it. A texture's alpha "
+                     "usually goes here."),
+        with_tooltip(in("normal", "Normal", vt::float3, math::vec4(0.0f, 0.0f, 1.0f, 0.0f)),
+                     "Tangent-space normal in the decal's frame: X along its width, Y along its height. A Normal Map node "
+                     "gives one. Written when linked or set."),
+        with_tooltip(in_unit(MATERIAL_METALLIC_PIN, "Metallic", vt::float1),
+                     "Written when linked or set. With only Roughness set, the surface keeps its own metallic."),
+        with_tooltip(in_unit(MATERIAL_ROUGHNESS_PIN, "Roughness", vt::float1, math::vec4(DEFAULT_ROUGHNESS)),
+                     "Written when linked or set. With only Metallic set, the surface keeps its own roughness."),
+        with_tooltip(in_color("emissive", "Emissive", vt::float3, math::vec4(0.0f, 0.0f, 0.0f, 1.0f)),
+                     "Light added to the surface, in linear colour; values above 1 glow. It adds to the surface's own "
+                     "and never replaces it. Written when linked or set."),
+        with_tooltip(in_unit(MATERIAL_NORMAL_OPACITY_PIN, "Normal Opacity", vt::float1, math::vec4(1.0f)),
+                     "How much of the normal shows. Unlinked, it is Opacity times this value."),
+        with_tooltip(in_unit(MATERIAL_SURFACE_OPACITY_PIN, "Surface Opacity", vt::float1, math::vec4(1.0f)),
+                     "How much of Metallic and Roughness shows. Unlinked, it is Opacity times this value."),
+    };
+    def.settings = {make_choice_setting(MATERIAL_DECAL_NORMAL_BLEND_SETTING,
+                                        "Normal Blend",
+                                        {MATERIAL_DECAL_NORMAL_BLEND_DETAIL, MATERIAL_DECAL_NORMAL_BLEND_REPLACE},
+                                        {"Detail", "Replace"},
+                                        MATERIAL_DECAL_NORMAL_BLEND_DETAIL,
+                                        "Detail: the decal's normal bends the surface's own, so a crack keeps the bumps of "
+                                        "the bricks under it. Replace: the decal's normal replaces the surface's over its "
+                                        "flat shape, for patches and plates.")};
+    material_setting_def edge_fade;
+    edge_fade.name = MATERIAL_DECAL_EDGE_FADE_SETTING;
+    edge_fade.label = "Edge Fade";
+    edge_fade.kind = material_setting_kind::number;
+    edge_fade.default_value = "0.1";
+    edge_fade.tooltip = "The share of the box's depth over which the decal fades out at each end, 0 to 0.5, so it never "
+                        "ends in a hard line on curved ground.";
+    def.settings.push_back(edge_fade);
+    return def;
+}
+
+auto make_post_process_output_node() -> material_node_def
+{
+    material_node_def def = make_node(MATERIAL_GRAPH_POST_PROCESS_OUTPUT_TYPE,
+                                      "Post Process Output",
+                                      category::output,
+                                      "The new colour of each pixel of the view, at the material's Location. Unlinked and at "
+                                      "its default, the colour is the scene's, unchanged.");
+    def.code = material_node_code::surface_output;
+    def.domains = get_material_domain_bit(material_domain::post_process);
+    def.inputs = {
+        with_tooltip(in_color(MATERIAL_COLOR_PIN, "Color", vt::float3, math::vec4(0.0f, 0.0f, 0.0f, 1.0f)),
+                     "The pixel's new colour, in linear colour. A Scene Texture node reading Scene Color gives the colour "
+                     "the pixel has. Unlinked and at its default, the scene's colour is kept; a value of its own fills "
+                     "the view with it."),
+        with_tooltip(in_unit(MATERIAL_OPACITY_PIN, "Opacity", vt::float1, math::vec4(1.0f)),
+                     "How much of Color shows over the scene: the effect's strength. The weight of the volume or camera "
+                     "entry that runs the material scales it."),
+    };
+    std::vector<std::string> keys;
+    std::vector<std::string> labels;
+    for(uint32_t i = 0; i < MATERIAL_POST_PROCESS_LOCATION_COUNT; ++i)
+    {
+        const auto location = material_post_process_location(i);
+        keys.emplace_back(get_material_post_process_location_key(location));
+        labels.emplace_back(get_material_post_process_location_label(location));
+    }
+    def.settings = {make_choice_setting(MATERIAL_POST_PROCESS_LOCATION_SETTING,
+                                        "Location",
+                                        keys,
+                                        labels,
+                                        get_material_post_process_location_key(material_post_process_location::after_tonemapping),
+                                        "Where in the frame the material runs. Before Transparent: the scene's light before "
+                                        "particles and TAA, which smooths what it draws (outlines and edge effects belong "
+                                        "here; distortion here ghosts, as it has no motion). Before Bloom: the scene's "
+                                        "light after TAA, so what it adds blooms. After Tonemapping: the display colour, 0 to "
+                                        "1, before the UI.")};
+    material_setting_def priority;
+    priority.name = MATERIAL_POST_PROCESS_PRIORITY_SETTING;
+    priority.label = "Priority";
+    priority.kind = material_setting_kind::number;
+    priority.default_value = "0";
+    priority.tooltip = "The order among the post-process materials of one Location: a higher priority runs later, over "
+                       "what the lower ones drew.";
+    def.settings.push_back(priority);
+    material_setting_def mask;
+    mask.name = MATERIAL_POST_PROCESS_MASK_SETTING;
+    mask.label = "Run Where Mask";
+    mask.kind = material_setting_kind::number;
+    mask.default_value = "0";
+    mask.tooltip = "0: the material runs over the whole view. 1 to 255: only over the pixels of the renderers whose Post "
+                   "Process Mask has this value, seen through whatever hides them; elsewhere the scene stays as it is.";
+    def.settings.push_back(mask);
+    return def;
+}
+
+void add_view_nodes(std::vector<material_node_def>& nodes)
+{
+    std::vector<std::string> keys;
+    std::vector<std::string> labels;
+    for(const auto& source : get_material_scene_texture_sources())
+    {
+        keys.emplace_back(source.key);
+        labels.emplace_back(source.label);
+    }
+    auto scene = make_fixed(MATERIAL_SCENE_TEXTURE_TYPE,
+                            "Scene Texture",
+                            category::input,
+                            "Reads the view: the scene's colour (post-process materials), its depth, and the G-buffer "
+                            "channels of the opaque surfaces. UV picks the pixel, unlinked this one. Depth is in world units "
+                            "along the camera's direction; scalar channels are in R. Custom Mask and Custom Depth hold the "
+                            "renderers with a Post Process Mask, seen through whatever hides them: the mask value (0 where "
+                            "none is) and their depth.",
+                            {in_code("uv", "UV", vt::float2, "i.screen_uv")},
+                            texel_outputs(),
+                            vt::float4,
+                            "mg_scene_texture_{source}({uv})");
+    scene.settings = {make_choice_setting(MATERIAL_SCENE_TEXTURE_SOURCE_SETTING,
+                                          "Source",
+                                          keys,
+                                          labels,
+                                          "base_color",
+                                          "What the node reads. A decal reads the surface it lies on; Scene Color, Emissive, "
+                                          "Velocity, Custom Mask and Custom Depth are for post-process materials.")};
+    nodes.push_back(in_domains(with_keywords(scene, "scene color depth gbuffer buffer screen texture post process input"),
+                               {material_domain::decal, material_domain::post_process}));
+    auto decal_data = make_fixed("decal_data",
+                                 "Decal Data",
+                                 category::input,
+                                 "The decal this pixel is drawn for: its Fade (the combined fade it is drawn with), its "
+                                 "Age in seconds since it appeared, its Normalized Age (0 to 1 of its lifetime) and its "
+                                 "Lifetime (0: it stays).",
+                                 {},
+                                 {out("fade", "Fade", vt::float1, ".x"),
+                                  out("age", "Age", vt::float1, ".y"),
+                                  out("normalized_age", "Normalized Age", vt::float1, ".z"),
+                                  out("lifetime", "Lifetime", vt::float1, ".w")},
+                                 vt::float4,
+                                 "i.decal_data");
+    nodes.push_back(in_domains(as_inline(with_keywords(decal_data, "decal fade age lifetime time")), {material_domain::decal}));
+    auto decal_position = make_fixed("decal_position",
+                                     "Decal Position",
+                                     category::input,
+                                     "The pixel's place in the decal's box, -0.5 to 0.5 on each axis: X along its width, Y "
+                                     "along its height, Z along its depth toward the projector.",
+                                     {},
+                                     {out("xyz", "XYZ", vt::float3), out("depth", "Depth", vt::float1, ".z")},
+                                     vt::float3,
+                                     "i.decal_position");
+    nodes.push_back(in_domains(as_inline(with_keywords(decal_position, "decal local box position projector")), {material_domain::decal}));
+    auto exposure = make_fixed("exposure",
+                               "Exposure",
+                               category::input,
+                               "The exposure the view is shown with: the scene's light times it is what the tonemapper "
+                               "maps. 1 at After Tonemapping.",
+                               {},
+                               {out("exposure", "Exposure", vt::float1)},
+                               vt::float1,
+                               "i.exposure");
+    nodes.push_back(in_domains(as_inline(with_keywords(exposure, "eye adaptation brightness ev")), {material_domain::post_process}));
+}
+
 void add_input_nodes(std::vector<material_node_def>& nodes)
 {
     auto texcoord = make_fixed("texcoord",
                                "Texture Coordinate",
                                category::input,
-                               "The mesh's first texture coordinates (UV).",
+                               "The mesh's first texture coordinates (UV). In a decal: the decal's own UV across its box. "
+                               "In a post-process material: the screen position, 0 to 1 from the top-left corner.",
                                {},
                                {out("uv", "UV", vt::float2), out("u", "U", vt::float1, ".x"), out("v", "V", vt::float1, ".y")},
                                vt::float2,
@@ -1474,7 +1663,8 @@ void add_condition_nodes(std::vector<material_node_def>& nodes)
     discard.code = material_node_code::discard;
     discard.inputs = {in("value", "Value", vt::float1, math::vec4(1.0f)),
                       in_unit("threshold", "Threshold", vt::float1, math::vec4(DEFAULT_OPACITY_MASK_CLIP))};
-    nodes.push_back(with_keywords(discard, "clip kill cut out alpha test hole"));
+    // A post-process pass writes every pixel of its target: a discarded one would hold nothing.
+    nodes.push_back(in_domains(with_keywords(discard, "clip kill cut out alpha test hole"), {material_domain::surface, material_domain::decal}));
     nodes.push_back(with_keywords(make_fixed("and",
                                              "And",
                                              category::utility,
@@ -1715,7 +1905,8 @@ void add_object_nodes(std::vector<material_node_def>& nodes)
     interpolator.value_type = vt::dynamic;
     interpolator.inputs = {in("in", "", vt::dynamic)};
     interpolator.outputs = {out("out", "", vt::dynamic)};
-    nodes.push_back(with_keywords(interpolator, "varying vertex per vertex interpolate custom interpolator"));
+    // Decals and post-process passes draw with the engine's vertex shaders: the graph has no vertex stage there.
+    nodes.push_back(in_domains(with_keywords(interpolator, "varying vertex per vertex interpolate custom interpolator"), {material_domain::surface}));
 }
 
 /// Polar Coordinates, Twirl, Spherize, Flipbook and Bump Offset: UVs reshaped.
@@ -2037,8 +2228,11 @@ void add_color_nodes(std::vector<material_node_def>& nodes)
 auto build_library() -> std::vector<material_node_def>
 {
     std::vector<material_node_def> nodes;
-    nodes.push_back(make_output_node());
+    nodes.push_back(in_domains(make_output_node(), {material_domain::surface}));
+    nodes.push_back(make_decal_output_node());
+    nodes.push_back(make_post_process_output_node());
     add_input_nodes(nodes);
+    add_view_nodes(nodes);
     add_constant_nodes(nodes);
     add_parameter_nodes(nodes);
     add_texture_nodes(nodes);
@@ -2206,6 +2400,75 @@ auto get_material_node_category_name(material_node_category category) -> const c
             break;
     }
     return "Utility";
+}
+
+auto get_material_domain_bit(material_domain domain) -> uint8_t
+{
+    return uint8_t(1u << uint32_t(domain));
+}
+
+auto is_material_node_in_domain(const material_node_def& def, material_domain domain) -> bool
+{
+    return (def.domains & get_material_domain_bit(domain)) != 0;
+}
+
+auto get_material_node_domains_text(const material_node_def& def) -> std::string
+{
+    std::vector<std::string> names;
+    for(uint32_t i = 0; i < MATERIAL_DOMAIN_COUNT; ++i)
+    {
+        const auto domain = material_domain(i);
+        if(is_material_node_in_domain(def, domain))
+        {
+            names.emplace_back(get_material_domain_label(domain));
+        }
+    }
+    if(names.size() == MATERIAL_DOMAIN_COUNT)
+    {
+        return {};
+    }
+    std::string text;
+    for(size_t i = 0; i < names.size(); ++i)
+    {
+        if(i > 0)
+        {
+            text += i + 1 == names.size() ? " and " : ", ";
+        }
+        text += names[i];
+    }
+    return text;
+}
+
+auto get_material_scene_texture_sources() -> const std::vector<material_scene_texture_source>&
+{
+    const uint8_t both = uint8_t(get_material_domain_bit(material_domain::decal) | get_material_domain_bit(material_domain::post_process));
+    const uint8_t post = get_material_domain_bit(material_domain::post_process);
+    static const std::vector<material_scene_texture_source> sources = {
+        {"scene_color", "Scene Color", post, material_scene_texture_color},
+        {"scene_depth", "Scene Depth", both, material_scene_texture_depth},
+        {"world_normal", "World Normal", both, material_scene_texture_gbuffer1},
+        {"base_color", "Base Color", both, material_scene_texture_gbuffer0},
+        {"metallic", "Metallic", both, material_scene_texture_gbuffer1},
+        {"roughness", "Roughness", both, material_scene_texture_gbuffer1},
+        {"ambient_occlusion", "Ambient Occlusion", both, material_scene_texture_gbuffer0},
+        {"emissive", "Emissive", post, material_scene_texture_gbuffer2},
+        {"velocity", "Velocity", post, material_scene_texture_velocity},
+        {"custom_mask", "Custom Mask", post, material_scene_texture_custom_mask},
+        {"custom_depth", "Custom Depth", post, material_scene_texture_custom_depth},
+    };
+    return sources;
+}
+
+auto find_material_scene_texture_source(hpp::string_view key) -> const material_scene_texture_source*
+{
+    for(const auto& source : get_material_scene_texture_sources())
+    {
+        if(key == source.key)
+        {
+            return &source;
+        }
+    }
+    return nullptr;
 }
 
 auto get_material_node_library() -> const std::vector<material_node_def>&

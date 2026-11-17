@@ -21,6 +21,10 @@
 #include "passes/auto_exposure_pass.h"
 #include "passes/blit_pass.h"
 #include "passes/depth_copy_pass.h"
+#include "passes/decal_pass.h"
+#include "passes/post_material_pass.h"
+#include "passes/mask_pass.h"
+#include "volume_resolver.h"
 #include "passes/fog_pass.h"
 #include "passes/fxaa_pass.h"
 #include "passes/hiz_pass.h"
@@ -118,6 +122,14 @@ struct pipeline_stats
     /// Particle sort keys this camera sorted (on the GPU, the sorted range rounded up to a power of two).
     uint32_t sorted_particle_keys = 0;
 
+    /// Decals the camera drew after culling and fading, the instanced draws they took, and the camera runs that
+    /// took the decal buffers' path (a decal writing a normal, metallic or roughness).
+    uint32_t drawn_decals = 0;
+    uint32_t decal_draws = 0;
+    uint32_t decal_buffer_runs = 0;
+    /// Full-screen passes of post-process materials.
+    uint32_t post_process_material_passes = 0;
+
     // Static mesh batching statistics
     batch_stats batching_stats;
 
@@ -212,6 +224,9 @@ public:
         std::function<void(gi_settings&)> fill_gi_params;
         /// Height fog (fog_pass). Unset means off, like the hooks above.
         std::function<void(fog_pass::run_params& params)> fill_fog_params;
+        /// Camera runs: the post-process materials the volumes and the camera run, each with its blended weight and
+        /// parameters, in the order they run (resolve_post_process_materials).
+        std::vector<post_process_material_draw> post_process_materials;
 
         /// Camera runs: the fraction of the render resolution the scene renders at, from MIN_RENDER_SCALE to 1.
         /// The finished scene is resampled into the output, at the camera's viewport size.
@@ -422,6 +437,9 @@ protected:
     prefilter_pass prefilter_pass_{};
     blit_pass blit_pass_{};
     depth_copy_pass depth_copy_pass_{};
+    decal_pass decal_pass_{};
+    post_material_pass post_material_pass_{};
+    mask_pass mask_pass_{};
     upscale_pass upscale_pass_{};
     atmospheric_pass_perez atmospheric_pass_perez_{};
     atmospheric_pass_skybox atmospheric_pass_skybox_{};

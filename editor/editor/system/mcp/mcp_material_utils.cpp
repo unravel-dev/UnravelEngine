@@ -304,6 +304,26 @@ auto resolve_material_asset(rtti::context& ctx, const std::string& key, const st
     return find_existing_asset<material>(ctx, key.empty() ? uid : to_asset_key(key), error);
 }
 
+auto resolve_domain_material(rtti::context& ctx, const std::string& key, material_domain domain, std::string& error)
+    -> asset_handle<material>
+{
+    auto mat = resolve_material_asset(ctx, key, {}, error);
+    if(!mat)
+    {
+        return {};
+    }
+    const auto loaded = mat.get();
+    if(asset_handle<material>::is_empty(loaded) || get_material_domain(*loaded) != domain)
+    {
+        error = fmt::format("{} is not a {} material: its graph's output node must be {} (material_graph_set).",
+                            key,
+                            get_material_domain_label(domain),
+                            get_material_graph_output_type(domain));
+        return {};
+    }
+    return mat;
+}
+
 auto material_type_name(material& mat) -> std::string
 {
     return entt::get_name(material_object(mat).type());

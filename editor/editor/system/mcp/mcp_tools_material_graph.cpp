@@ -10,6 +10,8 @@
 #include <engine/rendering/material_graph/material_graph_library.h>
 
 #include <filesystem/filesystem.h>
+
+#include <array>
 #include <graphics/graphics.h>
 
 #include <string>
@@ -62,11 +64,22 @@ auto get_setting_kind_name(material_setting_kind kind) -> const char*
 /// A node type in a line: what the library lists.
 auto describe_node_brief(const material_node_def& def) -> std::string
 {
-    return fmt::format(R"({{"type":{},"label":{},"category":{},"description":{}}})",
+    // A node of some domains only names them; every other works in every domain.
+    std::vector<std::string> domains;
+    for(uint32_t i = 0; i < MATERIAL_DOMAIN_COUNT; ++i)
+    {
+        if(is_material_node_in_domain(def, material_domain(i)))
+        {
+            domains.push_back(make_json_string(get_material_domain_key(material_domain(i))));
+        }
+    }
+    const std::string domains_json = domains.size() == MATERIAL_DOMAIN_COUNT ? std::string{} : fmt::format(R"(,"domains":[{}])", fmt::join(domains, ","));
+    return fmt::format(R"({{"type":{},"label":{},"category":{},"description":{}{}}})",
                        make_json_string(def.type),
                        make_json_string(def.label),
                        make_json_string(get_material_node_category_name(def.category)),
-                       make_json_string(def.description));
+                       make_json_string(def.description),
+                       domains_json);
 }
 
 auto describe_pin(const material_pin_def& pin, bool is_input) -> std::string
@@ -192,7 +205,7 @@ auto describe_compile(const material_graph_compile_result& result, bool include_
     std::string json = fmt::format(R"({{"errors":{},"warnings":{},"diagnostics":[{}],"parameters":[{}],"textures":[{}],)"
                                    R"("uses_opacity_mask":{},"opacity_mask_animated":{},)"
                                    R"("uses_world_position_offset":{},"world_position_offset_animated":{},"max_world_position_offset":{},)"
-                                   R"("reads_object_data":{},"vertex_interpolators":{})",
+                                   R"("reads_object_data":{},"vertex_interpolators":{},"domain":{})",
                                    errors,
                                    warnings,
                                    fmt::join(diagnostics, ","),
@@ -204,7 +217,30 @@ auto describe_compile(const material_graph_compile_result& result, bool include_
                                    bool_to_json(result.is_world_position_offset_animated),
                                    result.max_world_position_offset,
                                    bool_to_json(result.reads_object_data),
-                                   result.interpolator_count);
+                                   result.interpolator_count,
+                                   make_json_string(get_material_domain_key(result.domain)));
+    if(result.domain == material_domain::decal)
+    {
+        std::vector<std::string> writes;
+        const std::array<std::pair<uint32_t, const char*>, 4> channels = {{{material_decal_writes_base_color, "base_color"},
+                                                                           {material_decal_writes_normal, "normal"},
+                                                                           {material_decal_writes_surface, "metallic_roughness"},
+                                                                           {material_decal_writes_emissive, "emissive"}}};
+        for(const auto& [bit, name] : channels)
+        {
+            if((result.decal_writes & bit) != 0)
+            {
+                writes.push_back(make_json_string(name));
+            }
+        }
+        json += fmt::format(R"(,"decal_writes":[{}],"decal_reads_surface":{})", fmt::join(writes, ","), bool_to_json(result.decal_reads_surface));
+    }
+    else if(result.domain == material_domain::post_process)
+    {
+        json += fmt::format(R"(,"post_location":{},"post_priority":{})",
+                            make_json_string(get_material_post_process_location_key(result.post_location)),
+                            result.post_priority);
+    }
     if(include_code)
     {
         json += fmt::format(R"(,"code":{})", make_json_string(result.shader));
@@ -337,8 +373,10 @@ void register_material_graph_tools(mcp_tool_registry& registry)
              "The node types a material graph is made of. Without arguments: every type in a line (type, label, "
              "category, description). With types (or a category): each one in full - its inputs (name, type, default, "
              "value_only for values set on the node, unlinked_reads for inputs with a natural source such as the "
-             "mesh UV), outputs and settings. A graph names nodes by type and pins by these names; the material-graphs "
-             "skill (skills_get) shows the format and the workflow.",
+             "mesh UV), outputs and settings. A node working in some material domains only lists them (domains: "
+             "surface, decal, post_process); the graph's output node type sets its domain (surface_output, "
+             "decal_output, post_process_output). A graph names nodes by type and pins by these names; the "
+             "material-graphs skill (skills_get) shows the format and the workflow.",
          .input_schema_json =
              R"json({"type":"object","properties":{"types":{"type":"array","items":{"type":"string"}},"category":{"type":"string"}}})json",
          .handler =

@@ -117,9 +117,10 @@ auto get_material_graph_time() -> float
     return get_material_graph_times().x;
 }
 
-void graph_material_programs::init(asset_handle<gfx::shader> vertex_shader)
+void graph_material_programs::init(asset_handle<gfx::shader> vertex_shader, material_domain domain)
 {
     vertex_shader_ = std::move(vertex_shader);
+    domain_ = domain;
     samplers_.resize(MATERIAL_GRAPH_MAX_TEXTURES);
     for(uint32_t i = 0; i < MATERIAL_GRAPH_MAX_TEXTURES; ++i)
     {
@@ -144,7 +145,7 @@ auto graph_material_programs::begin(const graph_material& mat,
                                     const std::string& fragment_variant) -> gpu_program*
 {
     const auto& shader = mat.get_shader();
-    if(!shader || vertex_variant.empty())
+    if(!shader || vertex_variant.empty() || mat.get_domain() != domain_)
     {
         return nullptr;
     }
@@ -167,7 +168,8 @@ auto graph_material_programs::begin(const graph_material& mat,
 auto graph_material_programs::begin_moved_vertices(const material& mat,
                                                    const std::string& vertex_variant,
                                                    const asset_handle<gfx::shader>& fragment_shader,
-                                                   const math::vec3& camera_position) -> gpu_program*
+                                                   const math::vec3& camera_position,
+                                                   const std::string& fragment_variant) -> gpu_program*
 {
     const auto* graph = mat.safe_cast<graph_material>();
     const bool moves_vertices = graph != nullptr && graph->uses_world_position_offset();
@@ -178,7 +180,7 @@ auto graph_material_programs::begin_moved_vertices(const material& mat,
     {
         return nullptr;
     }
-    const program_key_view key{shader_object.get(), offset_shader.get(), fragment_object.get(), vertex_variant, gfx::shader::DEFAULT_VARIANT};
+    const program_key_view key{shader_object.get(), offset_shader.get(), fragment_object.get(), vertex_variant, fragment_variant};
     auto* program = begin_entry(key, graph->get_vertex_shader(), fragment_shader);
     if(program != nullptr)
     {

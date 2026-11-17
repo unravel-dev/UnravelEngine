@@ -57,6 +57,16 @@ constexpr std::array<visualization_swatch, 8> k_legend_particle_overdraw = {{
     {{0.0f, 0.0f, 0.0f}, "No particle: the image darkened to a fifth"},
 }};
 
+constexpr std::array<visualization_swatch, 7> k_legend_decal_overdraw = {{
+    {{0.0f, 0.25f, 1.0f}, "1 decal box"},
+    {{0.0f, 0.8f, 0.8f}, "2 boxes"},
+    {{0.2f, 0.9f, 0.1f}, "4 boxes"},
+    {{1.0f, 0.85f, 0.0f}, "8 boxes"},
+    {{1.0f, 0.15f, 0.0f}, "16 boxes"},
+    {{1.0f, 1.0f, 1.0f}, "32 boxes or more"},
+    {{0.0f, 0.0f, 0.0f}, "No decal: the image darkened to a fifth"},
+}};
+
 constexpr std::array<visualization_swatch, 6> k_legend_exposure = {{
     {{0.20f, 0.95f, 0.35f}, "Trace: log2 adapted exposure over the last 256 frames (oldest left)"},
     {{0.95f, 0.85f, 0.15f}, "Trace: log2 target exposure - a gap to green is adaptation in flight"},
@@ -486,6 +496,14 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      "quarter and a Write Velocity emitter's motion draw as one more. Octagon primitives, a smaller Max Screen Size "
      "and half resolution bring it down.",
      k_legend_particle_overdraw},
+    {visualization_mode::decal_overdraw,
+     visualization_group::surface,
+     "decal_overdraw",
+     "Decal Overdraw",
+     "How many decal boxes each pixel shaded this frame, over the darkened image: a decal shades every pixel of its "
+     "box's faces before it tests whether the surface there lies inside it. A box much deeper or wider than its "
+     "picture, or decals stacked on one spot, cost more. Fade Screen Size and Max Distance drop far decals.",
+     k_legend_decal_overdraw},
 });
 
 // Drift guards: the enum is the editor-side mirror of the engine's debug pass ids.
@@ -555,6 +573,8 @@ static_assert(static_cast<int>(visualization_mode::gi_performance_overview) ==
 static_assert(static_cast<int>(visualization_mode::particle_overdraw) ==
                   rendering::deferred::debug_pass_particle_overdraw,
               "visualization_mode drifted from deferred::debug_pass_particle_overdraw");
+static_assert(static_cast<int>(visualization_mode::decal_overdraw) == rendering::deferred::debug_pass_decal_overdraw,
+              "visualization_mode drifted from deferred::debug_pass_decal_overdraw");
 
 } // namespace
 

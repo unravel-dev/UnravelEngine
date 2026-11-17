@@ -1,11 +1,18 @@
 #include "mcp_material_utils.h"
 #include "mcp_tools_common.h"
 
+#include <editor/editing/editor_actions.h>
+#include <editor/editing/editing_manager.h>
+#include <editor/editing/actions/composite_action.h>
+#include <engine/defaults/defaults.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/ecs/components/post_process_material_component.h>
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/model.h>
 
+#include <algorithm>
 #include <functional>
 #include <utility>
 
@@ -52,6 +59,106 @@ auto read_slot_index(const simdjson::dom::object& item, const model& mdl, std::s
 auto item_error_json(const std::string& entity_id, const std::string& error) -> std::string
 {
     return fmt::format(R"({{"ok":false,"entity_id":{},"error":{}}})", make_json_string(entity_id), make_json_string(error));
+}
+
+/// The entity a post-process material call names, or an empty handle for the scene's global volume. False, with the
+/// reason, for an id that names nothing.
+auto read_post_process_target(scene& scn, const simdjson::dom::object& args, entt::handle& target, std::string& error) -> bool
+{
+    std::string entity_id;
+    if(!read_string(args, "entity_id", entity_id) || entity_id.empty())
+    {
+        target = {};
+        return true;
+    }
+    target = find_entity(scn, entity_id);
+    if(!target)
+    {
+        error = "Entity not found: " + entity_id;
+        return false;
+    }
+    return true;
+}
+
+/// One item of scene_set_post_process_materials_batch, read and checked before any is applied.
+struct post_process_material_item
+{
+    entt::handle target;
+    asset_handle<material> material;
+    post_process_material_change change;
+    component_apply_result applied;
+};
+
+/// Reads one item: its target, its Post Process material, and the change of the entry, with its parameter and texture
+/// overrides made on a copy of the entry's (or a new entry's) so a refused value changes nothing. False, with the
+/// reason, for an item set_post_process_material would refuse.
+auto read_post_process_material_item(rtti::context& ctx,
+                                     scene& scn,
+                                     const simdjson::dom::object& item,
+                                     post_process_material_item& out,
+                                     std::string& error) -> bool
+{
+    if(!read_post_process_target(scn, item, out.target, error))
+    {
+        return false;
+    }
+    std::string key;
+    read_string(item, "material", key);
+    out.material = resolve_domain_material(ctx, key, material_domain::post_process, error);
+    if(!out.material)
+    {
+        return false;
+    }
+    error = editor_actions::find_post_process_material_problem(ctx, out.target, out.material);
+    if(!error.empty())
+    {
+        return false;
+    }
+    double weight = 0.0;
+    if(read_double(item, "weight", weight))
+    {
+        out.change.weight = float(weight);
+    }
+    bool enabled = true;
+    if(item["enabled"].get(enabled) == simdjson::SUCCESS)
+    {
+        out.change.enabled = enabled;
+    }
+    simdjson::dom::object parameters;
+    simdjson::dom::object textures;
+    const bool has_parameters = item["parameters"].get(parameters) == simdjson::SUCCESS;
+    const bool has_textures = item["textures"].get(textures) == simdjson::SUCCESS;
+    if(!has_parameters && !has_textures)
+    {
+        return true;
+    }
+    material_instance overrides;
+    overrides.set_shared_material(out.material);
+    const entt::handle holder = out.target ? out.target : defaults::find_global_volume(scn);
+    const auto* materials = holder ? holder.try_get<post_process_material_component>() : nullptr;
+    if(const auto* entry = materials != nullptr ? materials->find(out.material) : nullptr)
+    {
+        overrides = entry->get_material_instance();
+    }
+    apply_material_instance_graph_values(ctx,
+                                         overrides,
+                                         has_parameters ? &parameters : nullptr,
+                                         has_textures ? &textures : nullptr,
+                                         out.applied);
+    if(!out.applied.ok)
+    {
+        error = fmt::format("Its parameters or textures were refused: {}", apply_result_to_json(out.applied));
+        return false;
+    }
+    out.change.overrides = std::move(overrides);
+    return true;
+}
+
+/// The entity a post-process item's entry lives on before the call: its target, or the scene's global volume (empty
+/// when the scene has none yet). Two items with the same holder and material name one entry.
+auto get_post_process_holder(scene& scn, entt::handle target) -> entt::handle
+{
+    return target ? target : defaults::find_global_volume(scn);
 }
 
 } // namespace
@@ -291,6 +398,170 @@ void register_material_tools(mcp_tool_registry& registry)
          .mutates_scene = true,
          .idempotent = true,
          .former_arguments = {{"items[].index", "material_index"}}});
+
+    registry.add(
+        {.name = "scene_set_post_process_materials_batch",
+         .description =
+             "Run Post Process materials over the view, as the Material Graph window's Add to Scene does. Each item: "
+             "material (a Post Process material); entity_id (a post process volume, whose contribution fades it, or a "
+             "camera, on which it always applies; default the scene's global volume, which is made when the scene has "
+             "none); weight (0..1, default 1) scales the material's Opacity; enabled switches the entry; parameters "
+             "{name: number or [x, y, z, w]} and textures {node id: texture key} override the material's values for "
+             "that entry only (null reverts one). An entry of the same material on that entity is changed instead of "
+             "added. The material's Location and Priority settings say where and in which order it runs. Every item "
+             "is checked first: one that is refused changes nothing, and two items may not name the same entry. "
+             "Returns each item's entity_id, entry index and whether a volume was made. One undo step.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"material":{"type":"string","description":"Key or uid of a Post Process material"},"entity_id":{"type":"string","description":"A volume or camera; default: the scene's global volume"},"weight":{"type":"number","minimum":0,"maximum":1},"enabled":{"type":"boolean"},"parameters":{"type":"object"},"textures":{"type":"object"}},"required":["material"]}}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             scene* scn = nullptr;
+             std::string error;
+             if(!require_edit_scene(ctx, scn, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             simdjson::dom::array items;
+             if(!read_required_array(args, "items", items, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::vector<post_process_material_item> planned;
+             for(auto element : items)
+             {
+                 simdjson::dom::object item;
+                 post_process_material_item plan;
+                 if(!read_object(element, item, error) || !read_post_process_material_item(ctx, *scn, item, plan, error))
+                 {
+                     return {.text = make_batch_item_error(planned.size(), error, "Nothing changed."), .is_error = true};
+                 }
+                 const auto holder = get_post_process_holder(*scn, plan.target);
+                 for(size_t i = 0; i < planned.size(); ++i)
+                 {
+                     if(planned[i].material.uid() == plan.material.uid() && get_post_process_holder(*scn, planned[i].target) == holder)
+                     {
+                         return {.text = make_batch_item_error(planned.size(),
+                                                               fmt::format("It names the entry item {} names: give them as one item", i),
+                                                               "Nothing changed."),
+                                 .is_error = true};
+                     }
+                 }
+                 planned.push_back(std::move(plan));
+             }
+             // Sized before the steps are made: each step fills its placement when the sequence runs.
+             std::vector<post_process_material_placement> placements(planned.size());
+             auto sequence = std::make_shared<sequence_action_t>();
+             for(size_t i = 0; i < planned.size(); ++i)
+             {
+                 editor_actions::add_post_process_material_step(ctx,
+                                                                *scn,
+                                                                planned[i].target,
+                                                                planned[i].material,
+                                                                planned[i].change,
+                                                                *sequence,
+                                                                placements[i]);
+             }
+             ctx.get_cached<editing_manager>().do_action("MCP Set Post Process Materials", sequence);
+             std::string results = "[";
+             for(size_t i = 0; i < planned.size(); ++i)
+             {
+                 const auto& placement = placements[i];
+                 const auto& mat = planned[i].material;
+                 const auto loaded = mat.get();
+                 const auto* graph = loaded ? loaded->safe_cast<graph_material>() : nullptr;
+                 results += fmt::format(
+                     R"({}{{"entity_id":{},"index":{},"added":{},"created_volume":{},"location":{},"priority":{},"result":{}}})",
+                     i == 0 ? "" : ",",
+                     make_json_string(entity_id_string(placement.entity)),
+                     placement.index,
+                     bool_to_json(placement.added),
+                     bool_to_json(placement.created_volume),
+                     make_json_string(graph ? get_material_post_process_location_key(graph->get_post_process_location()) : ""),
+                     graph ? graph->get_post_process_priority() : 0,
+                     apply_result_to_json(planned[i].applied));
+             }
+             results += "]";
+             return {.text = fmt::format(R"({{"results":{},"count":{}}})", results, planned.size()), .is_error = false};
+         },
+         .mutates_scene = true});
+
+    registry.add(
+        {.name = "scene_remove_post_process_materials_batch",
+         .description =
+             "Stop running Post Process materials. Each item: material, and entity_id (a volume or camera; default the "
+             "scene's global volume) whose entry of it is removed. To pause one instead, "
+             "scene_set_post_process_materials_batch with enabled false. Every item is checked first: one naming no "
+             "entry removes none. One undo step.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"material":{"type":"string","description":"Key or uid of the material"},"entity_id":{"type":"string","description":"A volume or camera; default: the scene's global volume"}},"required":["material"]}}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             scene* scn = nullptr;
+             std::string error;
+             if(!require_edit_scene(ctx, scn, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             simdjson::dom::array items;
+             if(!read_required_array(args, "items", items, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::vector<std::pair<entt::handle, asset_handle<material>>> removals;
+             for(auto element : items)
+             {
+                 simdjson::dom::object item;
+                 entt::handle target;
+                 if(!read_object(element, item, error) || !read_post_process_target(*scn, item, target, error))
+                 {
+                     return {.text = make_batch_item_error(removals.size(), error, "Nothing changed."), .is_error = true};
+                 }
+                 target = get_post_process_holder(*scn, target);
+                 if(!target)
+                 {
+                     return {.text = make_batch_item_error(removals.size(),
+                                                           "The scene has no global volume: name the volume or camera with entity_id",
+                                                           "Nothing changed."),
+                             .is_error = true};
+                 }
+                 std::string key;
+                 read_string(item, "material", key);
+                 const auto mat = resolve_material_asset(ctx, key, {}, error);
+                 if(!mat)
+                 {
+                     return {.text = make_batch_item_error(removals.size(), error, "Nothing changed."), .is_error = true};
+                 }
+                 error = editor_actions::find_post_process_material_removal_problem(ctx, target, mat);
+                 const bool is_repeated = std::any_of(removals.begin(),
+                                                      removals.end(),
+                                                      [&](const auto& removal)
+                                                      {
+                                                          return removal.first == target && removal.second.uid() == mat.uid();
+                                                      });
+                 if(error.empty() && is_repeated)
+                 {
+                     error = "An earlier item removes the same entry";
+                 }
+                 if(!error.empty())
+                 {
+                     return {.text = make_batch_item_error(removals.size(), error, "Nothing changed."), .is_error = true};
+                 }
+                 removals.emplace_back(target, mat);
+             }
+             auto sequence = std::make_shared<sequence_action_t>();
+             std::string removed = "[";
+             for(size_t i = 0; i < removals.size(); ++i)
+             {
+                 editor_actions::add_remove_post_process_material_step(removals[i].first, removals[i].second, *sequence);
+                 removed += fmt::format(R"({}{{"entity_id":{}}})", i == 0 ? "" : ",", make_json_string(entity_id_string(removals[i].first)));
+             }
+             removed += "]";
+             ctx.get_cached<editing_manager>().do_action("MCP Remove Post Process Materials", sequence);
+             return {.text = fmt::format(R"({{"removed":{},"count":{}}})", removed, removals.size()), .is_error = false};
+         },
+         .mutates_scene = true});
 }
 
 } // namespace unravel::mcp

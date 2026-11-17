@@ -1069,9 +1069,10 @@ void write_text(const fs::path& file, const std::string& text)
  * node type with a dynamic input is there twice: with nothing linked (its float form) and with a Vector 3 linked
  * into its first input.
  */
-auto make_graph_of_every_node() -> material_graph
+auto make_graph_of_every_node(material_domain domain = material_domain::surface) -> material_graph
 {
     auto graph = make_graph_with_output();
+    set_material_graph_domain(graph, domain);
     add_node(graph, "position", "world_position");
     std::string previous = "position";
     const auto add_read = [&](const std::string& id)
@@ -1082,12 +1083,18 @@ auto make_graph_of_every_node() -> material_graph
         link(graph, sum, "b", id);
         previous = sum;
     };
+    // A domain whose main reads textures of its own leaves the graph fewer: the texture nodes past its limit stay out.
+    uint32_t textures = 0;
     for(const auto& def : get_material_node_library())
     {
         // Functions have tests of their own: a call needs a function.
         const bool is_function_node = def.code == material_node_code::function_input || def.code == material_node_code::function_output ||
                                       def.code == material_node_code::function_call;
-        if(def.code == material_node_code::surface_output || is_function_node)
+        if(def.code == material_node_code::surface_output || is_function_node || !is_material_node_in_domain(def, domain))
+        {
+            continue;
+        }
+        if(is_material_texture_node(def) && ++textures > get_material_graph_max_textures(domain))
         {
             continue;
         }
@@ -1134,6 +1141,11 @@ auto make_graph_of_every_node() -> material_graph
         add_node(graph, vector_id, def.type);
         link(graph, vector_id, first_dynamic->name, "position");
         add_read(vector_id);
+    }
+    if(domain == material_domain::post_process)
+    {
+        link(graph, "output", MATERIAL_COLOR_PIN, previous);
+        return graph;
     }
     link(graph, "output", "emissive", previous);
     link(graph, "output", "normal", "normal_map");
@@ -1443,6 +1455,9 @@ auto make_vertex_graph_of_every_node() -> material_graph
 constexpr size_t PLAIN_VARIANT_COUNT = 3;
 constexpr size_t MASKED_VARIANT_COUNT = 7;
 constexpr size_t PREVIEW_VARIANT_COUNT = 1;
+/// A decal material's shader: the colour path and the decal buffers' path; a post-process material's: one.
+constexpr size_t DECAL_VARIANT_COUNT = 2;
+constexpr size_t POST_PROCESS_VARIANT_COUNT = 1;
 constexpr size_t VERTEX_VARIANT_COUNT = 23;
 
 /// A variant WebGL 2 leaves without code: it reads the skinning palettes from storage buffers, which need OpenGL ES
@@ -1482,7 +1497,10 @@ public:
     {
         const bool is_preview = contains(result.shader, "evaluate_preview");
         const bool has_casters = result.uses_opacity_mask || result.uses_world_position_offset;
-        const size_t variant_count = is_preview ? PREVIEW_VARIANT_COUNT : (has_casters ? MASKED_VARIANT_COUNT : PLAIN_VARIANT_COUNT);
+        const size_t domain_variant_count = result.domain == material_domain::decal ? DECAL_VARIANT_COUNT : POST_PROCESS_VARIANT_COUNT;
+        const size_t surface_variant_count = has_casters ? MASKED_VARIANT_COUNT : PLAIN_VARIANT_COUNT;
+        const size_t variant_count = is_preview ? PREVIEW_VARIANT_COUNT
+                                                : (result.domain == material_domain::surface ? surface_variant_count : domain_variant_count);
         const std::string file_name = sanitize_material_graph_identifier(name) + ".eshader";
         const auto& platform = gfx::get_renderer_platform_supported_filename_extensions();
         const auto renderers = is_preview ? std::set<std::string>(platform.begin(), platform.end()) : get_tested_renderers();
@@ -1614,6 +1632,279 @@ auto count_reroutes(const material_graph& graph) -> size_t
                                 }));
 }
 
+/// A decal whose Base Color reads a texture at a UV it computes, a normal map at another, and a texture at a UV read
+/// from a third texture (no gradients from the neighbours there).
+auto make_decal_uv_graph() -> material_graph
+{
+    auto graph = make_graph_with_output();
+    set_material_graph_domain(graph, material_domain::decal);
+    add_node(graph, "tiling", "tiling_offset");
+    set_value(graph, "tiling", "tiling", math::vec4(3.0f, 2.0f, 0.0f, 0.0f));
+    add_node(graph, "panned", "panner");
+    link(graph, "panned", "uv", "tiling");
+    add_node(graph, "albedo", "texture_sample");
+    link(graph, "albedo", "uv", "panned");
+    add_node(graph, "distortion", "texture_sample");
+    add_node(graph, "distorted", "texture_sample");
+    link(graph, "distorted", "uv", "distortion.rgba.rg");
+    add_node(graph, "tinted", "multiply");
+    link(graph, "tinted", "a", "albedo.rgb");
+    link(graph, "tinted", "b", "distorted.rgb");
+    add_node(graph, "normal_map", "normal_map");
+    link(graph, "normal_map", "uv", "tiling");
+    link(graph, "output", "base_color", "tinted");
+    link(graph, "output", MATERIAL_OPACITY_PIN, "albedo.a");
+    link(graph, "output", "normal", "normal_map");
+    return graph;
+}
+
+/// A post-process material at @p location reading each view texture it can.
+auto make_post_process_graph(material_post_process_location location) -> material_graph
+{
+    auto graph = make_graph_with_output();
+    set_material_graph_domain(graph, material_domain::post_process);
+    auto& output = graph.nodes[size_t(find_material_graph_output(graph))];
+    set_material_graph_setting(output, MATERIAL_POST_PROCESS_LOCATION_SETTING, get_material_post_process_location_key(location));
+    std::string previous;
+    for(const auto& source : get_material_scene_texture_sources())
+    {
+        if((source.domains & get_material_domain_bit(material_domain::post_process)) == 0)
+        {
+            continue;
+        }
+        const std::string id = std::string("read_") + source.key;
+        auto& node = add_node(graph, id, MATERIAL_SCENE_TEXTURE_TYPE);
+        set_material_graph_setting(node, MATERIAL_SCENE_TEXTURE_SOURCE_SETTING, source.key);
+        if(previous.empty())
+        {
+            previous = id + ".rgb";
+            continue;
+        }
+        const std::string sum = "sum_" + id;
+        add_node(graph, sum, "add");
+        link(graph, sum, "a", previous);
+        link(graph, sum, "b", id + ".rgb");
+        previous = sum;
+    }
+    add_node(graph, "offset_uv", "add");
+    link(graph, "offset_uv", "a", "screen.uv");
+    set_value(graph, "offset_uv", "b", math::vec4(0.01f));
+    add_node(graph, "screen", "screen_position");
+    add_node(graph, "neighbour", MATERIAL_SCENE_TEXTURE_TYPE);
+    set_material_graph_setting(graph.nodes.back(), MATERIAL_SCENE_TEXTURE_SOURCE_SETTING, "scene_color");
+    link(graph, "neighbour", "uv", "offset_uv");
+    add_node(graph, "exposure", "exposure");
+    add_node(graph, "scaled", "multiply");
+    link(graph, "scaled", "a", "neighbour.rgb");
+    link(graph, "scaled", "b", "exposure");
+    add_node(graph, "mixed", "add");
+    link(graph, "mixed", "a", previous);
+    link(graph, "mixed", "b", "scaled");
+    link(graph, "output", MATERIAL_COLOR_PIN, "mixed");
+    set_value(graph, "output", MATERIAL_OPACITY_PIN, math::vec4(0.5f));
+    return graph;
+}
+
+/// The decal and post-process shaders compiled with shaderc on every tested renderer: graphs of every node of their
+/// domain, a decal of each kind of UV, of each normal blend and of metallic alone, a post-process material at each
+/// Location, and their previews.
+void add_domain_shaders(shader_compile_batch& batch)
+{
+    for(const auto domain : {material_domain::decal, material_domain::post_process})
+    {
+        const std::string name = std::string(get_material_domain_key(domain)) + "_every_node";
+        const auto graph = make_graph_of_every_node(domain);
+        const auto result = compile_material_graph(graph);
+        check(!result.has_errors(), name + " compiles without errors" + describe(result));
+        batch.add(name, result);
+        material_graph_compile_options preview_options;
+        preview_options.is_preview = true;
+        const auto preview = compile_material_graph(graph, preview_options);
+        check(!preview.has_errors(), name + "'s preview compiles without errors" + describe(preview));
+        batch.add(name + "_preview", preview);
+    }
+    auto replaced = make_decal_uv_graph();
+    set_material_graph_setting(replaced.nodes[size_t(find_material_graph_output(replaced))],
+                               MATERIAL_DECAL_NORMAL_BLEND_SETTING,
+                               MATERIAL_DECAL_NORMAL_BLEND_REPLACE);
+    batch.add("decal_uv", compile_material_graph(make_decal_uv_graph()));
+    batch.add("decal_uv_replace", compile_material_graph(replaced));
+    auto metallic = make_graph_with_output();
+    set_material_graph_domain(metallic, material_domain::decal);
+    set_value(metallic, "output", MATERIAL_METALLIC_PIN, math::vec4(1.0f));
+    add_node(metallic, "shine", "constant");
+    set_value(metallic, "shine", "value", math::vec4(1.0f));
+    link(metallic, "output", MATERIAL_METALLIC_PIN, "shine");
+    batch.add("decal_metallic", compile_material_graph(metallic));
+    for(uint32_t i = 0; i < MATERIAL_POST_PROCESS_LOCATION_COUNT; ++i)
+    {
+        const auto location = material_post_process_location(i);
+        batch.add(std::string("post_") + get_material_post_process_location_key(location), compile_material_graph(make_post_process_graph(location)));
+    }
+    auto masked = make_post_process_graph(material_post_process_location::before_bloom);
+    set_material_graph_setting(masked.nodes[size_t(find_material_graph_output(masked))], MATERIAL_POST_PROCESS_MASK_SETTING, "7");
+    batch.add("post_run_where_mask", compile_material_graph(masked));
+}
+
+/// Material domains: the output node sets the domain; switching keeps what the new output has pins for; nodes of
+/// another domain are reported and read their defaults; the compile reports what a decal writes and where a
+/// post-process material runs, and the binding keeps it.
+void test_material_domains()
+{
+    std::printf("test_material_domains\n");
+    const auto* decal_output = find_material_node_def(MATERIAL_GRAPH_DECAL_OUTPUT_TYPE);
+    const auto* post_output = find_material_node_def(MATERIAL_GRAPH_POST_PROCESS_OUTPUT_TYPE);
+    const auto* scene = find_material_node_def(MATERIAL_SCENE_TEXTURE_TYPE);
+    const auto* interpolator = find_material_node_def("vertex_interpolator");
+    const auto* discard = find_material_node_def("discard");
+    check(decal_output && post_output && scene && interpolator && discard, "the library has the domain nodes");
+    if(!decal_output || !post_output || !scene || !interpolator || !discard)
+    {
+        return;
+    }
+    check(is_material_node_in_domain(*decal_output, material_domain::decal) &&
+              !is_material_node_in_domain(*decal_output, material_domain::surface),
+          "the Decal Output is a decal's alone");
+    check(!is_material_node_in_domain(*scene, material_domain::surface) && is_material_node_in_domain(*scene, material_domain::decal) &&
+              is_material_node_in_domain(*scene, material_domain::post_process),
+          "Scene Texture reads the view in decals and post-process materials");
+    check(!is_material_node_in_domain(*interpolator, material_domain::decal) && !is_material_node_in_domain(*discard, material_domain::post_process),
+          "a decal has no vertex stage of its own, and a post-process pass discards nothing");
+    check(get_material_node_domains_text(*scene) == "Decal and Post Process", "a node names the domains it works in");
+
+    auto graph = make_graph_with_output();
+    add_node(graph, "tint", "color_parameter");
+    add_node(graph, "mask", "scalar_parameter");
+    link(graph, "output", "base_color", "tint.rgb");
+    link(graph, "output", "opacity_mask", "mask");
+    set_material_graph_setting(graph.nodes[size_t(find_material_graph_output(graph))], MATERIAL_TWO_SIDED_SETTING, MATERIAL_TWO_SIDED_ON);
+    check(get_material_graph_domain(graph) == material_domain::surface, "a graph with a Surface Output is a surface");
+    check(set_material_graph_domain(graph, material_domain::decal) && get_material_graph_domain(graph) == material_domain::decal,
+          "the domain switches to Decal");
+    const auto& decal_node = graph.nodes[size_t(find_material_graph_output(graph))];
+    check(find_link(graph, decal_node.id, "base_color") == "tint.rgb" && find_link(graph, decal_node.id, MATERIAL_OPACITY_PIN) == "mask",
+          "Base Color keeps its link and Opacity Mask's moves to Opacity");
+    check(decal_node.settings.empty(), "settings the Decal Output does not have are dropped");
+    check(!set_material_graph_domain(graph, material_domain::decal), "switching to the same domain changes nothing");
+    check(set_material_graph_domain(graph, material_domain::post_process) &&
+              find_link(graph, graph.nodes[size_t(find_material_graph_output(graph))].id, "base_color").empty() &&
+              find_link(graph, graph.nodes[size_t(find_material_graph_output(graph))].id, MATERIAL_OPACITY_PIN) == "mask",
+          "a Post Process Output keeps Opacity and drops Base Color, which it has no pin for");
+
+    auto empty = make_graph_with_output();
+    material_graph fragment;
+    add_node(fragment, "out", MATERIAL_GRAPH_DECAL_OUTPUT_TYPE);
+    add_node(fragment, "tint", "color_parameter");
+    link(fragment, "out", "base_color", "tint.rgb");
+    paste_material_graph_nodes(empty, fragment, {});
+    check(get_material_graph_domain(empty) == material_domain::decal && !find_link(empty, "output", "base_color").empty(),
+          "a whole decal pasted over an empty graph makes it a decal");
+
+    const auto decal = compile_material_graph(make_decal_uv_graph());
+    check(!decal.has_errors(), "a decal graph compiles without errors" + describe(decal));
+    check(decal.domain == material_domain::decal &&
+              decal.decal_writes == (material_decal_writes_base_color | material_decal_writes_normal) && decal.decal_reads_surface,
+          "a decal writes what its output links; a Detail normal reads the surface");
+    check(contains(decal.shader, "#define DECAL_WRITES_BASE_COLOR 1") && contains(decal.shader, "#define DECAL_WRITES_NORMAL 1") &&
+              !contains(decal.shader, "DECAL_WRITES_EMISSIVE") && contains(decal.shader, "material_graph/mg_decal.sh") &&
+              contains(decal.shader, "material_graph/fs_material_graph_decal.sh") && contains(decal.shader, "DECAL_FULL") &&
+              contains(decal.shader, "#define MATERIAL_GRAPH_INSTANCE_MATERIAL 1"),
+          "a decal's shader has its domain's main, variants and defines");
+    check(contains(decal.shader, "vec2 mg_decal_uv_n_albedo(MaterialInputs i)") && contains(decal.shader, "mg_decal_texture2D_at(") &&
+              contains(decal.shader, "mg_decal_neighbour_x(i)"),
+          "a texture read at a computed UV takes its gradients from that UV at the neighbours");
+    check(contains(decal.shader, "mg_decal_texture2D(s_mg_texture") && contains(decal.shader, "mg_decal_tangent_space_normal("),
+          "a read at the decal's own UV takes the main's gradients, a normal map too");
+    check(!contains(decal.shader, "mg_decal_uv_n_distorted") && contains(decal.shader, "mg_texture2D("),
+          "a UV read from another texture falls back to the screen's gradients");
+    check(contains(decal.shader, "s.normal_opacity = s.opacity * ") && contains(decal.shader, "s.surface_opacity = s.opacity * "),
+          "an unlinked Normal and Surface Opacity are Opacity times their value");
+    check(decal.vertex_shader.empty() && !decal.uses_world_position_offset, "a decal has no vertex shader of its own");
+
+    auto silent = make_graph_with_output();
+    set_material_graph_domain(silent, material_domain::decal);
+    const auto silent_result = compile_material_graph(silent);
+    check(has_warning(silent_result) && silent_result.decal_writes == 0, "a decal setting no channel is warned about");
+    auto valued = silent;
+    set_value(valued, "output", MATERIAL_ROUGHNESS_PIN, math::vec4(0.9f));
+    const auto valued_result = compile_material_graph(valued);
+    check(valued_result.decal_writes == material_decal_writes_surface && contains(valued_result.shader, "#define DECAL_WRITES_ROUGHNESS 1") &&
+              contains(valued_result.shader, "#define DECAL_WRITES_METALLIC 0"),
+          "a value of its own on an unlinked channel writes it, and only it");
+    const auto* roughness_pin = find_material_pin_def(find_material_node_def(MATERIAL_GRAPH_DECAL_OUTPUT_TYPE)->inputs, MATERIAL_ROUGHNESS_PIN);
+    set_value(valued, "output", MATERIAL_ROUGHNESS_PIN, roughness_pin->default_value);
+    check(compile_material_graph(valued).decal_writes == 0, "a channel left at its default value is not written");
+
+    auto misplaced = make_graph_with_output();
+    add_node(misplaced, "scene", MATERIAL_SCENE_TEXTURE_TYPE);
+    link(misplaced, "output", "base_color", "scene.rgb");
+    const auto misplaced_result = compile_material_graph(misplaced);
+    check(has_diagnostic(misplaced_result, material_graph_severity::error, "scene") && !contains(misplaced_result.shader, "mg_scene_texture"),
+          "a Scene Texture in a surface is an error and reads its default");
+    set_material_graph_domain(misplaced, material_domain::decal);
+    set_material_graph_setting(misplaced.nodes[size_t(find_material_graph_node(misplaced, "scene"))], MATERIAL_SCENE_TEXTURE_SOURCE_SETTING, "scene_color");
+    check(has_diagnostic(compile_material_graph(misplaced), material_graph_severity::error, "scene", MATERIAL_SCENE_TEXTURE_SOURCE_SETTING),
+          "a decal cannot read the scene's colour: lighting has not run");
+
+    const auto post = compile_material_graph(make_post_process_graph(material_post_process_location::before_bloom));
+    check(!post.has_errors(), "a post-process graph compiles without errors" + describe(post));
+    check(post.domain == material_domain::post_process && post.post_location == material_post_process_location::before_bloom &&
+              !contains(post.shader, "POST_PROCESS_DISPLAY") && contains(post.shader, "material_graph/fs_material_graph_post.sh"),
+          "a post-process material runs at its Location");
+    const uint32_t every_texture = material_scene_texture_color | material_scene_texture_depth | material_scene_texture_gbuffer0 |
+                                   material_scene_texture_gbuffer1 | material_scene_texture_gbuffer2 | material_scene_texture_velocity |
+                                   material_scene_texture_custom_mask | material_scene_texture_custom_depth;
+    check(post.scene_textures == every_texture && post.samples_scene_neighbours, "the view textures read, one at another pixel");
+    auto display = make_graph_with_output();
+    set_material_graph_domain(display, material_domain::post_process);
+    set_material_graph_setting(display.nodes[size_t(find_material_graph_output(display))], MATERIAL_POST_PROCESS_PRIORITY_SETTING, "3");
+    const auto display_result = compile_material_graph(display);
+    check(display_result.post_location == material_post_process_location::after_tonemapping && display_result.post_priority == 3 &&
+              contains(display_result.shader, "#define POST_PROCESS_DISPLAY 1") && !contains(display_result.shader, "s.color ="),
+          "After Tonemapping is the default; an unlinked Color keeps the scene's");
+    check(display_result.scene_textures == 0 && !contains(display_result.shader, "POST_PROCESS_RUN_WHERE_MASK"),
+          "a material without Run Where Mask runs everywhere and reads no mask");
+    auto masked = display;
+    set_material_graph_setting(masked.nodes[size_t(find_material_graph_output(masked))], MATERIAL_POST_PROCESS_MASK_SETTING, "3");
+    const auto masked_result = compile_material_graph(masked);
+    check(!masked_result.has_errors() && (masked_result.scene_textures & material_scene_texture_custom_mask) != 0 &&
+              contains(masked_result.shader, "#define POST_PROCESS_RUN_WHERE_MASK 3") &&
+              contains(masked_result.shader, "#define MG_READS_CUSTOM_MASK 1"),
+          "Run Where Mask reads the post-process mask, which the pass then draws");
+    set_material_graph_setting(masked.nodes[size_t(find_material_graph_output(masked))], MATERIAL_POST_PROCESS_MASK_SETTING, "900");
+    check(contains(compile_material_graph(masked).shader, "#define POST_PROCESS_RUN_WHERE_MASK 255"),
+          "a Run Where Mask past 255 is the largest mask value");
+    const auto binding = make_material_graph_binding(decal);
+    check(binding.domain == material_domain::decal && binding.decal_writes == decal.decal_writes && binding.decal_reads_surface,
+          "the binding keeps the domain and what a decal writes");
+    const auto post_binding = make_material_graph_binding(display_result);
+    check(post_binding.post_location == material_post_process_location::after_tonemapping && post_binding.post_priority == 3,
+          "the binding keeps where a post-process material runs");
+    graph_material material;
+    material.set_graph(make_decal_uv_graph());
+    check(material.get_domain() == material_domain::decal && !material.casts_shadow(), "a decal material casts no shadow");
+}
+
+/// A value of several numbers on an input that takes one (a dynamic input, unlinked) reads its first number for every
+/// component: the compile warns, and a single number or trailing zeros do not.
+void test_dynamic_input_vector_values()
+{
+    std::printf("test_dynamic_input_vector_values\n");
+    auto graph = make_graph_with_output();
+    add_node(graph, "tint", "color_parameter");
+    add_node(graph, "tinted", "multiply");
+    link(graph, "tinted", "a", "tint.rgb");
+    set_value(graph, "tinted", "b", math::vec4(0.3f, 1.0f, 0.4f, 0.0f));
+    link(graph, "output", "base_color", "tinted");
+    const auto vector_result = compile_material_graph(graph);
+    check(has_diagnostic(vector_result, material_graph_severity::warning, "tinted", "b") &&
+              contains(vector_result.shader, "vec3_splat(0.3)"),
+          "a vector on a one-number input is read as its first number, with a warning");
+    set_value(graph, "tinted", "b", math::vec4(2.0f, 0.0f, 0.0f, 0.0f));
+    check(!has_diagnostic(compile_material_graph(graph), material_graph_severity::warning, "tinted", "b"),
+          "a single number on such an input is no warning");
+}
+
 void test_examples(asset_manager* am, const fs::path& output_folder)
 {
     std::printf("test_examples\n");
@@ -1697,6 +1988,7 @@ void test_examples(asset_manager* am, const fs::path& output_folder)
         standard_surface blended;
         blended.alpha = alpha_mode::blend;
         batch.add("standard_translucent", compile_material_graph(make_standard_material_graph(blended)));
+        add_domain_shaders(batch);
     }
     if(am)
     {
@@ -2509,6 +2801,8 @@ void run_material_graph_suite(rtti::context& ctx)
     RUN_CASE(test_material_attributes());
     RUN_CASE(test_quality_switch());
     RUN_CASE(test_compiled_quality_binding());
+    RUN_CASE(test_material_domains());
+    RUN_CASE(test_dynamic_input_vector_values());
     const fs::path output_folder = temp_path("material-graphs");
     fs::error_code ec;
     fs::create_directories(output_folder, ec);

@@ -222,6 +222,40 @@ constexpr const char* SHADER_MAIN_INCLUDE = "material_graph/fs_material_graph_gb
 /// The file holding main() of the shadow caster variants.
 constexpr const char* SHADER_SHADOW_MAIN_INCLUDE = "material_graph/fs_material_graph_shadow.sh";
 
+/// A decal material's shader: the colour path's variant and the decal buffers' (fs_material_graph_decal.sh), what
+/// decal/vs_decal.eshader writes, the header it reads the view through, and its main().
+constexpr const char* DECAL_SHADER_INTERFACE = "[variants]\n"
+                                               "// default: the colour path, into the G-buffer's base colour and emissive.\n"
+                                               "// full: the decal buffers' path, for decals writing normals or reading the surface.\n"
+                                               "default\n"
+                                               "full                DECAL_FULL\n"
+                                               "\n"
+                                               "[inputs]\n"
+                                               "flat vec4 v_decal_local_to_world0\n"
+                                               "flat vec4 v_decal_local_to_world1\n"
+                                               "flat vec4 v_decal_local_to_world2\n"
+                                               "flat vec4 v_decal_world_to_local0\n"
+                                               "flat vec4 v_decal_world_to_local1\n"
+                                               "flat vec4 v_decal_world_to_local2\n"
+                                               "flat vec4 v_decal_fade\n"
+                                               "flat vec4 v_decal_angle\n"
+                                               "flat vec4 v_material0\n"
+                                               "flat vec4 v_material1\n"
+                                               "flat vec4 v_material2\n"
+                                               "flat vec4 v_material3";
+constexpr const char* DECAL_HEADER_INCLUDE = "material_graph/mg_decal.sh";
+constexpr const char* DECAL_MAIN_INCLUDE = "material_graph/fs_material_graph_decal.sh";
+/// A post-process material's shader: the quad of vs_clip_quad.eshader, the header it reads the view through, its main().
+constexpr const char* POST_PROCESS_SHADER_INTERFACE = "[variants]\n"
+                                                      "default\n"
+                                                      "\n"
+                                                      "[inputs]\n"
+                                                      "vec2 v_texcoord0";
+constexpr const char* POST_PROCESS_HEADER_INCLUDE = "material_graph/mg_post.sh";
+constexpr const char* POST_PROCESS_MAIN_INCLUDE = "material_graph/fs_material_graph_post.sh";
+/// The made-up view a swatch of a decal or post-process material reads its Scene Textures from.
+constexpr const char* PREVIEW_VIEW_INCLUDE = "material_graph/mg_preview_view.sh";
+
 /// The preview shader: one variant, the quad of vs_clip_quad.eshader, and its main().
 constexpr const char* PREVIEW_INTERFACE = "[variants]\n"
                                           "default\n"
@@ -390,6 +424,36 @@ auto format_literal(const math::vec4& value, uint32_t width, bool broadcast) -> 
     return fmt::format("{}({})", get_material_value_shader_type(get_material_value_type(width)), fmt::join(literals, ", "));
 }
 
+/// Whether @p value, stored for an input that takes one number, holds a vector: a component after the first that is
+/// set and differs from it. Trailing zeros are how a single number is stored.
+auto is_vector_value_given(const math::vec4& value) -> bool
+{
+    for(int i = 1; i < 4; ++i)
+    {
+        if(value[i] != 0.0f && value[i] != value.x)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// @p value as a list, without its trailing zeros: "[0.0, -0.12]".
+auto format_vector_value(const math::vec4& value) -> std::string
+{
+    int count = 4;
+    while(count > 1 && value[count - 1] == 0.0f)
+    {
+        --count;
+    }
+    std::vector<std::string> parts;
+    for(int i = 0; i < count; ++i)
+    {
+        parts.push_back(format_float_literal(value[i]));
+    }
+    return fmt::format("[{}]", fmt::join(parts, ", "));
+}
+
 /// Index of a component letter (x, y, z, w or r, g, b, a); -1 for any other character.
 auto get_component_index(char c) -> int
 {
@@ -541,6 +605,7 @@ private:
         {
             mark_used();
         }
+        check_domain_nodes();
         collect_node_aspects();
         allocate_parameters();
         allocate_textures();
@@ -552,9 +617,12 @@ private:
             return;
         }
         emit_surface();
-        collect_vertex_outputs();
-        estimate_emissive();
-        emit_vertex();
+        if(is_surface_domain())
+        {
+            collect_vertex_outputs();
+            estimate_emissive();
+            emit_vertex();
+        }
         assemble_shader();
         assemble_vertex_shader();
     }
@@ -609,22 +677,92 @@ private:
             auto& info = get_info(i);
             info.input_types.assign(state.def->inputs.size(), material_value_type::float1);
             info.output_types.assign(state.def->outputs.size(), material_value_type::float1);
-            if(node.type != MATERIAL_GRAPH_OUTPUT_TYPE)
+            const auto domain = find_material_domain_of_output_type(node.type);
+            if(!domain)
             {
                 continue;
             }
             if(output_ < 0)
             {
                 output_ = int(i);
+                result_.domain = *domain;
             }
             else
             {
-                report(material_graph_severity::warning, node.id, {}, "Only the first Surface Output is used.");
+                report(material_graph_severity::warning, node.id, {}, "Only the graph's first output node is used.");
             }
         }
         if(output_ < 0 && !is_material_function_graph(graph_))
         {
-            report(material_graph_severity::error, {}, {}, "The graph has no Surface Output node.");
+            report(material_graph_severity::error, {}, {}, "The graph has no output node.");
+        }
+    }
+
+    auto is_surface_domain() const -> bool
+    {
+        return result_.domain == material_domain::surface;
+    }
+
+    /// Whether node @p index can run in the graph's domain: a node of another domain's reads what this one's main does
+    /// not give, so its code is its default value.
+    auto is_in_domain(size_t index) const -> bool
+    {
+        const auto* def = states_[index].def;
+        return def == nullptr || is_material_node_in_domain(*def, result_.domain);
+    }
+
+    /// Reports every used node that does not run in the graph's domain, and what the Scene Texture nodes read: the view
+    /// textures the draw binds, and whether one reads another pixel than its own.
+    void check_domain_nodes()
+    {
+        for(size_t i = 0; i < states_.size(); ++i)
+        {
+            const auto& state = states_[i];
+            if(!state.def || !get_info(i).is_used || int(i) == output_)
+            {
+                continue;
+            }
+            if(!is_in_domain(i))
+            {
+                report(material_graph_severity::error,
+                       state.node->id,
+                       {},
+                       fmt::format("{} works in {} materials, not in a {} material: it reads its default value.",
+                                   state.def->label,
+                                   get_material_node_domains_text(*state.def),
+                                   get_material_domain_label(result_.domain)));
+                continue;
+            }
+            if(state.node->type == MATERIAL_SCENE_TEXTURE_TYPE)
+            {
+                collect_scene_texture(i);
+            }
+        }
+    }
+
+    void collect_scene_texture(size_t index)
+    {
+        const auto& state = states_[index];
+        const auto* setting = find_material_setting_def(*state.def, MATERIAL_SCENE_TEXTURE_SOURCE_SETTING);
+        const std::string key = setting != nullptr ? get_checked_setting(index, *setting) : std::string{};
+        const auto* source = find_material_scene_texture_source(key);
+        if(source == nullptr)
+        {
+            return;
+        }
+        if((source->domains & get_material_domain_bit(result_.domain)) == 0)
+        {
+            report(material_graph_severity::error,
+                   state.node->id,
+                   MATERIAL_SCENE_TEXTURE_SOURCE_SETTING,
+                   fmt::format("A {} material cannot read {}: it reads black.", get_material_domain_label(result_.domain), source->label));
+            return;
+        }
+        result_.scene_textures |= source->texture_bit;
+        result_.samples_scene_neighbours = result_.samples_scene_neighbours || is_input_linked(state, 0);
+        if(result_.domain == material_domain::decal)
+        {
+            result_.decal_reads_surface = true;
         }
     }
 
@@ -1498,12 +1636,14 @@ private:
             }
             const bool is_normal = is_used_kind(i, material_node_code::normal_map);
             const auto& node = *states_[i].node;
-            if(result_.textures.size() >= MATERIAL_GRAPH_MAX_TEXTURES)
+            if(result_.textures.size() >= get_material_graph_max_textures(result_.domain))
             {
                 report(material_graph_severity::error,
                        node.id,
                        {},
-                       fmt::format("A material reads at most {} textures; this one reads its default value.", MATERIAL_GRAPH_MAX_TEXTURES));
+                       fmt::format("A {} material reads at most {} textures; this one reads its default value.",
+                                   get_material_domain_label(result_.domain),
+                                   get_material_graph_max_textures(result_.domain)));
                 continue;
             }
             const auto texture_index = uint32_t(result_.textures.size());
@@ -1723,7 +1863,20 @@ private:
         {
             return pin_def.default_code;
         }
-        return format_literal(get_value(state, pin), width, pin_def.type == material_value_type::dynamic);
+        const math::vec4 value = get_value(state, pin);
+        const bool is_dynamic = pin_def.type == material_value_type::dynamic;
+        if(is_dynamic && is_vector_value_given(value))
+        {
+            report(material_graph_severity::warning,
+                   state.node->id,
+                   pin_def.name,
+                   fmt::format("{} takes one number for every component: {} is read as {}. Link a Vector 2, Vector 3 or "
+                               "Color node to give each component its own value.",
+                               pin_def.label.empty() ? pin_def.name : pin_def.label,
+                               format_vector_value(value),
+                               format_float_literal(value.x)));
+        }
+        return format_literal(value, width, is_dynamic);
     }
 
     /// What an unlinked input of a type that is no number reads: the default surface for attributes, nothing for a
@@ -1853,6 +2006,12 @@ private:
     auto make_node_code(size_t index) -> std::string
     {
         const auto& def = *states_[index].def;
+        // Reported by check_domain_nodes: what it would read does not exist in this domain's shader.
+        if(!is_in_domain(index) && def.code != material_node_code::surface_output)
+        {
+            const auto type = get_info(index).type;
+            return is_material_value_numeric(type) ? format_literal(math::vec4(0.0f), get_material_value_width(type), true) : "0.0";
+        }
         switch(def.code)
         {
             case material_node_code::expression:
@@ -2348,8 +2507,147 @@ private:
         return fmt::format("{}.{}", reg, COMPONENTS_XYZW[it->component]);
     }
 
+    /// Decals: a texture read takes its gradients from the surface the decal lies on (mg_decal.sh), not from the
+    /// screen's 2x2 quads, which straddle depth edges and pick a mip far too small there.
+    auto is_decal_gradient_read(size_t index) -> bool
+    {
+        if(result_.domain != material_domain::decal || options_.is_preview || is_emitting_decal_uv_)
+        {
+            return false;
+        }
+        const auto* mode = find_material_setting_def(*states_[index].def, MATERIAL_TEXTURE_MIP_MODE_SETTING);
+        return mode == nullptr || get_checked_setting(index, *mode) == "auto";
+    }
+
+    /// The UV a decal's texture read reads at, and at the two neighbours on its surface. The decal's own UV takes the
+    /// main's gradients (is_own); a UV the graph computes from what a neighbour has (positions, UVs, time, parameters)
+    /// is computed again there by a function of its own (emit_decal_uv_function); any other reads at the screen's
+    /// gradients.
+    struct decal_uv_codes
+    {
+        std::string uv;
+        std::string uv_x;
+        std::string uv_y;
+        bool is_own{};
+    };
+
+    auto make_decal_uv_codes(size_t index, size_t pin) -> decal_uv_codes
+    {
+        decal_uv_codes codes;
+        if(!is_input_linked(states_[index], pin))
+        {
+            codes.uv = get_input_code(index, pin);
+            codes.is_own = true;
+            return codes;
+        }
+        const std::string function = emit_decal_uv_function(index, pin);
+        if(function.empty())
+        {
+            codes.uv = get_input_code(index, pin);
+            return codes;
+        }
+        codes.uv = fmt::format("{}(i)", function);
+        codes.uv_x = fmt::format("{}(mg_decal_neighbour_x(i))", function);
+        codes.uv_y = fmt::format("{}(mg_decal_neighbour_y(i))", function);
+        return codes;
+    }
+
+    /// Whether node @p index can be computed again from the inputs of another pixel: no texture read, no user code.
+    auto can_evaluate_at_neighbour(size_t index) const -> bool
+    {
+        const auto* def = states_[index].def;
+        if(def == nullptr)
+        {
+            return false;
+        }
+        switch(def->code)
+        {
+            case material_node_code::expression:
+            case material_node_code::parameter:
+            case material_node_code::append:
+            case material_node_code::swizzle:
+            case material_node_code::reroute:
+            case material_node_code::named_reroute_declaration:
+            case material_node_code::named_reroute:
+            case material_node_code::static_switch:
+            case material_node_code::function_input:
+            case material_node_code::function_output:
+            case material_node_code::function_call:
+            case material_node_code::color_ramp:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// Emits `vec2 mg_decal_uv_<node>(MaterialInputs i)`, the UV input @p pin of node @p index computed from the
+    /// inputs it is given, among the functions; empty when what it reads cannot run there. Its nodes are emitted again
+    /// into it: the variables of evaluate_material are not in its scope.
+    auto emit_decal_uv_function(size_t index, size_t pin) -> std::string
+    {
+        std::set<size_t> nodes;
+        collect_input_nodes(index, pin, nodes);
+        for(const size_t node : nodes)
+        {
+            if(!can_evaluate_at_neighbour(node))
+            {
+                return {};
+            }
+        }
+        const std::string name = fmt::format("mg_decal_uv_{}", states_[index].variable);
+        auto main_body = std::exchange(body_, {});
+        auto main_lines = std::exchange(node_lines_, {});
+        std::vector<std::pair<bool, std::string>> saved;
+        saved.reserve(states_.size());
+        for(auto& state : states_)
+        {
+            saved.emplace_back(state.is_emitted, state.value_code);
+            state.is_emitted = false;
+        }
+        is_emitting_decal_uv_ = true;
+        const std::string code = get_input_code(index, pin);
+        is_emitting_decal_uv_ = false;
+        auto function_body = std::exchange(body_, std::move(main_body));
+        node_lines_ = std::move(main_lines);
+        for(size_t i = 0; i < states_.size(); ++i)
+        {
+            states_[i].is_emitted = saved[i].first;
+            states_[i].value_code = std::move(saved[i].second);
+        }
+        functions_.push_back(fmt::format("vec2 {}(MaterialInputs i)", name));
+        functions_.emplace_back("{");
+        functions_.insert(functions_.end(), function_body.begin(), function_body.end());
+        functions_.push_back(fmt::format("{}return {};", INDENT, code));
+        functions_.emplace_back("}");
+        functions_.emplace_back();
+        return name;
+    }
+
+    auto make_decal_texture_sample_code(size_t index, const std::string& sampler) -> std::string
+    {
+        const auto codes = make_decal_uv_codes(index, 0);
+        if(codes.is_own)
+        {
+            return fmt::format("mg_decal_texture2D({}, {}, i)", sampler, codes.uv);
+        }
+        if(!codes.uv_x.empty())
+        {
+            return fmt::format("mg_decal_texture2D_at({}, {}, {}, {}, i)", sampler, codes.uv, codes.uv_x, codes.uv_y);
+        }
+        return make_sample_read(index, sampler, codes.uv, false);
+    }
+
     auto make_texture_sample_code(size_t index) -> std::string
     {
+        const bool is_cube_node = get_material_texture_node_kind(*states_[index].def) == material_value_type::texture_cube;
+        if(!is_cube_node && is_decal_gradient_read(index))
+        {
+            const std::string sampler = get_texture_sampler(index);
+            if(!sampler.empty())
+            {
+                return make_decal_texture_sample_code(index, sampler);
+            }
+        }
         const std::string coordinates = get_input_code(index, 0);
         const std::string sampler = get_texture_sampler(index);
         if(sampler.empty())
@@ -2364,8 +2662,6 @@ private:
 
     auto make_normal_map_code(size_t index) -> std::string
     {
-        const std::string uv = get_input_code(index, 0);
-        const std::string strength = get_input_code(index, 1);
         const std::string sampler = get_texture_sampler(index);
         const int texture = find_read_texture(index);
         if(sampler.empty() || texture < 0)
@@ -2375,6 +2671,35 @@ private:
         // getTangentSpaceNormal (shaderlib.sh) reads the layout of the texture the draw binds.
         const auto slot = uint32_t(texture);
         const std::string layout_code = fmt::format("{}[{}].{}", NORMAL_CHANNELS_UNIFORM, slot / MAX_WIDTH, COMPONENTS_XYZW[slot % MAX_WIDTH]);
+        if(is_decal_gradient_read(index))
+        {
+            const auto codes = make_decal_uv_codes(index, 0);
+            const std::string strength = get_input_code(index, 1);
+            if(codes.is_own)
+            {
+                return fmt::format("mg_decal_tangent_space_normal({}, {}, mg_decal_uv_ddx(i) * exp2(i.mip_bias), mg_decal_uv_ddy(i) * "
+                                   "exp2(i.mip_bias), {}, {})",
+                                   sampler,
+                                   codes.uv,
+                                   strength,
+                                   layout_code);
+            }
+            if(!codes.uv_x.empty())
+            {
+                return fmt::format("mg_decal_tangent_space_normal({}, {}, ({} - {}) * exp2(i.mip_bias), ({} - {}) * exp2(i.mip_bias), {}, {})",
+                                   sampler,
+                                   codes.uv,
+                                   codes.uv_x,
+                                   codes.uv,
+                                   codes.uv_y,
+                                   codes.uv,
+                                   strength,
+                                   layout_code);
+            }
+            return fmt::format("getTangentSpaceNormal({}, {}, {}, {}, i.mip_bias)", sampler, codes.uv, strength, layout_code);
+        }
+        const std::string uv = get_input_code(index, 0);
+        const std::string strength = get_input_code(index, 1);
         return fmt::format("getTangentSpaceNormal({}, {}, {}, {}, i.mip_bias)", sampler, uv, strength, layout_code);
     }
 
@@ -2429,6 +2754,11 @@ private:
             emit_function_surface();
             return;
         }
+        if(!is_surface_domain())
+        {
+            emit_domain_output();
+            return;
+        }
         emit_discards();
         const size_t index = size_t(output_);
         const auto& state = states_[index];
@@ -2462,6 +2792,158 @@ private:
         body_.insert(body_.end(), assignments.begin(), assignments.end());
         node_lines_.push_back({index, first_line, body_.size() - first_line});
         collect_surface_defines(index);
+    }
+
+    /// The Decal or Post Process Output's channels. Post: a Color the graph does not set (is_input_set) keeps the
+    /// scene's (main() fills it in). Decal: an unlinked Normal Opacity or Surface Opacity is Opacity times its value.
+    void emit_domain_output()
+    {
+        emit_discards();
+        const size_t index = size_t(output_);
+        const auto& state = states_[index];
+        const auto& def = *state.def;
+        std::vector<std::string> assignments;
+        for(size_t pin = 0; pin < def.inputs.size(); ++pin)
+        {
+            const auto& name = def.inputs[pin].name;
+            const bool is_linked = is_input_linked(state, pin);
+            if(name == MATERIAL_COLOR_PIN && !is_input_set(index, pin))
+            {
+                continue;
+            }
+            const bool is_relative_opacity = name == MATERIAL_NORMAL_OPACITY_PIN || name == MATERIAL_SURFACE_OPACITY_PIN;
+            if(is_relative_opacity && !is_linked)
+            {
+                assignments.push_back(fmt::format("{}s.{} = s.{} * {};", INDENT, name, MATERIAL_OPACITY_PIN, get_input_code(index, pin)));
+                continue;
+            }
+            assignments.push_back(fmt::format("{}s.{} = {};", INDENT, name, get_input_code(index, pin)));
+        }
+        const size_t first_line = body_.size();
+        body_.push_back(fmt::format("{}// {}: {}", INDENT, make_comment_text(state.node->id), def.label));
+        body_.insert(body_.end(), assignments.begin(), assignments.end());
+        node_lines_.push_back({index, first_line, body_.size() - first_line});
+        if(result_.domain == material_domain::decal)
+        {
+            collect_decal_defines(index);
+        }
+        else
+        {
+            collect_post_process_defines(index);
+        }
+    }
+
+    /// A decal's defines: the channels it writes (those its Decal Output sets, is_input_set), how its normal blends, how
+    /// far its ends fade.
+    void collect_decal_defines(size_t index)
+    {
+        const auto& state = states_[index];
+        const auto& def = *state.def;
+        const auto is_pin_set = [&](const char* name)
+        {
+            return is_input_set(index, name);
+        };
+        uint32_t writes = 0;
+        if(is_pin_set(BASE_COLOR_PIN))
+        {
+            writes |= material_decal_writes_base_color;
+            defines_.push_back("#define DECAL_WRITES_BASE_COLOR 1");
+        }
+        if(is_pin_set(NORMAL_PIN))
+        {
+            writes |= material_decal_writes_normal;
+            defines_.push_back("#define DECAL_WRITES_NORMAL 1");
+        }
+        if(is_pin_set(MATERIAL_METALLIC_PIN) || is_pin_set(MATERIAL_ROUGHNESS_PIN))
+        {
+            writes |= material_decal_writes_surface;
+            defines_.push_back("#define DECAL_WRITES_SURFACE 1");
+            defines_.push_back(fmt::format("#define DECAL_WRITES_METALLIC {}", is_pin_set(MATERIAL_METALLIC_PIN) ? 1 : 0));
+            defines_.push_back(fmt::format("#define DECAL_WRITES_ROUGHNESS {}", is_pin_set(MATERIAL_ROUGHNESS_PIN) ? 1 : 0));
+        }
+        if(is_pin_set(EMISSIVE_PIN))
+        {
+            writes |= material_decal_writes_emissive;
+            defines_.push_back("#define DECAL_WRITES_EMISSIVE 1");
+        }
+        if(writes == 0)
+        {
+            report(material_graph_severity::warning,
+                   state.node->id,
+                   {},
+                   "The Decal Output sets no channel: link one, or give it a value, or the decal leaves every surface "
+                   "as it is.");
+        }
+        result_.decal_writes = writes;
+        const auto* blend = find_material_setting_def(def, MATERIAL_DECAL_NORMAL_BLEND_SETTING);
+        const bool is_replace = blend != nullptr && get_checked_setting(index, *blend) == MATERIAL_DECAL_NORMAL_BLEND_REPLACE;
+        if(is_replace)
+        {
+            defines_.push_back("#define DECAL_NORMAL_REPLACE 1");
+        }
+        // A surface read, or metallic and roughness written apart (the other kept), reads the G-buffer the decal lies on.
+        const bool writes_one_of_metallic_roughness = (writes & material_decal_writes_surface) != 0 &&
+                                                      is_pin_set(MATERIAL_METALLIC_PIN) != is_pin_set(MATERIAL_ROUGHNESS_PIN);
+        const bool blends_detail_normal = (writes & material_decal_writes_normal) != 0 && !is_replace;
+        result_.decal_reads_surface = result_.decal_reads_surface || blends_detail_normal || writes_one_of_metallic_roughness;
+        if(result_.decal_reads_surface)
+        {
+            defines_.push_back("#define DECAL_READS_SURFACE 1");
+        }
+        const auto* edge = find_material_setting_def(def, MATERIAL_DECAL_EDGE_FADE_SETTING);
+        const float edge_fade = edge != nullptr ? std::clamp(parse_number(index, *edge, get_setting(state, edge->name)), 0.0f, 0.5f) : 0.0f;
+        defines_.push_back(fmt::format("#define DECAL_EDGE_FADE {}", format_float_literal(edge_fade)));
+        add_scene_texture_defines();
+    }
+
+    /// A post-process material's defines: its Location's kind of colour, the view textures it reads.
+    void collect_post_process_defines(size_t index)
+    {
+        const auto& state = states_[index];
+        const auto& def = *state.def;
+        const auto* location = find_material_setting_def(def, MATERIAL_POST_PROCESS_LOCATION_SETTING);
+        if(location != nullptr)
+        {
+            result_.post_location =
+                find_material_post_process_location(get_checked_setting(index, *location)).value_or(material_post_process_location::after_tonemapping);
+        }
+        const auto* priority = find_material_setting_def(def, MATERIAL_POST_PROCESS_PRIORITY_SETTING);
+        if(priority != nullptr)
+        {
+            result_.post_priority = int(std::lround(parse_number(index, *priority, get_setting(state, priority->name))));
+        }
+        const auto* mask = find_material_setting_def(def, MATERIAL_POST_PROCESS_MASK_SETTING);
+        if(mask != nullptr)
+        {
+            const auto value = std::clamp(std::lround(parse_number(index, *mask, get_setting(state, mask->name))), 0L, 255L);
+            if(value > 0)
+            {
+                // The mask decides where it runs: the pass draws the masked renderers and binds their mask.
+                result_.scene_textures |= material_scene_texture_custom_mask;
+                defines_.push_back(fmt::format("#define POST_PROCESS_RUN_WHERE_MASK {}", value));
+            }
+        }
+        add_scene_texture_defines();
+    }
+
+    /// MG_READS_<texture> for each view texture a Scene Texture node reads: the mains declare only those samplers.
+    void add_scene_texture_defines()
+    {
+        const std::array<std::pair<uint32_t, const char*>, 8> names = {{{material_scene_texture_color, "MG_READS_SCENE_COLOR"},
+                                                                        {material_scene_texture_depth, "MG_READS_SCENE_DEPTH"},
+                                                                        {material_scene_texture_gbuffer0, "MG_READS_GBUFFER0"},
+                                                                        {material_scene_texture_gbuffer1, "MG_READS_GBUFFER1"},
+                                                                        {material_scene_texture_gbuffer2, "MG_READS_GBUFFER2"},
+                                                                        {material_scene_texture_velocity, "MG_READS_VELOCITY"},
+                                                                        {material_scene_texture_custom_mask, "MG_READS_CUSTOM_MASK"},
+                                                                        {material_scene_texture_custom_depth, "MG_READS_CUSTOM_DEPTH"}}};
+        for(const auto& [bit, name] : names)
+        {
+            if((result_.scene_textures & bit) != 0)
+            {
+                defines_.push_back(fmt::format("#define {} 1", name));
+            }
+        }
     }
 
     /// Estimates what the Surface Output's Emissive gives off, for the GI (material_graph_emissive_estimate).
@@ -2563,6 +3045,36 @@ private:
         return pin < state.sources.size() && (state.sources[pin].is_linked() || state.is_composed[pin]);
     }
 
+    /// Whether the graph sets input @p pin of node @p index: a link, or a value of its own other than the pin's default
+    /// (a link taken away leaves its input behind at the default). An output node writes only the channels it sets.
+    auto is_input_set(size_t index, size_t pin) const -> bool
+    {
+        const auto& state = states_[index];
+        if(is_input_linked(state, pin))
+        {
+            return true;
+        }
+        const auto& pin_def = state.def->inputs[pin];
+        const math::vec4 value = get_value(state, pin);
+        const uint32_t width = std::max(get_material_value_width(pin_def.type), 1u);
+        for(uint32_t component = 0; component < std::min(width, 4u); ++component)
+        {
+            if(value[int(component)] != pin_def.default_value[int(component)])
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// is_input_set for the pin named @p name of node @p index; false for a node without one.
+    auto is_input_set(size_t index, hpp::string_view name) const -> bool
+    {
+        const auto& def = *states_[index].def;
+        const auto* pin = find_material_pin_def(def.inputs, name);
+        return pin != nullptr && is_input_set(index, size_t(pin - def.inputs.data()));
+    }
+
     /// The estimate of input @p pin of node @p index: its own value while unlinked.
     auto estimate_input(size_t index, size_t pin, int depth) const -> material_graph_emissive_estimate
     {
@@ -2644,7 +3156,7 @@ private:
     {
         for(size_t i = 0; i < states_.size(); ++i)
         {
-            if(is_used_kind_def(i, material_node_code::discard))
+            if(is_used_kind_def(i, material_node_code::discard) && is_in_domain(i))
             {
                 emit_discard(i);
             }
@@ -3142,6 +3654,10 @@ private:
         {
             lines.push_back(make_include_line(include));
         }
+        if(!is_surface_domain())
+        {
+            lines.push_back(make_include_line(PREVIEW_VIEW_INCLUDE));
+        }
         lines.emplace_back();
         add_declarations(lines);
         lines.insert(lines.end(), functions_.begin(), functions_.end());
@@ -3162,8 +3678,61 @@ private:
         }
     }
 
+    /// The shader of a decal or post-process material: its domain's interface, header and main around the code.
+    void assemble_domain_shader()
+    {
+        const bool is_decal = result_.domain == material_domain::decal;
+        std::vector<std::string> lines;
+        const std::string source = options_.source_name.empty() ? std::string{} : fmt::format(" from {}", make_comment_text(options_.source_name));
+        lines.push_back(fmt::format("// Generated by the material graph compiler{}. Edit the graph, not this file.", source));
+        add_lines(lines, is_decal ? DECAL_SHADER_INTERFACE : POST_PROCESS_SHADER_INTERFACE);
+        lines.emplace_back();
+        lines.emplace_back("[code]");
+        if(is_decal)
+        {
+            // A decal's instances carry the values of the first parameter registers (vs_decal.eshader).
+            lines.emplace_back("#define MATERIAL_GRAPH_INSTANCE_MATERIAL 1");
+        }
+        else if(result_.post_location == material_post_process_location::after_tonemapping)
+        {
+            lines.emplace_back("#define POST_PROCESS_DISPLAY 1");
+        }
+        add_defines(lines);
+        for(const auto* include : SHADER_HEADER_INCLUDES)
+        {
+            lines.push_back(make_include_line(include));
+        }
+        lines.push_back(make_include_line(is_decal ? DECAL_HEADER_INCLUDE : POST_PROCESS_HEADER_INCLUDE));
+        lines.emplace_back();
+        add_declarations(lines);
+        lines.insert(lines.end(), functions_.begin(), functions_.end());
+        lines.push_back("void evaluate_material(MaterialInputs i, inout MaterialSurface s)");
+        lines.push_back("{");
+        const size_t body_start = lines.size();
+        lines.insert(lines.end(), body_.begin(), body_.end());
+        lines.push_back("}");
+        lines.emplace_back();
+        lines.push_back(make_include_line(is_decal ? DECAL_MAIN_INCLUDE : POST_PROCESS_MAIN_INCLUDE));
+        for(const auto& range : node_lines_)
+        {
+            auto& info = get_info(range.node);
+            info.first_line = uint32_t(body_start + range.first + 1);
+            info.line_count = uint32_t(range.count);
+        }
+        for(const auto& line : lines)
+        {
+            result_.shader += line;
+            result_.shader += '\n';
+        }
+    }
+
     void assemble_shader()
     {
+        if(!is_surface_domain())
+        {
+            assemble_domain_shader();
+            return;
+        }
         std::vector<std::string> lines;
         const std::string source = options_.source_name.empty() ? std::string{} : fmt::format(" from {}", make_comment_text(options_.source_name));
         lines.push_back(fmt::format("// Generated by the material graph compiler{}. Edit the graph, not this file.", source));
@@ -3510,6 +4079,8 @@ private:
     std::map<size_t, uint32_t> interpolator_slots_;
     /// emit_vertex is emitting: Vertex Interpolators give their input itself.
     bool is_emitting_vertex_{};
+    /// A decal texture's UV function is being emitted (emit_decal_uv_function): its reads use the screen's gradients.
+    bool is_emitting_decal_uv_{};
 };
 
 /// Identifies a problem across two compiles of a graph.
@@ -3629,7 +4200,28 @@ auto make_material_graph_binding(const material_graph_compile_result& result) ->
     binding.max_world_position_offset = result.max_world_position_offset;
     binding.reads_vertex_outputs = result.reads_vertex_outputs();
     binding.computes_vertex_values = result.computes_vertex_values();
+    binding.domain = result.domain;
+    binding.decal_writes = result.decal_writes;
+    binding.decal_reads_surface = result.decal_reads_surface;
+    binding.post_location = result.post_location;
+    binding.post_priority = result.post_priority;
+    binding.scene_textures = result.scene_textures;
+    binding.samples_scene_neighbours = result.samples_scene_neighbours;
     return binding;
+}
+
+auto get_material_graph_max_textures(material_domain domain) -> uint32_t
+{
+    switch(domain)
+    {
+        case material_domain::decal:
+            return MATERIAL_GRAPH_MAX_DECAL_TEXTURES;
+        case material_domain::post_process:
+            return MATERIAL_GRAPH_MAX_POST_PROCESS_TEXTURES;
+        case material_domain::surface:
+            break;
+    }
+    return MATERIAL_GRAPH_MAX_TEXTURES;
 }
 
 auto make_material_graph_parameter_registers(const material_graph_binding& binding) -> std::vector<math::vec4>
@@ -3678,6 +4270,11 @@ auto get_material_graph_shader_includes() -> std::vector<std::string>
     includes.emplace_back(VERTEX_OFFSET_INCLUDE);
     includes.emplace_back(VERTEX_MAIN_INCLUDE);
     includes.emplace_back(VERTEX_VELOCITY_MAIN_INCLUDE);
+    includes.emplace_back(DECAL_HEADER_INCLUDE);
+    includes.emplace_back(DECAL_MAIN_INCLUDE);
+    includes.emplace_back(POST_PROCESS_HEADER_INCLUDE);
+    includes.emplace_back(POST_PROCESS_MAIN_INCLUDE);
+    includes.emplace_back("pre_exposure.sh");
     return includes;
 }
 

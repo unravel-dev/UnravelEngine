@@ -127,7 +127,9 @@ MCP client; this skill holds what an engine developer needs beside them.
   only); an edit of an existing asset checks `require_project_data_asset`; files are written
   with `asset_writer::atomic_save_to_file` or `atomic_write_file`.
 - A batch checks every item before changing anything: one rejected item rejects the call and
-  nothing changes. An error is one sentence that says what to do instead.
+  nothing changes, worded by `make_batch_item_error` ("Item 2: <reason>. Nothing changed.").
+  An error is one sentence that says what to do instead. Several edits of one call that must be
+  one undo step share a `sequence_action_t` (skill `unravel-editor-panel`).
 - A new or renamed tool is named in the shipped guide of its area, in that guide's voice
   (full sentences, ASCII, GI rather than another engine's feature names). A tool no guide
   mentions is one clients do not find.

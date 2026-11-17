@@ -100,6 +100,19 @@ draws them: skill `unravel-rendering`. Driving materials through the editor's MC
 - Editor-private scenes (the graph window's 3D preview, inspector previews) are unloaded and reloaded into new
   entities on a script recompile and at play end: code keeping entity handles into one checks them at every use
   and rebuilds (`material_graph_scene_preview`).
+- The output node is the domain (`material_domain`: `surface_output`, `decal_output`, `post_process_output`;
+  `get_material_graph_domain`, `set_material_graph_domain` keeps links by pin name). A node's `domains` mask says
+  where it works; one of another domain is an error and reads its default. Each domain's generated shader includes
+  its own main (`fs_material_graph_gbuffer.sh`, `fs_material_graph_decal.sh`, `fs_material_graph_post.sh`) and
+  takes as many textures as that main leaves stages for (`get_material_graph_max_textures`: 15, 12, 7). A
+  `graph_material_programs` serves one domain (`init(vs, domain)`): a decal or post material on a model slot gets
+  no program and draws the default surface.
+- A decal's texture reads take their mips from the surface (neighbour depths), not the screen quads: a read at a
+  UV computed from the decal's inputs re-evaluates that UV at the neighbours (`mg_decal_uv_<node>`), others fall
+  back to the screen's gradients. Scene Texture reads the decal's receiver, never the scene colour (lighting has
+  not run).
+- Run Where Mask and Scene Texture Custom Mask / Custom Depth set the `material_scene_texture_custom_*` bits; the
+  pipeline draws the post-process mask only while a run's materials have them (`run_post_process_mask_pass`).
 
 ## How it works
 

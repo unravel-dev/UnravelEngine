@@ -40,6 +40,7 @@ void main()
 	i.screen_uv = gl_FragCoord.xy * u_viewTexel.xy;
 	i.time = u_material_time.x;
 	i.mip_bias = u_camera_clip_planes.z;
+	mg_set_domain_input_defaults(i);
 #if MATERIAL_OBJECT_DATA
 	mg_set_object_inputs_packed(i, v_object0, v_object1, v_object2);
 #else

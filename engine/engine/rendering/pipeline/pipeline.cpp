@@ -737,6 +737,9 @@ auto pipeline::init(rtti::context& ctx) -> bool
     report_feature_pass("reflection probe prefilter", render_feature::reflection_probe_prefilter, prefilter_pass_.init(ctx));
     report_pass("blit", blit_pass_.init(ctx));
     report_pass("depth copy", depth_copy_pass_.init(ctx));
+    report_pass("decals", decal_pass_.init(ctx));
+    report_pass("post-process materials", post_material_pass_.init(ctx));
+    report_pass("masks", mask_pass_.init(ctx));
     report_pass("upscale", upscale_pass_.init(ctx));
     report_pass("Perez sky", atmospheric_pass_perez_.init(ctx));
     report_pass("skybox", atmospheric_pass_skybox_.init(ctx));
@@ -1117,6 +1120,7 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
     {
         return params;
     }
+    params.post_process_materials = resolve_post_process_materials(*scn, cam->get_position(), camera_ent);
     auto resolved = resolve_post_process_volumes(*scn, cam->get_position(), camera_ent);
     const bool has_any_volume = resolved.has_auto_exposure || resolved.has_bloom || resolved.has_tonemapping ||
                                 resolved.has_fxaa || resolved.has_taa || resolved.has_ssr || resolved.has_assao || resolved.has_ssil || resolved.has_gtao ||
@@ -1200,6 +1204,10 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
 
 void pipeline::apply_feature_limits(run_params& params, const feature_limits& limits)
 {
+    if(!limits.post_process_materials)
+    {
+        params.post_process_materials.clear();
+    }
     params.limits = limits;
     if(!limits.global_illumination)
     {
@@ -1730,6 +1738,10 @@ void pipeline_stats::add_stats(const pipeline_stats& stats)
     skipped_particle_emitters += stats.skipped_particle_emitters;
     skipped_particles += stats.skipped_particles;
     sorted_particle_keys += stats.sorted_particle_keys;
+    drawn_decals += stats.drawn_decals;
+    decal_draws += stats.decal_draws;
+    decal_buffer_runs += stats.decal_buffer_runs;
+    post_process_material_passes += stats.post_process_material_passes;
 
     add_batch_stats(stats.batching_stats);
 }

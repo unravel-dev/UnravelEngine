@@ -85,6 +85,13 @@ struct feature_limits
     /// The most cascades a directional light may split its shadow map into. Fewer cascades cover the same distance
     /// with less resolution, and every caster draws into fewer of them.
     int max_shadow_cascades{4};
+    /// Decals: off, Decal components draw nothing.
+    bool decals{true};
+    /// What decals change besides the colour: off, decals lay their base colour and emissive alone (one pass over the
+    /// G-buffer), and their normals, metallic and roughness are not drawn.
+    bool decal_surface_channels{true};
+    /// Post-process materials: off, the Post Process Materials of volumes and cameras run none.
+    bool post_process_materials{true};
 
     friend auto operator==(const feature_limits& lhs, const feature_limits& rhs) -> bool = default;
 };

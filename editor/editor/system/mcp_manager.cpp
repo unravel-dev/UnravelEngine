@@ -722,28 +722,8 @@ auto mcp_manager::execute_tool_call(const mcp::mcp_tool& tool, const std::string
     // Editor actions are undoable only inside an undo scope, which the panels open around their own
     // edits. A tool call runs outside any panel - or, by chance, nested inside one that is waiting
     // on assets - so without a scope of its own its undo would depend on timing.
-    struct undo_scope
-    {
-        editing_manager* em{};
-        explicit undo_scope(editing_manager* manager) : em(manager)
-        {
-            if(em)
-            {
-                em->push_undo_stack_enabled(true);
-            }
-        }
-        ~undo_scope()
-        {
-            if(em)
-            {
-                em->pop_undo_stack_enabled();
-            }
-        }
-        undo_scope(const undo_scope&) = delete;
-        auto operator=(const undo_scope&) -> undo_scope& = delete;
-    };
     const bool opens_undo_scope = tool.mutates_scene && tool.requires_main_thread && ctx_->has<editing_manager>();
-    const undo_scope scope(opens_undo_scope ? &ctx_->get_cached<editing_manager>() : nullptr);
+    const editing_manager::undo_scope scope(opens_undo_scope ? &ctx_->get_cached<editing_manager>() : nullptr);
     if(opens_undo_scope)
     {
         // One call is one undo step, never merged into the previous call's.

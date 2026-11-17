@@ -55,7 +55,9 @@ auto get_material_graph_time() -> float;
 class graph_material_programs : public uniforms_cache
 {
 public:
-    void init(asset_handle<gfx::shader> vertex_shader);
+    /// Binds the programs to @p vertex_shader, for materials of @p domain alone: a material of another domain gets no
+    /// program, so a decal or post-process material on a model draws the default surface.
+    void init(asset_handle<gfx::shader> vertex_shader, material_domain domain = material_domain::surface);
 
     /**
      * @brief The program drawing @p mat with the vertex shader's @p vertex_variant and its shader's @p
@@ -66,14 +68,16 @@ public:
 
     /**
      * @brief The program drawing @p mat in a pass of @p fragment_shader when it is a graph material whose World Position
-     * Offset moves its vertices: its vertex shader's @p vertex_variant, made at the first call, begun with the graph's
-     * values and @p camera_position (what the offset reads, the G-buffer's) bound. Null for every other material, and
-     * while the vertex shader is not there: the pass draws it with its own program, as the G-buffer does then.
+     * Offset moves its vertices: its vertex shader's @p vertex_variant with @p fragment_shader's @p fragment_variant,
+     * made at the first call, begun with the graph's values and @p camera_position (what the offset reads, the
+     * G-buffer's) bound. Null for every other material, and while the vertex shader is not there: the pass draws it with
+     * its own program, as the G-buffer does then.
      */
     auto begin_moved_vertices(const material& mat,
                               const std::string& vertex_variant,
                               const asset_handle<gfx::shader>& fragment_shader,
-                              const math::vec3& camera_position) -> gpu_program*;
+                              const math::vec3& camera_position,
+                              const std::string& fragment_variant = gfx::shader::DEFAULT_VARIANT) -> gpu_program*;
 
     /// The variant of a moved-vertices vertex shader that draws the velocity of @p vertex_variant's draws: "velocity"
     /// for the default, "velocity_" + the variant for the others.
@@ -161,6 +165,7 @@ private:
     gfx::program::uniform_ptr time_;
     gfx::program::uniform_ptr camera_position_;
     asset_handle<gfx::shader> vertex_shader_;
+    material_domain domain_{material_domain::surface};
     std::map<program_key, program_entry, program_key_less> programs_;
 };
 

@@ -1,7 +1,7 @@
 ---
 name: material-graphs
 title: Material graphs
-description: Authoring graph materials (node materials) through material_graph_describe_nodes / get / set / compile / open - the JSON format, links and components, parameters and textures material instances set by name, reading what the compile found, and checking the generated code with shaderc.
+description: Authoring graph materials (node materials) through material_graph_describe_nodes / get / set / compile / open - the JSON format, links and components, parameters and textures material instances set by name, decal and post-process materials, reading what the compile found, and checking the generated code with shaderc.
 order: 55
 ---
 # Material graphs
@@ -173,6 +173,96 @@ result to go back.
   polar coordinates, twirl, flipbook, bump_offset, sphere_mask and the shape
   masks. material_graph_describe_nodes lists them all.
 
+## Domains: surface, decal, post process
+
+The output node says what a material draws: surface_output (a mesh's surface),
+decal_output (what a Decal component's box lays onto the surfaces in it) or
+post_process_output (the colour of the whole view). The compile result's
+domain says which; material_graph_describe_nodes lists each node's domains,
+and a node of another domain is an error that reads its default. Each
+domain is a starter in the Content Browser (Create > Decal Material, Post
+Process Material) and in the Material Graph window's New menu.
+
+Decal materials:
+
+- decal_output pins: base_color, opacity, normal, metallic, roughness,
+  emissive, normal_opacity and surface_opacity (how much of Opacity the normal
+  and the metallic / roughness take). Settings: normal_blend (detail adds the
+  decal's bumps to the surface's, replace swaps them), edge_fade (the share of
+  the box's depth its ends fade over). A channel is written when its pin is
+  linked or holds a value other than its default ({"pin":"roughness",
+  "value":[0.9]} writes roughness); one left at its default keeps the surface's.
+- texcoord reads the decal's UV: 0 to 1 across its face, v down. decal_data
+  gives fade, age, normalized_age, lifetime (fade a blood splat by
+  normalized_age); decal_position the pixel's place in the box, -0.5 to 0.5.
+- scene_texture (source scene_depth, world_normal, base_color, metallic,
+  roughness, ambient_occlusion) reads the surface the decal lies on: wetness
+  darkens base_color and lowers roughness.
+- Writing only base_color, opacity and emissive is the cheap path; normal,
+  metallic or roughness take the decal buffers. The feature limit
+  decal_surface_channels (Decal Normals And Roughness) turns them off; new
+  Android and Web profiles draw colour only.
+- At most 12 textures.
+
+```json
+{"nodes": [
+  {"id": "output", "type": "decal_output", "inputs": [
+    {"pin": "base_color", "link": "tint.rgb"}, {"pin": "opacity", "link": "mask.a"}]},
+  {"id": "mask", "type": "texture_sample", "texture_key": "app:/data/textures/splat.png"},
+  {"id": "tint", "type": "color_parameter",
+   "inputs": [{"pin": "value", "value": [0.4, 0.02, 0.02, 1.0]}],
+   "settings": [{"name": "name", "value": "Tint"}]}
+]}
+```
+
+Post Process materials:
+
+- post_process_output pins: color (the pixel's new linear colour; unlinked the
+  scene's), opacity (its strength; the entry's weight scales it). Settings:
+  location (before_transparent: before particles and TAA, for outlines and
+  edge effects; before_bloom: after TAA, what it adds blooms; after_tonemapping:
+  the display colour 0 to 1), priority (higher runs later within a location),
+  run_where_mask (1 to 255: only over the renderers with that Post Process
+  Mask; 0 everywhere).
+- scene_texture sources: scene_color, scene_depth, world_normal, base_color,
+  metallic, roughness, ambient_occlusion, emissive, velocity, custom_mask (a
+  renderer's Post Process Mask, 0 to 255, seen through walls) and custom_depth
+  (that renderer's depth). Its uv input picks the pixel (unlinked: this one);
+  screen_position and screen_size (texel) build neighbour offsets for edges.
+- An unlinked dynamic input takes one number for every component: a vector
+  constant goes through a vector3 or color node.
+- Run one with scene_set_post_process_materials_batch (below); at most 7
+  textures.
+
+```json
+{"nodes": [
+  {"id": "output", "type": "post_process_output", "inputs": [
+    {"pin": "color", "link": "graded"}, {"pin": "opacity", "link": "strength"}],
+   "settings": [{"name": "location", "value": "before_bloom"}]},
+  {"id": "scene", "type": "scene_texture", "settings": [{"name": "source", "value": "scene_color"}]},
+  {"id": "graded", "type": "desaturate", "inputs": [{"pin": "color", "link": "scene.rgb"}]},
+  {"id": "strength", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [0.8]}],
+   "settings": [{"name": "name", "value": "Strength"}]}
+]}
+```
+
+Placing them:
+
+- scene_place_decals_batch {"items": [{"material": key, "screen": [x, y]}]}
+  (or origin + direction, or point + normal, per item) makes a Decal entity on
+  the surface each ray hits, all in one undo step; size, depth, rotation and
+  parent_id are optional. Edit them afterwards as the Decal component
+  (components guide).
+- scene_set_post_process_materials_batch {"items": [{"material": key}]} runs a
+  post material on the scene's global volume (made when there is none); an
+  item's entity_id names a volume (it fades with the volume's contribution) or
+  a camera (always applies). weight, enabled, and parameters / textures
+  override the material's values for that entry only.
+  scene_remove_post_process_materials_batch takes entries off. Read them with
+  scene_get_component_properties_batch component "Post Process Materials".
+- material_graph_open on a decal or post material shows it in the window's
+  3D preview: projected onto the shape, or over the preview's view.
+
 ## Material functions
 
 - A function is a .mgraph file in the project's data folder: function_input
@@ -204,4 +294,5 @@ result to go back.
 - A parameter's per_instance setting ("on" by default, "off") places it among
   the first registers, which overrides change without a draw of their own, or
   after them.
-- At most 15 textures and 64 parameter registers per graph.
+- At most 15 textures (12 for decals, 7 for post-process materials) and 64
+  parameter registers per graph.

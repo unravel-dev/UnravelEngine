@@ -12,6 +12,7 @@
 #include <engine/rendering/pipeline/passes/gtao_pass.h>
 #include <engine/rendering/pipeline/passes/tonemapping_pass.h>
 #include <engine/rendering/pipeline/passes/taa_pass.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <entt/entt.hpp>
 #include <math/math.h>
 #include <hpp/optional.hpp>
@@ -47,6 +48,47 @@ struct resolved_post_process_settings
     bool has_fog = false;
     fog_pass::settings fog{};
 };
+
+/**
+ * @brief One post-process material a camera run draws: the material whose program and textures it binds, its
+ * parameter registers blended across the volumes that run it, and the weight it shows with.
+ */
+struct post_process_material_draw
+{
+    /// The key of the material asset the entries name: entries of one material blend into one draw.
+    std::string material_key;
+    std::shared_ptr<graph_material> material;
+    std::vector<math::vec4> registers;
+    float weight{};
+    material_post_process_location location{material_post_process_location::after_tonemapping};
+    int priority{};
+    /// Where it came in the resolve (volumes by priority, each volume's list, then the camera's): the order among
+    /// materials of one location and priority.
+    uint32_t order{};
+};
+
+/**
+ * @brief The post-process materials a camera at @p camera_pos runs: every contributing volume's entries, weighted by
+ * its contribution, then @p camera_ent's own. Entries of one material blend into one draw: its weight moves toward each
+ * later entry's weight by that entry's contribution, and its parameters with it, so a volume fades its materials in.
+ * Sorted by Location, Priority, then that order; draws of no weight are left out.
+ */
+auto resolve_post_process_materials(scene& scn, const math::vec3& camera_pos, entt::handle camera_ent)
+    -> std::vector<post_process_material_draw>;
+
+/**
+ * @brief Moves @p draw toward a later entry of its material, of @p weight and @p registers, by @p contribution: the
+ * over-model the volumes' other settings blend by. Its weight and registers blend over; at a contribution of a half or
+ * more the entry's @p material (its overrides resolved) becomes the draw's.
+ */
+void blend_post_process_material_draw(post_process_material_draw& draw,
+                                      const std::shared_ptr<graph_material>& material,
+                                      const std::vector<math::vec4>& registers,
+                                      float weight,
+                                      float contribution);
+
+/// Drops the draws of no weight and sorts the others by Location, Priority, then the order they came in.
+void finish_post_process_material_draws(std::vector<post_process_material_draw>& draws);
 
 /**
  * @brief Resolves post-process volumes for a camera position.

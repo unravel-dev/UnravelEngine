@@ -27,6 +27,13 @@ namespace Unravel.Core
         private uint key;
         private readonly Material material;
 
+        /// <summary>The slot a decal's instance passes to the native calls: a decal has one instance, of its material.
+        /// Mirrors DECAL_MATERIAL_INSTANCE_SLOT in model_component_bindings.cpp.</summary>
+        internal const uint DecalSlot = uint.MaxValue;
+
+        /// <summary>Whether the instance is a post-process material entry's (PostProcessMaterialComponent.GetInstance).</summary>
+        private bool isPostProcessEntry => slot >= PostProcessMaterialComponent.InstanceSlotBase && slot != DecalSlot;
+
         internal MaterialInstance(Entity owner, uint slot)
         {
             this.owner = owner;
@@ -53,7 +60,8 @@ namespace Unravel.Core
             key = internal_m2n_material_instance_create(sharedMaterial.uid);
         }
 
-        /// <summary>The model slot this instance belongs to; 0 for an instance of no renderer.</summary>
+        /// <summary>The model slot this instance belongs to; 0 for an instance of no renderer, the largest value for a
+        /// decal's, and from 0xFF000000 on for a post-process material entry's.</summary>
         public uint slot { get; }
 
         /// <summary>The shared material this instance overrides, or null when the slot has none.</summary>
@@ -64,6 +72,17 @@ namespace Unravel.Core
                 if (isOfNoRenderer)
                 {
                     return material;
+                }
+                if (slot == DecalSlot)
+                {
+                    var decalMaterial = DecalComponent.internal_m2n_decal_get_material(owner);
+                    return decalMaterial == Guid.Empty ? null : new Material { uid = decalMaterial };
+                }
+                if (isPostProcessEntry)
+                {
+                    var entryMaterial = PostProcessMaterialComponent.internal_m2n_post_materials_get_material(
+                        owner, (int)(slot - PostProcessMaterialComponent.InstanceSlotBase));
+                    return entryMaterial == Guid.Empty ? null : new Material { uid = entryMaterial };
                 }
                 var uid = ModelComponent.internal_m2n_model_get_shared_material(owner, slot);
                 return uid == Guid.Empty ? null : new Material { uid = uid };

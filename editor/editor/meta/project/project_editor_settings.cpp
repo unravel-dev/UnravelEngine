@@ -72,6 +72,7 @@ SERIALIZE_INLINE(gizmos_data)
     try_serialize(ar, ser20::make_nvp("show_light", obj.show_light));
     try_serialize(ar, ser20::make_nvp("show_reflection_probe", obj.show_reflection_probe));
     try_serialize(ar, ser20::make_nvp("show_volume", obj.show_volume));
+    try_serialize(ar, ser20::make_nvp("show_decal", obj.show_decal));
     try_serialize(ar, ser20::make_nvp("show_model_bounds", obj.show_model_bounds));
     try_serialize(ar, ser20::make_nvp("show_model_submesh_bounds", obj.show_model_submesh_bounds));
     try_serialize(ar, ser20::make_nvp("show_text", obj.show_text));

@@ -190,6 +190,12 @@ struct defaults
      * @return A handle to the created entity.
      */
     static auto create_volume_entity(rtti::context& ctx, scene& scn, const std::string& name, volume_mode mode = volume_mode::local) -> entt::handle;
+
+    /**
+     * @brief The scene's active global post process volume of the highest priority: where a post-process material
+     * goes when no volume or camera is named. Empty when the scene has none.
+     */
+    static auto find_global_volume(scene& scn) -> entt::handle;
     /**
      * @brief Creates a UI document entity.
      * @param ctx The context for creation.
@@ -198,6 +204,29 @@ struct defaults
      * @return A handle to the created entity.
      */
     static auto create_ui_document_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
+    /**
+     * @brief Creates a Decal entity with @p decal_material, the engine's Default Decal when empty. Its size follows the
+     * aspect of the material's first texture, so a texture laid on it is not stretched.
+     */
+    static auto create_decal_entity(rtti::context& ctx,
+                                    scene& scn,
+                                    const std::string& name,
+                                    const asset_handle<material>& decal_material = {}) -> entt::handle;
+    /**
+     * @brief Places @p decal on the surface at @p point, projecting into it against @p normal: its height (Y) toward the
+     * world's up where the surface is a wall, toward the world's forward where it is a floor or a ceiling, turned by
+     * @p roll_degrees about the projection.
+     */
+    static void place_decal_on_surface(entt::handle decal, const math::vec3& point, const math::vec3& normal, float roll_degrees = 0.0f);
+    /**
+     * @brief Creates a Decal entity with @p decal_material on the surface under screen position @p pos of @p cam, or
+     * on the ground plane when no surface is there: what dropping a Decal material in the Scene view does.
+     */
+    static auto create_decal_at(rtti::context& ctx,
+                                scene& scn,
+                                const asset_handle<material>& decal_material,
+                                const camera& cam,
+                                math::vec2 pos) -> entt::handle;
 
     /**
      * @brief Creates a text entity.

@@ -248,6 +248,10 @@ void draw_views_tab(int& mode, visualization_menu::state& menu_state)
                                            "Show the active view's description and color legend in the bottom-left "
                                            "corner of the viewport.",
                                            menu_state.show_legend);
+    visualization_widgets::draw_switch_row("Post Process Materials",
+                                           "Run the post-process materials of the volumes and the camera in this view. "
+                                           "Off shows the scene without them, for editing under a strong effect.",
+                                           menu_state.show_post_process_materials);
 }
 
 /// The Overlays tab, scrolling once the options of the overlays that are on outgrow the room under it.

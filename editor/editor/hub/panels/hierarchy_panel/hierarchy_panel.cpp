@@ -341,6 +341,15 @@ void create_volume_entity(rtti::context& ctx, entt::handle parent_entity)
         });
 }
 
+void create_decal_entity(rtti::context& ctx, entt::handle parent_entity)
+{
+    queue_create_with_parent(ctx, parent_entity, "Create Decal Entity",
+        [](rtti::context& ctx, scene& scn) -> entt::handle
+        {
+            return defaults::create_decal_entity(ctx, scn, "Decal");
+        });
+}
+
 void create_audio_source_entity(rtti::context& ctx, entt::handle parent_entity)
 {
     queue_create_with_parent(ctx, parent_entity, "Create Audio Source Entity",
@@ -666,6 +675,13 @@ void draw_common_menu_items(rtti::context& ctx, entt::handle parent_entity)
     {
         create_volume_entity(ctx, parent_entity);
     }
+
+    if(ImGui::MenuItemIcon(ICON_MDI_STICKER_OUTLINE, "Decal"))
+    {
+        create_decal_entity(ctx, parent_entity);
+    }
+    ImGui::SetItemTooltipEx("A box that lays a Decal material onto the surfaces inside it. Dragging a Decal material onto "
+                            "a surface in the Scene view places one there.");
 
     if(ImGui::MenuItemIcon(ICON_MDI_VOLUME_HIGH, "Audio Source"))
     {

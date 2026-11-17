@@ -64,6 +64,18 @@ struct MaterialInputs
 	vec4 interpolator2;
 	vec4 interpolator3;
 #endif
+	// Decals: the decal's fade, age in seconds, normalized age and lifetime (Decal Data); (1, 0, 0, 0) elsewhere.
+	vec4 decal_data;
+	// Decals: the pixel's place in the decal's box, -0.5 to 0.5 per axis (Decal Position), and how it and the world
+	// position change to the next pixel on the same surface along x and y: what texture reads take their mips from.
+	// Zero elsewhere.
+	vec3 decal_position;
+	vec3 decal_position_ddx;
+	vec3 decal_position_ddy;
+	vec3 world_position_ddx;
+	vec3 world_position_ddy;
+	// Post-process: the exposure the view is shown with (Exposure); 1 elsewhere.
+	float exposure;
 #ifdef MATERIAL_GRAPH_INSTANCE_MATERIAL
 	// The instance's own values of the first parameter registers (the instance_material variant): the varyings are
 	// main()'s alone, so the graph's code reads them here.
@@ -95,6 +107,13 @@ struct MaterialSurface
 	float subsurface_opacity;
 	// Within this distance of the camera the surface dithers out; 0: it does not.
 	float camera_fade_distance;
+	// Decal and post-process: how much of the output shows (Opacity), and a decal's opacities of its normal and of its
+	// metallic and roughness.
+	float opacity;
+	float normal_opacity;
+	float surface_opacity;
+	// Post-process: the pixel's new colour (Color); main() fills in the scene's.
+	vec3 color;
 };
 
 // What the vertex stage of the graph writes: the Surface Output's World Position Offset, and the values of its Vertex
@@ -125,6 +144,15 @@ struct MaterialVertex
 	_i.object_axis_x = (_packed0).xyz; \
 	_i.object_axis_y = (_packed1).xyz; \
 	_i.object_axis_z = (_packed2).xyz
+// The inputs of the other domains, for a main of a domain without them: a surface reads no decal and no exposure.
+#define mg_set_domain_input_defaults(_i) \
+	_i.decal_data = vec4(1.0, 0.0, 0.0, 0.0); \
+	_i.decal_position = vec3_splat(0.0); \
+	_i.decal_position_ddx = vec3_splat(0.0); \
+	_i.decal_position_ddy = vec3_splat(0.0); \
+	_i.world_position_ddx = vec3_splat(0.0); \
+	_i.world_position_ddy = vec3_splat(0.0); \
+	_i.exposure = 1.0
 // Where no vertex shader passes them: the world's own frame.
 #define mg_set_world_object_inputs(_i) \
 	_i.object_position = vec3_splat(0.0); \
@@ -168,6 +196,10 @@ MaterialSurface mg_default_surface()
 	s.subsurface_color = vec3_splat(0.0);
 	s.subsurface_opacity = 0.0;
 	s.camera_fade_distance = 0.0;
+	s.opacity = 1.0;
+	s.normal_opacity = 1.0;
+	s.surface_opacity = 1.0;
+	s.color = vec3_splat(0.0);
 	return s;
 }
 

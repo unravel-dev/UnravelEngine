@@ -104,6 +104,89 @@ struct material_graph
 
 /// The node type of the graph's surface output: one per graph, where the material's channels are linked.
 inline constexpr const char* MATERIAL_GRAPH_OUTPUT_TYPE = "surface_output";
+/// The output of a decal material: what a decal lays onto the surfaces its box projects onto.
+inline constexpr const char* MATERIAL_GRAPH_DECAL_OUTPUT_TYPE = "decal_output";
+/// The output of a post-process material: the new colour of each pixel of the view at its Location.
+inline constexpr const char* MATERIAL_GRAPH_POST_PROCESS_OUTPUT_TYPE = "post_process_output";
+
+/**
+ * @brief What a material draws, as its graph's output node says: a surface of a mesh, a decal projected onto other
+ * surfaces, or a full-screen post-process pass. The values are saved in compiled materials: append only.
+ */
+enum class material_domain : uint8_t
+{
+    surface,
+    decal,
+    post_process,
+};
+
+/// The number of material domains.
+inline constexpr uint32_t MATERIAL_DOMAIN_COUNT = 3;
+
+/// The output node type of @p domain.
+auto get_material_graph_output_type(material_domain domain) -> const char*;
+/// The domain whose output node type is @p type; empty for any other node type.
+auto find_material_domain_of_output_type(hpp::string_view type) -> hpp::optional<material_domain>;
+/// Whether @p type is the output node type of a domain.
+auto is_material_graph_output_type(hpp::string_view type) -> bool;
+/// The domain as the editor names it ("Surface", "Decal", "Post Process").
+auto get_material_domain_label(material_domain domain) -> const char*;
+/// The domain as files and tools name it ("surface", "decal", "post_process").
+auto get_material_domain_key(material_domain domain) -> const char*;
+/// The domain a file or tool names; empty for an unknown name.
+auto find_material_domain(hpp::string_view key) -> hpp::optional<material_domain>;
+/// The domain of @p graph: its output node's; Surface for a graph without one.
+auto get_material_graph_domain(const material_graph& graph) -> material_domain;
+/**
+ * @brief Makes @p graph a material of @p domain: its output node becomes the domain's, keeping its id, position and
+ * every input whose pin the new node has (Opacity Mask and Opacity carry over to each other). Settings the new node
+ * has no setting for are dropped. A graph without an output gets the domain's.
+ * @return True when the graph changed.
+ */
+auto set_material_graph_domain(material_graph& graph, material_domain domain) -> bool;
+
+/// Decal Output: the opacity every channel the decal writes is scaled by; also the Post Process Output's.
+inline constexpr const char* MATERIAL_OPACITY_PIN = "opacity";
+/// Decal Output: the optional opacities of the normal and of metallic and roughness (unlinked: Opacity).
+inline constexpr const char* MATERIAL_NORMAL_OPACITY_PIN = "normal_opacity";
+inline constexpr const char* MATERIAL_SURFACE_OPACITY_PIN = "surface_opacity";
+/// Post Process Output: the pixel's new colour.
+inline constexpr const char* MATERIAL_COLOR_PIN = "color";
+/// Decal Output: how the decal's normal meets the surface's: "detail" (bends the surface's own normal, the default)
+/// or "replace" (replaces it over the flat surface).
+inline constexpr const char* MATERIAL_DECAL_NORMAL_BLEND_SETTING = "normal_blend";
+inline constexpr const char* MATERIAL_DECAL_NORMAL_BLEND_DETAIL = "detail";
+inline constexpr const char* MATERIAL_DECAL_NORMAL_BLEND_REPLACE = "replace";
+/// Decal Output: the share of the box's depth over which the decal fades out at each end (0 to 0.5).
+inline constexpr const char* MATERIAL_DECAL_EDGE_FADE_SETTING = "edge_fade";
+/// Post Process Output: where in the frame the material runs (material_post_process_location's keys).
+inline constexpr const char* MATERIAL_POST_PROCESS_LOCATION_SETTING = "location";
+/// Post Process Output: the order among the materials of one Location; higher runs later.
+inline constexpr const char* MATERIAL_POST_PROCESS_PRIORITY_SETTING = "priority";
+/// The Post Process Output's setting naming the Post Process Mask value it runs over; 0 runs everywhere.
+inline constexpr const char* MATERIAL_POST_PROCESS_MASK_SETTING = "run_where_mask";
+
+/**
+ * @brief Where a post-process material runs in the frame. The keys and their order are a contract: a location is
+ * added, never renamed or moved. The values are saved in compiled materials: append only.
+ */
+enum class material_post_process_location : uint8_t
+{
+    /// After the sky and the fog, before particles and TAA: the scene's light at the render size, jittered.
+    before_transparent,
+    /// After TAA and the exposure meter, before bloom and tonemapping: the scene's light, stable.
+    before_bloom,
+    /// After tonemapping, before FXAA and the UI: the display colour, 0 to 1.
+    after_tonemapping,
+};
+
+inline constexpr uint32_t MATERIAL_POST_PROCESS_LOCATION_COUNT = 3;
+/// The Location setting's value of @p location ("before_transparent", ...).
+auto get_material_post_process_location_key(material_post_process_location location) -> const char*;
+/// The Location as the editor names it ("Before Transparent", ...).
+auto get_material_post_process_location_label(material_post_process_location location) -> const char*;
+/// The location a setting value names; empty for an unknown value.
+auto find_material_post_process_location(hpp::string_view key) -> hpp::optional<material_post_process_location>;
 /// The setting naming a parameter node's parameter, which material instances and scripts set it by; on a texture
 /// node, the name its texture is set by; on a Static Switch, the name that shows it in the material's inspector.
 inline constexpr const char* MATERIAL_PARAMETER_NAME_SETTING = "name";

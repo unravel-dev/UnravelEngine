@@ -591,6 +591,26 @@ REFLECT_INLINE(feature_limits)
             entt::attribute{"tooltip", "Allow volumetric clouds. When off, skies that ask for them render flat clouds, "
                                        "without the raymarch."},
         })
+        .data<&feature_limits::decals>("decals"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "decals"},
+            entt::attribute{"pretty_name", "Decals"},
+            entt::attribute{"tooltip", "Allow decals. When off, Decal components draw nothing."},
+        })
+        .data<&feature_limits::decal_surface_channels>("decal_surface_channels"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "decal_surface_channels"},
+            entt::attribute{"pretty_name", "Decal Normals And Roughness"},
+            entt::attribute{"tooltip", "Allow decals to change normals, metallic and roughness. When off, decals lay their "
+                                       "colour and emissive alone, in one pass over the G-buffer, which suits phones."},
+        })
+        .data<&feature_limits::post_process_materials>("post_process_materials"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "post_process_materials"},
+            entt::attribute{"pretty_name", "Post Process Materials"},
+            entt::attribute{"tooltip", "Allow post-process materials. When off, the Post Process Materials of volumes and "
+                                       "cameras run none. Each one is a pass over the whole view."},
+        })
         .data<&feature_limits::detailed_indirect_lighting>("detailed_indirect_lighting"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "detailed_indirect_lighting"},
@@ -653,6 +673,9 @@ SAVE_INLINE(feature_limits)
     try_save(ar, ser20::make_nvp("max_bloom_mips", obj.max_bloom_mips));
     try_save(ar, ser20::make_nvp("per_frame_exposure_metering", obj.per_frame_exposure_metering));
     try_save(ar, ser20::make_nvp("max_shadow_cascades", obj.max_shadow_cascades));
+    try_save(ar, ser20::make_nvp("decals", obj.decals));
+    try_save(ar, ser20::make_nvp("decal_surface_channels", obj.decal_surface_channels));
+    try_save(ar, ser20::make_nvp("post_process_materials", obj.post_process_materials));
 }
 
 LOAD_INLINE(feature_limits)
@@ -675,6 +698,9 @@ LOAD_INLINE(feature_limits)
     try_load(ar, ser20::make_nvp("max_bloom_mips", obj.max_bloom_mips));
     try_load(ar, ser20::make_nvp("per_frame_exposure_metering", obj.per_frame_exposure_metering));
     try_load(ar, ser20::make_nvp("max_shadow_cascades", obj.max_shadow_cascades));
+    try_load(ar, ser20::make_nvp("decals", obj.decals));
+    try_load(ar, ser20::make_nvp("decal_surface_channels", obj.decal_surface_channels));
+    try_load(ar, ser20::make_nvp("post_process_materials", obj.post_process_materials));
 }
 
 REFLECT_INLINE(settings::graphics_settings)

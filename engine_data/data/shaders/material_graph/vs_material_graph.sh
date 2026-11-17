@@ -35,6 +35,7 @@ MaterialVertex mg_evaluate_vertex(mat4 model, vec3 world_position, vec4 packed_n
 	i.screen_uv = vec2_splat(0.5);
 	i.time = time;
 	i.mip_bias = 0.0;
+	mg_set_domain_input_defaults(i);
 	mg_set_object_inputs(i, model);
 #if MATERIAL_INTERPOLATORS
 	i.interpolator0 = vec4_splat(0.0);

@@ -32,6 +32,8 @@ struct state
 {
     /// Draw the active view's color legend over the viewport.
     bool show_legend{true};
+    /// Run the post-process materials of the volumes and the camera in the view.
+    bool show_post_process_materials{true};
     /// The popover's open tab.
     popover_tab tab{popover_tab::views};
     /// Opens or closes the popover from code on the next frame.

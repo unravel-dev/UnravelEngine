@@ -13,6 +13,7 @@ namespace unravel
 struct physics_material;
 struct animation_controller;
 struct material_graph;
+enum class material_domain : uint8_t;
 class material;
 class asset_manager;
 }
@@ -45,6 +46,9 @@ auto create_material(rtti::context& ctx, const fs::path& absolute_path) -> asset
  * Surface Output.
  */
 auto make_starter_material_graph() -> material_graph;
+/// The graph a new material of @p domain starts from: for a decal, a tinted colour map with its alpha as the opacity;
+/// for a post-process material, the scene's colour tinted at a Strength.
+auto make_starter_material_graph(material_domain domain) -> material_graph;
 
 /// The graph a new material function starts with: a Vector 3 input passed to an output.
 auto make_starter_material_function() -> material_graph;

@@ -21,6 +21,24 @@ namespace unravel
 
 /// The most textures a graph material reads: bgfx's 16 stages less the skinning palette's (SKINNING_PALETTE_STAGE).
 constexpr uint32_t MATERIAL_GRAPH_MAX_TEXTURES = 15;
+/// The most textures a decal material reads: its main reads the depth copy and two G-buffer targets on stages of its
+/// own (fs_material_graph_decal.sh).
+constexpr uint32_t MATERIAL_GRAPH_MAX_DECAL_TEXTURES = 12;
+/// The most textures a post-process material reads: its main reads the scene's colour, depth, G-buffer, velocity, the
+/// custom mask and the pre-exposure on stages of its own (mg_post.sh).
+constexpr uint32_t MATERIAL_GRAPH_MAX_POST_PROCESS_TEXTURES = 7;
+/// The most textures a material of @p domain reads.
+auto get_material_graph_max_textures(material_domain domain) -> uint32_t;
+
+/// What a decal material writes (material_graph_compile_result::decal_writes): the channels its Decal Output links.
+enum material_decal_write_bits : uint32_t
+{
+    material_decal_writes_base_color = 1u << 0u,
+    material_decal_writes_normal = 1u << 1u,
+    /// Metallic and roughness, written together.
+    material_decal_writes_surface = 1u << 2u,
+    material_decal_writes_emissive = 1u << 3u,
+};
 /// The most vec4 registers a graph material's parameters take (the size the u_mg_params uniform is made with).
 constexpr uint32_t MATERIAL_GRAPH_MAX_PARAMETER_REGISTERS = 64;
 /// The uniform array holding a graph material's parameters.
@@ -240,6 +258,20 @@ struct material_graph_compile_result
     bool reads_object_data{};
     /// How many Vertex Interpolators the pixel stage reads (MATERIAL_INTERPOLATORS): values the vertex shader computes.
     uint32_t interpolator_count{};
+    /// What the material draws: its output node's domain.
+    material_domain domain{material_domain::surface};
+    /// Decals: the channels written (material_decal_write_bits).
+    uint32_t decal_writes{};
+    /// Decals: the material reads the surface it lies on (a Scene Texture of the G-buffer, or a Detail normal blend),
+    /// so it draws through the decal buffers, where the G-buffer is not a target.
+    bool decal_reads_surface{};
+    /// Post-process: where it runs and its order there.
+    material_post_process_location post_location{material_post_process_location::after_tonemapping};
+    int post_priority{};
+    /// Decal and post-process: the view textures the Scene Texture nodes read (material_scene_texture_bits).
+    uint32_t scene_textures{};
+    /// A Scene Texture node reads another pixel than its own (its UV is linked).
+    bool samples_scene_neighbours{};
 
     /// The pixel stage reads what only the graph's own vertex shader writes: draws need that vertex shader, never the
     /// renderer's.
@@ -295,6 +327,14 @@ struct material_graph_binding
     bool reads_vertex_outputs{};
     /// material_graph_compile_result::computes_vertex_values.
     bool computes_vertex_values{};
+    /// What the material draws and the traits of its domain (material_graph_compile_result's of the same names).
+    material_domain domain{material_domain::surface};
+    uint32_t decal_writes{};
+    bool decal_reads_surface{};
+    material_post_process_location post_location{material_post_process_location::after_tonemapping};
+    int post_priority{};
+    uint32_t scene_textures{};
+    bool samples_scene_neighbours{};
 };
 
 /// The binding of a compiled graph.

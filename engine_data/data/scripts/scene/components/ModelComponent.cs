@@ -5,6 +5,19 @@ namespace Unravel.Core
 {
 
     /// <summary>
+    /// Whether decals draw on a model (<see cref="ModelComponent.receiveDecals"/>).
+    /// </summary>
+    public enum DecalReceive
+    {
+        /// <summary>Every model but a skinned one: a decal fixed in the world slides on a moving character.</summary>
+        Auto = 0,
+        /// <summary>Decals draw on the model.</summary>
+        On = 1,
+        /// <summary>Decals never draw on the model.</summary>
+        Off = 2,
+    }
+
+    /// <summary>
     /// Represents a component that provides model rendering capabilities for an entity.
     /// </summary>
     public class ModelComponent : Component
@@ -34,6 +47,26 @@ namespace Unravel.Core
         {
             get => internal_m2n_model_get_casts_shadow(owner);
             set => internal_m2n_model_set_casts_shadow(owner, value);
+        }
+
+        /// <summary>
+        /// Whether decals draw on the model: Auto (every model but a skinned one), On or Off.
+        /// </summary>
+        public DecalReceive receiveDecals
+        {
+            get => (DecalReceive)internal_m2n_model_get_receive_decals(owner);
+            set => internal_m2n_model_set_receive_decals(owner, (int)value);
+        }
+
+        /// <summary>
+        /// The value, 1 to 255, that post-process materials find the model by, also where something hides it (Scene
+        /// Texture Custom Mask and Custom Depth, Run Where Mask): highlight what the player looks at by setting it.
+        /// 0 leaves the model out.
+        /// </summary>
+        public int postProcessMask
+        {
+            get => internal_m2n_model_get_post_process_mask(owner);
+            set => internal_m2n_model_set_post_process_mask(owner, value);
         }
 
         /// <summary>
@@ -123,6 +156,18 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_model_set_enabled(Entity eid, bool enabled);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_model_get_receive_decals(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_model_get_post_process_mask(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_model_set_post_process_mask(Entity eid, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_model_set_receive_decals(Entity eid, int mode);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern bool internal_m2n_model_get_casts_shadow(Entity eid);
