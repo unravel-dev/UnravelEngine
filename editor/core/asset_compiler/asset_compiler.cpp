@@ -3311,12 +3311,18 @@ auto check_script_files(const std::vector<fs::path>& files, std::vector<script_c
     return builds;
 }
 
-template<>
-auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
+namespace
+{
+/// Builds the script library of `key`'s protocol into `build_folder`, then moves it to `output`.
+auto build_script_library(asset_manager& am,
+                          const fs::path& key,
+                          const fs::path& output,
+                          uint32_t flags,
+                          const fs::path& build_folder) -> bool
 {
     bool result = true;
     fs::error_code err;
-    fs::path temp = fs::temp_directory_path(err);
+    fs::path temp = build_folder;
 
     dotnet::compiler_params params;
 
@@ -3379,9 +3385,6 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
 
     // APPLOG_TRACE("Script Compile : \n {0} {1}", cmd.cmd, cmd.args);
 
-    // Symbols an older build left here (an mdb where this one writes a pdb) would travel with this one.
-    script_system::remove_compiled_lib(temp);
-
     if(!run_process(cmd.cmd, cmd.args, true, error))
     {
         auto parsed_errors = parse_compilation_errors(error);
@@ -3435,6 +3438,21 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
         script_system::copy_compiled_lib(temp, output);
     }
 
+    return result;
+}
+} // namespace
+
+template<>
+auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
+{
+    fs::error_code err;
+    // One folder per build: every editor on the computer builds its libraries under the same temp folder, and two
+    // building the same library name at once would load each other's assembly.
+    const auto build_folder =
+        fs::temp_directory_path(err) / ("unravel-script-build-" + hpp::to_string(generate_uuid()));
+    fs::create_directories(build_folder, err);
+    const bool result = build_script_library(am, key, output, flags, build_folder);
+    fs::remove_all(build_folder, err);
     return result;
 }
 
