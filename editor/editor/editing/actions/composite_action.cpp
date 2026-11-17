@@ -1,5 +1,7 @@
 #include "composite_action.h"
 
+#include <algorithm>
+
 namespace unravel
 {
 
@@ -138,10 +140,11 @@ void sequence_action_t::do_action()
     }
 
     // Redo path: replay captured sub-actions in order. Each sub-action owns its own
-    // first-vs-subsequent logic (e.g. create_entities_action_t restores from snapshot).
+    // first-vs-subsequent logic (e.g. create_entities_action_t restores from snapshot), and
+    // is checked at its turn: what it acts on may exist again only once the steps before it ran.
     for(auto& action : sub_actions)
     {
-        if(action)
+        if(action && action->is_valid())
         {
             action->do_action();
         }
@@ -153,7 +156,7 @@ void sequence_action_t::undo_action()
     // Undo in reverse order so later steps are unwound before earlier ones.
     for(auto it = sub_actions.rbegin(); it != sub_actions.rend(); ++it)
     {
-        if(*it)
+        if(*it && (*it)->is_valid())
         {
             (*it)->undo_action();
         }
@@ -166,23 +169,33 @@ auto sequence_action_t::is_valid() const -> bool
     {
         return !step_factories.empty();
     }
-    if(sub_actions.empty())
-    {
-        return false;
-    }
-    for(const auto& action : sub_actions)
-    {
-        if(!action || !action->is_valid())
-        {
-            return false;
-        }
-    }
-    return true;
+    // A later step may act on an entity an earlier one creates, which is gone while the chain is
+    // undone: the chain is valid when its first step is, and the others are checked at their turn.
+    return !sub_actions.empty() && sub_actions.front() && sub_actions.front()->is_valid();
 }
 
 auto sequence_action_t::is_mergeable(const editing_action_t& /*previous*/) const -> bool
 {
     return false;
+}
+
+auto sequence_action_t::is_undoable() const -> bool
+{
+    return undoable && (!first_run_done || !sub_actions.empty());
+}
+
+auto sequence_action_t::modifies_scene_content() const -> bool
+{
+    if(!first_run_done)
+    {
+        return true;
+    }
+    return std::any_of(sub_actions.begin(),
+                       sub_actions.end(),
+                       [](const std::shared_ptr<editing_action_t>& action)
+                       {
+                           return action && action->modifies_scene_content();
+                       });
 }
 
 void sequence_action_t::draw_in_inspector(rtti::context& ctx)

@@ -38,8 +38,11 @@ struct composite_action_t : crtp_meta_type<composite_action_t, editing_action_t>
  *  - Subsequent do_action (redo): replays retained sub-actions in order.
  *  - undo_action: walks retained sub-actions in reverse and undoes each, matching
  *    composite_action_t semantics.
+ *  - is_valid: the first sub-action's; each later one is checked when its turn comes, since
+ *    it may act on an entity an earlier step creates (gone while the chain is undone).
  *
- * Factories returning nullptr are silently skipped, allowing conditional steps.
+ * Factories returning nullptr are silently skipped, allowing conditional steps. A sequence whose
+ * factories all returned nullptr changed nothing: it is no undo step and leaves the scene saved.
  */
 struct sequence_action_t : crtp_meta_type<sequence_action_t, editing_action_t>
 {
@@ -57,6 +60,8 @@ struct sequence_action_t : crtp_meta_type<sequence_action_t, editing_action_t>
     void undo_action() override;
     auto is_valid() const -> bool override;
     auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    auto is_undoable() const -> bool override;
+    auto modifies_scene_content() const -> bool override;
     void draw_in_inspector(rtti::context& ctx) override;
 };
 
