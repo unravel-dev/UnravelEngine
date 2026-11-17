@@ -122,6 +122,9 @@ window (`unravel-editor-mcp`), prefab editing and override paths (`unravel-prefa
 - The Game panel sets `rendering_system`'s game view device only while it shows a device
   preset (`game_panel::apply_view_size`); the UI dp ratio and the scripts' screen follow that
   device, otherwise the editor window's display scale.
+- A phone or tablet preset makes the game behave as that device at every render size, a forced
+  capture size included (user rule): never fall back to a desktop because the size differs.
+  Play start sets the device before the scripts start (`game_panel::on_play_before_begin`).
 
 ## How it works
 

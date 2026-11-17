@@ -25,6 +25,12 @@ public:
     void deinit(rtti::context& ctx);
 
     void on_frame_update(rtti::context& ctx, const frame_times& times);
+    /**
+     * @brief Play brings this panel to the front, but the scripts start before it draws again: from now on it counts
+     * as shown for a few frames, and the game view's size and device are set before they start, so Start already
+     * reads the phone or tablet the preset stands for.
+     */
+    void on_play_before_begin(rtti::context& ctx);
     void on_frame_before_render(rtti::context& ctx, const frame_times& times);
     void on_frame_render(rtti::context& ctx, const frame_times& times);
     void on_project_opened();
@@ -98,6 +104,7 @@ private:
     /// Render size set by set_forced_render_size; 0 x 0 when not forced.
     uint32_t forced_render_width_{0};
     uint32_t forced_render_height_{0};
+    std::shared_ptr<int> sentinel_ = std::make_shared<int>();
     /// Escape freed the cursor; a click in the view gives it back to the game.
     bool is_cursor_released_{};
 };

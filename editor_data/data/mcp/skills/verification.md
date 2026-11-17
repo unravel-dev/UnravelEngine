@@ -52,7 +52,10 @@ live, not to build the scene.
 3. viewport_capture_game (it renders the game view itself, even with the Game
    tab hidden). width + height (e.g. 1280 x 720) capture at that resolution
    and restore the previous size afterwards; viewport_set_render_size
-   {"panel":"game",...} keeps the game at one size (0 x 0 to undo).
+   {"panel":"game",...} keeps the game at one size (0 x 0 to undo). With a
+   phone or tablet preset in the Game panel the game behaves as that device
+   (touch controls, safe area) at any capture size; pick a desktop preset for
+   desktop captures.
 4. play_set_active {"active":false} - edit state is restored, including
    everything physics moved. The scenes reload after a stop: wait for
    editor_wait_for {"play_phase":"inactive"} before the next edit or play

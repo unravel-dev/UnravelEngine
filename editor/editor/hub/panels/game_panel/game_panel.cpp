@@ -13,6 +13,7 @@
 #include <string>
 #include <editor/system/project_manager.h>
 #include <engine/ecs/ecs.h>
+#include <engine/events.h>
 #include <engine/play_mode.h>
 #include <engine/input/input.h>
 #include <engine/rendering/ecs/components/camera_component.h>
@@ -67,6 +68,21 @@ auto make_device_frame(rtti::context& ctx, const ImVec2& image_size, const ImVec
 /// corners cover (on the opposite edge).
 constexpr float PHONE_CUTOUT_SHARE = 0.045f;
 constexpr float PHONE_CORNER_SHARE = 0.03f;
+/// Frames the panel counts as shown after play starts, while the editor brings its tab to the front.
+constexpr uint32_t PLAY_START_SHOWN_FRAMES = 2;
+
+/// The pixels a view of @p resolution gets in a panel area of @p area_size; the preset's own size while the panel has
+/// not been drawn yet, as when play starts with another tab in front. Zero for a free preset then.
+auto get_view_pixels(const settings::resolution_settings::resolution& resolution, ImVec2 area_size) -> usize32_t
+{
+    const usize32_t pixels = viewport_resolution::compute_viewport_pixels(resolution, area_size);
+    if(pixels.width > 0 && pixels.height > 0)
+    {
+        return pixels;
+    }
+    return viewport_resolution::get_render_resolution(resolution);
+}
+
 
 /// The phone or the tablet a preset stands for, in the pixels of a view of @p view_size; nothing for a desktop or
 /// free preset. Scripts then see its touch screen, its density and its cutout instead of the editor's desktop.
@@ -136,6 +152,13 @@ game_panel::game_panel(imgui_panels* parent, const char* name)
 
 void game_panel::init(rtti::context& ctx)
 {
+    ctx.get_cached<events>().on_play_before_begin.connect(sentinel_, this, &game_panel::on_play_before_begin);
+}
+
+void game_panel::on_play_before_begin(rtti::context& ctx)
+{
+    hold_visible_force(PLAY_START_SHOWN_FRAMES);
+    apply_view_size(ctx, ctx.get_cached<ecs>().get_scene());
 }
 
 void game_panel::deinit(rtti::context& ctx)
@@ -180,7 +203,7 @@ void game_panel::apply_view_size(rtti::context& ctx, scene& scn) const
         rendering.set_game_view_device(hpp::nullopt);
         return;
     }
-    const usize32_t view_size = viewport_resolution::compute_viewport_pixels(*resolution, view_area_size_);
+    const usize32_t view_size = get_view_pixels(*resolution, view_area_size_);
     if(view_size.width == 0 || view_size.height == 0)
     {
         rendering.set_game_view_device(hpp::nullopt);
