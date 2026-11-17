@@ -193,6 +193,7 @@ constexpr auto ROWS = std::to_array<row_desc>({
      .name = "Decal",
      .objects = OBJECTS<decal_component>,
      .gizmo_tooltip = "The decal's box, the direction it projects in and the face it lays onto surfaces.",
+     .icon_flag = &billboard_gizmos::show_decal,
      .gizmo_flag = &gizmos_data::show_decal},
     {.icon = ICON_MDI_TEXT,
      .name = "Text",

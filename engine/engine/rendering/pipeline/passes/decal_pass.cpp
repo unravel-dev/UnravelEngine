@@ -87,16 +87,6 @@ auto get_decal_screen_fade(float share, float screen_size) -> float
     return std::clamp((share - screen_size * 0.5f) / (screen_size * 0.5f), 0.0f, 1.0f);
 }
 
-/// 1 up to nine tenths of @p max_distance, 0 beyond it, linear between.
-auto get_decal_distance_fade(float distance, float max_distance) -> float
-{
-    if(max_distance <= 0.0f)
-    {
-        return 1.0f;
-    }
-    return std::clamp((max_distance - distance) / (max_distance * 0.1f), 0.0f, 1.0f);
-}
-
 /// The material a decal's draw binds, and whether it is the shared one: a decal sharing its material's draw takes the
 /// shared material (its first registers ride in the instance); one whose overrides cannot takes its own.
 auto get_decal_program_material(decal_component& decal, const std::shared_ptr<material>& shared) -> std::shared_ptr<material>
@@ -240,7 +230,7 @@ void decal_pass::collect(scene& scn, const camera& cam, const feature_limits& li
             const float radius = 0.5f * std::sqrt(math::dot(axis_x, axis_x) + math::dot(axis_y, axis_y) + math::dot(axis_z, axis_z));
             const float distance = math::length(center - camera_position);
             float fade = std::clamp(decal.opacity, 0.0f, 1.0f) * decal.get_play_fade();
-            fade *= get_decal_distance_fade(distance, decal.max_distance);
+            fade *= decal.get_distance_fade(distance);
             fade *= get_decal_screen_fade(get_decal_screen_share(radius, distance, projection_scale, is_perspective), decal.fade_screen_size);
             if(fade <= 0.0f)
             {

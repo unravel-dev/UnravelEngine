@@ -603,6 +603,11 @@ auto thumbnail_manager::get_gizmo_icon(entt::handle e) -> gfx::texture::ptr
         icon = gimzmo_icons_.particle_emitter;
     }
 
+    if(e.all_of<decal_component>())
+    {
+        icon = gimzmo_icons_.decal;
+    }
+
     return icon.get();
 }
 
@@ -644,6 +649,7 @@ auto thumbnail_manager::init(rtti::context& ctx) -> bool
     gimzmo_icons_.audio_source = am.get_asset<gfx::texture>("editor:/data/icons/audio_source.png");
     gimzmo_icons_.reflection_probe = am.get_asset<gfx::texture>("editor:/data/icons/reflection_probe.png");
     gimzmo_icons_.particle_emitter = am.get_asset<gfx::texture>("editor:/data/icons/particle_emitter.png");
+    gimzmo_icons_.decal = am.get_asset<gfx::texture>("editor:/data/icons/decal.png");
 
     gen_.remaining = static_cast<int>(gen_.scenes.size());
     gen_.reset_wait();

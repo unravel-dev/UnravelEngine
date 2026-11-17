@@ -9,6 +9,8 @@
 namespace unravel
 {
 
+class scene;
+
 /**
  * @brief A decal: a box that lays a Decal-domain material onto the surfaces inside it.
  *
@@ -90,11 +92,31 @@ public:
     auto get_lifetime_fade() const -> float;
     /// Whether the decal has aged past its Lifetime and Fade Out.
     auto has_faded_out() const -> bool;
+    /// How much of the decal shows at @p distance from the view: 1 up to nine tenths of Max Distance, 0 beyond it.
+    auto get_distance_fade(float distance) const -> float;
+    /**
+     * @brief Whether the decal, placed by @p world, draws on a surface at @p point whose normal is @p normal: the point
+     *        lies in its box and the surface turns toward the projector within its Angle Fade. Which surfaces receive
+     *        it is find_decal_at's.
+     */
+    auto draws_at(const math::transform& world, const math::vec3& point, const math::vec3& normal) const -> bool;
     /// The Lifetime as the Decal Data node reads it: its age over Fade In, Lifetime and Fade Out (0 while it stays).
     auto get_normalized_age() const -> float;
 
 private:
     material_instance material_;
 };
+
+/**
+ * @brief The decal drawn on top at @p point of @p surface, a model whose normal there is @p normal, seen from
+ *        @p view_position: of the active decals in @p scn that show there (a Decal material, not faded out, draws_at)
+ *        and that @p surface receives (Receive Decals, Receiver Layers), the one of highest Sort Order, the smaller
+ *        box on a tie. Empty when none draws there. The Scene view picks decals with it.
+ */
+auto find_decal_at(scene& scn,
+                   entt::handle surface,
+                   const math::vec3& point,
+                   const math::vec3& normal,
+                   const math::vec3& view_position) -> entt::handle;
 
 } // namespace unravel

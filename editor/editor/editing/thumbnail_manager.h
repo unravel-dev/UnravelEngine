@@ -153,6 +153,7 @@ private:
         asset_handle<gfx::texture> audio_source;
         asset_handle<gfx::texture> reflection_probe;
         asset_handle<gfx::texture> particle_emitter;
+        asset_handle<gfx::texture> decal;
 
     } gimzmo_icons_;
 

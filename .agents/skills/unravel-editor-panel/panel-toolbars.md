@@ -71,7 +71,10 @@ One module gives every panel toolbar the same look and input rules: `panel_toolb
   is a table of object types against Icons (every object) and Gizmos (the selection). A new
   gizmo flag is a `ROWS` entry or a detail of one and gets a line in the serialize of
   `editor/editor/meta/project/project_editor_settings.cpp`; a new icon type is added to
-  `billboard_components`, `billboard_gizmos::is_shown` and `ROWS`. The settings
+  `billboard_components`, `billboard_gizmos::is_shown`, `ROWS` and
+  `thumbnail_manager::get_gizmo_icon` (an icon in `editor_data/data/icons/` with its `.meta` and
+  compiled asset); a `shows_billboard` overload leaves out objects of the type that draw none
+  (decals spawned in play). The settings
   (`editor/editor/editing/gizmo_settings.h`) live in `editing_manager` while a project is open;
   a change on the toolbar also goes to the project's settings in `app:/editor/editor.cfg`.
   `viewport_set_overlays` (MCP) changes only the live values, so a capture is never saved.

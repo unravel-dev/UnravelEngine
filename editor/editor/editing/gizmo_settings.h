@@ -12,13 +12,24 @@ class light_component;
 class reflection_probe_component;
 class audio_source_component;
 class particle_emitter_component;
+class decal_component;
 
 /// The components whose objects draw an icon in the Scene view, and can be picked by it.
 using billboard_components = std::tuple<camera_component,
                                         light_component,
                                         reflection_probe_component,
                                         audio_source_component,
-                                        particle_emitter_component>;
+                                        particle_emitter_component,
+                                        decal_component>;
+
+/// Whether an object of a billboard component draws its icon: every one, but a decal a script spawned in play
+/// (Decals.Spawn), which can be thousands.
+template<typename T>
+auto shows_billboard(const T& /*component*/) -> bool
+{
+    return true;
+}
+auto shows_billboard(const decal_component& decal) -> bool;
 
 /// The icons the Scene view draws for every object of a type in the scene.
 struct billboard_gizmos
@@ -31,6 +42,7 @@ struct billboard_gizmos
     bool show_reflection_probe {true};
     bool show_audio_source {true};
     bool show_particle_emitter {true};
+    bool show_decal {true};
 
     auto operator==(const billboard_gizmos&) const -> bool = default;
 
@@ -54,17 +66,21 @@ struct billboard_gizmos
         {
             return show_audio_source;
         }
+        else if constexpr(std::is_same_v<T, particle_emitter_component>)
+        {
+            return show_particle_emitter;
+        }
         else
         {
-            static_assert(std::is_same_v<T, particle_emitter_component>, "This component has no icon.");
-            return show_particle_emitter;
+            static_assert(std::is_same_v<T, decal_component>, "This component has no icon.");
+            return show_decal;
         }
     }
 
     /// Whether any type of object shows its icon.
     auto is_any_shown() const -> bool
     {
-        return show_camera || show_light || show_reflection_probe || show_audio_source || show_particle_emitter;
+        return show_camera || show_light || show_reflection_probe || show_audio_source || show_particle_emitter || show_decal;
     }
 
     /// Hides the icons of every type of object.
@@ -75,6 +91,7 @@ struct billboard_gizmos
         show_reflection_probe = false;
         show_audio_source = false;
         show_particle_emitter = false;
+        show_decal = false;
     }
 };
 

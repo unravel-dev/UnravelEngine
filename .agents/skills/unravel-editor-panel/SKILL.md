@@ -145,6 +145,12 @@ window (`unravel-editor-mcp`), prefab editing and override paths (`unravel-prefa
 - The viewports drive scenes: `scene_panel` updates its own scene (editor camera and
   editor-only entities) and the prefab scene while visible; `game_panel` updates the game
   scene every frame and renders it while visible or forced.
+- Picking (`picking_manager`): a click draws entity ids around the cursor (models' geometry,
+  text and UI bounds, the icons of `billboard_components`) and takes the id seen most. The first
+  click on a nested entity selects its logical top-level entity, the next the entity itself
+  (`get_logical_top_level_entity`). A plain click selection whose ray hits a model under a decal
+  takes the decal (`pick_decal_over`, the engine's `find_decal_at`); a click on a selected decal
+  passes through to the surface. Area picks and drag-and-drop picks (a callback) keep what they hit.
 - `editing_manager` holds the selection (`entt::meta_any` objects: entities, assets), focus,
   gizmo, snap and grid settings, prefab mode and the `undo_redo_stack`. `do_action` runs an
   action now; `queue_action` runs it at `execute_actions` during the frame update.

@@ -20,12 +20,17 @@
 
 #include "../tests.h"
 
+#include <engine/assets/asset_manager.h>
 #include <engine/defaults/defaults.h>
+#include <engine/ecs/components/layer_component.h>
+#include <engine/engine.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/scene.h>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/rendering/ecs/components/decal_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/material_graph/graph_material.h>
+#include <engine/rendering/material_graph/material_graph.h>
 
 #include <cstdio>
 #include <sstream>
@@ -185,6 +190,77 @@ void test_receivers()
     check(decal.receiver_layers.mask == layer_reserved::everything_layer, "a decal lays onto every layer by default");
 }
 
+/// A material whose graph ends in @p output_type, registered under @p name.
+auto make_output_material(const std::string& name, const char* output_type) -> asset_handle<material>
+{
+    material_graph graph;
+    material_graph_node output;
+    output.id = "output";
+    output.type = output_type;
+    graph.nodes.push_back(output);
+    auto made = std::make_shared<graph_material>();
+    made->set_graph(graph);
+    auto& am = engine::context().get_cached<asset_manager>();
+    const std::string key = "engine:/embedded/decals_test/" + name;
+    am.unload_asset<material>(key);
+    return am.get_asset_from_instance<material>(key, made);
+}
+
+void test_find_decal_at()
+{
+    std::printf("test_find_decal_at\n");
+    const auto decal_material = make_output_material("decal", MATERIAL_GRAPH_DECAL_OUTPUT_TYPE);
+    const auto surface_material = make_output_material("surface", MATERIAL_GRAPH_OUTPUT_TYPE);
+    scene scn("decals");
+    auto floor = scn.create_entity("floor");
+    auto& floor_model = floor.emplace<model_component>();
+    const math::vec3 up(0.0f, 1.0f, 0.0f);
+    const math::vec3 eye(0.0f, 2.0f, 0.0f);
+    const auto add_decal = [&](const char* name, const math::vec2& size)
+    {
+        auto entity = scn.create_entity(name);
+        auto& decal = entity.emplace<decal_component>();
+        decal.set_material(decal_material);
+        decal.resize(size);
+        defaults::place_decal_on_surface(entity, math::vec3(0.0f), up);
+        return entity;
+    };
+    check(!find_decal_at(scn, floor, math::vec3(0.0f), up, eye), "a scene without decals has none to pick");
+
+    auto wide = add_decal("wide", math::vec2(2.0f, 2.0f));
+    check(find_decal_at(scn, floor, math::vec3(0.6f, 0.0f, 0.3f), up, eye) == wide, "a click inside the decal's box picks it");
+    check(!find_decal_at(scn, floor, math::vec3(1.4f, 0.0f, 0.0f), up, eye), "a click outside its box picks none");
+    check(!find_decal_at(scn, floor, math::vec3(0.6f, 0.0f, 0.3f), math::vec3(1.0f, 0.0f, 0.0f), eye),
+          "a surface turned past the end of its Angle Fade shows none of it");
+
+    auto narrow = add_decal("narrow", math::vec2(0.5f, 0.5f));
+    check(find_decal_at(scn, floor, math::vec3(0.1f, 0.0f, 0.1f), up, eye) == narrow, "of two decals of one Sort Order, the smaller");
+    wide.get<decal_component>().sort_order = 1;
+    check(find_decal_at(scn, floor, math::vec3(0.1f, 0.0f, 0.1f), up, eye) == wide, "a higher Sort Order is on top");
+    wide.get<decal_component>().sort_order = 0;
+
+    narrow.get<decal_component>().opacity = 0.0f;
+    wide.get<decal_component>().max_distance = 1.0f;
+    check(!find_decal_at(scn, floor, math::vec3(0.1f, 0.0f, 0.1f), up, eye), "a decal faded out, or too far away, shows nothing to pick");
+    narrow.get<decal_component>().opacity = 1.0f;
+    wide.get<decal_component>().max_distance = 0.0f;
+
+    narrow.get<decal_component>().set_material(surface_material);
+    check(find_decal_at(scn, floor, math::vec3(0.1f, 0.0f, 0.1f), up, eye) == wide, "a decal of a surface material draws nothing");
+    narrow.get<decal_component>().set_material(decal_material);
+
+    floor_model.set_decal_receive(decal_receive::off);
+    check(!find_decal_at(scn, floor, math::vec3(0.1f, 0.0f, 0.1f), up, eye), "a surface whose Receive Decals is off keeps none");
+    floor_model.set_decal_receive(decal_receive::automatic);
+    floor.get_or_emplace<layer_component>().layers.mask = 1 << 3;
+    wide.get<decal_component>().receiver_layers.mask = 1 << 3;
+    narrow.get<decal_component>().receiver_layers.mask = 1 << 4;
+    check(find_decal_at(scn, floor, math::vec3(0.1f, 0.0f, 0.1f), up, eye) == wide,
+          "only a decal whose Receiver Layers hold the surface's layer draws on it");
+    wide.get<transform_component>().set_active(false);
+    check(!find_decal_at(scn, floor, math::vec3(0.1f, 0.0f, 0.1f), up, eye), "an inactive decal draws nothing");
+}
+
 void test_round_trip()
 {
     std::printf("test_round_trip\n");
@@ -245,6 +321,7 @@ void run_decals_suite(rtti::context& /*ctx*/)
     RUN_CASE(test_box());
     RUN_CASE(test_placement());
     RUN_CASE(test_receivers());
+    RUN_CASE(test_find_decal_at());
     RUN_CASE(test_round_trip());
 }
 

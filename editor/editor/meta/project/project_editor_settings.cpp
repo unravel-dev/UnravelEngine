@@ -60,6 +60,7 @@ SERIALIZE_INLINE(billboard_gizmos)
     try_serialize(ar, ser20::make_nvp("show_reflection_probe", obj.show_reflection_probe));
     try_serialize(ar, ser20::make_nvp("show_audio_source", obj.show_audio_source));
     try_serialize(ar, ser20::make_nvp("show_particle_emitter", obj.show_particle_emitter));
+    try_serialize(ar, ser20::make_nvp("show_decal", obj.show_decal));
 }
 
 SERIALIZE_INLINE(gizmos_data)

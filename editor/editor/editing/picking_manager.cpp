@@ -680,6 +680,10 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                         scn.registry->view<type_t>().each(
                             [&](auto e, auto&& comp)
                             {
+                                if(!shows_billboard(comp))
+                                {
+                                    return;
+                                }
 
                                 auto entity = scn.create_handle(e);
 
@@ -699,7 +703,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                                 if(icon)
                                 {
                                     if(!pick_camera.test_billboard(em.billboard_data.size, world_transform))
-                                        return; // completely outside → skip draw
+                                        return; // completely outside -> skip draw
 
                                     gfx::draw_billboard(dd.encoder,
                                                         icon->native_handle(),
@@ -814,11 +818,17 @@ void picking_manager::process_pick_result(rtti::context& ctx, scene* target_scen
     if(id_key != 0)
     {
         picked_entity = target_scene->create_handle(entity);
+        const bool is_area_picking = pick_area_.x > 0.0f && pick_area_.y > 0.0f;
+        // A plain click selection on a decal's surface selects the decal; drag-and-drop picks (a callback) and area
+        // picks keep what they hit.
+        if(picked_entity && !pick_callback_ && !is_area_picking)
+        {
+            picked_entity = pick_decal_over(ctx, *target_scene, picked_entity);
+        }
         if(picked_entity)
         {
             auto logical_pick = get_logical_top_level_entity(*target_scene->registry, picked_entity);
 
-            const bool is_area_picking = pick_area_.x > 0.0f && pick_area_.y > 0.0f;
             if(is_area_picking || !em.is_selected(logical_pick))
             {
                 picked_entity = logical_pick;
@@ -848,6 +858,27 @@ void picking_manager::process_pick_result(rtti::context& ctx, scene* target_scen
             em.unselect();
         }
     }
+}
+
+auto picking_manager::pick_decal_over(rtti::context& ctx, scene& scn, entt::handle picked) const -> entt::handle
+{
+    // Nothing changes for a click on anything but a model, or in a scene without decals.
+    if(!pick_ray_ || !picked.all_of<model_component>() || scn.registry->view<decal_component>().size_hint() == 0)
+    {
+        return picked;
+    }
+    const auto hits = raycast_scene_models(scn, *pick_ray_);
+    if(hits.empty() || hits.front().entity != picked)
+    {
+        return picked;
+    }
+    const auto& hit = hits.front();
+    const entt::handle decal = find_decal_at(scn, picked, hit.point, hit.normal, pick_ray_->origin);
+    if(!decal || ctx.get_cached<editing_manager>().is_selected(decal))
+    {
+        return picked;
+    }
+    return decal;
 }
 
 picking_manager::picking_manager()
@@ -922,6 +953,7 @@ auto picking_manager::deinit(rtti::context& ctx) -> bool
 
 void picking_manager::setup_pick_camera(const camera& cam, math::vec2 pos, math::vec2 area)
 {
+    pick_ray_.reset();
     camera pick_camera;
     if(area.x > 0.0f && area.y > 0.0f)
     {
@@ -945,6 +977,8 @@ void picking_manager::setup_pick_camera(const camera& cam, math::vec2 pos, math:
         if(!cam.viewport_to_world(pos, frustum.planes[math::volume_plane::far_plane], pick_at, true))
             return;
 
+        pick_ray_ = scene_ray{.origin = pick_eye, .direction = math::normalize(pick_at - pick_eye)};
+
         pick_camera.set_aspect_ratio(1.0f);
         pick_camera.set_fov(1.0f);
         pick_camera.set_near_clip(near_clip);
@@ -961,6 +995,7 @@ void picking_manager::setup_pick_camera(const camera& cam, math::vec2 pos, math:
 
 void picking_manager::cancel_pick()
 {
+    pick_ray_.reset();
     pick_camera_.reset();
     original_camera_.reset();
     pick_position_ = {};

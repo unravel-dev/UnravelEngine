@@ -22,6 +22,7 @@
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/ecs/components/decal_component.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
@@ -457,7 +458,7 @@ void gizmos_renderer::draw_outline_pass(const gfx::frame_buffer::ptr& selection_
     gfx::set_texture(outline_program_.s_tex, 0, selection_mask);
 
     float thickness = 3.0f;
-    // Compute inverse‐pixel dims:
+    // Compute inverse-pixel dims:
     float data[4] = {1.0f / float(size.width), 1.0f / float(size.height), thickness, 0.0f};
     gfx::set_uniform(outline_program_.u_data, data);
 
@@ -465,7 +466,7 @@ void gizmos_renderer::draw_outline_pass(const gfx::frame_buffer::ptr& selection_
     float outline_color[4] = {1.0f, 0.5f, 0.2f, 1.0f};
     gfx::set_uniform(outline_program_.u_outline_color, outline_color);
 
-    // Draw a full‐screen quad
+    // Draw a full-screen quad
     auto topology = gfx::clip_quad(0.0f);
 
     // Alpha-blend the outline over existing scene
@@ -474,6 +475,11 @@ void gizmos_renderer::draw_outline_pass(const gfx::frame_buffer::ptr& selection_
     bgfx::submit(dd.view, outline_program_.program->native_handle());
 
     outline_program_.program->end();
+}
+
+auto shows_billboard(const decal_component& decal) -> bool
+{
+    return !decal.is_transient;
 }
 
 void gizmos_renderer::draw_icon_gizmos(rtti::context& ctx, scene& scn, const camera& camera, gfx::dd_raii& dd)
@@ -493,6 +499,10 @@ void gizmos_renderer::draw_icon_gizmos(rtti::context& ctx, scene& scn, const cam
             scn.registry->view<type_t>().each(
                 [&](auto e, auto&& comp)
                 {
+                    if(!shows_billboard(comp))
+                    {
+                        return;
+                    }
                     auto entity = scn.create_handle(e);
                     entt::meta_any s = entity;
                     draw_gizmo_billboard_var(ctx, s, camera, dd);

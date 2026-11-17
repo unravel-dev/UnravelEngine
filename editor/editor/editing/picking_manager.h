@@ -10,6 +10,7 @@
 #include <functional>
 
 #include "editing_manager.h"
+#include "scene_raycast.h"
 
 namespace gfx
 {
@@ -58,6 +59,13 @@ private:
     // Process picking results and call appropriate handlers
     void process_pick_result(rtti::context& ctx, scene* target_scene, ENTT_ID_TYPE id_key);
 
+    /**
+     * @brief The decal drawn where the click hit @p picked, a model, or @p picked itself: a click on a decal selects
+     *        it, and a click on a decal already selected passes through to the surface under it. Only a plain click
+     *        selection asks (pick_ray_ is set); the surface the click's ray hits first must be @p picked.
+     */
+    auto pick_decal_over(rtti::context& ctx, scene& scn, entt::handle picked) const -> entt::handle;
+
     /// surface used to render into
     std::shared_ptr<gfx::frame_buffer> surface_;
     ///
@@ -89,6 +97,8 @@ private:
     
     // Store the original pick position for callbacks
     math::vec2 pick_position_{};
+    /// The ray of a single click, through the view at pick_position_; none for an area pick.
+    hpp::optional<scene_ray> pick_ray_{};
 
     math::vec2 pick_area_{};
     
