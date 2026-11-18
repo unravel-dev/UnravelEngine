@@ -55,13 +55,10 @@ constexpr ImU32 FOLDER_ICON_COLOR = IM_COL32(214, 178, 104, 255);
 constexpr ImU32 ADDED_COLOR = IM_COL32(110, 200, 130, 255);
 
 /**
- * @brief The project's scenes that are not in the build yet - neither the startup scene nor listed - and
- * whose path passes `search` (null: every one), by path.
+ * @brief The project's scenes that are not in the build yet - neither the startup scene nor listed - by path.
  */
-auto find_scenes_outside_build(rtti::context& ctx,
-                               const deploy_settings& params,
-                               const std::string& startup_scene,
-                               const ImGuiTextFilter* search) -> std::vector<asset_handle<scene_prefab>>
+auto find_scenes_outside_build(rtti::context& ctx, const deploy_settings& params, const std::string& startup_scene)
+    -> std::vector<asset_handle<scene_prefab>>
 {
     const std::string project_root = std::string(deployment::CONTENT_PROTOCOL) + ":/";
     auto scenes = ctx.get_cached<asset_manager>().get_assets_with_predicate<scene_prefab>(
@@ -74,9 +71,7 @@ auto find_scenes_outside_build(rtti::context& ctx,
                                                {
                                                    return deployment::is_same_key(listed, key);
                                                });
-            const bool passes_search = search == nullptr || search->PassFilter(deployment::get_display_path(key).c_str());
-            return deployment::is_key_under(key, project_root) && !is_listed && !deployment::is_same_key(key, startup_scene) &&
-                   passes_search;
+            return deployment::is_key_under(key, project_root) && !is_listed && !deployment::is_same_key(key, startup_scene);
         });
     // The storage puts the empty handle first without asking the predicate.
     scenes.erase(std::remove_if(scenes.begin(),
@@ -393,7 +388,7 @@ void deploy_content_view::draw_scene_row(const std::string& key, bool is_startup
 /// the project is in the build.
 void deploy_content_view::draw_scene_buttons(rtti::context& ctx)
 {
-    const auto outside = find_scenes_outside_build(ctx, editor_->get(), get_startup_scene(ctx), nullptr);
+    const auto outside = find_scenes_outside_build(ctx, editor_->get(), get_startup_scene(ctx));
     const char* add_all_label = ICON_MDI_PLAYLIST_PLUS " Add All Scenes";
     const char* add_label = ICON_MDI_PLUS " Add Scene";
     const float width = widgets::calc_button_width(add_all_label) + ImGui::GetStyle().ItemSpacing.x + widgets::calc_button_width(add_label);
@@ -413,8 +408,7 @@ void deploy_content_view::draw_scene_buttons(rtti::context& ctx)
     ImGui::SameLine();
     if(ImGui::Button(add_label, ImVec2(widgets::calc_button_width(add_label), 0.0f)))
     {
-        scene_search_.Clear();
-        ImGui::OpenPopup(SCENE_PICKER_ID);
+        asset_picker::open_window(SCENE_PICKER_ID);
     }
     ImGui::SetItemTooltipEx("%s", "Pick a scene the game loads from a script, so what it uses ships too.");
     ImGui::EndDisabled();
@@ -422,39 +416,37 @@ void deploy_content_view::draw_scene_buttons(rtti::context& ctx)
     draw_scene_picker(ctx);
 }
 
-/// The editor's asset picker over the scenes not in the build: a click adds the scene and closes it.
+/// The editor's asset picker over the scenes not in the build: the scene picked is added.
 void deploy_content_view::draw_scene_picker(rtti::context& ctx)
 {
-    if(!asset_picker::begin_window(SCENE_PICKER_ID, get_asset_icon<scene_prefab>(), "Add Scene to Build", scene_search_))
+    if(!asset_picker::is_window_open(SCENE_PICKER_ID))
     {
         return;
     }
-    const auto scenes = find_scenes_outside_build(ctx, editor_->get(), get_startup_scene(ctx), &scene_search_);
+    const auto scenes = find_scenes_outside_build(ctx, editor_->get(), get_startup_scene(ctx));
+    std::vector<asset_picker::entry> entries;
+    entries.reserve(scenes.size());
+    for(const auto& scene : scenes)
+    {
+        entries.push_back({scene.id(), scene.name()});
+    }
+    asset_picker::window_content window{};
+    window.icon = get_asset_icon<scene_prefab>();
+    window.type = ex::get_type<scene_prefab>();
+    window.title = "Add Scene to Build";
+    window.description = "Scenes of the project the build leaves out. Add the ones the game loads from a script, so what they use ships too.";
+    window.confirm_label = ICON_MDI_PLUS " Add to Build";
+    window.empty_text = "Every scene of the project is in the build.";
     auto& tm = ctx.get_cached<thumbnail_manager>();
-    const auto get_tile = [&](std::size_t index) -> asset_picker::tile_content
+    asset_picker::entry_source source;
+    source.get_preview = [&tm, &scenes](std::size_t index)
     {
-        asset_picker::tile_content tile{};
-        tile.thumbnail = asset_picker::make_preview(tm, scenes[index]);
-        tile.name = scenes[index].name();
-        return tile;
+        return asset_picker::make_preview(tm, scenes[index]);
     };
-    const asset_picker::grid_result grid = asset_picker::draw_grid(scenes.size(), get_tile);
-    if(grid.picked >= 0)
+    if(const auto picked = asset_picker::draw_window(SCENE_PICKER_ID, window, entries, source))
     {
-        add_scenes(ctx, {scenes[std::size_t(grid.picked)].id()});
-        ImGui::CloseCurrentPopup();
+        add_scenes(ctx, {scenes[*picked].id()});
     }
-    std::string footer = fmt::format("{} scene(s) not in the build", scenes.size());
-    if(grid.hovered >= 0)
-    {
-        footer = deployment::get_display_path(scenes[std::size_t(grid.hovered)].id());
-    }
-    else if(scenes.empty())
-    {
-        footer = scene_search_.IsActive() ? "No scene outside the build matches the search." : "Every scene of the project is in the build.";
-    }
-    asset_picker::draw_footer(footer);
-    asset_picker::end_window();
 }
 
 void deploy_content_view::add_scenes(rtti::context& ctx, const std::vector<std::string>& keys)

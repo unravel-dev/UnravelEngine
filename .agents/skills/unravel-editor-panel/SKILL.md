@@ -68,6 +68,10 @@ window (`unravel-editor-mcp`), prefab editing and override paths (`unravel-prefa
   else uses.
 - `asset_manager::get_assets_with_predicate` returns the empty handle first: that is the
   picker's None tile; do not add another.
+- An asset shown as a tile is the content browser's card: `draw_content_card` with a
+  `content_card_view` (`content_browser_item.h`), as the asset picker draws it. The picker
+  (`asset_picker::draw_window`) asks for thumbnails, badges and details only of the entries
+  on screen, and one picker serves every asset field and the deploy window's scene list.
 - `flattable` is read as a `bool`; the string `"true"` is ignored. The attribute list:
   [add-inspector.md](add-inspector.md).
 - A value that does not survive save and reload is usually missing from the component's

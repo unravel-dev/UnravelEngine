@@ -33,7 +33,6 @@ struct style_sheet;
 
 struct inspector_asset_handle : public crtp_meta_type<inspector_asset_handle, inspector>
 {
-    ImGuiTextFilter filter;
 };
 
 struct inspector_asset_handle_texture : public crtp_meta_type<inspector_asset_handle_texture, inspector_asset_handle>

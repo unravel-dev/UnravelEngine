@@ -88,9 +88,6 @@ private:
     std::unordered_set<std::string> open_folders_;
     std::vector<std::size_t> rows_;
     ImGuiTextFilter search_;
-
-    /// The search of the Add Scene picker.
-    ImGuiTextFilter scene_search_;
 };
 
 } // namespace unravel

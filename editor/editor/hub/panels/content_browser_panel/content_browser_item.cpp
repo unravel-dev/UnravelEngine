@@ -59,6 +59,8 @@ constexpr float SPINNER_THICKNESS = 3.0f;
 constexpr float SPINNER_SPEED = 6.0f;
 constexpr float SPINNER_ARC = IM_PI * 1.5f;
 constexpr int SPINNER_SEGMENTS = 24;
+/// A card without a texture shows its glyph this share of the thumbnail's width.
+constexpr float GLYPH_SHARE = 0.4f;
 
 constexpr ImU32 WELL_COLOR = IM_COL32(0, 0, 0, 56);
 constexpr ImU32 TILE_COLOR = IM_COL32(255, 255, 255, 12);
@@ -189,15 +191,21 @@ struct tooltip_style_scope
 };
 
 /// The accent color of an asset type; a neutral gray for types without one.
-auto get_type_accent(const std::string& type) -> ImU32
+auto get_type_accent(hpp::string_view type) -> ImU32
 {
     const auto found = std::find_if(TYPE_ACCENTS.begin(),
                                     TYPE_ACCENTS.end(),
                                     [&type](const type_accent& accent)
                                     {
-                                        return type == accent.type;
+                                        return type == hpp::string_view(accent.type);
                                     });
     return found == TYPE_ACCENTS.end() ? FALLBACK_ACCENT_COLOR : found->color;
+}
+
+/// The end of a view's text, for the ImGui calls that take a range.
+auto end_of(hpp::string_view text) -> const char*
+{
+    return text.data() + text.size();
 }
 
 /// The color with its alpha replaced.
@@ -241,9 +249,9 @@ auto compute_card_layout(ImVec2 origin, float width, const card_fonts& fonts) ->
 
 /// The theme's selection color when selected, a brighter tile under the pointer, a faint one otherwise; idle
 /// folders blend into the panel.
-auto get_tile_color(const content_browser_item& item, const card_state& state) -> ImU32
+auto get_tile_color(const content_card_view& card, const card_state& state) -> ImU32
 {
-    if(item.is_selected)
+    if(card.is_selected)
     {
         return ImGui::GetColorU32(ImGuiCol_Header);
     }
@@ -255,31 +263,31 @@ auto get_tile_color(const content_browser_item& item, const card_state& state) -
     {
         return TILE_HOVERED_COLOR;
     }
-    return item.is_folder() ? 0 : TILE_COLOR;
+    return card.is_folder ? 0 : TILE_COLOR;
 }
 
 /// The tile, and for files the darker thumbnail well and the type's accent strip.
 void draw_card_background(ImDrawList* draw_list,
                           const card_layout& layout,
-                          const content_browser_item& item,
+                          const content_card_view& card,
                           const card_state& state)
 {
-    if(const ImU32 tile = get_tile_color(item, state); tile != 0)
+    if(const ImU32 tile = get_tile_color(card, state); tile != 0)
     {
         draw_list->AddRectFilled(layout.card.Min, layout.card.Max, tile, CARD_ROUNDING);
     }
-    if(item.is_folder())
+    if(card.is_folder)
     {
         return;
     }
     draw_list->AddRectFilled(layout.well.Min, layout.well.Max, WELL_COLOR, CARD_ROUNDING, ImDrawFlags_RoundCornersTop);
-    if(!item.type.empty())
+    if(!card.type.empty())
     {
-        draw_list->AddRectFilled(layout.accent.Min, layout.accent.Max, get_type_accent(item.type));
+        draw_list->AddRectFilled(layout.accent.Min, layout.accent.Max, get_type_accent(card.type));
     }
 }
 
-/// An arc turning in the middle of the well while the asset loads.
+/// An arc turning in the middle of the area while the asset loads.
 void draw_card_spinner(ImDrawList* draw_list, const ImRect& area)
 {
     const float radius = area.GetWidth() * SPINNER_RADIUS_FRACTION;
@@ -295,23 +303,36 @@ auto get_thumbnail_area(const ImRect& well) -> ImRect
     return ImRect(well.Min + inset, well.Max - inset);
 }
 
-/// The thumbnail centered in the well with its aspect kept, or the spinner while the asset loads.
-void draw_card_thumbnail(ImDrawList* draw_list, const ImRect& well, const content_browser_item& item)
+/// A glyph in the middle of the area at a share of its width, in the muted text color.
+void draw_card_glyph(ImDrawList* draw_list, const ImRect& area, const char* glyph)
+{
+    ImGui::PushWindowFontScale(area.GetWidth() * GLYPH_SHARE / ImGui::GetFontSize());
+    ImGui::RenderIconCentered(draw_list, area.GetCenter(), glyph, imgui_style::get_muted_text_color_u32());
+    ImGui::PopWindowFontScale();
+}
+
+/// The thumbnail centered in the well with its aspect kept, the spinner while the asset loads, or the card's glyph
+/// while it has no texture.
+void draw_card_thumbnail(ImDrawList* draw_list, const ImRect& well, const content_card_view& card)
 {
     const ImRect area = get_thumbnail_area(well);
-    if(item.is_loading)
+    if(card.is_loading)
     {
         draw_card_spinner(draw_list, area);
         return;
     }
-    ImVec2 image = ImGui::GetSize(item.icon);
-    if(!item.icon || image.x <= 0.0f || image.y <= 0.0f)
+    ImVec2 image = card.texture_size;
+    if(card.texture == ImTextureID{} || image.x <= 0.0f || image.y <= 0.0f)
     {
+        if(card.glyph != nullptr)
+        {
+            draw_card_glyph(draw_list, area, card.glyph);
+        }
         return;
     }
     image *= ImMin(area.GetWidth() / image.x, area.GetHeight() / image.y);
     const ImVec2 image_min = area.Min + (area.GetSize() - image) * 0.5f;
-    draw_list->AddImageRounded(ImGui::ToId(item.icon),
+    draw_list->AddImageRounded(card.texture,
                                image_min,
                                image_min + image,
                                ImVec2(0.0f, 0.0f),
@@ -327,25 +348,25 @@ void draw_ellipsized_text(ImDrawList* draw_list,
                           ImVec2 pos,
                           float max_x,
                           ImU32 color,
-                          const char* text)
+                          hpp::string_view text)
 {
     ImGui::PushFont(font, font_base_size);
-    const ImVec2 text_size = ImGui::CalcTextSize(text, nullptr, true);
+    const ImVec2 text_size = ImGui::CalcTextSize(text.data(), end_of(text), true);
     ImGui::PushStyleColor(ImGuiCol_Text, color);
-    ImGui::RenderTextEllipsis(draw_list, pos, ImVec2(max_x, pos.y + text_size.y), max_x, text, nullptr, &text_size);
+    ImGui::RenderTextEllipsis(draw_list, pos, ImVec2(max_x, pos.y + text_size.y), max_x, text.data(), end_of(text), &text_size);
     ImGui::PopStyleColor();
     ImGui::PopFont();
 }
 
 /// The summary on a dark rounded badge in the thumbnail's bottom-right corner, when the card is wide enough.
-void draw_card_badge(ImDrawList* draw_list, const ImRect& well, const card_fonts& fonts, const content_browser_item& item)
+void draw_card_badge(ImDrawList* draw_list, const ImRect& well, const card_fonts& fonts, const content_card_view& card)
 {
-    if(item.summary.empty() || item.is_loading)
+    if(card.summary.empty() || card.is_loading)
     {
         return;
     }
     const float font_size = fonts.panel_size * BADGE_FONT_SCALE;
-    const ImVec2 text_size = fonts.name->CalcTextSizeA(font_size, FLT_MAX, 0.0f, item.summary.c_str());
+    const ImVec2 text_size = fonts.name->CalcTextSizeA(font_size, FLT_MAX, 0.0f, card.summary.data(), end_of(card.summary));
     const ImVec2 padding(BADGE_PADDING_X, BADGE_PADDING_Y);
     const ImRect area = get_thumbnail_area(well);
     const ImVec2 badge_max = area.Max - ImVec2(BADGE_MARGIN, BADGE_MARGIN);
@@ -355,27 +376,17 @@ void draw_card_badge(ImDrawList* draw_list, const ImRect& well, const card_fonts
         return;
     }
     draw_list->AddRectFilled(badge_min, badge_max, BADGE_BACKGROUND, BADGE_ROUNDING);
-    draw_list->AddText(fonts.name, font_size, badge_min + padding, BADGE_TEXT_COLOR, item.summary.c_str());
+    draw_list->AddText(fonts.name, font_size, badge_min + padding, BADGE_TEXT_COLOR, card.summary.data(), end_of(card.summary));
 }
 
-/// For an asset an import writes, an import mark on a dark rounded badge in the thumbnail's top-left corner, in
-/// the imported color; a pencil in the edited color once it was edited. Dropped when the card is too narrow.
-void draw_card_import_badge(ImDrawList* draw_list, const ImRect& well, const card_fonts& fonts, const content_browser_item& item)
+/// An icon on a dark rounded badge with its top-left corner at badge_min; dropped past max_x.
+void draw_icon_badge(ImDrawList* draw_list, const card_fonts& fonts, ImVec2 badge_min, float max_x, const char* icon, ImU32 color)
 {
-    if(!item.is_generated || item.is_loading)
-    {
-        return;
-    }
-    const char* icon = item.is_generated_edited ? ICON_MDI_PENCIL_OUTLINE : ICON_MDI_IMPORT;
-    const ImU32 color =
-        item.is_generated_edited ? imgui_style::get_edited_import_color_u32() : imgui_style::get_imported_asset_color_u32();
     const float font_size = fonts.panel_size * IMPORT_BADGE_FONT_SCALE;
     const ImVec2 icon_size = fonts.name->CalcTextSizeA(font_size, FLT_MAX, 0.0f, icon);
     const ImVec2 padding(BADGE_PADDING_Y + IMPORT_BADGE_EXTRA_PADDING, BADGE_PADDING_Y + IMPORT_BADGE_EXTRA_PADDING);
-    const ImRect area = get_thumbnail_area(well);
-    const ImVec2 badge_min = area.Min + ImVec2(BADGE_MARGIN, BADGE_MARGIN);
     const ImVec2 badge_max = badge_min + icon_size + padding * 2.0f;
-    if(badge_max.x > area.Max.x - BADGE_MARGIN)
+    if(badge_max.x > max_x)
     {
         return;
     }
@@ -383,10 +394,51 @@ void draw_card_import_badge(ImDrawList* draw_list, const ImRect& well, const car
     draw_list->AddText(fonts.name, font_size, badge_min + padding, color, icon);
 }
 
+/// Width of an icon badge, for one placed from the right.
+auto calc_icon_badge_width(const card_fonts& fonts, const char* icon) -> float
+{
+    const float font_size = fonts.panel_size * IMPORT_BADGE_FONT_SCALE;
+    return fonts.name->CalcTextSizeA(font_size, FLT_MAX, 0.0f, icon).x + (BADGE_PADDING_Y + IMPORT_BADGE_EXTRA_PADDING) * 2.0f;
+}
+
+/// For an asset an import writes, an import mark on a dark rounded badge in the thumbnail's top-left corner, in
+/// the imported color; a pencil in the edited color once it was edited. Dropped when the card is too narrow.
+void draw_card_import_badge(ImDrawList* draw_list, const ImRect& well, const card_fonts& fonts, const content_card_view& card)
+{
+    if(!card.is_generated || card.is_loading)
+    {
+        return;
+    }
+    const char* icon = card.is_generated_edited ? ICON_MDI_PENCIL_OUTLINE : ICON_MDI_IMPORT;
+    const ImU32 color =
+        card.is_generated_edited ? imgui_style::get_edited_import_color_u32() : imgui_style::get_imported_asset_color_u32();
+    const ImRect area = get_thumbnail_area(well);
+    draw_icon_badge(draw_list, fonts, area.Min + ImVec2(BADGE_MARGIN, BADGE_MARGIN), area.Max.x - BADGE_MARGIN, icon, color);
+}
+
+/// For what a field holds now, a check in the accent color on a dark rounded badge in the thumbnail's top-right
+/// corner. Dropped when the card is too narrow.
+void draw_card_current_badge(ImDrawList* draw_list, const ImRect& well, const card_fonts& fonts, const content_card_view& card)
+{
+    if(!card.is_current)
+    {
+        return;
+    }
+    const ImRect area = get_thumbnail_area(well);
+    const float width = calc_icon_badge_width(fonts, ICON_MDI_CHECK_BOLD);
+    const ImVec2 badge_min(area.Max.x - BADGE_MARGIN - width, area.Min.y + BADGE_MARGIN);
+    if(badge_min.x < area.Min.x + BADGE_MARGIN)
+    {
+        return;
+    }
+    const ImU32 accent = ImGui::ColorConvertFloat4ToU32(imgui_style::get_accent_color());
+    draw_icon_badge(draw_list, fonts, badge_min, area.Max.x, ICON_MDI_CHECK_BOLD, accent);
+}
+
 /// A type's pill: its type in dark bold text on a pill of its accent color, shared by the card and the tooltip.
 struct type_pill
 {
-    const std::string& type;
+    hpp::string_view type;
     ImFont* font{};
     /// Unscaled, as PushFont() takes it.
     float font_base_size{};
@@ -396,10 +448,10 @@ struct type_pill
 };
 
 /// Measures the pill of type, its text ellipsized to keep the pill within max_width.
-auto measure_type_pill(const std::string& type, ImFont* font, float font_base_size, float max_width) -> type_pill
+auto measure_type_pill(hpp::string_view type, ImFont* font, float font_base_size, float max_width) -> type_pill
 {
     ImGui::PushFont(font, font_base_size);
-    const ImVec2 text_size = ImGui::CalcTextSize(type.c_str());
+    const ImVec2 text_size = ImGui::CalcTextSize(type.data(), end_of(type));
     ImGui::PopFont();
     const ImVec2 padding(TYPE_PILL_PADDING_X, TYPE_PILL_PADDING_Y);
     const float text_width = ImMin(text_size.x, ImMax(max_width - padding.x * 2.0f, 0.0f));
@@ -417,17 +469,17 @@ void draw_type_pill(ImDrawList* draw_list, ImVec2 pill_min, const type_pill& pil
                          text_pos,
                          text_pos.x + pill.text_width,
                          TYPE_PILL_TEXT_COLOR,
-                         pill.type.c_str());
+                         pill.type);
 }
 
 /// The type's pill centered under the name, ellipsized to the card.
 void draw_card_type_pill(ImDrawList* draw_list,
                          const card_layout& layout,
                          const card_fonts& fonts,
-                         const content_browser_item& item)
+                         const content_card_view& card)
 {
     const type_pill pill =
-        measure_type_pill(item.type, fonts.type, fonts.caption_base_size, layout.text_max_x - layout.name_pos.x);
+        measure_type_pill(card.type, fonts.type, fonts.caption_base_size, layout.text_max_x - layout.name_pos.x);
     draw_type_pill(draw_list, ImVec2(layout.card.GetCenter().x - pill.size.x * 0.5f, layout.caption_pos.y), pill);
 }
 
@@ -571,10 +623,10 @@ auto find_name_break(const char* text, const char* text_end, float max_width) ->
 
 /// The name centered on up to two lines: broken at its most natural place when it does not fit one, the second line
 /// ellipsized. A name that fits one line sits in the middle of the two.
-void draw_card_name(ImDrawList* draw_list, const card_layout& layout, const card_fonts& fonts, const content_browser_item& item)
+void draw_card_name(ImDrawList* draw_list, const card_layout& layout, const card_fonts& fonts, const content_card_view& card)
 {
-    const char* text = item.entry.stem.c_str();
-    const char* text_end = text + item.entry.stem.size();
+    const char* text = card.name.data();
+    const char* text_end = end_of(card.name);
     const float max_width = layout.text_max_x - layout.name_pos.x;
     const float center_x = layout.card.GetCenter().x;
     ImGui::PushFont(fonts.name, fonts.name_base_size);
@@ -597,32 +649,55 @@ void draw_card_name(ImDrawList* draw_list, const card_layout& layout, const card
     ImGui::PopFont();
 }
 
-/// The name, then the type on its pill.
+/// The caption in muted text centered on the pill's row, ellipsized to the card.
+void draw_card_caption(ImDrawList* draw_list,
+                       const card_layout& layout,
+                       const card_fonts& fonts,
+                       const content_card_view& card)
+{
+    ImGui::PushFont(fonts.name, fonts.caption_base_size);
+    ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
+    draw_centered_line(draw_list,
+                       layout.card.GetCenter().x,
+                       layout.caption_pos.y + TYPE_PILL_PADDING_Y,
+                       layout.text_max_x - layout.name_pos.x,
+                       card.caption.data(),
+                       end_of(card.caption));
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+}
+
+/// The name, then the caption, or else the type on its pill.
 void draw_card_labels(ImDrawList* draw_list,
                       const card_layout& layout,
                       const card_fonts& fonts,
-                      const content_browser_item& item)
+                      const content_card_view& card)
 {
-    draw_card_name(draw_list, layout, fonts, item);
-    if(item.type.empty() || item.is_folder())
+    draw_card_name(draw_list, layout, fonts, card);
+    if(!card.caption.empty())
+    {
+        draw_card_caption(draw_list, layout, fonts, card);
+        return;
+    }
+    if(card.type.empty() || card.is_folder)
     {
         return;
     }
-    draw_card_type_pill(draw_list, layout, fonts, item);
+    draw_card_type_pill(draw_list, layout, fonts, card);
 }
 
 /// A yellow ring for the focused entry, the theme's navigation color for a selected one, and the type's accent
 /// under the pointer.
 void draw_card_ring(ImDrawList* draw_list,
                     const card_layout& layout,
-                    const content_browser_item& item,
+                    const content_card_view& card,
                     const card_state& state)
 {
-    if(item.is_focused)
+    if(card.is_focused)
     {
         draw_list->AddRect(layout.card.Min, layout.card.Max, FOCUSED_RING_COLOR, CARD_ROUNDING, 0, FOCUSED_RING_THICKNESS);
     }
-    else if(item.is_selected)
+    else if(card.is_selected)
     {
         draw_list->AddRect(layout.card.Min,
                            layout.card.Max,
@@ -631,11 +706,11 @@ void draw_card_ring(ImDrawList* draw_list,
                            0,
                            SELECTED_RING_THICKNESS);
     }
-    else if(state.is_hovered && !item.is_folder())
+    else if(state.is_hovered && !card.is_folder)
     {
         draw_list->AddRect(layout.card.Min,
                            layout.card.Max,
-                           with_alpha(get_type_accent(item.type), HOVERED_RING_ALPHA),
+                           with_alpha(get_type_accent(card.type), HOVERED_RING_ALPHA),
                            CARD_ROUNDING,
                            0,
                            HOVERED_RING_THICKNESS);
@@ -682,21 +757,21 @@ void draw_tooltip_thumbnail(const content_browser_item& item)
 }
 
 /// The type's pill as an item at the cursor, then the summary beside it in dim text.
-void draw_tooltip_type_line(const content_browser_item& item, float max_width)
+void draw_tooltip_type_line(hpp::string_view type, hpp::string_view summary, float max_width)
 {
     ImFont* bold = ImGui::GetFont(ImGui::Font::Bold);
     const type_pill pill =
-        measure_type_pill(item.type, bold != nullptr ? bold : ImGui::GetFont(), get_scaled_base_size(TOOLTIP_PILL_FONT_SCALE), max_width);
+        measure_type_pill(type, bold != nullptr ? bold : ImGui::GetFont(), get_scaled_base_size(TOOLTIP_PILL_FONT_SCALE), max_width);
     draw_type_pill(ImGui::GetWindowDrawList(), ImGui::GetCursorScreenPos(), pill);
     ImGui::Dummy(pill.size);
-    if(item.summary.empty())
+    if(summary.empty())
     {
         return;
     }
     ImGui::SameLine();
     ImGui::PushFont(nullptr, pill.font_base_size);
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextUnformatted(item.summary.c_str());
+    ImGui::TextUnformatted(summary.data(), end_of(summary));
     ImGui::PopStyleColor();
     ImGui::PopFont();
 }
@@ -714,7 +789,7 @@ void draw_tooltip_header(const content_browser_item& item, float content_width)
     ImGui::PopFont();
     if(!item.type.empty())
     {
-        draw_tooltip_type_line(item, text_width);
+        draw_tooltip_type_line(item.type, item.summary, text_width);
     }
     ImGui::PushFont(nullptr, get_scaled_base_size(TOOLTIP_PATH_FONT_SCALE));
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -901,7 +976,7 @@ auto content_browser_item::is_folder() const -> bool
     return entry.entry.is_directory();
 }
 
-auto draw_content_card(const content_browser_item& item) -> bool
+auto draw_content_card(const content_card_view& card, ImGuiID id) -> bool
 {
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     if(window->SkipItems)
@@ -909,8 +984,7 @@ auto draw_content_card(const content_browser_item& item) -> bool
         return false;
     }
     const content_card::card_fonts fonts = content_card::get_card_fonts();
-    const content_card::card_layout layout = content_card::compute_card_layout(window->DC.CursorPos, item.size, fonts);
-    const ImGuiID id = window->GetID(item.entry.stem.c_str());
+    const content_card::card_layout layout = content_card::compute_card_layout(window->DC.CursorPos, card.size, fonts);
     ImGui::ItemSize(layout.card);
     if(!ImGui::ItemAdd(layout.card, id))
     {
@@ -919,13 +993,60 @@ auto draw_content_card(const content_browser_item& item) -> bool
     content_card::card_state state;
     const bool is_pressed = ImGui::ButtonBehavior(layout.card, id, &state.is_hovered, &state.is_held);
     ImDrawList* draw_list = window->DrawList;
-    content_card::draw_card_background(draw_list, layout, item, state);
-    content_card::draw_card_thumbnail(draw_list, layout.well, item);
-    content_card::draw_card_badge(draw_list, layout.well, fonts, item);
-    content_card::draw_card_import_badge(draw_list, layout.well, fonts, item);
-    content_card::draw_card_labels(draw_list, layout, fonts, item);
-    content_card::draw_card_ring(draw_list, layout, item, state);
+    content_card::draw_card_background(draw_list, layout, card, state);
+    content_card::draw_card_thumbnail(draw_list, layout.well, card);
+    content_card::draw_card_badge(draw_list, layout.well, fonts, card);
+    content_card::draw_card_import_badge(draw_list, layout.well, fonts, card);
+    content_card::draw_card_current_badge(draw_list, layout.well, fonts, card);
+    content_card::draw_card_labels(draw_list, layout, fonts, card);
+    content_card::draw_card_ring(draw_list, layout, card, state);
     return is_pressed;
+}
+
+auto draw_content_card(const content_browser_item& item) -> bool
+{
+    content_card_view card;
+    card.name = item.entry.stem;
+    card.type = item.type;
+    card.summary = item.summary;
+    if(item.icon)
+    {
+        card.texture = ImGui::ToId(item.icon);
+        card.texture_size = ImGui::GetSize(item.icon);
+    }
+    card.is_folder = item.is_folder();
+    card.is_generated = item.is_generated;
+    card.is_generated_edited = item.is_generated_edited;
+    card.is_loading = item.is_loading;
+    card.is_selected = item.is_selected;
+    card.is_focused = item.is_focused;
+    card.size = item.size;
+    return draw_content_card(card, ImGui::GetID(item.entry.stem.c_str()));
+}
+
+auto get_content_card_height(float width) -> float
+{
+    return content_card::compute_card_layout(ImVec2(0.0f, 0.0f), width, content_card::get_card_fonts()).card.GetHeight();
+}
+
+auto get_asset_type_accent(hpp::string_view type) -> ImU32
+{
+    return content_card::get_type_accent(type);
+}
+
+void draw_asset_type_line(hpp::string_view type, hpp::string_view summary, float max_width)
+{
+    content_card::draw_tooltip_type_line(type, summary, max_width);
+}
+
+void draw_content_sections(const content_item_sections& sections, float content_width)
+{
+    content_card::draw_tooltip_sections(sections, content_width);
+}
+
+void draw_loading_spinner(ImDrawList* draw_list, const ImVec2& min, const ImVec2& max)
+{
+    content_card::draw_card_spinner(draw_list, ImRect(min, max));
 }
 
 void draw_content_tooltip(const content_browser_item& item)

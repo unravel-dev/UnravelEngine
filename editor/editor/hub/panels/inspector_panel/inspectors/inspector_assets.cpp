@@ -121,18 +121,73 @@ template<typename T>
 using asset_acceptor = std::function<bool(const asset_handle<T>&)>;
 
 /// What the picker offers: the empty handle first (get_assets_with_predicate always puts it
-/// there), then the assets of the project that pass the search and @p accepts.
+/// there), then the assets of the project and the engine that pass @p accepts.
 template<typename T>
-auto find_pickable_assets(asset_manager& am, const ImGuiTextFilter& filter, const asset_acceptor<T>& accepts = {})
-    -> std::vector<asset_handle<T>>
+auto find_pickable_assets(asset_manager& am, const asset_acceptor<T>& accepts = {}) -> std::vector<asset_handle<T>>
 {
     return am.get_assets_with_predicate<T>(
         [&](const auto& asset)
         {
             const auto& id = asset.id();
             hpp::string_view id_view(id);
-            return !id_view.starts_with("editor:/") && filter.PassFilter(asset.name().c_str()) && (!accepts || accepts(asset));
+            return !id_view.starts_with("editor:/") && (!accepts || accepts(asset));
         });
+}
+
+/// Whether two handles name the same asset; empty handles are the same.
+template<typename T>
+auto is_same_asset(const asset_handle<T>& lhs, const asset_handle<T>& rhs) -> bool
+{
+    if(!lhs || !rhs)
+    {
+        return !lhs && !rhs;
+    }
+    return lhs.uid() == rhs.uid();
+}
+
+/// The picker's entries, the empty handle as None, and which one the field holds now.
+template<typename T>
+auto make_picker_entries(const std::vector<asset_handle<T>>& assets, const asset_handle<T>& data, hpp::optional<std::size_t>& current)
+    -> std::vector<asset_picker::entry>
+{
+    std::vector<asset_picker::entry> entries;
+    entries.reserve(assets.size());
+    for(std::size_t index = 0; index < assets.size(); ++index)
+    {
+        const auto& asset = assets[index];
+        entries.push_back(asset ? asset_picker::entry{asset.id(), asset.name()} : asset_picker::entry{{}, "None"});
+        if(is_same_asset(asset, data))
+        {
+            current = index;
+        }
+    }
+    return entries;
+}
+
+/// What the picker draws of the assets: thumbnails, the content browser's badges and tooltip facts.
+template<typename T>
+auto make_picker_source(thumbnail_manager& tm, const std::vector<asset_handle<T>>& assets) -> asset_picker::entry_source
+{
+    asset_picker::entry_source source;
+    source.get_preview = [&tm, &assets](std::size_t index)
+    {
+        if(!assets[index])
+        {
+            asset_picker::preview none{};
+            none.icon = ICON_MDI_CANCEL;
+            return none;
+        }
+        return asset_picker::make_preview(tm, assets[index]);
+    };
+    source.get_summary = [&assets](std::size_t index)
+    {
+        return get_asset_summary(assets[index]);
+    };
+    source.collect_details = [&assets](std::size_t index, content_item_sections& sections)
+    {
+        collect_asset_details(assets[index], sections);
+    };
+    return source;
 }
 
 /// Where an asset field opens its asset, and how; empty for a type nothing opens.
@@ -152,8 +207,7 @@ struct asset_opener
 /// </summary>
 //-----------------------------------------------------------------------------
 template<typename T>
-auto pick_asset(ImGuiTextFilter& filter,
-                editing_manager& em,
+auto pick_asset(editing_manager& em,
                 thumbnail_manager& tm,
                 asset_manager& am,
                 asset_handle<T>& data,
@@ -199,50 +253,29 @@ auto pick_asset(ImGuiTextFilter& filter,
     const std::string popup_id = fmt::format("Pick {}", type);
     if(request.is_pick_pressed)
     {
-        filter.Clear();
-        ImGui::OpenPopup(popup_id.c_str());
+        asset_picker::open_window(popup_id.c_str());
     }
-    if(!asset_picker::begin_window(popup_id.c_str(), get_asset_icon<T>(), fmt::format("Select {}", type), filter))
+    if(!asset_picker::is_window_open(popup_id.c_str()))
     {
         return result;
     }
 
-    const auto assets = find_pickable_assets<T>(am, filter, accepts);
-    const auto get_tile = [&](std::size_t index) -> asset_picker::tile_content
+    const auto assets = find_pickable_assets<T>(am, accepts);
+    asset_picker::window_content window{};
+    window.icon = get_asset_icon<T>();
+    window.type = type;
+    window.title = fmt::format("Select {}", type);
+    window.description = data ? fmt::format("The field holds {} now.", data.name()) : std::string("The field is empty now.");
+    window.confirm_label = "Select";
+    window.empty_text = "Nothing in the project or the engine is of this type.";
+    const auto entries = make_picker_entries(assets, data, window.current);
+    const auto picked = asset_picker::draw_window(popup_id.c_str(), window, entries, make_picker_source(tm, assets));
+    if(picked && !is_same_asset(assets[*picked], data))
     {
-        const auto& asset = assets[index];
-        asset_picker::tile_content tile{};
-        if(!asset)
-        {
-            tile.thumbnail.icon = ICON_MDI_CANCEL;
-            tile.name = "None";
-            tile.is_selected = !data;
-            return tile;
-        }
-        tile.thumbnail = asset_picker::make_preview(tm, asset);
-        tile.name = asset.name();
-        tile.is_selected = data && asset.uid() == data.uid();
-        return tile;
-    };
-    const asset_picker::grid_result grid = asset_picker::draw_grid(assets.size(), get_tile);
-    if(grid.picked >= 0)
-    {
-        data = assets[static_cast<std::size_t>(grid.picked)];
+        data = assets[*picked];
         result.changed = true;
         result.edit_finished = true;
-        ImGui::CloseCurrentPopup();
     }
-
-    // Not counting the empty handle.
-    const std::size_t asset_count = assets.empty() ? 0 : assets.size() - 1;
-    std::string footer = fmt::format("{} {}", asset_count, asset_count == 1 ? "asset" : "assets");
-    if(grid.hovered >= 0)
-    {
-        const auto& hovered = assets[static_cast<std::size_t>(grid.hovered)];
-        footer = hovered ? hovered.id() : fmt::format("Clears the {}", type);
-    }
-    asset_picker::draw_footer(footer);
-    asset_picker::end_window();
     return result;
 }
 
@@ -634,7 +667,7 @@ auto inspector_asset_handle_texture::inspect_as_property(rtti::context& ctx, ass
     auto& em = ctx.get_cached<editing_manager>();
 
     inspect_result result{};
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<gfx::texture>());
+    result |= pick_asset(em, tm, am, data, ex::get_type<gfx::texture>());
 
     return result;
 }
@@ -761,7 +794,7 @@ auto inspector_asset_handle_material::inspect_as_property(rtti::context& ctx, as
             return !held || *held == domain;
         };
     }
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<material>(), opener, accepts);
+    result |= pick_asset(em, tm, am, data, ex::get_type<material>(), opener, accepts);
     if(expected && data)
     {
         if(const auto held = find_loaded_material_domain(data); held && *held != *expected)
@@ -1668,7 +1701,7 @@ auto inspector_asset_handle_mesh::inspect_as_property(rtti::context& ctx, asset_
 
     inspect_result result{};
 
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<mesh>());
+    result |= pick_asset(em, tm, am, data, ex::get_type<mesh>());
     return result;
 }
 
@@ -1819,7 +1852,7 @@ auto inspector_asset_handle_animation::inspect_as_property(rtti::context& ctx, a
     auto& em = ctx.get_cached<editing_manager>();
 
     inspect_result result{};
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<animation_clip>());
+    result |= pick_asset(em, tm, am, data, ex::get_type<animation_clip>());
 
     return result;
 }
@@ -2076,7 +2109,7 @@ auto inspector_asset_handle_prefab::inspect_as_property(rtti::context& ctx, asse
     auto& em = ctx.get_cached<editing_manager>();
 
     inspect_result result{};
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<prefab>());
+    result |= pick_asset(em, tm, am, data, ex::get_type<prefab>());
 
     return result;
 }
@@ -2157,7 +2190,7 @@ auto inspector_asset_handle_scene_prefab::inspect_as_property(rtti::context& ctx
 
     inspect_result result{};
 
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<scene_prefab>());
+    result |= pick_asset(em, tm, am, data, ex::get_type<scene_prefab>());
 
     return result;
 }
@@ -2213,7 +2246,7 @@ auto inspector_asset_handle_physics_material::inspect_as_property(rtti::context&
     auto& em = ctx.get_cached<editing_manager>();
 
     inspect_result result{};
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<physics_material>());
+    result |= pick_asset(em, tm, am, data, ex::get_type<physics_material>());
 
     return result;
 }
@@ -2259,7 +2292,7 @@ auto inspector_asset_handle_animation_controller::inspect_as_property(rtti::cont
     auto& em = ctx.get_cached<editing_manager>();
 
     inspect_result result{};
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<animation_controller>());
+    result |= pick_asset(em, tm, am, data, ex::get_type<animation_controller>());
 
     return result;
 }
@@ -2367,7 +2400,7 @@ auto inspector_asset_handle_audio_clip::inspect_as_property(rtti::context& ctx, 
     auto& em = ctx.get_cached<editing_manager>();
 
     inspect_result result{};
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<audio_clip>());
+    result |= pick_asset(em, tm, am, data, ex::get_type<audio_clip>());
 
     return result;
 }
@@ -2510,7 +2543,7 @@ auto inspector_asset_handle_font::inspect_as_property(rtti::context& ctx, asset_
     auto& em = ctx.get_cached<editing_manager>();
 
     inspect_result result{};
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<font>());
+    result |= pick_asset(em, tm, am, data, ex::get_type<font>());
 
     return result;
 }
@@ -2558,7 +2591,7 @@ auto inspector_asset_handle_ui_tree::inspect_as_property(rtti::context& ctx, ass
     auto& em = ctx.get_cached<editing_manager>();
 
     inspect_result result{};
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<ui_tree>());
+    result |= pick_asset(em, tm, am, data, ex::get_type<ui_tree>());
 
     return result;
 }
@@ -2603,7 +2636,7 @@ auto inspector_asset_handle_style_sheet::inspect_as_property(rtti::context& ctx,
     auto& em = ctx.get_cached<editing_manager>();
 
     inspect_result result{};
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<style_sheet>());
+    result |= pick_asset(em, tm, am, data, ex::get_type<style_sheet>());
 
     return result;
 }

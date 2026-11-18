@@ -1,10 +1,13 @@
 #pragma once
 
+#include <editor/hub/panels/content_browser_panel/content_browser_item_details.h>
+#include <hpp/optional.hpp>
 #include <imgui/imgui.h>
 
 #include <cstddef>
 #include <functional>
 #include <string>
+#include <vector>
 
 /// The field of an asset property and the window that picks one. Drawing only: the templated
 /// pick_asset in inspector_assets.cpp feeds them the assets of its type and applies the result.
@@ -61,37 +64,61 @@ auto draw_field(const field_content& content) -> field_request;
 /// Colors the last item as a place to drop, while a drag that fits it goes on.
 void draw_drop_highlight(bool is_drop_possible);
 
-/// One tile of the picker grid.
-struct tile_content
+/// One choice of the picker.
+struct entry
 {
-    preview thumbnail;
+    /// Where the asset is, "app:/data/Materials/M_Gold.mat"; empty for the None entry, which clears the field.
+    std::string path;
     std::string name;
-    /// The asset the property has now.
-    bool is_selected{};
 };
 
-/// What the grid of the picker was asked for this frame.
-struct grid_result
+/// What the picker window says around its entries.
+struct window_content
 {
-    /// Index of the tile clicked, -1 for none.
-    int picked{-1};
-    /// Index of the tile under the pointer, -1 for none.
-    int hovered{-1};
+    const char* icon{};
+    /// The type of asset, "Material": the accent of the cards and the type the details name.
+    std::string type;
+    /// "Select Material".
+    std::string title;
+    /// A sentence under the title, such as what the field holds now.
+    std::string description;
+    /// The button that takes the highlighted entry, "Select".
+    std::string confirm_label;
+    /// What the results say while there is nothing to pick, without a search.
+    std::string empty_text;
+    /// Index of the entry the field holds now: highlighted when the window opens and marked on its card.
+    hpp::optional<std::size_t> current;
 };
+
+/// What the picker asks of the entries it draws, by their index. Each runs only for what is on screen: asking for a
+/// thumbnail is what starts loading an asset nothing else uses.
+struct entry_source
+{
+    std::function<preview(std::size_t)> get_preview;
+    /// A short fact badged on the card, such as a triangle count; may be empty.
+    std::function<std::string(std::size_t)> get_summary;
+    /// The facts the details pane lists for the highlighted entry; may be empty.
+    std::function<void(std::size_t, content_item_sections&)> collect_details;
+};
+
+/// Opens the picker with this id. Call from the ID scope draw_window() is called from.
+void open_window(const char* popup_id);
+
+/// Whether the picker with this id is open, so its entries are gathered only then.
+auto is_window_open(const char* popup_id) -> bool;
 
 //-----------------------------------------------------------------------------
 /// <summary>
-/// Opens the picker window when it is not open: a modal with a title, a search field over a
-/// grid of tiles, and a footer. Returns true while it is open; end_window() follows then.
+/// Draws the picker while it is open: a modal with a title, a search field, the folders of the
+/// entries beside them as cards or a list, a pane with the details of the highlighted entry, and
+/// Cancel and confirm buttons. A click highlights an entry; a double-click, Enter or the confirm
+/// button picks it and closes the window. The arrow keys move the highlight while typing.
 /// </summary>
+/// <returns>The index of the entry picked this frame, if one was</returns>
 //-----------------------------------------------------------------------------
-auto begin_window(const char* popup_id, const char* icon, const std::string& title, ImGuiTextFilter& filter) -> bool;
-void end_window();
-
-/// The tiles, sized by the size slider of the footer. Only the visible rows are drawn.
-auto draw_grid(std::size_t count, const std::function<tile_content(std::size_t)>& get_tile) -> grid_result;
-
-/// A line about the tile under the pointer, and the slider that sizes the tiles.
-void draw_footer(const std::string& text);
+auto draw_window(const char* popup_id,
+                 const window_content& content,
+                 const std::vector<entry>& entries,
+                 const entry_source& source) -> hpp::optional<std::size_t>;
 
 } // namespace unravel::asset_picker
