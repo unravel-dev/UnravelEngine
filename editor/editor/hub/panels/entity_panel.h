@@ -22,6 +22,18 @@ public:
 
     void duplicate_entities(const std::vector<entt::handle>& entities);
 
+    /**
+     * @brief Copy, cut, paste, paste as child, duplicate and delete of the selected entities by their shortcuts, for a
+     *        panel that shows entities. Call while the panel's window is focused.
+     */
+    static void handle_entity_shortcuts(rtti::context& ctx, const std::vector<entt::handle>& selections);
+
+    /**
+     * @brief The menu items for copy, cut, paste and duplicate of @p targets, next to or under @p anchor. The entity
+     *        menus of the hierarchy and the Edit menu share them.
+     */
+    static void draw_clipboard_menu_items(rtti::context& ctx, const std::vector<entt::handle>& targets, entt::handle anchor);
+
     void focus_entities(entt::handle camera, const std::vector<entt::handle>& entities);
 
     void delete_entities(const std::vector<entt::handle>& entities);

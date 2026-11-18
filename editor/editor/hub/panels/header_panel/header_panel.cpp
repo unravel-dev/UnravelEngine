@@ -9,6 +9,7 @@
 #include <editor/editing/editor_actions.h>
 #include <editor/editing/prefab_bake.h>
 #include <editor/shortcuts.h>
+#include <editor/imgui/integration/imgui_context_menu_style.h>
 #include <editor/system/mcp_manager.h>
 #include <editor/system/project_manager.h>
 #include <editor/system/version_manager.h>
@@ -291,6 +292,16 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
             {
                 parent_->get_undo_redo_panel().show(true);
             }
+
+            ImGui::Separator();
+            const auto selections = em.try_get_selections_as_copy<entt::handle>();
+            const entt::handle anchor = selections.empty() ? entt::handle{} : selections.back();
+            entity_panel::draw_clipboard_menu_items(ctx, selections, anchor);
+            if(ImGui::MenuItemIcon(ICON_MDI_DELETE, "Delete", ImGui::GetKeyName(shortcuts::delete_item), !selections.empty()))
+            {
+                parent_->get_scene_panel().delete_entities(selections);
+            }
+            ImGui::Separator();
 
             if(ImGui::MenuItem("Editor Settings..."))
             {

@@ -727,6 +727,16 @@ auto is_prefab_instance_root(entt::handle entity) -> bool
     return entity.all_of<prefab_component>() && !is_authoring_root(entity);
 }
 
+/// What a row's menu acts on: the selection when the row is part of it, else the row alone.
+auto get_menu_targets(editing_manager& em, entt::handle entity) -> std::vector<entt::handle>
+{
+    if(em.is_selected(entity))
+    {
+        return em.try_get_selections_as_copy<entt::handle>();
+    }
+    return {entity};
+}
+
 void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
 {
     if(ImGui::BeginPopupContextItem("Entity Context Menu"))
@@ -753,16 +763,13 @@ void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::ha
                     });
             }
 
-            if(ImGui::MenuItemIcon(ICON_MDI_CONTENT_COPY,
-                                   "Duplicate",
-                                   ImGui::GetKeyCombinationName(shortcuts::duplicate_item).c_str()))
-            {
-                panels->get_scene_panel().duplicate_entities({entity});
-            }
+            auto& em = ctx.get_cached<editing_manager>();
+            const auto targets = get_menu_targets(em, entity);
+            entity_panel::draw_clipboard_menu_items(ctx, targets, entity);
 
             if(ImGui::MenuItemIcon(ICON_MDI_DELETE, "Delete", ImGui::GetKeyName(shortcuts::delete_item)))
             {
-                panels->get_scene_panel().delete_entities({entity});
+                panels->get_scene_panel().delete_entities(targets);
             }
 
             if(ImGui::MenuItemIcon(ICON_MDI_CROSSHAIRS_GPS, "Focus", ImGui::GetKeyName(shortcuts::focus_selected)))
@@ -805,6 +812,8 @@ void draw_window_context_menu(rtti::context& ctx, imgui_panels* panels)
             ImGui::ContextMenuStyleScope style_scope;
 
             draw_common_menu_items(ctx, {});
+            ImGui::Separator();
+            entity_panel::draw_clipboard_menu_items(ctx, {}, {});
         }
         ImGui::EndPopup();
     }
@@ -831,8 +840,6 @@ struct hierarchy_draw_context
     rtti::context& ctx;
     imgui_panels* panels{};
     const hierarchy_search& search;
-    /// The panel has the keyboard focus: the selection wears the accent then, grey otherwise.
-    bool is_focused{};
 };
 
 auto calc_hierarchy_table_pixels(float font_units) -> float
@@ -957,19 +964,9 @@ void handle_entity_keyboard_shortcuts(rtti::context& ctx, imgui_panels* panels, 
             });
     }
 
-    if(ImGui::IsItemKeyPressed(shortcuts::delete_item))
-    {
-        panels->get_scene_panel().delete_entities({entity});
-    }
-
     if(ImGui::IsItemKeyPressed(shortcuts::focus_selected))
     {
         panels->get_scene_panel().focus_entities(panels->get_scene_panel().get_camera(), {entity});
-    }
-
-    if(ImGui::IsItemCombinationKeyPressed(shortcuts::duplicate_item))
-    {
-        panels->get_scene_panel().duplicate_entities({entity});
     }
 }
 
@@ -1219,12 +1216,12 @@ auto is_hierarchy_row_hovered() -> bool
            ImGui::IsMouseHoveringRect(row_min, row_max, false);
 }
 
-/// The node draws the selection. The hover is drawn for the whole row instead, since the value
-/// cells take it from the node.
+/// The node draws the selection, in the accent wherever it was made: a selection made in the Scene view reads as one
+/// made here. The hover is drawn for the whole row instead, since the value cells take it from the node.
 constexpr int HIERARCHY_ROW_STYLE_COLORS = 2;
-void push_entity_row_colors(bool is_selected, bool is_focused)
+void push_entity_row_colors(bool is_selected)
 {
-    const ImVec4 selected_color = is_focused ? imgui_style::get_accent_color() : ImGui::GetStyleColorVec4(ImGuiCol_Header);
+    const ImVec4 selected_color = imgui_style::get_accent_color();
     ImGui::PushStyleColor(ImGuiCol_Header, selected_color);
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, is_selected ? selected_color : ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 }
@@ -1382,7 +1379,7 @@ void draw_entity_name_cell(const hierarchy_draw_context& draw_ctx, const std::ve
         ImGui::SetNextItemOpen(true, ImGuiCond_Always);
     }
 
-    push_entity_row_colors(is_selected, draw_ctx.is_focused);
+    push_entity_row_colors(is_selected);
     ImGui::AlignTextToFramePadding();
     // The node draws no label: the row draws it, so that it can give way to the prefab button.
     ImGui::SetNextItemStorageID(row.storage_id);
@@ -1927,14 +1924,13 @@ void hierarchy_panel::add_search_path(entt::registry& registry, entt::entity ent
 void hierarchy_panel::draw_scene_table(rtti::context& ctx, scene& target_scene)
 {
     const float table_width = ImGui::GetContentRegionAvail().x;
-    const bool is_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     // Each table row latches the cell padding: it stays pushed until the table ends.
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(calc_hierarchy_table_pixels(HIERARCHY_TABLE_CELL_PADDING_X), 0.0f));
     if(ImGui::BeginTable("##hierarchy_table", static_cast<int>(hierarchy_column::count), HIERARCHY_TABLE_FLAGS))
     {
         setup_hierarchy_columns(table_width);
         draw_hierarchy_header_row();
-        draw_scene_rows(ctx, target_scene, is_focused);
+        draw_scene_rows(ctx, target_scene);
         // After the rows, so that the menu knows whether one of them is under the pointer.
         draw_window_context_menu(ctx, parent_);
         handle_window_empty_click(ctx);
@@ -1945,10 +1941,10 @@ void hierarchy_panel::draw_scene_table(rtti::context& ctx, scene& target_scene)
     ImGui::PopStyleVar();
 }
 
-void hierarchy_panel::draw_scene_rows(rtti::context& ctx, scene& target_scene, bool is_focused)
+void hierarchy_panel::draw_scene_rows(rtti::context& ctx, scene& target_scene)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    const hierarchy_draw_context draw_ctx{ctx, parent_, search_, is_focused};
+    const hierarchy_draw_context draw_ctx{ctx, parent_, search_};
     const std::string scene_name = get_scene_display_name(em, &target_scene);
     // The frame padding sets the height of the tree nodes, one row, and the room around the arrow.
     const float frame_padding_y = ImFloor((hierarchy_cells::get_row_height() - ImGui::GetFontSize()) * 0.5f);
@@ -2028,6 +2024,23 @@ void hierarchy_panel::draw_ui(rtti::context& ctx)
     }
     update_search(*target_scene);
     draw_scene_table(ctx, *target_scene);
+    handle_panel_shortcuts(ctx);
+}
+
+void hierarchy_panel::handle_panel_shortcuts(rtti::context& ctx)
+{
+    // Not while a field takes the keys: a rename or the search field.
+    if(!ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) || ImGui::IsAnyItemActive() || is_editing_label())
+    {
+        return;
+    }
+    auto& em = ctx.get_cached<editing_manager>();
+    const auto selections = em.try_get_selections_as_copy<entt::handle>();
+    if(ImGui::IsKeyPressed(shortcuts::delete_item) && !selections.empty())
+    {
+        delete_entities(selections);
+    }
+    handle_entity_shortcuts(ctx, selections);
 }
 
 } // namespace unravel

@@ -91,6 +91,11 @@ inside the project).
   (prefix, default app:/data; wait_ms to wait for each) compiles them again on
   demand.
 - assets_reimport_batch imports keys again and waits until each has reloaded.
+- In the editor, several textures, audio clips or meshes selected together
+  (Content Browser ctrl-click, or selection_set {asset, "mode":"add"}) share one
+  Import tab: Apply gives every selected asset the settings changed there, and
+  each keeps the rest of its own. assets_set_import_settings_batch does the same
+  for agents, item by item.
 - The engine's and the editor's assets follow a new project's defaults, never
   the project's. Use compression "none" for UI atlases and pixel art that must
   stay exact, colorspace "srgb" for color maps, "linear" for data maps.

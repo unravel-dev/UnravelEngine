@@ -130,6 +130,12 @@ public:
     void prepare_for_item();
 
     /**
+     * @brief Marks a row drawn by name when the value at @p path of the drawn component differs between the
+     *        selected entities, as a reflected row is marked by its own path.
+     */
+    void set_mixed_path(std::string path);
+
+    /**
      * @brief Gets the currently active property layout from the global stack
      * @return Pointer to current layout, or nullptr if stack is empty
      */
@@ -142,6 +148,9 @@ private:
     /// The label's context menu (resets, reverts) and tooltip, and the help marker when it fits. A shortened label
     /// gets a tooltip naming it in full.
     void draw_label_menu_and_tooltip(bool show_help_marker, bool is_label_shortened);
+
+    /// Copy and Paste of the row's value in its label menu; nothing for a row drawn by name.
+    void draw_value_clipboard_items();
 
     /// Whether the row is drawn inside the value cell of another row.
     static auto is_inside_value_cell(const property_layout* self) -> bool;
@@ -172,7 +181,22 @@ private:
     bool has_gutter_{};
     /// Whether the row stacks its label over its value, as every row of a narrow window does.
     bool stacked_{};
+    /// The reflected property the row shows and the object holding it, for its Copy and Paste; empty for a row drawn
+    /// by name.
+    entt::meta_data prop_{};
+    entt::meta_any object_{};
+    /// The path a row drawn by name is marked by; empty for none.
+    std::string mixed_path_;
 };
+
+/**
+ * @brief Asks the row showing @p property of @p object to take @p value_json as an edit: the row's label menu
+ *        cannot write the value, inspect_property does, so the edit records undo and prefab overrides as typing does.
+ */
+void request_property_paste(const void* object, const entt::meta_data& property, std::string value_json);
+
+/// The value a paste asked the row showing @p property of @p object to take, once.
+auto take_property_paste(const void* object, const entt::meta_data& property) -> hpp::optional<std::string>;
 
 /**
  * @brief Metadata about a variable being inspected
@@ -240,7 +264,7 @@ struct inspect_result
  * - Undo/redo safety: Actions store stable paths, not volatile references
  * 
  * Example: Instead of storing `&entity.transform.position.x`, we store a chain
- * of functions that can navigate: entity → transform → position → x each time.
+ * of functions that can navigate: entity -> transform -> position -> x each time.
  */
 struct meta_any_proxy
 {

@@ -4,6 +4,7 @@
 #include "inspector_coretypes.h"
 #include "inspector_basetypes.h"
 #include "inspectors.h"
+#include "multi_edit.h"
 #include "entt/meta/resolve.hpp"
 #include "imgui/imgui.h"
 #include <imgui/imgui_internal.h>
@@ -88,7 +89,19 @@ bool drag_vector_fields(ImGuiDataType data_type,
         {
             ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
         }
-        changed |= ImGui::DragScalar("", data_type, component, limits.speed, &limits.min, &limits.max, format);
+        if(ImGui::DragScalar("", data_type, component, limits.speed, &limits.min, &limits.max, format))
+        {
+            changed = true;
+            // Equal limits leave the field unbounded, as ImGui reads them.
+            if(limits.min < limits.max)
+            {
+                multi_edit::note_drag_change(limits.min, limits.max);
+            }
+            else
+            {
+                multi_edit::note_drag_change();
+            }
+        }
         ImGui::DrawItemActivityOutline();
         const ImVec2 min = ImGui::GetItemRectMin();
         ImGui::GetWindowDrawList()->AddRectFilled(min,
@@ -182,6 +195,10 @@ bool DragFloat2(math::vec2& data, const var_info& info, std::array<const char*, 
                                                 nullptr,
                                                 formats.data());
     ImGui::ActiveItemWrapMousePos();
+    if(result)
+    {
+        multi_edit::note_drag_change();
+    }
 
     return result;
 }
@@ -199,6 +216,10 @@ bool DragFloat3(math::vec3& data,
                                                 nullptr,
                                                 formats.data());
     ImGui::ActiveItemWrapMousePos();
+    if(result)
+    {
+        multi_edit::note_drag_change();
+    }
 
     return result;
 }
@@ -216,6 +237,10 @@ bool DragFloat4(math::vec4& data,
                                                 nullptr,
                                                 formats.data());
     ImGui::ActiveItemWrapMousePos();
+    if(result)
+    {
+        multi_edit::note_drag_change();
+    }
 
     return result;
 }
@@ -563,7 +588,7 @@ auto inspector_quaternion::inspect(rtti::context& ctx,
     static const auto reset = math::zero<math::vec3>();
 
     // auto val = quat_to_vec4(data);
-    if(DragVec3(val, info, &reset, "%.2f°"))
+    if(DragVec3(val, info, &reset, "%.2f\xC2\xB0"))
     {
         // data = vec4_to_quat(val);
         data = math::quat(math::radians(val));
@@ -655,6 +680,7 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
         property_layout layout;
         layout.set_data(prop_pretty_name);
+        layout.set_mixed_path(override_ctx.get_row_path());
         // The reset button shares the label cell.
         layout.push_layout(false, ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x);
 
@@ -709,6 +735,7 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
         property_layout layout;
         layout.set_data(prop_pretty_name);
+        layout.set_mixed_path(override_ctx.get_row_path() + "_euler");
         // The reset button shares the label cell.
         layout.push_layout(false, ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x);
 
@@ -758,7 +785,7 @@ auto inspector_transform::inspect(rtti::context& ctx,
             const math::vec3 euler_old = euler_angles;
             static const auto reset = math::zero<math::vec3>();
             bool rotation_changed = false;
-            if(DragVec3(euler_angles, info, &reset, "%.2f°"))
+            if(DragVec3(euler_angles, info, &reset, "%.2f\xC2\xB0"))
             {
                 data.set_rotation_euler_degrees(euler_angles);
                 rotation_changed = true;
@@ -810,6 +837,7 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
         property_layout layout;
         layout.set_data(prop_pretty_name);
+        layout.set_mixed_path(override_ctx.get_row_path());
         static bool locked_scale = false;
         auto label = locked_scale ? ICON_MDI_LOCK : ICON_MDI_LOCK_OPEN_VARIANT;
         const float buttons_width =
@@ -890,6 +918,7 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
         property_layout layout;
         layout.set_data(prop_pretty_name);
+        layout.set_mixed_path(override_ctx.get_row_path());
         // The reset button shares the label cell.
         layout.push_layout(false, ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x);
 

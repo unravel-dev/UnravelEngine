@@ -1,4 +1,6 @@
 #include "entity_actions.h"
+
+#include <numeric>
 #include "reflection/reflection.h"
 #include <editor/editing/animation_preview.h>
 #include <editor/editing/editing_manager.h>
@@ -18,6 +20,7 @@
 #include <engine/ui/ecs/components/ui_document_component.h>
 #include <engine/engine.h>
 #include <serialization/associative_archive.h>
+#include <serialization/document_paths.h>
 #include <serialization/binary_archive.h>
 
 namespace unravel
@@ -90,6 +93,38 @@ void apply_subtree_uuid_preorder(entt::handle obj, const std::vector<hpp::uuid>&
     for(auto child : trans_comp.get_children())
     {
         apply_subtree_uuid_preorder(child, uids, next);
+    }
+}
+
+/// Where each root stands among its siblings, for putting it back there.
+auto collect_sibling_places(const std::vector<entt::handle>& roots) -> std::vector<size_t>
+{
+    std::vector<size_t> places;
+    places.reserve(roots.size());
+    for(const auto& root : roots)
+    {
+        places.push_back(root ? root.get<transform_component>().get_sibling_index() : 0);
+    }
+    return places;
+}
+
+/// Puts restored roots back at their places among their siblings, the lowest place first so each lands where it was.
+void restore_sibling_places(const std::vector<entt::handle>& restored, const std::vector<size_t>& places)
+{
+    std::vector<size_t> sequence(std::min(restored.size(), places.size()));
+    std::iota(sequence.begin(), sequence.end(), size_t{0});
+    std::stable_sort(sequence.begin(),
+                     sequence.end(),
+                     [&](size_t lhs, size_t rhs)
+                     {
+                         return places[lhs] < places[rhs];
+                     });
+    for(const auto i : sequence)
+    {
+        if(restored[i])
+        {
+            restored[i].get<transform_component>().set_sibling_index(places[i]);
+        }
     }
 }
 } // namespace
@@ -174,6 +209,7 @@ void create_entities_action_t::do_action()
             serialized_roots.emplace_back(ss.str());
             root_entities.emplace_back(entt::make_uhandle(root));
             parent_entities.emplace_back(parent_uh);
+            sibling_places.push_back(root.get<transform_component>().get_sibling_index());
         }
 
         captured = true;
@@ -188,9 +224,11 @@ void create_entities_action_t::do_action()
         return;
     }
     entt::registry& registry = *root_entities.front().registry;
+    std::vector<entt::handle> restored_roots(serialized_roots.size());
     for(size_t i = 0; i < serialized_roots.size(); ++i)
     {
         auto restored = restore_root_from_serialized_subtree(registry, serialized_roots[i]);
+        restored_roots[i] = restored;
         if(!restored || i >= parent_entities.size())
         {
             continue;
@@ -228,6 +266,7 @@ void create_entities_action_t::do_action()
             prefab_override_context::restore_entity_removal(removal_records[i]);
         }
     }
+    restore_sibling_places(restored_roots, sibling_places);
 }
 
 void create_entities_action_t::undo_action()
@@ -266,6 +305,10 @@ void create_entities_action_t::undo_action()
         {
             parent_entities[i] = parent_uh;
         }
+        if(i < sibling_places.size())
+        {
+            sibling_places[i] = target.get<transform_component>().get_sibling_index();
+        }
 
         if(i < subtree_uuids.size())
         {
@@ -282,7 +325,7 @@ void create_entities_action_t::undo_action()
             serialized_roots[i] = ss.str();
         }
 
-        em.unselect(target);
+        em.forget_entity(target);
 
         // Destroying an entity inside a prefab instance records it on that instance. The
         // record has to be kept, because the entity coming back on redo does not bring it
@@ -383,6 +426,7 @@ delete_entities_action_t::delete_entities_action_t(std::vector<entt::handle> ent
         serialized_roots.emplace_back(ss.str());
         root_entities.emplace_back(entt::make_uhandle(root));
         parent_entities.emplace_back(parent_uh);
+        sibling_places.push_back(root.get<transform_component>().get_sibling_index());
     }
 }
 
@@ -404,7 +448,7 @@ void delete_entities_action_t::do_action()
         {
             continue;
         }
-        em.unselect(target);
+        em.forget_entity(target);
 
         // Kept so undo can put it back. Deleting an entity inside a prefab instance records
         // it on that instance - as a removed entity, or as a removed nested instance - and
@@ -422,9 +466,11 @@ void delete_entities_action_t::undo_action()
         return;
     }
     entt::registry& registry = *root_entities.front().registry;
+    std::vector<entt::handle> restored_roots(serialized_roots.size());
     for(size_t i = 0; i < serialized_roots.size(); ++i)
     {
         auto restored = restore_root_from_serialized_subtree(registry, serialized_roots[i]);
+        restored_roots[i] = restored;
         if(!restored || i >= parent_entities.size())
         {
             continue;
@@ -463,6 +509,7 @@ void delete_entities_action_t::undo_action()
             prefab_override_context::restore_entity_removal(removal_records[i]);
         }
     }
+    restore_sibling_places(restored_roots, sibling_places);
 }
 
 auto delete_entities_action_t::is_valid() const -> bool
@@ -1273,15 +1320,34 @@ void entity_reset_component_action_t::draw_in_inspector(rtti::context& ctx)
 {
 }
 
-namespace
+auto has_component(entt::handle entity, const entt::meta_type& component_type) -> bool
 {
-/// Loads @p state, a component as save_component_state saved it, into the entity's component in place.
+    auto exists = component_type.func("component_exists"_hs);
+    return entity && exists && exists.invoke({}, entity).cast<bool>();
+}
+
+auto get_component_state_paths(const entt::meta_type& component_type) -> serialization::path_set
+{
+    if(component_type == entt::resolve<transform_component>())
+    {
+        return {"local_transform", "active"};
+    }
+    return {};
+}
+
 void load_component_state(entt::handle entity, const entt::meta_type& component_type, const std::string& state)
 {
     std::stringstream stream(state);
+    const auto paths = get_component_state_paths(component_type);
+    // A path filter already in force (a load of what one edit changed) decides on its own.
+    if(paths.empty() || serialization::get_path_context() != nullptr)
+    {
+        component_type.invoke("component_load"_hs, {}, entity, entt::forward_as_meta(stream));
+        return;
+    }
+    const serialization::scoped_path_filter filter("component", paths);
     component_type.invoke("component_load"_hs, {}, entity, entt::forward_as_meta(stream));
 }
-} // namespace
 
 entity_component_state_action_t::entity_component_state_action_t(entt::handle ent,
                                                                  const entt::meta_type& ctype,
@@ -1306,7 +1372,9 @@ void entity_component_state_action_t::do_action()
         load_component_state(ent, component_type, state_after);
     }
     is_edit_live = false;
-    prefab_record = prefab_override_context::mark_changed_properties(ent, component_type, state_before);
+    prefab_record = override_path.empty()
+                        ? prefab_override_context::mark_changed_properties(ent, component_type, state_before)
+                        : prefab_override_context::mark_path_changed(ent, component_type, override_path, pretty_override_path);
 }
 
 void entity_component_state_action_t::undo_action()
@@ -1323,7 +1391,19 @@ void entity_component_state_action_t::undo_action()
 
 auto entity_component_state_action_t::is_mergeable(const editing_action_t& previous) const -> bool
 {
-    return false;
+    // A drag over a row is one undo step: frames of it edit the same row of the same component of the same entity.
+    // An edit of another row is a step of its own, with the override it records.
+    const auto& prior = static_cast<const entity_component_state_action_t&>(previous);
+    return prior.entity.registry == entity.registry && prior.entity.uuid == entity.uuid &&
+           prior.component_type == component_type && prior.override_path == override_path;
+}
+
+void entity_component_state_action_t::merge_with(const editing_action_t& previous)
+{
+    // The merged step undoes to where the earliest one began, overrides included: later frames found them recorded.
+    const auto& prior = static_cast<const entity_component_state_action_t&>(previous);
+    state_before = prior.state_before;
+    prefab_record = prior.prefab_record;
 }
 
 auto entity_component_state_action_t::is_valid() const -> bool
@@ -1433,13 +1513,12 @@ auto entity_subtree_snapshot::capture(entt::handle root_entity) -> entity_subtre
     }
     snapshot.serialized = stream.str();
     snapshot.root = entt::make_uhandle(root_entity);
-    if(auto parent_entity = root_entity.get<transform_component>().get_parent())
+    const auto& transform = root_entity.get<transform_component>();
+    if(auto parent_entity = transform.get_parent())
     {
-        const auto& siblings = parent_entity.get<transform_component>().get_children();
         snapshot.parent = entt::make_uhandle(parent_entity);
-        snapshot.sibling_index =
-            static_cast<size_t>(std::distance(siblings.begin(), std::find(siblings.begin(), siblings.end(), root_entity)));
     }
+    snapshot.sibling_index = transform.get_sibling_index();
     return snapshot;
 }
 
@@ -1451,7 +1530,7 @@ auto entity_subtree_snapshot::restore() const -> entt::handle
     }
     if(auto current = root.resolve())
     {
-        engine::context().get_cached<editing_manager>().unselect(current);
+        engine::context().get_cached<editing_manager>().forget_entity(current);
         scene::destroy_entity(current);
     }
     auto restored = restore_root_from_serialized_subtree(*root.registry, serialized);
@@ -1461,18 +1540,125 @@ auto entity_subtree_snapshot::restore() const -> entt::handle
     }
     size_t next_uid = 0;
     apply_subtree_uuid_preorder(restored, subtree_uuids, next_uid);
-    auto parent_entity = parent.resolve();
-    if(!parent_entity)
+    auto& transform = restored.get<transform_component>();
+    if(auto parent_entity = parent.resolve())
     {
-        return restored;
+        transform.set_parent(parent_entity, false);
     }
-    restored.get<transform_component>().set_parent(parent_entity, false);
-    auto& parent_transform = parent_entity.get<transform_component>();
-    auto children = parent_transform.get_children();
-    children.erase(std::remove(children.begin(), children.end(), restored), children.end());
-    children.insert(children.begin() + static_cast<std::ptrdiff_t>(std::min(sibling_index, children.size())), restored);
-    parent_transform.set_children(children);
+    transform.set_sibling_index(sibling_index);
     return restored;
+}
+
+} // namespace unravel
+
+namespace unravel
+{
+namespace
+{
+
+/// The place of the script in @p slot among the entity's scripts; the count when there is none.
+auto find_script_index(const script_component& scripts, const hpp::uuid& slot) -> size_t
+{
+    const auto& comps = scripts.get_script_components();
+    const auto it = std::find_if(comps.begin(),
+                                 comps.end(),
+                                 [&](const auto& script)
+                                 {
+                                     return script.slot == slot;
+                                 });
+    return static_cast<size_t>(std::distance(comps.begin(), it));
+}
+
+/// Loads the script a per-script save wrote into @p out, to read its type; false when it does not load.
+auto load_script_object(entt::handle entity, const std::string& saved, script_component::script_object& out) -> bool
+{
+    std::stringstream stream(saved);
+    return load_from_stream(stream, entity, out) && out.pinned != nullptr;
+}
+
+/// Puts the script @p saved holds in the place of the script in @p slot, keeping the slot and the place.
+auto replace_script(entt::handle entity, script_component& scripts, const hpp::uuid& slot, size_t index, const std::string& saved)
+    -> bool
+{
+    script_component::script_object loaded;
+    if(!load_script_object(entity, saved, loaded))
+    {
+        return false;
+    }
+    if(auto current = scripts.get_script_component_by_slot(slot); current.pinned)
+    {
+        scripts.remove_script_component(current.pinned->get_object());
+        scripts.process_pending_deletions();
+    }
+    loaded.slot = slot;
+    scripts.insert_script_component(loaded, index);
+    return true;
+}
+
+} // namespace
+
+entity_load_script_values_action_t::entity_load_script_values_action_t(entt::handle ent,
+                                                                       const hpp::uuid& script_slot,
+                                                                       std::string script_values)
+    : entity(entt::make_uhandle(ent)), slot(script_slot), values(std::move(script_values))
+{
+    name = "Paste Script Values";
+}
+
+void entity_load_script_values_action_t::do_action()
+{
+    auto ent = entity.resolve();
+    auto* scripts = ent ? ent.try_get<script_component>() : nullptr;
+    if(scripts == nullptr)
+    {
+        return;
+    }
+    const auto current = scripts->get_script_component_by_slot(slot);
+    script_component::script_object pasted;
+    if(!current.pinned || !load_script_object(ent, values, pasted) ||
+       pasted.pinned->get_object().get_type().get_fullname() != current.pinned->get_object().get_type().get_fullname())
+    {
+        return;
+    }
+    // The copy loaded above only checks the type; the script that takes the slot is loaded afresh.
+    const auto component_type = entt::resolve<script_component>();
+    const auto state_before = prefab_override_context::save_component_state(ent, component_type);
+    std::stringstream before;
+    save_to_stream(before, ent, current);
+    script_before = before.str();
+    index = find_script_index(*scripts, slot);
+    if(replace_script(ent, *scripts, slot, index, values))
+    {
+        prefab_record = prefab_override_context::mark_changed_properties(ent, component_type, state_before);
+    }
+}
+
+void entity_load_script_values_action_t::undo_action()
+{
+    auto ent = entity.resolve();
+    auto* scripts = ent ? ent.try_get<script_component>() : nullptr;
+    if(scripts == nullptr || script_before.empty())
+    {
+        return;
+    }
+    replace_script(ent, *scripts, slot, index, script_before);
+    prefab_override_context::restore_overrides(prefab_record);
+    prefab_record = {};
+}
+
+auto entity_load_script_values_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    return false;
+}
+
+auto entity_load_script_values_action_t::is_valid() const -> bool
+{
+    auto ent = entity.resolve();
+    return ent.valid() && ent.all_of<script_component>() && !slot.is_nil();
+}
+
+void entity_load_script_values_action_t::draw_in_inspector(rtti::context& ctx)
+{
 }
 
 } // namespace unravel

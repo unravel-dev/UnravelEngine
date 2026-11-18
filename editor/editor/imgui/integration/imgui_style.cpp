@@ -39,6 +39,17 @@ auto get_changed_value_color_u32() -> ImU32
 
 namespace
 {
+/// A red-orange, warmer than the amber of notes and changed toolbar settings.
+constexpr ImU32 MIXED_VALUE_COLOR = IM_COL32(255, 112, 67, 255);
+} // namespace
+
+auto get_mixed_value_color() -> ImVec4
+{
+    return ImGui::ColorConvertU32ToFloat4(MIXED_VALUE_COLOR);
+}
+
+namespace
+{
 /// The content browser's Material accent: the assets imports write are materials.
 constexpr ImU32 IMPORTED_ASSET_COLOR = IM_COL32(86, 180, 168, 255);
 /// The amber of the inspector's notes.

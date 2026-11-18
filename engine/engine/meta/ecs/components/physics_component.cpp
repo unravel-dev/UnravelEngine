@@ -670,7 +670,8 @@ LOAD(physics_component)
         obj.set_material(material);
     }
 
-    std::vector<physics_compound_shape> shapes;
+    // Read over the live list: a load that lists some of its elements keeps the others as they are.
+    auto shapes = obj.get_shapes();
     if(try_load(ar, ser20::make_nvp("shapes", shapes)))
     {
         obj.set_shapes(shapes);

@@ -935,7 +935,8 @@ void register_editor_tools(mcp_tool_registry& registry)
              "Set what the editor has selected. entity_ids replaces the entity selection (mode add adds "
              "to it, as ctrl-click does; [] clears it). asset (a key, or a path relative to app:/data) "
              "selects an asset as a Content Browser click does, so the Inspector shows its details and "
-             "import settings. Returns the entity selection.",
+             "import settings (mode add adds it to the selected assets, as ctrl-click does: several textures, "
+             "audio clips or meshes then share one Apply of import settings). Returns the entity selection.",
          .input_schema_json =
              R"({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}},"mode":{"type":"string","enum":["replace","add"],"default":"replace"},"asset":{"type":"string"}}})",
          .handler =
@@ -952,7 +953,9 @@ void register_editor_tools(mcp_tool_registry& registry)
                  if(has_asset)
                  {
                      const auto key = to_asset_key(asset);
-                     if(!editor_actions::select_asset(ctx, key, &error))
+                     std::string asset_mode;
+                     read_string(args, "mode", asset_mode);
+                     if(!editor_actions::select_asset(ctx, key, &error, asset_mode == "add"))
                      {
                          return {.text = error, .is_error = true};
                      }

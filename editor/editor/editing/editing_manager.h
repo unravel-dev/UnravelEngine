@@ -599,6 +599,28 @@ struct editing_manager
         }
     }
 
+    /**
+     * @brief Drops an entity and everything under it from the selection and the focus without an undo step.
+     *
+     * For an action that destroys entities as part of its own do or undo: a selection step recorded from there would
+     * take the place of the redo history. The entities under it are destroyed with it, so they leave too.
+     */
+    void forget_entity(entt::handle entity)
+    {
+        const auto is_destroyed_with = [&](const entt::meta_any& object)
+        {
+            const auto* selected = object.try_cast<entt::handle>();
+            return selected != nullptr && *selected &&
+                   (*selected == entity || transform_component::is_parent_of(entity, *selected));
+        };
+        std::erase_if(selection_data.objects, is_destroyed_with);
+        sanity_check_selection_data();
+        if(is_destroyed_with(focused_data.object))
+        {
+            unfocus();
+        }
+    }
+
     // Helper method to restore selection from a snapshot (used by actions)
     void restore_selection_impl(const std::vector<entt::meta_any>& selection_snapshot)
     {
@@ -691,7 +713,8 @@ struct editing_manager
                     // make it active
                     unselect_impl(entry);
 
-                    if(!selection_data.objects.back())
+                    // It may have been the only one selected.
+                    if(!selection_data.objects.empty() && !selection_data.objects.back())
                     {
                         selection_data.objects.clear();
                     }

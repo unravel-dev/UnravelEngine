@@ -1,4 +1,8 @@
 #include "inspector_panel.h"
+#include "inspectors/multi_edit.h"
+#include <engine/audio/audio_clip.h>
+#include <engine/rendering/mesh.h>
+#include <graphics/texture.h>
 #include "../panel_toolbar.h"
 #include "../panels_defs.h"
 #include "inspectors/inspectors.h"
@@ -240,13 +244,89 @@ void inspector_panel::draw_inspected_object(rtti::context& ctx, entt::meta_any& 
     }
     if(selections_count > 1)
     {
-        ImGui::Text("%d Items Selected.", static_cast<int>(selections_count));
+        inspect_selected_entities(ctx, selected, selections_count);
         return;
     }
     if(selected)
     {
         inspect_object_with_prefab_check(ctx, selected);
     }
+}
+
+namespace
+{
+
+/// The key and uid of a selected asset whose import settings an Inspector edits; nothing for anything else.
+auto get_import_asset_identity(const entt::meta_any& selected) -> hpp::optional<multi_edit::asset_identity>
+{
+    if(const auto* texture = selected.try_cast<asset_handle<gfx::texture>>())
+    {
+        return multi_edit::asset_identity{texture->id(), texture->uid()};
+    }
+    if(const auto* clip = selected.try_cast<asset_handle<audio_clip>>())
+    {
+        return multi_edit::asset_identity{clip->id(), clip->uid()};
+    }
+    if(const auto* model = selected.try_cast<asset_handle<mesh>>())
+    {
+        return multi_edit::asset_identity{model->id(), model->uid()};
+    }
+    return hpp::nullopt;
+}
+
+} // namespace
+
+void inspector_panel::inspect_selected_assets(rtti::context& ctx, entt::meta_any& selected, size_t selections_count)
+{
+    // Several assets of one type whose import settings the Inspector edits draw as the one selected last; Apply of its
+    // settings reaches them all. Any other selection has no common rows.
+    auto& em = ctx.get_cached<editing_manager>();
+    std::vector<multi_edit::asset_identity> others;
+    const auto shown = get_import_asset_identity(selected);
+    for(const auto& object : em.get_selections())
+    {
+        const auto other = object.type() == selected.type() ? get_import_asset_identity(object) : hpp::nullopt;
+        if(other && shown && other->uid != shown->uid)
+        {
+            others.push_back(*other);
+        }
+    }
+    if(!shown || others.size() + 1 != selections_count)
+    {
+        ImGui::Text("%d Items Selected.", static_cast<int>(selections_count));
+        return;
+    }
+    ImGui::TextDisabled("%d assets selected: Apply of import settings reaches every one of them.",
+                        static_cast<int>(selections_count));
+    multi_edit::begin_assets(std::move(others));
+    inspect_object_with_prefab_check(ctx, selected);
+    multi_edit::end_assets();
+}
+
+void inspector_panel::inspect_selected_entities(rtti::context& ctx, entt::meta_any& selected, size_t selections_count)
+{
+    // Several entities draw as the one selected last, and edits reach them all. A selection holding anything else
+    // has no common rows.
+    auto& em = ctx.get_cached<editing_manager>();
+    const auto entities = em.try_get_selections_as_copy<entt::handle>();
+    const auto* shown = selected.try_cast<entt::handle>();
+    if(shown == nullptr || entities.size() != selections_count)
+    {
+        inspect_selected_assets(ctx, selected, selections_count);
+        return;
+    }
+    std::vector<entt::handle> others;
+    std::copy_if(entities.begin(),
+                 entities.end(),
+                 std::back_inserter(others),
+                 [&](const entt::handle& entity)
+                 {
+                     return entity && entity != *shown && entity.registry() == shown->registry();
+                 });
+    ImGui::TextDisabled("%d entities selected: edits reach every one of them.", static_cast<int>(others.size() + 1));
+    multi_edit::begin(*shown, std::move(others));
+    inspect_object_with_prefab_check(ctx, selected);
+    multi_edit::end();
 }
 
 void inspector_panel::follow_shown_object(rtti::context& ctx, const entt::meta_any* shown)

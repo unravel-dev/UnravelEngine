@@ -6,6 +6,7 @@
 #include "entt/meta/meta.hpp"
 #include <engine/assets/asset_handle.h>
 #include <engine/ecs/scene.h>
+#include <serialization/document_paths.h>
 #include <base/basetypes.hpp>
 #include <math/math.h>
 #include <functional>
@@ -41,6 +42,8 @@ struct create_entities_action_t : crtp_meta_type<create_entities_action_t, editi
     std::vector<entt::uhandle> parent_entities{};
     /// Preorder UUIDs per root subtree (same ordering as save_to_stream / flatten_hierarchy).
     std::vector<std::vector<hpp::uuid>> subtree_uuids{};
+    /// Where each root stands among its siblings, so redo puts it back there. Refreshed on every undo.
+    std::vector<size_t> sibling_places{};
     /// What destroying each root recorded on the prefab instance that contained it. Restoring
     /// the entity does not restore this - it lives on the container, not on the entity.
     std::vector<prefab_removal_record> removal_records{};
@@ -70,6 +73,8 @@ struct delete_entities_action_t : crtp_meta_type<delete_entities_action_t, editi
     std::vector<entt::uhandle> parent_entities{};
     /// Preorder UUIDs per root subtree (same order as save_to_stream / flatten_hierarchy).
     std::vector<std::vector<hpp::uuid>> subtree_uuids{};
+    /// Where each root stood among its siblings, so undo puts it back there.
+    std::vector<size_t> sibling_places{};
     /// What the deletion recorded on the prefab instance that contained each root. Restoring
     /// the entity does not restore this - it lives on the container, not on the entity.
     std::vector<prefab_removal_record> removal_records{};
@@ -334,6 +339,10 @@ struct entity_component_state_action_t : crtp_meta_type<entity_component_state_a
     prefab_override_record prefab_record{};
     /// The edit is live when the action is made; only a redo loads state_after.
     bool is_edit_live{true};
+    /// The row an Inspector edit changed, when the edit is one row's: its override is recorded there, as the row's
+    /// own edit records it. Empty: every changed property is recorded (mark_changed_properties).
+    std::string override_path{};
+    std::string pretty_override_path{};
 
     /// @param state_before What prefab_override_context::save_component_state returned before the edit.
     entity_component_state_action_t(entt::handle ent, const entt::meta_type& ctype, std::string state_before);
@@ -341,6 +350,7 @@ struct entity_component_state_action_t : crtp_meta_type<entity_component_state_a
     void do_action() override;
     void undo_action() override;
     auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    void merge_with(const editing_action_t& previous) override;
     auto is_valid() const -> bool override;
     void draw_in_inspector(rtti::context& ctx) override;
 };
@@ -394,5 +404,46 @@ struct entity_reset_script_component_action_t : crtp_meta_type<entity_reset_scri
     auto is_valid() const -> bool override;
     void draw_in_inspector(rtti::context& ctx) override;
 };
+
+/**
+ * @brief Puts the values of a copied script into a script of the same type, keeping its slot and its place.
+ *
+ * The values are what the per-script save wrote. On a prefab instance the fields that change become overrides, as
+ * edits would. Does nothing when the copy is of another type.
+ */
+struct entity_load_script_values_action_t : crtp_meta_type<entity_load_script_values_action_t, editing_action_t>
+{
+    entt::uhandle entity{};
+    hpp::uuid slot{};
+    std::string values{};
+
+    /// The script as it was, for undo.
+    std::string script_before{};
+    size_t index{};
+    prefab_override_record prefab_record{};
+
+    entity_load_script_values_action_t(entt::handle ent, const hpp::uuid& script_slot, std::string script_values);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
+};
+
+/// Whether @p entity has a component of the reflected @p component_type.
+auto has_component(entt::handle entity, const entt::meta_type& component_type) -> bool;
+
+/**
+ * @brief What a component's saved state puts back: every member, but a transform's local transform and active flag
+ *        only. Its parent and children are where the entity stands in the hierarchy, not values of it: loaded alone,
+ *        outside a document of the whole hierarchy, they would reparent the entity to an entity made for the purpose.
+ * @return The paths below the state's "component" node to load; empty for all of them.
+ */
+auto get_component_state_paths(const entt::meta_type& component_type) -> serialization::path_set;
+
+/// Loads @p state, a component as prefab_override_context::save_component_state saved it, into the entity's
+/// component in place, through the component's own load, limited to get_component_state_paths.
+void load_component_state(entt::handle entity, const entt::meta_type& component_type, const std::string& state);
 
 } // namespace unravel

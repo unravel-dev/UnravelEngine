@@ -1,4 +1,8 @@
 #include "inspector.h"
+#include <editor/editing/component_clipboard.h>
+#include "inspectors.h"
+#include "multi_edit.h"
+#include <editor/system/mcp/mcp_meta_properties.h>
 #include <algorithm>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <editor/imgui/integration/imgui_context_menu_style.h>
@@ -267,6 +271,8 @@ property_layout::~property_layout()
 
 void property_layout::set_data(const entt::meta_data& prop, const entt::meta_any& object, bool columns)
 {
+    prop_ = prop;
+    object_ = object.as_ref();
     auto name = entt::get_pretty_name(prop);
 
     auto hint = entt::get_property_hint(object, prop);
@@ -341,6 +347,22 @@ void property_layout::push_layout(bool auto_proceed_to_next_column, float label_
 
     begin_columns();
 
+    // A row whose value differs between the selected entities says so in its label's color and its tooltip. Only rows
+    // of a component drawn for several entities can differ.
+    bool is_mixed = false;
+    if(multi_edit::covers_edit())
+    {
+        const auto mixed_path = prop_ ? engine::context().get_cached<prefab_override_context>().get_row_path() : mixed_path_;
+        is_mixed = !mixed_path.empty() && multi_edit::is_row_mixed(mixed_path);
+    }
+    if(is_mixed)
+    {
+        tooltip_ += (tooltip_.empty() ? "" : "\n\n") +
+                    std::string("Differs between the selected entities. The value shown is the active entity's, and "
+                                "an edit gives it to all of them.");
+        ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_mixed_value_color());
+    }
+
     ImGui::AlignTextToFramePadding();
     // The divider's grab strip and the caller's buttons share the cell with the label; a stacked row's label line
     // ends where its revert button is.
@@ -357,6 +379,10 @@ void property_layout::push_layout(bool auto_proceed_to_next_column, float label_
     {
         draw_label_text(name_, label_room);
     }
+    if(is_mixed)
+    {
+        ImGui::PopStyleColor();
+    }
 
     draw_label_menu_and_tooltip(show_help_marker, !callback_ && text_width > label_room);
 
@@ -364,6 +390,79 @@ void property_layout::push_layout(bool auto_proceed_to_next_column, float label_
     {
         prepare_for_item();
     }
+}
+
+namespace
+{
+
+/// The pending paste of a row's label menu, for the row's inspect_property to take.
+struct property_paste_request
+{
+    const void* object{};
+    entt::meta_data property{};
+    std::string value_json;
+    /// Taken in the frame it was asked in, or the next: a row no longer drawn drops it.
+    int frame{};
+};
+
+property_paste_request pending_property_paste;
+
+/// How a value's type is named in a copy of it.
+auto get_value_type_name(const entt::meta_type& type) -> std::string
+{
+    return std::string(type.info().name());
+}
+
+} // namespace
+
+void request_property_paste(const void* object, const entt::meta_data& property, std::string value_json)
+{
+    pending_property_paste = {object, property, std::move(value_json), ImGui::GetFrameCount()};
+}
+
+auto take_property_paste(const void* object, const entt::meta_data& property) -> hpp::optional<std::string>
+{
+    auto& request = pending_property_paste;
+    const bool is_fresh = ImGui::GetFrameCount() - request.frame <= 1;
+    if(request.value_json.empty() || request.object != object || !(request.property == property) || !is_fresh)
+    {
+        return hpp::nullopt;
+    }
+    auto value_json = std::move(request.value_json);
+    request = {};
+    return value_json;
+}
+
+void property_layout::set_mixed_path(std::string path)
+{
+    mixed_path_ = std::move(path);
+}
+
+void property_layout::draw_value_clipboard_items()
+{
+    if(!prop_ || !object_)
+    {
+        return;
+    }
+    auto& ctx = engine::context();
+    auto value = prop_.get(object_);
+    const auto value_json = value ? mcp::meta_value_to_json(ctx, value) : hpp::nullopt;
+    if(!value_json)
+    {
+        return;
+    }
+    const auto type_name = get_value_type_name(prop_.type());
+    if(ImGui::MenuItem("Copy"))
+    {
+        component_clipboard::set_clipboard(component_clipboard::make_value_document(*value_json, type_name, name_));
+    }
+    const auto pasted = component_clipboard::clipboard_value_json(type_name);
+    if(ImGui::MenuItem("Paste", nullptr, false, pasted.has_value() && !ImGui::IsReadonly()))
+    {
+        request_property_paste(object_.base().data(), prop_, *pasted);
+    }
+    ImGui::SetItemTooltipEx("Gives the property the value copied from a property of the same type, or the text on the "
+                            "clipboard when it reads as one.");
 }
 
 void property_layout::draw_label_menu_and_tooltip(bool show_help_marker, bool is_label_shortened)
@@ -389,6 +488,7 @@ void property_layout::draw_label_menu_and_tooltip(bool show_help_marker, bool is
             {
                 profile_overrides.revert_current();
             }
+            draw_value_clipboard_items();
         }
         ImGui::EndPopup();
     }

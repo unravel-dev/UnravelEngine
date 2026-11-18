@@ -167,6 +167,17 @@ struct prefab_override_context
     /// Whether we're currently inspecting a prefab instance
     bool is_active = false;
 
+    /// The names of the properties from the component down to the row drawn now, kept whether or not a prefab
+    /// instance is inspected: what editing several entities at once compares a row by.
+    std::vector<std::string> row_segments;
+    /// The same names as the Inspector shows them, for the changes list.
+    std::vector<std::string> pretty_row_segments;
+
+    /// The drawn row's path inside its component, as the component's saved document names it: "light/intensity".
+    auto get_row_path() const -> std::string;
+    /// The drawn row's path as the Inspector names it: "Light/Intensity".
+    auto get_pretty_row_path() const -> std::string;
+
     /**
      * @brief Sets the entity UUID for both path contexts
      * @param uuid UUID of the entity being inspected
@@ -337,6 +348,16 @@ struct prefab_override_context
      * @param state_before What save_component_state returned before the edit
      * @return What changed in the override list, for restore_overrides
      */
+    /**
+     * @brief Records the override an edit of one row records, for an edit made outside the row's own action: on the
+     *        instance holding @p entity, at @p path of @p component_type.
+     * @return What changed in the override list, for restore_overrides
+     */
+    static auto mark_path_changed(entt::handle entity,
+                                  const entt::meta_type& component_type,
+                                  const std::string& path,
+                                  const std::string& pretty_path) -> prefab_override_record;
+
     static auto mark_changed_properties(entt::handle entity,
                                         const entt::meta_type& component_type,
                                         const std::string& state_before) -> prefab_override_record;

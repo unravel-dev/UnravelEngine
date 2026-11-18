@@ -11,6 +11,7 @@
 
 #include <hpp/optional.hpp>
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace unravel
@@ -365,8 +366,237 @@ SAVE(material_instance)
 SAVE_INSTANTIATE(material_instance, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(material_instance, ser20::oarchive_binary_t);
 
+namespace
+{
+
+/**
+ * @brief While alive, reads ignore the path filter in force: a partial load reads what it needs whole (the material
+ *        type, the named overrides) and keeps the listed parts itself.
+ */
+class unfiltered_read_scope
+{
+public:
+    unfiltered_read_scope()
+        : previous_(serialization::get_path_context())
+    {
+        serialization::set_path_context(nullptr);
+    }
+
+    ~unfiltered_read_scope()
+    {
+        serialization::set_path_context(previous_);
+    }
+
+    unfiltered_read_scope(const unfiltered_read_scope&) = delete;
+    auto operator=(const unfiltered_read_scope&) -> unfiltered_read_scope& = delete;
+
+private:
+    serialization::path_context* previous_{};
+};
+
+/// Whether the path filter in force reads the member @p name of the value being loaded; always without a filter.
+auto is_member_listed(const std::string& name) -> bool
+{
+    const auto* path_ctx = serialization::get_path_context();
+    if(path_ctx == nullptr || !path_ctx->is_recording())
+    {
+        return true;
+    }
+    const serialization::path_segment_guard member(name);
+    return path_ctx->should_serialize_property(path_ctx->get_current_path());
+}
+
+/// A member name no saved instance has: the filter in force reads it only when it lists the instance as a whole.
+constexpr const char* WHOLE_INSTANCE_PROBE = "*";
+
+/// Merges the listed named overrides under @p key into @p values: one the document has is set, one it lacks is
+/// reverted, and the rest stay. True when any listed one changed.
+template<typename Archive, typename Value>
+auto merge_listed_named_values(Archive& ar, const char* key, std::vector<Value>& values) -> bool
+{
+    std::vector<Value> saved;
+    {
+        const unfiltered_read_scope unfiltered;
+        saved = load_named_values<Archive, Value>(ar, key);
+    }
+    const serialization::path_segment_guard list(key);
+    const auto is_saved = [&saved](const std::string& name)
+    {
+        return std::any_of(saved.begin(),
+                           saved.end(),
+                           [&name](const Value& entry)
+                           {
+                               return entry.name == name;
+                           });
+    };
+    const auto reverted = std::remove_if(values.begin(),
+                                         values.end(),
+                                         [&](const Value& entry)
+                                         {
+                                             return !is_saved(entry.name) && is_member_listed(entry.name);
+                                         });
+    bool is_changed = reverted != values.end();
+    values.erase(reverted, values.end());
+    for(auto& entry : saved)
+    {
+        if(!is_member_listed(entry.name))
+        {
+            continue;
+        }
+        auto found = std::find_if(values.begin(),
+                                  values.end(),
+                                  [&entry](const Value& existing)
+                                  {
+                                      return existing.name == entry.name;
+                                  });
+        if(found != values.end())
+        {
+            *found = std::move(entry);
+        }
+        else
+        {
+            values.push_back(std::move(entry));
+        }
+        is_changed = true;
+    }
+    return is_changed;
+}
+
+/// Reverts, by @p revert, the named overrides of @p values that the filter in force lists under @p key.
+template<typename Value, typename Revert>
+void revert_listed_named(const char* key, const std::vector<Value>& values, Revert&& revert)
+{
+    const serialization::path_segment_guard list(key);
+    std::vector<std::string> listed;
+    for(const auto& entry : values)
+    {
+        if(is_member_listed(entry.name))
+        {
+            listed.push_back(entry.name);
+        }
+    }
+    for(const auto& name : listed)
+    {
+        revert(name);
+    }
+}
+
+} // namespace
+
+auto is_instance_listed_in_part() -> bool
+{
+    const auto* path_ctx = serialization::get_path_context();
+    if(path_ctx == nullptr || !path_ctx->is_recording())
+    {
+        return false;
+    }
+    const std::string path = path_ctx->get_current_path();
+    return path_ctx->should_serialize_property(path) &&
+           !path_ctx->should_serialize_property(path + "/" + WHOLE_INSTANCE_PROBE);
+}
+
+void revert_listed_overrides(material_instance& instance)
+{
+    if(const auto type = instance.get_material_type())
+    {
+        std::vector<entt::id_type> listed;
+        for(const auto& entry : instance.get_overrides())
+        {
+            const auto name = get_property_name(type, entry.property);
+            if(!name.empty() && is_member_listed(name))
+            {
+                listed.push_back(entry.property);
+            }
+        }
+        for(const auto property : listed)
+        {
+            instance.revert(property);
+        }
+    }
+    revert_listed_named(GRAPH_PARAMETERS_KEY,
+                        instance.get_graph_parameter_overrides(),
+                        [&instance](const std::string& name)
+                        {
+                            instance.revert_graph_parameter(name);
+                        });
+    revert_listed_named(GRAPH_TEXTURES_KEY,
+                        instance.get_graph_texture_overrides(),
+                        [&instance](const std::string& name)
+                        {
+                            instance.revert_graph_texture(name);
+                        });
+}
+
 LOAD(material_instance)
 {
+    if constexpr(!is_binary_archive<Archive>())
+    {
+        if(is_instance_listed_in_part())
+        {
+            // The listed overrides merge into the instance as it is: one the document has is set, one it lacks is
+            // reverted, every other one stays.
+            std::string partial_type_name;
+            {
+                const unfiltered_read_scope unfiltered;
+                try_load(ar, ser20::make_nvp(MATERIAL_TYPE_KEY, partial_type_name));
+            }
+            const auto partial_type = partial_type_name.empty() || partial_type_name == LEGACY_PBR_TYPE_NAME
+                                          ? entt::meta_type{}
+                                          : entt::resolve(entt::hashed_string{partial_type_name.c_str()}.value());
+            // Overrides of another material type do not apply to this instance's material.
+            if(partial_type && obj.material_type_ != entt::id_type{} && obj.material_type_ != partial_type.id())
+            {
+                return;
+            }
+            if(partial_type)
+            {
+                if(obj.material_type_ == entt::id_type{})
+                {
+                    obj.material_type_ = partial_type.id();
+                }
+                for_each_material_property(
+                    partial_type,
+                    [&](entt::id_type property, const entt::meta_data& data)
+                    {
+                        const auto name = entt::get_attribute_as<std::string>(data, "name");
+                        if(!is_member_listed(name))
+                        {
+                            return;
+                        }
+                        auto value = load_value(ar, name.c_str(), data.type());
+                        auto found = std::find_if(obj.overrides_.begin(),
+                                                  obj.overrides_.end(),
+                                                  [property](const material_instance::property_override& entry)
+                                                  {
+                                                      return entry.property == property;
+                                                  });
+                        if(value && found != obj.overrides_.end())
+                        {
+                            found->value = std::move(value);
+                        }
+                        else if(value)
+                        {
+                            obj.overrides_.push_back({property, std::move(value)});
+                        }
+                        else if(found != obj.overrides_.end())
+                        {
+                            obj.overrides_.erase(found);
+                        }
+                        else
+                        {
+                            return;
+                        }
+                        obj.changed_properties_.push_back(property);
+                    });
+            }
+            const bool are_parameters_changed =
+                merge_listed_named_values<Archive, graph_parameter_value>(ar, GRAPH_PARAMETERS_KEY, obj.graph_parameters_);
+            const bool are_textures_changed =
+                merge_listed_named_values<Archive, graph_texture_value>(ar, GRAPH_TEXTURES_KEY, obj.graph_textures_);
+            obj.are_graph_overrides_changed_ = obj.are_graph_overrides_changed_ || are_parameters_changed || are_textures_changed;
+            return;
+        }
+    }
     std::string type_name;
     if(!try_load(ar, ser20::make_nvp(MATERIAL_TYPE_KEY, type_name)))
     {

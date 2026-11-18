@@ -215,14 +215,15 @@ struct component_meta
         return removed > 0;
     }
     
+    /// Saves the component as a document holding it under "component". A path filter in force (a sparse save)
+    /// limits what is written, as for any save.
     static auto save(entt::handle entity, std::stringstream& stream) -> bool
     {
         component_save_scope scope(entity);
         try
         {
             auto ar = ser20::create_oarchive_associative(stream);
-            ar(ser20::make_nvp("component", entity.get<T>()));
-            return true;
+            return try_save(ar, ser20::make_nvp("component", entity.get<T>()));
         }
         catch(const ser20::Exception& e)
         {
@@ -231,14 +232,15 @@ struct component_meta
         }
     }
 
+    /// Loads a document save() wrote into the component in place. A path filter in force (a sparse load) limits
+    /// what is replaced: the rest of the component stays as it is.
     static auto load(entt::handle entity, std::stringstream& stream) -> bool
     {
         component_load_scope scope(entity);
         try
         {
-        auto ar = ser20::create_iarchive_associative(stream);
-            ar(ser20::make_nvp("component", entity.get<T>()));
-            return true;
+            auto ar = ser20::create_iarchive_associative(stream);
+            return try_load(ar, ser20::make_nvp("component", entity.get<T>()));
         }
         catch(const ser20::Exception& e)
         {

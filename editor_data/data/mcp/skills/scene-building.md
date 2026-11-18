@@ -55,11 +55,25 @@ audio_source, particle_emitter, text, ui_document.
    behavior (see the components skill).
 6. scene_save.
 
-## Reuse: duplicate and prefabs
+## Reuse: duplicate, copy and paste, prefabs
 
 - scene_duplicate_entities_batch clones whole configured hierarchies - build
   one finished pedestal-with-prop or domino, then duplicate and move the
-  copies. Far better than re-creating and re-configuring each one.
+  copies. Far better than re-creating and re-configuring each one. Each copy
+  lands right after its source; a name a sibling has already gets the next free
+  number (Crate becomes Crate (1)); links inside a copy point at the copy.
+- scene_copy_entities {entity_ids} returns a copy as a text document, the one
+  the editor's Copy puts on the clipboard (to_clipboard:true puts it there too,
+  for the user's Ctrl+V). scene_paste_entities {document} pastes it into the
+  scene being edited - another scene, a prefab in prefab_open, a later session
+  or another project - as new entities in one undo step. placement next_to
+  (default, after entity_id), child or child_keep_world (under entity_id), root.
+  Links out of the copy find the entity with the same id in this scene, or stay
+  empty. Keep a document to move content between scenes or as a snippet.
+- scene_copy_components_batch {entity_id, entity_ids} copies components of one
+  entity to others: mode values (default) gives the targets' components the
+  source's values, as_new adds them. components and scripts pick which; a
+  Transform copies its local position, rotation and scale only.
 - prefab_create_from_entities_batch saves a hierarchy as a .pfb asset in the
   data folder (attach:true makes the entity an instance of it) and waits until
   it loads; scene_create_batch kind prefab instantiates it with a pose. Use

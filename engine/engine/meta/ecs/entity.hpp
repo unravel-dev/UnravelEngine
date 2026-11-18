@@ -32,6 +32,18 @@ enum class clone_mode_t
     cloning_prefab_instance,
     updating_prefab,
 };
+
+/// How a copy of a hierarchy names the entities it holds.
+enum class clone_identity
+{
+    /// Registry entity ids: the copy loads only into the registry it was taken from, while the
+    /// originals exist. The fastest; what scene::clone_entity uses.
+    entity_ids,
+    /// Entity uuids: the copy loads into any registry at any later time, and a reference to an entity
+    /// outside it finds the entity with that uuid wherever the copy lands. What the editor's clipboard uses.
+    uuids,
+};
+
 struct save_context
 {
     auto get_clone_mode() const -> clone_mode_t
@@ -44,11 +56,19 @@ struct save_context
         return clone_mode != clone_mode_t::none;
     }
 
+    /// Whether entities are written by their registry id rather than their uuid.
+    auto writes_entity_ids() const -> bool
+    {
+        return is_cloning() && identity == clone_identity::entity_ids;
+    }
+
     auto is_saving_to_prefab() const -> bool
     {
         return to_prefab;
     }
     clone_mode_t clone_mode{};
+    /// How a clone names its entities; read only while cloning.
+    clone_identity identity{clone_identity::entity_ids};
     bool to_prefab{};
     entt::const_handle save_source{};
 
@@ -108,6 +128,12 @@ struct load_context
         return clone_mode != clone_mode_t::none;
     }
 
+    /// Whether entities are read by their registry id rather than their uuid.
+    auto reads_entity_ids() const -> bool
+    {
+        return is_cloning() && identity == clone_identity::entity_ids;
+    }
+
     /// Whether records are currently being applied over an existing prefab instance,
     /// i.e. matched by prefab uid rather than creating fresh entities.
     auto is_updating_prefab() const -> bool
@@ -118,7 +144,30 @@ struct load_context
 
     std::vector<entity_data<entt::handle>> entities;
     clone_mode_t clone_mode{};
+    /// How the clone being read names its entities; read only while cloning.
+    clone_identity identity{clone_identity::entity_ids};
     entt::registry* reg{};
+
+    /**
+     * @brief The entities a copy of one hierarchy holds records for - a clone, an undo snapshot, a
+     *        clipboard copy - read before its records, while that document is being read.
+     *
+     * A reference to one of them is to the copy's own entity, made at its first mention, wherever the
+     * reference sits. A reference to any other entity is to one already in the registry, or to nothing:
+     * the copy never makes an entity it holds no record for. Without the list (a scene, a prefab), a link
+     * resolves as its flags say.
+     */
+    struct record_list
+    {
+        bool is_set{};
+        std::set<entt::entity> ids;
+        std::set<hpp::uuid> uids;
+    };
+    record_list records;
+
+    /// Entities already in the registry by uuid, built at the first lookup of a reference by uuid.
+    std::map<hpp::uuid, entt::entity> existing_by_uid;
+    bool existing_by_uid_built{};
 
     /// True when the document being read declared its nested instances already resolved.
     /// Read before the context is popped; see load_from_prefab.
@@ -445,7 +494,31 @@ void re_home_document_statements(entt::handle root);
 /// refused (find_document_problem says why), or the asset is already being expanded further up.
 auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry) -> entt::handle;
 
+/// Copies a hierarchy into the registry of @p dst_obj, which is set to the copy's root; save_clone_to_stream and
+/// load_clone_from_view with entity ids.
 void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj);
+
+/**
+ * @brief Writes a copy of several hierarchies, in the order given, as one document.
+ *
+ * The copy holds each root and everything under it, with the prefab ids a clone keeps (only at and below an instance
+ * root inside the copy) and a list of the entities it holds records for. A root inside another root of the list, or
+ * listed twice, is copied once, with the root that holds it.
+ * @param identity How the copy names its entities: entity ids load only into the same registry while the originals
+ *        exist; uuids load into any registry at any later time.
+ */
+void save_clone_to_stream(std::ostream& stream, const std::vector<entt::const_handle>& roots, clone_identity identity);
+
+/**
+ * @brief Loads a copy written by save_clone_to_stream into @p registry, as new entities with fresh ids, and returns
+ *        its roots in the order they were written, each at the scene root.
+ *
+ * A reference to an entity of the copy lands on its copy, from any root to any root. A reference to any other entity
+ * lands on the entity of the registry with that id (that uuid, for a copy in uuids) or on nothing; no entity is made
+ * for it. Each root is nobody's slot; nested slots follow reconcile_cloned_slots. Post-load callbacks run once over
+ * every loaded entity. Empty, with the reason logged, for a document this build cannot read.
+ */
+auto load_clone_from_view(hpp::string_view view, entt::registry& registry) -> std::vector<entt::handle>;
 
 /// The first layout of scene and prefab files, which do not say which layout they are in. A scene
 /// in it holds one "entities" key per root in a single object, with a root count.

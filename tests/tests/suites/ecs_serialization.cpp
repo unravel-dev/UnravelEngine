@@ -26,6 +26,10 @@
 #include <engine/assets/asset_manager.h>
 
 #include "../tests.h"
+#include <engine/animation/ecs/components/animation_component.h>
+#include <engine/animation/ecs/components/ik_components.h>
+#include <engine/physics/ecs/components/physics_component.h>
+#include <engine/physics/ecs/components/ragdoll_component.h>
 #include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/prefab_component.h>
 #include <engine/ecs/components/tag_component.h>
@@ -45,6 +49,7 @@
 
 #include <logging/logging.h>
 #include <serialization/associative_archive.h>
+#include <serialization/document_paths.h>
 #include <serialization/serialization.h>
 #include <threadpp/thread_pool.h>
 #include <uuid/uuid.h>
@@ -704,6 +709,460 @@ void test_clone_entity_leaves_no_orphans()
     // clone_entity_from_stream's handle-based API, but now disposes of it when the loader
     // does not adopt it - which it never does.
     check(after == before, "cloning creates no extra componentless entities");
+}
+
+/// A root, its child and its grandchild, linked by entity references: the root's two-bone IK targets the
+/// grandchild (two levels down) and poles the child (one level down); the grandchild's targets the root.
+struct linked_tree
+{
+    entt::handle root;
+    entt::handle child;
+    entt::handle grandchild;
+};
+
+auto build_linked_tree(scene& scn) -> linked_tree
+{
+    linked_tree tree;
+    tree.root = scn.create_entity("root");
+    tree.child = scn.create_entity("child", tree.root);
+    tree.grandchild = scn.create_entity("grandchild", tree.child);
+    auto& root_ik = tree.root.emplace<two_bone_ik_component>();
+    root_ik.target = tree.grandchild;
+    root_ik.pole = tree.child;
+    tree.grandchild.emplace<two_bone_ik_component>().target = tree.root;
+    return tree;
+}
+
+/// Checks that a copy of a linked_tree under `copy_root` links to its own entities.
+void check_links_point_inside(entt::handle copy_root, const linked_tree& original)
+{
+    auto copy_child = find_child_by_name(copy_root, "child");
+    auto copy_grandchild = copy_child ? find_child_by_name(copy_child, "grandchild") : entt::handle{};
+    check(static_cast<bool>(copy_grandchild), "the copy has a grandchild");
+    check(copy_grandchild != original.grandchild, "the copy's grandchild is not the original one");
+    check(copy_root.all_of<two_bone_ik_component>(), "the copy's root keeps its IK");
+    if(copy_root.all_of<two_bone_ik_component>())
+    {
+        const auto& ik = copy_root.get<two_bone_ik_component>();
+        check(static_cast<bool>(copy_grandchild) && ik.target == copy_grandchild,
+              "a link two levels down points at the copy's grandchild");
+        check(static_cast<bool>(copy_child) && ik.pole == copy_child, "a link one level down points at the copy's child");
+    }
+    if(copy_grandchild && copy_grandchild.all_of<two_bone_ik_component>())
+    {
+        check(copy_grandchild.get<two_bone_ik_component>().target == copy_root,
+              "a link back up points at the copy's root");
+    }
+}
+
+/// Checks that copying `tree` left the original's entities where they were.
+void check_linked_tree_untouched(const linked_tree& tree)
+{
+    check(tree.grandchild.get<transform_component>().get_parent() == tree.child,
+          "the original grandchild stays under the original child");
+    check_eq(tree.child.get<transform_component>().get_children().size(), 1, "the original child keeps its one child");
+    check(tree.root.get<two_bone_ik_component>().target == tree.grandchild,
+          "the original root still targets the original grandchild");
+}
+
+void test_clone_links_to_entities_further_down_point_at_the_copy()
+{
+    begin_test("a clone's links to entities further down point at the copy, and the original keeps its entities");
+
+    scene scn("scn");
+    auto tree = build_linked_tree(scn);
+
+    auto copy = scn.clone_entity(tree.root, true, false);
+    check(static_cast<bool>(copy), "the clone exists");
+    if(!copy)
+    {
+        return;
+    }
+    check_links_point_inside(copy, tree);
+    check_linked_tree_untouched(tree);
+}
+
+void test_subtree_snapshot_restores_links_further_down()
+{
+    begin_test("a subtree restored from its undo snapshot links to its own entities further down");
+
+    scene scn("scn");
+    auto tree = build_linked_tree(scn);
+    std::string blob;
+    {
+        serialization::scoped_output_format compact(serialization::output_format::compact);
+        std::stringstream ss;
+        save_to_stream(ss, tree.root);
+        blob = ss.str();
+    }
+    scene::destroy_entity(tree.root);
+
+    // As delete_entities_action_t's undo restores it: into a scratch handle the loader replaces.
+    entt::handle restored(*scn.registry, scn.registry->create());
+    load_from_view(blob, restored);
+    check(static_cast<bool>(restored), "the subtree is restored");
+    if(!restored)
+    {
+        return;
+    }
+    auto restored_child = find_child_by_name(restored, "child");
+    auto restored_grandchild = restored_child ? find_child_by_name(restored_child, "grandchild") : entt::handle{};
+    check(static_cast<bool>(restored_grandchild), "with its grandchild");
+    check(restored.all_of<two_bone_ik_component>(), "and the root's IK");
+    if(restored.all_of<two_bone_ik_component>())
+    {
+        check(static_cast<bool>(restored_grandchild) && restored.get<two_bone_ik_component>().target == restored_grandchild,
+              "a link two levels down points at the restored grandchild");
+        check(static_cast<bool>(restored_child) && restored.get<two_bone_ik_component>().pole == restored_child,
+              "a link one level down points at the restored child");
+    }
+}
+
+void test_subtree_snapshot_restores_links_to_outside_entities()
+{
+    begin_test("a subtree restored from its undo snapshot links to the entities outside it that are still there");
+
+    scene scn("scn");
+    auto outside = scn.create_entity("outside");
+    auto tree = build_linked_tree(scn);
+    tree.root.get<two_bone_ik_component>().pole = outside;
+    std::string blob;
+    {
+        serialization::scoped_output_format compact(serialization::output_format::compact);
+        std::stringstream ss;
+        save_to_stream(ss, tree.root);
+        blob = ss.str();
+    }
+    scene::destroy_entity(tree.root);
+    const size_t before = count_componentless(*scn.registry);
+
+    entt::handle restored(*scn.registry, scn.registry->create());
+    load_from_view(blob, restored);
+    check(restored.all_of<two_bone_ik_component>(), "the subtree is restored with the root's IK");
+    if(restored.all_of<two_bone_ik_component>())
+    {
+        check(restored.get<two_bone_ik_component>().pole == outside, "a link to an entity outside points at that entity");
+    }
+    // The scratch handle the loader replaced is the one componentless entity a restore leaves behind.
+    check(count_componentless(*scn.registry) <= before + 1, "no empty entity is made for the outside link");
+}
+
+void test_component_load_honours_a_path_filter()
+{
+    begin_test("a component's own load replaces only what a path filter lists, as editing several entities at once needs");
+
+    scene scn("scn");
+    auto source = scn.create_entity("source");
+    auto target = scn.create_entity("target");
+    auto& from = source.emplace<test_component>();
+    from.f = 1.5f;
+    from.i32 = 2;
+    from.str = "source";
+    auto& into = target.emplace<test_component>();
+    into.f = 7.0f;
+    into.i32 = 8;
+    into.str = "target";
+
+    const auto type = entt::resolve<test_component>();
+    std::stringstream saved;
+    check(type.invoke("component_save"_hs, {}, source, entt::forward_as_meta(saved)).cast<bool>(), "the source saves");
+    {
+        const serialization::scoped_path_filter filter("component", {"f"});
+        std::stringstream stream(saved.str());
+        check(type.invoke("component_load"_hs, {}, target, entt::forward_as_meta(stream)).cast<bool>(), "the target loads");
+    }
+    check(target.get<test_component>().f == 1.5f, "the listed property takes the source's value");
+    check_eq(target.get<test_component>().i32, 8, "a property the filter leaves out keeps the target's");
+    check_eq(target.get<test_component>().str, "target", "and so does another");
+
+    std::stringstream whole(saved.str());
+    type.invoke("component_load"_hs, {}, target, entt::forward_as_meta(whole));
+    check_eq(target.get<test_component>().i32, 2, "without a filter the whole component loads");
+}
+
+/// Saves @p source's Component and loads only @p paths of it into @p target's.
+template<typename Component>
+void load_component_paths(entt::handle source, entt::handle target, const serialization::path_set& paths)
+{
+    const auto type = entt::resolve<Component>();
+    std::stringstream saved;
+    type.invoke("component_save"_hs, {}, source, entt::forward_as_meta(saved));
+    const serialization::scoped_path_filter filter("component", paths);
+    std::stringstream stream(saved.str());
+    type.invoke("component_load"_hs, {}, target, entt::forward_as_meta(stream));
+}
+
+auto make_sphere(float radius) -> physics_compound_shape
+{
+    physics_sphere_shape sphere;
+    sphere.radius = radius;
+    return physics_compound_shape{sphere};
+}
+
+auto make_ragdoll_body(const std::string& bone, float mass) -> ragdoll_body
+{
+    ragdoll_body body;
+    body.bone = bone;
+    body.mass = mass;
+    return body;
+}
+
+void test_list_loads_keep_the_elements_they_leave_out()
+{
+    begin_test("a load that lists one element of a component's list keeps the elements it leaves out");
+
+    scene scn("scn");
+    auto source = scn.create_entity("source");
+    auto target = scn.create_entity("target");
+
+    source.emplace<physics_component>().set_shapes({make_sphere(1.0f), make_sphere(2.0f)});
+    target.emplace<physics_component>().set_shapes({make_sphere(7.0f), make_sphere(8.0f)});
+    load_component_paths<physics_component>(source, target, {"shapes[1]"});
+    const auto& shapes = target.get<physics_component>().get_shapes();
+    check(shapes.size() == 2 && shapes[0] == make_sphere(7.0f) && shapes[1] == make_sphere(2.0f),
+          "physics shapes: the listed shape is the document's, the other stays");
+
+    auto& source_ragdoll = source.emplace<ragdoll_component>();
+    source_ragdoll.set_bodies({make_ragdoll_body("hips", 10.0f), make_ragdoll_body("spine", 5.0f)});
+    source_ragdoll.set_disabled_collisions({{"hips", "spine"}, {"spine", "head"}});
+    auto& target_ragdoll = target.emplace<ragdoll_component>();
+    target_ragdoll.set_bodies({make_ragdoll_body("pelvis", 12.0f), make_ragdoll_body("chest", 6.0f)});
+    target_ragdoll.set_disabled_collisions({{"pelvis", "chest"}, {"chest", "neck"}});
+    load_component_paths<ragdoll_component>(source, target, {"bodies[1]", "disabled_collisions[1]"});
+    const auto& bodies = target.get<ragdoll_component>().get_bodies();
+    check(bodies.size() == 2 && bodies[0] == make_ragdoll_body("pelvis", 12.0f) &&
+              bodies[1] == make_ragdoll_body("spine", 5.0f),
+          "ragdoll bodies: the listed body is the document's, the other stays");
+    const auto& pairs = target.get<ragdoll_component>().get_disabled_collisions();
+    check(pairs.size() == 2 && pairs[0].bone_a == "pelvis" && pairs[1].bone_a == "spine",
+          "ragdoll pairs: the listed pair is the document's, the other stays");
+
+    humanoid_pose_offset raised{humanoid_bone::left_upper_arm, {10.0f, 0.0f, 0.0f}};
+    humanoid_pose_offset lowered{humanoid_bone::right_upper_arm, {-10.0f, 0.0f, 0.0f}};
+    humanoid_pose_offset kept{humanoid_bone::left_upper_arm, {0.0f, 45.0f, 0.0f}};
+    humanoid_pose_offset replaced{humanoid_bone::right_upper_arm, {0.0f, -45.0f, 0.0f}};
+    source.emplace<animation_component>().set_retarget_pose_offsets({raised, lowered});
+    target.emplace<animation_component>().set_retarget_pose_offsets({kept, replaced});
+    load_component_paths<animation_component>(source, target, {"retarget_pose_offsets[1]"});
+    const auto& offsets = target.get<animation_component>().get_retarget_pose_offsets();
+    check(offsets.size() == 2 && offsets[0] == kept && offsets[1] == lowered,
+          "retarget pose offsets: the listed offset is the document's, the other stays");
+}
+
+void test_filtered_list_load_steps_over_skipped_elements()
+{
+    begin_test("a load that leaves out list elements reads each listed element from its own place in the document");
+
+    scene scn("scn");
+    auto source = scn.create_entity("source");
+    auto target = scn.create_entity("target");
+    auto& from = source.emplace<test_component>();
+    from.sequential = {"a", "b", "c"};
+    from.associative_mock = {{"first", {}}, {"second", {}}, {"third", {}}};
+    auto& into = target.emplace<test_component>();
+    into.sequential = {"x", "y", "z"};
+    into.associative_mock = {{"one", {}}, {"two", {}}, {"three", {}}};
+
+    const auto type = entt::resolve<test_component>();
+    std::stringstream saved;
+    type.invoke("component_save"_hs, {}, source, entt::forward_as_meta(saved));
+    {
+        const serialization::scoped_path_filter filter("component", {"sequential[1]", "associative_mock[2]/name"});
+        std::stringstream stream(saved.str());
+        type.invoke("component_load"_hs, {}, target, entt::forward_as_meta(stream));
+    }
+    const auto& loaded = target.get<test_component>();
+    check(loaded.sequential == std::vector<std::string>{"x", "b", "z"},
+          "a listed value after a skipped one is the document's at its own place");
+    check(loaded.associative_mock.size() == 3 && loaded.associative_mock[0].name == "one" &&
+              loaded.associative_mock[1].name == "two" && loaded.associative_mock[2].name == "third",
+          "a listed member of the third element is the document's third element's, after two skipped");
+}
+
+/// A copy of the hierarchies as the editor's clipboard holds it: uuids, any registry, any time.
+auto copy_portable(const std::vector<entt::handle>& roots) -> std::string
+{
+    std::vector<entt::const_handle> const_roots(roots.begin(), roots.end());
+    std::stringstream ss;
+    save_clone_to_stream(ss, const_roots, clone_identity::uuids);
+    return ss.str();
+}
+
+void test_portable_copy_loads_into_another_registry()
+{
+    begin_test("a portable copy loads into another scene: its links land inside it, a link out of it finds nothing there");
+
+    scene src("src");
+    auto outside = src.create_entity("outside");
+    auto tree = build_linked_tree(src);
+    tree.root.get<transform_component>().set_position_local({1.0f, 2.0f, 3.0f});
+    tree.child.emplace<two_bone_ik_component>().target = outside;
+    const auto text = copy_portable({tree.root});
+
+    scene dst("dst");
+    const size_t componentless_before = count_componentless(*dst.registry);
+    const auto roots = load_clone_from_view(text, *dst.registry);
+    check_eq(roots.size(), 1, "one root comes back");
+    if(roots.size() != 1)
+    {
+        return;
+    }
+    const auto copy = roots.front();
+    check(copy.registry() == dst.registry.get(), "in the scene it was loaded into");
+    check_links_point_inside(copy, tree);
+    check(uid_of(copy) != uid_of(tree.root), "with a fresh uid");
+    check_near(copy.get<transform_component>().get_position_local(), {1.0f, 2.0f, 3.0f}, "at the source's place");
+    check(!copy.get<transform_component>().get_parent(), "at the scene root");
+    auto copy_child = find_child_by_name(copy, "child");
+    check(copy_child && copy_child.all_of<two_bone_ik_component>() && !copy_child.get<two_bone_ik_component>().target,
+          "a link to an entity this scene does not have is empty");
+    check_eq(count_componentless(*dst.registry), componentless_before, "and no empty entity is made for it");
+    check_eq(count_real_entities(*dst.registry), 3, "the three entities of the copy, nothing more");
+}
+
+void test_portable_copy_into_the_same_scene()
+{
+    begin_test("a portable copy loaded where it was taken links to the copy inside and to the same entities outside");
+
+    scene scn("scn");
+    auto outside = scn.create_entity("outside");
+    auto tree = build_linked_tree(scn);
+    tree.child.emplace<two_bone_ik_component>().target = outside;
+    const auto text = copy_portable({tree.root});
+
+    const auto roots = load_clone_from_view(text, *scn.registry);
+    check_eq(roots.size(), 1, "one root comes back");
+    if(roots.size() != 1)
+    {
+        return;
+    }
+    check_links_point_inside(roots.front(), tree);
+    auto copy_child = find_child_by_name(roots.front(), "child");
+    check(copy_child && copy_child.all_of<two_bone_ik_component>() && copy_child.get<two_bone_ik_component>().target == outside,
+          "a link out of the copy points at the same entity");
+    check_linked_tree_untouched(tree);
+    check(uid_of(roots.front()) != uid_of(tree.root), "the copy has a uid of its own");
+}
+
+void test_portable_copy_links_between_its_roots()
+{
+    begin_test("a copy of two roots links one to the other's copy; a copy of one links to the other itself");
+
+    scene scn("scn");
+    auto first = scn.create_entity("first");
+    auto second = scn.create_entity("second");
+    auto second_child = scn.create_entity("second_child", second);
+    first.emplace<two_bone_ik_component>().target = second_child;
+
+    const auto both = load_clone_from_view(copy_portable({first, second}), *scn.registry);
+    check_eq(both.size(), 2, "both roots come back");
+    if(both.size() == 2)
+    {
+        check_eq(name_of(both[0]), "first", "in the order they were given");
+        auto copied_second_child = find_child_by_name(both[1], "second_child");
+        check(static_cast<bool>(copied_second_child) && both[0].get<two_bone_ik_component>().target == copied_second_child,
+              "the first copy targets the second copy's child");
+    }
+
+    const auto alone = load_clone_from_view(copy_portable({first}), *scn.registry);
+    check_eq(alone.size(), 1, "one root comes back");
+    if(alone.size() == 1)
+    {
+        check(alone[0].get<two_bone_ik_component>().target == second_child,
+              "copied alone, it targets the original, which is outside the copy");
+    }
+}
+
+void test_portable_copy_outlives_its_originals()
+{
+    begin_test("a portable copy loads after its originals are gone");
+
+    scene scn("scn");
+    auto tree = build_linked_tree(scn);
+    const auto text = copy_portable({tree.root});
+    scene::destroy_entity(tree.root);
+
+    const auto roots = load_clone_from_view(text, *scn.registry);
+    check_eq(roots.size(), 1, "one root comes back");
+    if(roots.size() == 1)
+    {
+        auto copy_child = find_child_by_name(roots.front(), "child");
+        auto copy_grandchild = copy_child ? find_child_by_name(copy_child, "grandchild") : entt::handle{};
+        check(static_cast<bool>(copy_grandchild), "whole");
+        check(roots.front().get<two_bone_ik_component>().target == copy_grandchild, "its links land inside it");
+    }
+}
+
+void test_portable_copy_keeps_prefab_ids_at_and_below_instance_roots()
+{
+    begin_test("a portable copy of an instance stays an instance; a copy of its content is plain");
+
+    scene authoring("authoring");
+    auto pfb = make_prefab_from(build_sample_tree(authoring), "test:/tree.pfb");
+
+    scene src("src");
+    auto instance = src.instantiate(pfb, false);
+    check(static_cast<bool>(instance), "the instance exists");
+    if(!instance)
+    {
+        return;
+    }
+    auto child_a = find_child_by_name(instance, "child_a");
+
+    scene dst("dst");
+    const auto instance_copy = load_clone_from_view(copy_portable({instance}), *dst.registry);
+    check_eq(instance_copy.size(), 1, "the instance's copy comes back");
+    if(instance_copy.size() == 1)
+    {
+        check(instance_copy[0].all_of<prefab_component>(), "as an instance");
+        check(instance_copy[0].get<prefab_component>().instance_id.is_nil(), "placed by hand: nobody's slot");
+        check(prefab_uid_of(instance_copy[0]) == prefab_uid_of(instance), "keeping the root's prefab id");
+        auto copied_child = find_child_by_name(instance_copy[0], "child_a");
+        check(copied_child && prefab_uid_of(copied_child) == prefab_uid_of(child_a), "and its content keeps theirs");
+    }
+
+    const auto content_copy = load_clone_from_view(copy_portable({child_a}), *dst.registry);
+    check_eq(content_copy.size(), 1, "the content's copy comes back");
+    if(content_copy.size() == 1)
+    {
+        check(!content_copy[0].all_of<prefab_id_component>(), "carrying no prefab id");
+        auto copied_grandchild = find_child_by_name(content_copy[0], "grandchild");
+        check(copied_grandchild && !copied_grandchild.all_of<prefab_id_component>(), "nor does anything under it");
+    }
+}
+
+void test_portable_copy_takes_each_root_once()
+{
+    begin_test("a copy of a root listed with its own child, or listed twice, holds it once");
+
+    scene scn("scn");
+    auto tree = build_linked_tree(scn);
+    const auto roots = load_clone_from_view(copy_portable({tree.child, tree.root, tree.root}), *scn.registry);
+    check_eq(roots.size(), 1, "one root comes back");
+    if(roots.size() == 1)
+    {
+        check_eq(name_of(roots[0]), "root", "the one that holds the other");
+        check_links_point_inside(roots[0], tree);
+    }
+}
+
+void test_portable_copy_in_a_newer_layout_is_refused()
+{
+    begin_test("a copy in a layout newer than this build reads is refused and loads nothing");
+
+    scene scn("scn");
+    auto text = copy_portable({build_sample_tree(scn)});
+    const std::regex version_member(R"("version"\s*:\s*\d+)");
+    check(std::regex_search(text, version_member), "the copy states its layout");
+    text = std::regex_replace(text,
+                              version_member,
+                              "\"version\": " + std::to_string(PREFAB_DOCUMENT_VERSION + 1),
+                              std::regex_constants::format_first_only);
+
+    scene dst("dst");
+    const size_t before = count_real_entities(*dst.registry);
+    check(load_clone_from_view(text, *dst.registry).empty(), "nothing comes back");
+    check_eq(count_real_entities(*dst.registry), before, "and nothing is made");
 }
 
 // ---------------------------------------------------------------------------------
@@ -6491,6 +6950,36 @@ void bench_prefab(size_t target, int reps)
         best_sync_ovr = std::min(best_sync_ovr, ms_since(t0));
     }
     record("prefab resync (32 overrides)", n, best_sync_ovr);
+
+    // A clone by entity ids (scene::clone_entity, C# Instantiate) and a portable copy written and loaded back (the
+    // editor's clipboard), each of the whole tree into its own scene.
+    double best_clone = 1e30;
+    for(int i = 0; i < reps; ++i)
+    {
+        const auto t0 = clock_t_::now();
+        auto copy = authoring.clone_entity(prefab_root, true, false);
+        best_clone = std::min(best_clone, ms_since(t0));
+        scene::destroy_entity(copy);
+    }
+    record("clone entity", n, best_clone);
+
+    double best_portable = 1e30;
+    size_t portable_bytes = 0;
+    for(int i = 0; i < reps; ++i)
+    {
+        const auto t0 = clock_t_::now();
+        std::stringstream ss;
+        save_clone_to_stream(ss, {prefab_root}, clone_identity::uuids);
+        const auto text = ss.str();
+        const auto roots = load_clone_from_view(text, *authoring.registry);
+        best_portable = std::min(best_portable, ms_since(t0));
+        portable_bytes = text.size();
+        for(auto root : roots)
+        {
+            scene::destroy_entity(root);
+        }
+    }
+    record("portable copy + load", n, best_portable, portable_bytes);
 }
 
 /**
@@ -6764,6 +7253,19 @@ void run_ecs_serialization_suite(rtti::context& ctx)
         RUN_CASE(test_clone_object_strips_prefab_ids());
         RUN_CASE(test_clone_prefab_instance_keeps_prefab_ids());
         RUN_CASE(test_clone_entity_leaves_no_orphans());
+        RUN_CASE(test_clone_links_to_entities_further_down_point_at_the_copy());
+        RUN_CASE(test_subtree_snapshot_restores_links_further_down());
+        RUN_CASE(test_subtree_snapshot_restores_links_to_outside_entities());
+        RUN_CASE(test_component_load_honours_a_path_filter());
+        RUN_CASE(test_filtered_list_load_steps_over_skipped_elements());
+        RUN_CASE(test_list_loads_keep_the_elements_they_leave_out());
+        RUN_CASE(test_portable_copy_loads_into_another_registry());
+        RUN_CASE(test_portable_copy_into_the_same_scene());
+        RUN_CASE(test_portable_copy_links_between_its_roots());
+        RUN_CASE(test_portable_copy_outlives_its_originals());
+        RUN_CASE(test_portable_copy_keeps_prefab_ids_at_and_below_instance_roots());
+        RUN_CASE(test_portable_copy_takes_each_root_once());
+        RUN_CASE(test_portable_copy_in_a_newer_layout_is_refused());
 
         RUN_CASE(test_instantiate_assigns_fresh_uids_per_instance());
         RUN_CASE(test_instantiate_sets_prefab_source());

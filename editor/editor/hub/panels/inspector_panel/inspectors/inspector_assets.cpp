@@ -28,6 +28,8 @@
 #include <engine/meta/rendering/texture.hpp>
 #include <engine/meta/ui/style_sheet.hpp>
 #include <engine/meta/ui/ui_tree.hpp>
+#include <serialization/sparse_document.h>
+#include "multi_edit.h"
 #include <engine/rendering/font.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/material_graph/graph_material.h>
@@ -366,8 +368,46 @@ auto is_same_import_settings(const Settings& lhs, const Settings& rhs) -> bool
 }
 
 /**
+ * @brief Carries an edit of the drawn asset's import settings, from @p before to @p edited, to the other selected
+ *        assets of its type: the settings the edit changed go into each, and each keeps the rest of its own. Each
+ *        one's .meta is written, which imports it again.
+ */
+template<typename Settings>
+void apply_import_edit_to_others(rtti::context& ctx, const Settings& before, const Settings& edited)
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    for(const auto& other : multi_edit::get_other_assets())
+    {
+        auto meta = am.get_metadata(other.uid);
+        auto importer = safe_pointer_cast<Settings>(meta.meta.importer);
+        if(!importer)
+        {
+            continue;
+        }
+        serialization::apply_edit(before, edited, "settings", *importer);
+        editor_actions::save_import_settings(other.key, meta.meta);
+    }
+}
+
+/// Under the import settings of an asset drawn for several: what Apply does to the others.
+void draw_import_selection_note()
+{
+    const auto count = multi_edit::get_other_assets().size();
+    if(count == 0)
+    {
+        return;
+    }
+    ImGui::TextWrapped("%s",
+                       fmt::format("Apply also gives the {} other selected assets every setting changed here. Each of "
+                                   "them keeps the rest of its own settings.",
+                                   count)
+                           .c_str());
+}
+
+/**
  * @brief The Revert and Apply buttons under an asset's import settings, enabled while `edited` differs from
- * `applied`: Revert drops the edits, Apply writes them to the asset's .meta, which imports it again.
+ * `applied`: Revert drops the edits, Apply writes them to the asset's .meta, which imports it again, and to the
+ * other selected assets of its type.
  */
 template<typename Settings>
 void draw_import_buttons(const std::string& key,
@@ -376,6 +416,7 @@ void draw_import_buttons(const std::string& key,
                          std::shared_ptr<Settings>& edited)
 {
     ImGui::Spacing();
+    draw_import_selection_note();
     const bool has_unapplied_edits = applied && edited && !is_same_import_settings(*edited, *applied);
     ImGui::BeginDisabled(!has_unapplied_edits);
     if(ImGui::Button("Revert"))
@@ -385,8 +426,10 @@ void draw_import_buttons(const std::string& key,
     ImGui::SameLine();
     if(ImGui::Button("Apply"))
     {
+        const Settings before = *applied;
         *applied = *edited;
         editor_actions::save_import_settings(key, meta);
+        apply_import_edit_to_others(engine::context(), before, *edited);
     }
     ImGui::EndDisabled();
 }
@@ -996,6 +1039,13 @@ auto make_graph_override_marks(const material_instance& instance, hpp::optional<
     return marks;
 }
 
+/// The path of an instance's graph override row inside the component, as the instance saves it: for marking the row
+/// when the selected entities' values differ.
+auto make_graph_row_path(rtti::context& ctx, const char* segment, const std::string& name) -> std::string
+{
+    return ctx.get_cached<prefab_override_context>().get_row_path() + "/" + segment + "/" + name;
+}
+
 /// What the graph rows of a frame did to the instance.
 struct graph_row_changes
 {
@@ -1053,11 +1103,13 @@ void draw_graph_parameter_row(rtti::context& ctx,
                               graph_row_changes& changes)
 {
     auto value = instance.get_graph_parameter(parameter.name).value_or(parameter.default_value);
-    property_layout layout(make_graph_row_label(parameter.name),
-                           make_graph_row_tooltip(parameter.description,
-                                                  "A parameter of the material graph. Overriding it keeps the model in "
-                                                  "its shared material's draw while it is among the graph's first four "
-                                                  "registers."));
+    property_layout layout;
+    layout.set_data(make_graph_row_label(parameter.name),
+                    make_graph_row_tooltip(parameter.description,
+                                           "A parameter of the material graph. Overriding it keeps the model in its "
+                                           "shared material's draw while it is among the graph's first four registers."));
+    layout.set_mixed_path(make_graph_row_path(ctx, GRAPH_PARAMETERS_SEGMENT, parameter.name));
+    layout.push_layout();
     const auto edit = inspect_vector_value(ctx, value, make_parameter_value_style(graph.get_graph(), parameter));
     changes.is_finished = changes.is_finished || edit.edit_finished;
     if(edit.changed && instance.set_graph_parameter(parameter.name, value))
@@ -1070,10 +1122,13 @@ void draw_graph_parameter_row(rtti::context& ctx,
 void draw_graph_texture_row(rtti::context& ctx, material_instance& instance, const material_graph_texture& texture, graph_row_changes& changes)
 {
     auto handle = instance.get_graph_texture(texture.name);
-    property_layout layout(make_graph_row_label(texture.name),
-                           make_graph_row_tooltip(texture.description,
-                                                  "A texture node of the material graph. Overriding it gives the model a "
-                                                  "draw of its own."));
+    property_layout layout;
+    layout.set_data(make_graph_row_label(texture.name),
+                    make_graph_row_tooltip(texture.description,
+                                           "A texture node of the material graph. Overriding it gives the model a draw "
+                                           "of its own."));
+    layout.set_mixed_path(make_graph_row_path(ctx, GRAPH_TEXTURES_SEGMENT, texture.name));
+    layout.push_layout();
     entt::meta_any value = entt::forward_as_meta(handle);
     var_info info;
     info.is_property = true;
@@ -1731,6 +1786,7 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
                 }
             }
 
+            draw_import_selection_note();
             if(ImGui::Button("Revert"))
             {
                 importer_ = {};
@@ -1738,9 +1794,11 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
             ImGui::SameLine();
             if(ImGui::Button("Apply"))
             {
-                if(importer_)
+                if(importer_ && importer)
                 {
+                    const mesh_importer_meta before = *importer;
                     *importer = *importer_;
+                    apply_import_edit_to_others(ctx, before, *importer_);
                 }
 
                 editor_actions::save_import_settings(data.id(), meta.meta);

@@ -3,6 +3,10 @@
 #include "mcp_project_paths.h"
 
 #include <editor/editing/actions/actions.h>
+#include <editor/editing/actions/composite_action.h>
+#include <editor/editing/component_clipboard.h>
+#include <editor/editing/entity_clipboard.h>
+#include <editor/editing/entity_inspect.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/defaults/defaults.h>
@@ -17,6 +21,90 @@ namespace unravel::mcp
 {
 namespace
 {
+
+/// [{id, name, parent_id}] of the entities.
+auto entities_to_lean_json(const std::vector<entt::handle>& entities) -> std::string
+{
+    std::string json = "[";
+    for(size_t i = 0; i < entities.size(); ++i)
+    {
+        json += (i == 0 ? "" : ",") + entity_to_lean_json(entities[i], true);
+    }
+    return json + "]";
+}
+
+/// The placement scene_paste_entities names: next_to, child, child_keep_world or root.
+auto to_paste_placement(const std::string& name) -> paste_placement
+{
+    if(name == "child")
+    {
+        return paste_placement::child_keep_local;
+    }
+    if(name == "child_keep_world")
+    {
+        return paste_placement::child_keep_world;
+    }
+    if(name == "root")
+    {
+        return paste_placement::scene_root;
+    }
+    return paste_placement::next_to;
+}
+
+auto is_placement_under_anchor(paste_placement placement) -> bool
+{
+    return placement == paste_placement::child_keep_local || placement == paste_placement::child_keep_world;
+}
+
+/// The copied components @p names and @p scripts name; all of them when both are empty. False, with the names nothing
+/// matched in @p error, when one names nothing the source has.
+auto pick_copied_components(const std::vector<component_clipboard::copied_component>& all,
+                            const std::vector<std::string>& names,
+                            const std::vector<std::string>& scripts,
+                            std::vector<component_clipboard::copied_component>& out,
+                            std::string& error) -> bool
+{
+    if(names.empty() && scripts.empty())
+    {
+        out = all;
+        return true;
+    }
+    std::vector<std::string> missing;
+    const auto pick = [&](const std::string& wanted, bool is_script)
+    {
+        const auto it = std::find_if(all.begin(),
+                                     all.end(),
+                                     [&](const component_clipboard::copied_component& item)
+                                     {
+                                         return is_script ? item.script_type == wanted : (!item.is_script() && item.name == wanted);
+                                     });
+        if(it == all.end())
+        {
+            missing.push_back(wanted);
+            return;
+        }
+        out.push_back(*it);
+    };
+    for(const auto& name : names)
+    {
+        pick(name, false);
+    }
+    for(const auto& script : scripts)
+    {
+        pick(script, true);
+    }
+    if(missing.empty())
+    {
+        return true;
+    }
+    std::string available;
+    for(const auto& item : all)
+    {
+        available += (available.empty() ? "" : ", ") + (item.is_script() ? item.script_type : item.name);
+    }
+    error = fmt::format("The source has no {} to copy. It has {}. Nothing changed.", fmt::join(missing, ", "), available);
+    return false;
+}
 
 void collect_matching_children(entt::handle entity,
                                const entity_filter& filter,
@@ -410,8 +498,10 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "scene_duplicate_entities_batch",
          .description =
-             "Duplicate entities with everything under them, under the same parent and at the same pose, in one "
-             "undo step. Returns created [{id, name, parent_id}].",
+             "Duplicate entities with everything under them, each copy right after its source among its siblings and at "
+             "its pose, in one undo step, as Ctrl+D does. An entity inside another one in the list is copied with it, "
+             "once. A copy whose name a sibling has already gets the next free number: Crate becomes Crate (1). Links "
+             "inside a copy land on the copy. Returns created [{id, name, parent_id}].",
          .input_schema_json =
              R"json({"type":"object","properties":{"entity_ids":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["entity_ids"]})json",
          .handler =
@@ -430,36 +520,199 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
 
-             std::vector<entt::handle> created;
-             auto& em = ctx.get_cached<editing_manager>();
-             em.do_action<create_entities_action_t>(
-                 "MCP Duplicate Entities",
-                 [&]()
-                 {
-                     created.clear();
-                     for(auto source : sources)
-                     {
-                         auto clone = scn->clone_entity(source);
-                         if(clone)
-                         {
-                             created.push_back(clone);
-                         }
-                     }
-                     return created;
-                 });
-
-             std::string json = "[";
-             for(size_t i = 0; i < created.size(); ++i)
+             auto result = std::make_shared<paste_result>();
+             auto action = entity_clipboard::make_duplicate_action(ctx, sources, result);
+             if(!action)
              {
-                 if(i > 0)
-                 {
-                     json += ",";
-                 }
-                 json += entity_to_lean_json(created[i], true);
+                 return {.text = result->problem.empty() ? std::string("Nothing to duplicate.") : result->problem, .is_error = true};
              }
-             json += "]";
-             return {.text = fmt::format(R"({{"created":{},"count":{}}})", json, created.size()),
-                     .is_error = created.empty()};
+             ctx.get_cached<editing_manager>().do_action("MCP " + action->get_name(), action);
+             return {.text = fmt::format(R"({{"created":{},"count":{}}})", entities_to_lean_json(result->roots), result->roots.size()),
+                     .is_error = result->roots.empty()};
+         },
+         .mutates_scene = true});
+
+    registry.add(
+        {.name = "scene_copy_entities",
+         .description =
+             "Copy entities with everything under them as a text document, the one the editor's Copy puts on the "
+             "clipboard. It pastes into any scene, prefab or project with scene_paste_entities, at any later time: keep "
+             "it to move content between scenes or as a reusable snippet. to_clipboard also puts it on the OS clipboard, "
+             "where the user's Ctrl+V pastes it. Returns {document, count}.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"entity_ids":{"type":"array","minItems":1,"items":{"type":"string"}},"to_clipboard":{"type":"boolean"}},"required":["entity_ids"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto* scn = ctx.get_cached<editing_manager>().get_active_scene(ctx);
+             if(scn == nullptr)
+             {
+                 return {.text = "No scene is open.", .is_error = true};
+             }
+             std::vector<entt::handle> entities;
+             std::string error;
+             if(!read_entity_ids(args, *scn, entities, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             const auto document = entity_clipboard::copy(entities);
+             bool to_clipboard = false;
+             read_bool(args, "to_clipboard", to_clipboard);
+             if(to_clipboard && !document.empty())
+             {
+                 ImGui::SetClipboardText(document.c_str());
+             }
+             return {.text = fmt::format(R"({{"document":{},"count":{}}})",
+                                         make_json_string(document),
+                                         transform_component::get_top_level_entities(entities).size()),
+                     .is_error = false};
+         },
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
+
+    registry.add(
+        {.name = "scene_paste_entities",
+         .description =
+             "Paste a copy of entities made by scene_copy_entities or the editor's Copy into the scene being edited, as "
+             "new entities with fresh ids, in one undo step. document is the copy's text; without it the OS clipboard is "
+             "pasted. placement: next_to (default: right after entity_id among its siblings, keeping world poses; "
+             "without entity_id, right after each original when the scene has it, else under its old parent when the "
+             "scene has that, else at the root), child (last under entity_id, keeping poses relative to the parent), "
+             "child_keep_world (last under entity_id, keeping world poses), root. Links inside the copy land on the copy; "
+             "links out of it land on this scene's entity with that id, or are left empty. A copy whose name a sibling "
+             "has gets the next free number. In prefab mode the copies land inside the prefab, and a copy holding an "
+             "instance of the prefab being edited is refused. Returns created [{id, name, parent_id}].",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"document":{"type":"string"},"entity_id":{"type":"string"},"placement":{"type":"string","enum":["next_to","child","child_keep_world","root"]}}})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             scene* scn = nullptr;
+             std::string error;
+             if(!require_edit_scene(ctx, scn, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::string document;
+             if(!read_string(args, "document", document))
+             {
+                 const char* text = ImGui::GetClipboardText();
+                 document = text != nullptr ? text : "";
+             }
+             entt::handle anchor;
+             std::string anchor_id;
+             if(read_string(args, "entity_id", anchor_id))
+             {
+                 anchor = find_entity(*scn, anchor_id);
+                 if(!anchor)
+                 {
+                     return {.text = "Entity not found: " + anchor_id + ". Nothing changed.", .is_error = true};
+                 }
+             }
+             std::string placement_name = "next_to";
+             read_string(args, "placement", placement_name);
+             const auto placement = to_paste_placement(placement_name);
+             if(is_placement_under_anchor(placement) && !anchor)
+             {
+                 return {.text = "placement " + placement_name + " needs entity_id, the entity to paste under. Nothing changed.",
+                         .is_error = true};
+             }
+             auto result = std::make_shared<paste_result>();
+             auto action = entity_clipboard::make_paste_action(ctx, std::move(document), placement, anchor, result);
+             if(!action)
+             {
+                 return {.text = result->problem + " Nothing changed.", .is_error = true};
+             }
+             ctx.get_cached<editing_manager>().do_action("MCP " + action->get_name(), action);
+             return {.text = fmt::format(R"({{"created":{},"count":{}}})", entities_to_lean_json(result->roots), result->roots.size()),
+                     .is_error = result->roots.empty()};
+         },
+         .mutates_scene = true});
+
+    registry.add(
+        {.name = "scene_copy_components_batch",
+         .description =
+             "Copy components of one entity to others, as the Inspector's Copy Component and Paste Component Values or "
+             "Paste Component as New do, in one undo step. components names native components (Light, Model, "
+             "Transform), scripts names C# scripts by full type name; neither copies every component the Inspector "
+             "copies (not Id, Name, Layers or the prefab's own). mode values (default) loads the copied values into the "
+             "targets' component of that type and skips targets without it (a script goes into each target's first "
+             "script of its type); as_new adds them, skipping a native component a target has already. A Transform "
+             "copies its local position, rotation and scale only. On prefab instances the changed fields become "
+             "overrides. Returns {pasted, components}.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"entity_id":{"type":"string","description":"The entity to copy from"},"entity_ids":{"type":"array","minItems":1,"items":{"type":"string"},"description":"The entities to paste onto"},"components":{"type":"array","items":{"type":"string"}},"scripts":{"type":"array","items":{"type":"string"}},"mode":{"type":"string","enum":["values","as_new"]}},"required":["entity_id","entity_ids"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             scene* scn = nullptr;
+             std::string error;
+             if(!require_edit_scene(ctx, scn, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::string source_id;
+             read_string(args, "entity_id", source_id);
+             const auto source = find_entity(*scn, source_id);
+             if(!source)
+             {
+                 return {.text = "Entity not found: " + source_id + ". Nothing changed.", .is_error = true};
+             }
+             std::vector<entt::handle> targets;
+             if(!read_entity_ids(args, *scn, targets, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::vector<std::string> names;
+             std::vector<std::string> scripts;
+             if(!read_string_array(args, "components", names, error, false) ||
+                !read_string_array(args, "scripts", scripts, error, false))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             const auto all = component_clipboard::read_components(component_clipboard::copy_all_components(source));
+             std::vector<component_clipboard::copied_component> items;
+             if(!pick_copied_components(all, names, scripts, items, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             if(items.empty())
+             {
+                 return {.text = "The source has no component to copy. Nothing changed.", .is_error = true};
+             }
+             std::string mode = "values";
+             read_string(args, "mode", mode);
+             size_t pasted = 0;
+             if(mode == "as_new")
+             {
+                 pasted = component_clipboard::paste_as_new(ctx, targets, items);
+             }
+             else
+             {
+                 auto edits = std::make_shared<composite_action_t>();
+                 for(const auto& item : items)
+                 {
+                     component_clipboard::add_paste_values_steps(*edits, targets, item);
+                 }
+                 pasted = edits->sub_actions.size();
+                 if(pasted > 0)
+                 {
+                     ctx.get_cached<editing_manager>().do_action("MCP Paste Component Values", edits);
+                 }
+             }
+             if(pasted == 0)
+             {
+                 return {.text = mode == "as_new"
+                                     ? std::string("Every target has these components already. Nothing changed.")
+                                     : std::string("No target has these components, which mode as_new adds. Nothing changed."),
+                         .is_error = true};
+             }
+             std::string copied;
+             for(const auto& item : items)
+             {
+                 copied += (copied.empty() ? "" : ",") + make_json_string(item.is_script() ? item.script_type : item.name);
+             }
+             return {.text = fmt::format(R"({{"pasted":{},"components":[{}]}})", pasted, copied), .is_error = false};
          },
          .mutates_scene = true});
 }

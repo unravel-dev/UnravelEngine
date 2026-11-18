@@ -64,8 +64,26 @@ auto is_instance_slot_kept(size_t slot) -> bool
     return !path_ctx->should_serialize_property(path_ctx->get_current_path());
 }
 
+/// Whether the load lists the slot's instance in part (see is_instance_listed_in_part).
+auto is_instance_slot_listed_in_part(size_t slot) -> bool
+{
+    serialization::path_segment_guard list_guard(MATERIAL_INSTANCES_NAME);
+    serialization::path_segment_guard slot_guard("[" + std::to_string(slot) + "]");
+    return is_instance_listed_in_part();
+}
+
+/// Reverts the overrides of @p instance the load lists under the slot's path.
+void revert_listed_slot_overrides(size_t slot, material_instance& instance)
+{
+    serialization::path_segment_guard list_guard(MATERIAL_INSTANCES_NAME);
+    serialization::path_segment_guard slot_guard("[" + std::to_string(slot) + "]");
+    revert_listed_overrides(instance);
+}
+
 /// The instances the document states, read over the live ones: a document without them, or a load that skips the
-/// whole list, keeps the live list, and a slot kept on its own keeps its live instance whatever the document says.
+/// whole list, keeps the live list, and a slot kept on its own keeps its live instance whatever the document says. A
+/// slot past the document's list has no overrides there: a load listing some of its overrides reverts those and
+/// keeps the rest.
 template<typename Archive>
 auto load_material_instances(Archive& ar, const std::vector<material_instance>& live) -> std::vector<material_instance>
 {
@@ -78,12 +96,19 @@ auto load_material_instances(Archive& ar, const std::vector<material_instance>& 
             instances = live;
         }
     }
+    const size_t document_count = instances.size();
     for(size_t slot = 0; slot < live.size(); ++slot)
     {
-        if(is_instance_slot_kept(slot))
+        const bool is_kept = is_instance_slot_kept(slot);
+        const bool is_reverted_in_part = !is_kept && slot >= document_count && is_instance_slot_listed_in_part(slot);
+        if(is_kept || is_reverted_in_part)
         {
             instances.resize(std::max(instances.size(), slot + 1));
             instances[slot] = live[slot];
+        }
+        if(is_reverted_in_part)
+        {
+            revert_listed_slot_overrides(slot, instances[slot]);
         }
     }
     return instances;

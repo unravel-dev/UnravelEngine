@@ -32,6 +32,8 @@
 #include <functional>
 #include <iterator>
 #include <ser20/external/simdjson/simdjson.h>
+#include <editor/system/mcp/mcp_meta_properties.h>
+#include "multi_edit.h"
 #include <serialization/serialization.h>
 #include <sstream>
 #include <unordered_map>
@@ -150,6 +152,21 @@ auto add_property_action(rtti::context& ctx,
         }
         return true;
     }
+    if(!result.change_recorded && multi_edit::covers_edit())
+    {
+        // Every selected entity takes the edit, in one step that records each one's overrides itself.
+        multi_edit::record_edit(ctx,
+                                var_proxy.impl->name,
+                                override_ctx.get_row_path(),
+                                override_ctx.get_pretty_row_path(),
+                                [&]()
+                                {
+                                    var_proxy.impl->setter(var_proxy, new_var, 0);
+                                });
+        result.change_recorded = true;
+        return true;
+    }
+
     std::function<void()> on_success = nullptr;
     std::function<void()> on_undo = nullptr;
 
@@ -322,6 +339,9 @@ void prefab_override_context::set_entity_uuid(const hpp::uuid& uuid)
 
 void prefab_override_context::set_component_type(const std::string& type, const std::string& pretty_type)
 {
+    // Rows are named from their component down.
+    row_segments.clear();
+    pretty_row_segments.clear();
     if(!is_active)
     {
         return;
@@ -331,8 +351,36 @@ void prefab_override_context::set_component_type(const std::string& type, const 
     pretty_path_context.set_component_type(pretty_type);
 }
 
+namespace
+{
+/// The segments as a document path: "materials[0]/roughness", an element's index joined to its array without a
+/// separator, as the override paths and the serializer's paths name it.
+auto join_row_segments(const std::vector<std::string>& segments) -> std::string
+{
+    std::string path;
+    for(const auto& segment : segments)
+    {
+        const bool is_element = !segment.empty() && segment.front() == '[';
+        path += (path.empty() || is_element ? "" : "/") + segment;
+    }
+    return path;
+}
+} // namespace
+
+auto prefab_override_context::get_row_path() const -> std::string
+{
+    return join_row_segments(row_segments);
+}
+
+auto prefab_override_context::get_pretty_row_path() const -> std::string
+{
+    return join_row_segments(pretty_row_segments);
+}
+
 void prefab_override_context::push_segment(const std::string& segment, const std::string& pretty_segment)
 {
+    row_segments.push_back(segment);
+    pretty_row_segments.push_back(pretty_segment);
     if(!is_active)
     {
         return;
@@ -351,6 +399,11 @@ void prefab_override_context::push_segment(const std::string& segment, const std
 
 void prefab_override_context::pop_segment()
 {
+    if(!row_segments.empty())
+    {
+        row_segments.pop_back();
+        pretty_row_segments.pop_back();
+    }
     if(!is_active)
     {
         return;
@@ -838,6 +891,23 @@ auto prefab_override_context::save_component_state(entt::handle entity, const en
         return {};
     }
     return stream.str();
+}
+
+auto prefab_override_context::mark_path_changed(entt::handle entity,
+                                                const entt::meta_type& component_type,
+                                                const std::string& path,
+                                                const std::string& pretty_path) -> prefab_override_record
+{
+    auto root = find_prefab_root_entity(entity);
+    const auto* prefab_before = root ? root.try_get<prefab_component>() : nullptr;
+    if(prefab_before == nullptr || path.empty())
+    {
+        return {};
+    }
+    // A copy, to compare the list with once the path is recorded.
+    const auto overrides_before = prefab_before->local.overrides;
+    mark_property_as_changed(entity, component_type, path, pretty_path);
+    return diff_overrides(root, overrides_before);
 }
 
 auto prefab_override_context::mark_changed_properties(entt::handle entity,
@@ -1788,6 +1858,24 @@ void open_next_node_while_filtering()
     }
 }
 
+/// Writes a pasted value, JSON as the MCP tools read it, into @p value: an edit for inspect_property to record.
+auto paste_property_value(rtti::context& ctx, entt::meta_any& value, const std::string& value_json, const std::string& name)
+    -> inspect_result
+{
+    inspect_result result{};
+    simdjson::dom::parser parser;
+    simdjson::dom::element element;
+    std::string error;
+    if(parser.parse(value_json).get(element) || !mcp::meta_value_from_json(ctx, element, value, error))
+    {
+        APPLOG_WARNING("The clipboard holds no value {} can take: {}", name, error.empty() ? "it is not one value." : error);
+        return result;
+    }
+    result.changed = true;
+    result.edit_finished = true;
+    return result;
+}
+
 auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any_proxy& var_proxy, const entt::meta_data& prop) -> inspect_result
 {
     if(!entt::is_property_visible(object, prop))
@@ -1925,6 +2013,10 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
 
     if(!is_readonly)
     {
+        if(auto pasted = take_property_paste(object.base().data(), prop))
+        {
+            result |= paste_property_value(ctx, prop_var, *pasted, pretty_name);
+        }
         if(result.changed)
         {
 

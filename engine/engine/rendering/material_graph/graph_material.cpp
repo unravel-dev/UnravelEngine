@@ -694,7 +694,8 @@ auto get_material_domain(const material& mat) -> material_domain
 auto find_loaded_material_domain(const asset_handle<material>& mat) -> hpp::optional<material_domain>
 {
     const auto loaded = mat ? mat.try_get() : nullptr;
-    if(asset_handle<material>::is_empty(loaded))
+    // Null while the material still loads (or for a handle without an asset); the empty asset after a failed load.
+    if(!loaded || asset_handle<material>::is_empty(loaded))
     {
         return hpp::nullopt;
     }

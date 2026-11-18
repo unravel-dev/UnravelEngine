@@ -49,6 +49,7 @@ inline const ImGuiKeyCombination select_all = {ImGuiKey_LeftCtrl, ImGuiKey_A};
 inline const ImGuiKeyCombination cut = {ImGuiKey_LeftCtrl, ImGuiKey_X};
 inline const ImGuiKeyCombination copy = {ImGuiKey_LeftCtrl, ImGuiKey_C};
 inline const ImGuiKeyCombination paste = {ImGuiKey_LeftCtrl, ImGuiKey_V};
+inline const ImGuiKeyCombination paste_as_child = {ImGuiKey_LeftCtrl, ImGuiKey_LeftShift, ImGuiKey_V};
 inline const ImGuiKeyCombination undo = {ImGuiKey_LeftCtrl, ImGuiKey_Z};
 inline const ImGuiKeyCombination redo = {ImGuiKey_LeftCtrl, ImGuiKey_Y};
 inline const ImGuiKeyCombination redo_alt = {ImGuiKey_LeftCtrl, ImGuiKey_LeftShift, ImGuiKey_Z};

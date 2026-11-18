@@ -201,3 +201,82 @@ static_assert(can_probe_names<ser20::iarchive_associative_t>,
 static_assert(can_restore_nodes<ser20::iarchive_associative_t>,
               "The selected associative input archive cannot restore its node depth after a failed load. "
               "See the comment above this assertion.");
+
+namespace serialization
+{
+/**
+ * @brief Whether an element of type @p T is a plain value in an associative document (a number, a string, an enum, a
+ *        type saved as one value), not a node of its own: the rule the JSON reader's prologue starts nodes by.
+ */
+template<typename T>
+inline constexpr bool is_plain_array_element = std::is_arithmetic_v<T> || std::is_same_v<T, std::string> ||
+                                               ser20::traits::has_minimal_input_serialization<T, ser20::iarchive_associative_t>::value ||
+                                               ser20::traits::has_minimal_base_class_serialization<
+                                                   T, ser20::traits::has_minimal_input_serialization, ser20::iarchive_associative_t>::value;
+
+/**
+ * @brief Steps the reader of @p ar over the array element it is at without keeping any of it: a node is entered and
+ *        left, a plain value is read into a scratch value of the element type.
+ */
+template<typename T>
+void skip_array_element(ser20::iarchive_associative_t& ar)
+{
+    if constexpr(!is_plain_array_element<T>)
+    {
+        ar.startNode();
+        ar.finishNode();
+    }
+    else
+    {
+        // Read whole, past any path filter: nothing of it is kept.
+        struct path_context_restore
+        {
+            path_context* previous;
+            ~path_context_restore()
+            {
+                set_path_context(previous);
+            }
+        } restore{get_path_context()};
+        set_path_context(nullptr);
+        T scratch{};
+        ar(scratch);
+    }
+}
+} // namespace serialization
+
+namespace ser20
+{
+/**
+ * @brief Loads a vector from an associative document as ser20's own load does, except that an element the path filter
+ *        in force leaves out is stepped over.
+ *
+ * The reader takes array elements in order. ser20's load leaves a left-out element unread, so the next element read
+ * would take the left-out one's place in the document: a reload that keeps one material slot of a model as it is would
+ * give the slot after it the kept slot's instance. Chosen over ser20's load for this archive as the more specialized
+ * one; vectors of bool keep ser20's.
+ */
+template<class T, class A>
+inline void SER20_LOAD_FUNCTION_NAME(iarchive_associative_t& ar, std::vector<T, A>& vector)
+    requires(!std::is_same_v<T, bool>)
+{
+    size_type size{};
+    ar(make_size_tag(size));
+    vector.resize(static_cast<std::size_t>(size));
+    auto& context = get_vector_serialization_context();
+    size_t index = 0;
+    for(auto&& element : vector)
+    {
+        context.begin_element_serialization(index);
+        if(context.should_serialize_element_at(index))
+        {
+            ar(element);
+        }
+        else
+        {
+            serialization::skip_array_element<T>(ar);
+        }
+        context.end_element_serialization(index);
+        ++index;
+    }
+}
+} // namespace ser20

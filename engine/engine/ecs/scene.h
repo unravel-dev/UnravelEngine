@@ -11,6 +11,8 @@
 #include <entt/entt.hpp>
 #include <entt/signal/sigh.hpp>
 #include <functional>
+#include <hpp/string_view.hpp>
+#include <vector>
 
 using namespace entt::literals;
 
@@ -287,6 +289,15 @@ struct scene
      */
     auto clone_entity(entt::handle clone_from, bool keep_parent = true, bool call_callbacks = true) -> entt::handle;
     void clone_entity(entt::handle& clone_to, entt::handle clone_from, bool keep_parent = true, bool call_callbacks = true);
+
+    /**
+     * @brief Loads a copy written by save_clone_to_stream into this scene, as clone_entity loads its copy.
+     *
+     * The copy's roots come back at the scene root, in the order they were written. A reference the copy makes to an
+     * entity outside it lands on this scene's entity with that id, or on nothing. Empty, with the reason logged,
+     * for a copy this build cannot read.
+     */
+    auto load_copy(hpp::string_view copy, bool call_callbacks = true) -> std::vector<entt::handle>;
 
     /**
      * @brief Creates an entity in the specified registry with an optional name and parent.

@@ -16,6 +16,7 @@
 #include <editor/shortcuts.h>
 
 
+#include <engine/engine.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/defaults/defaults.h>
@@ -2038,7 +2039,6 @@ void scene_panel::handle_keyboard_shortcuts(editing_manager& em)
 {
     bool is_delete_pressed = ImGui::IsItemKeyPressed(shortcuts::delete_item);
     bool is_focus_pressed = ImGui::IsItemKeyPressed(shortcuts::focus_selected);
-    bool is_duplicate_pressed = ImGui::IsItemCombinationKeyPressed(shortcuts::duplicate_item);
 
     auto selections = em.try_get_selections_as_copy<entt::handle>();
 
@@ -2052,9 +2052,9 @@ void scene_panel::handle_keyboard_shortcuts(editing_manager& em)
         focus_entities(get_camera(), selections);
     }
 
-    if(is_duplicate_pressed)
+    if(ImGui::IsWindowFocused())
     {
-        duplicate_entities(selections);
+        handle_entity_shortcuts(engine::context(), selections);
     }
 }
 

@@ -749,19 +749,14 @@ void scene::clone_entity(entt::handle& clone_to, entt::handle clone_from, bool k
 
     auto load_callback_override = [&](hpp::span<const entt::handle> entities) -> void
     {
-        if(keep_parent)
+        // The clone's root is the first entity loaded; clone_to is assigned only once the load returns.
+        auto clone_root = entities.empty() ? entt::handle{} : entities.front();
+        if(keep_parent && clone_root)
         {
-            // get cloned from transform
-            auto& clone_from_component = clone_from.get<transform_component>();
-    
-            // // get cloned to transform
-            auto& clone_to_component = clone_to.get<transform_component>();
-    
-            // set parent from original
-            auto parent = clone_from_component.get_parent();
+            auto parent = clone_from.get<transform_component>().get_parent();
             if(parent)
             {
-                clone_to_component.set_parent(parent, false);
+                clone_root.get<transform_component>().set_parent(parent, false);
             }
         }
 
@@ -774,6 +769,21 @@ void scene::clone_entity(entt::handle& clone_to, entt::handle clone_from, bool k
     clone_entity_from_stream(clone_from, clone_to);
     pop_on_load_callbacks();
 
+}
+
+auto scene::load_copy(hpp::string_view copy, bool call_callbacks) -> std::vector<entt::handle>
+{
+    APP_SCOPE_PERF("Load Copy");
+    if(call_callbacks)
+    {
+        push_on_load_callbacks({on_load_callback});
+    }
+    auto roots = load_clone_from_view(copy, *registry);
+    if(call_callbacks)
+    {
+        pop_on_load_callbacks();
+    }
+    return roots;
 }
 
 auto scene::clone_entity(entt::handle clone_from, bool keep_parent, bool call_callbacks) -> entt::handle

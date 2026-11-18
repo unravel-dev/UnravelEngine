@@ -166,6 +166,10 @@ Per-instance values and batching:
   restored after play); `material_instance::set_graph_parameter` / `set_graph_texture` override them per
   renderer, saved as `"graph_parameters"` / `"graph_textures"` objects in the instance. A values-only `set_graph`
   marks only what the changed defaults feed, and instances sync changed overrides by name.
+- A load whose path filter lists some of an instance's overrides, as editing several entities at once does, merges
+  them into the instance it loads over (`is_instance_listed_in_part`): a listed override the document has is set,
+  one it lacks is reverted, the others stay. A slot past the model's saved list (one without overrides) reverts the
+  listed ones (`revert_listed_overrides`).
 - Each parameter and texture carries the `render_change` aspects its Surface Output channels feed
   (`material_graph_parameter::changes`), so an emissive edit leaves cached shadows alone. GI recaptures caused by
   per-instance values are rate-limited (`gi_surface_cache::gate_instance_values`).

@@ -1136,7 +1136,7 @@ void save_entity(Archive& ar, const entt::const_handle& obj, entity_flags flags)
         save_entity_instance_uid(ar, obj);
         save_entity_instance_path(ar, obj);
     }
-    if(!save_ctx.is_cloning())
+    if(!save_ctx.writes_entity_ids())
     {
         save_entity_uuid(ar, obj);
     }
@@ -1145,6 +1145,66 @@ void save_entity(Archive& ar, const entt::const_handle& obj, entity_flags flags)
         save_entity_id(ar, obj);
     }
 }
+
+namespace
+{
+
+auto is_listed_record(const load_context::record_list& records, entt::entity id) -> bool
+{
+    return records.ids.count(id) > 0;
+}
+
+auto is_listed_record(const load_context::record_list& records, const hpp::uuid& uid) -> bool
+{
+    return records.uids.count(uid) > 0;
+}
+
+/**
+ * @brief Whether a reference not mapped yet names an entity already in the registry rather than one the
+ *        document makes: in a copy with a record list, any entity it holds no record for; without a list,
+ *        what the link's flags say.
+ */
+template<typename Id>
+auto is_resolved_in_registry(const load_context& load_ctx, const Id& id, entity_flags flags) -> bool
+{
+    if(load_ctx.records.is_set)
+    {
+        return !is_listed_record(load_ctx.records, id);
+    }
+    return flags == entity_flags::resolve_with_existing;
+}
+
+/// The entity the registry already has under @p id; empty when it has none.
+auto find_existing_entity(load_context& load_ctx, entt::entity id) -> entt::handle
+{
+    entt::handle existing(*load_ctx.reg, id);
+    return existing ? existing : entt::handle{};
+}
+
+/// The entity the registry already has with @p uid; empty when it has none. The registry is indexed at the
+/// first lookup, so a copy with many references to entities outside it costs one pass over the registry.
+auto find_existing_entity(load_context& load_ctx, const hpp::uuid& uid) -> entt::handle
+{
+    if(!load_ctx.existing_by_uid_built)
+    {
+        auto view = load_ctx.reg->view<id_component>();
+        for(auto e : view)
+        {
+            load_ctx.existing_by_uid.emplace(view.get<id_component>(e).id, e);
+        }
+        load_ctx.existing_by_uid_built = true;
+    }
+    const auto it = load_ctx.existing_by_uid.find(uid);
+    if(it == load_ctx.existing_by_uid.end())
+    {
+        return {};
+    }
+    // Destroyed since the index was built, its id may be reused.
+    entt::handle existing(*load_ctx.reg, it->second);
+    return existing ? existing : entt::handle{};
+}
+
+} // namespace
 
 template<typename Archive>
 auto load_entity_from_id(Archive& ar, entt::handle& obj, entity_flags flags) -> bool
@@ -1160,35 +1220,23 @@ auto load_entity_from_id(Archive& ar, entt::handle& obj, entity_flags flags) -> 
         if(it != load_ctx.mapping_by_eid.end())
         {
             obj = it->second;
-            // APPLOG_TRACE("found in cache entity from id: {}", uint32_t(id));
         }
         else if(obj)
         {
             load_ctx.mapping_by_eid[id] = obj;
-            // APPLOG_TRACE("added to cache entity from id: {}", uint32_t(id));
+        }
+        else if(is_resolved_in_registry(load_ctx, id, flags))
+        {
+            obj = find_existing_entity(load_ctx, id);
+            if(obj)
+            {
+                load_ctx.mapping_by_eid[id] = obj;
+            }
         }
         else
         {
-            if(flags == entity_flags::resolve_with_existing)
-            {
-                entt::handle check_entity(*load_ctx.reg, id);
-                if(check_entity)
-                {
-                    obj = check_entity;
-                    load_ctx.mapping_by_eid[id] = obj;
-                    // APPLOG_TRACE("added to cache entity from id: {}", uint32_t(id));
-                }
-                else
-                {
-                    obj = {};
-                }
-            }
-            else
-            {
-                obj = entt::handle(*load_ctx.reg, load_ctx.reg->create());
-                load_ctx.mapping_by_eid[id] = obj;
-                // APPLOG_TRACE("created and added to cache entity from id: {}", uint32_t(id));
-            }
+            obj = entt::handle(*load_ctx.reg, load_ctx.reg->create());
+            load_ctx.mapping_by_eid[id] = obj;
         }
     }
 
@@ -1396,23 +1444,17 @@ auto load_entity_from_uuid(Archive& ar, entt::handle& obj, entity_flags flags) -
     {
         load_ctx.mapping_by_uid[uuid] = obj;
     }
+    else if(is_resolved_in_registry(load_ctx, uuid, flags))
+    {
+        // An entity the document holds no record for: there or not, the reference is read.
+        obj = find_existing_entity(load_ctx, uuid);
+        if(obj)
+        {
+            load_ctx.mapping_by_uid[uuid] = obj;
+        }
+    }
     else
     {
-        if(flags == entity_flags::resolve_with_existing)
-        {
-            auto view = load_ctx.reg->view<id_component>();
-            for(auto e : view)
-            {
-                if(view.get<id_component>(e).id == uuid)
-                {
-                    obj = entt::handle(*load_ctx.reg, e);
-                    load_ctx.mapping_by_uid[uuid] = obj;
-                    return true;
-                }
-            }
-            obj = {};
-            return false;
-        }
         obj = entt::handle(*load_ctx.reg, load_ctx.reg->create());
         load_ctx.mapping_by_uid[uuid] = obj;
     }
@@ -1428,7 +1470,7 @@ void load_entity(Archive& ar, entt::handle& obj, entity_flags flags)
     {
         valid = load_entity_from_prefab_uid(ar, obj, flags);
     }
-    if(!valid && !load_ctx.is_cloning())
+    if(!valid && !load_ctx.reads_entity_ids())
     {
         valid = load_entity_from_uuid(ar, obj, flags);
     }
@@ -1859,10 +1901,50 @@ void flatten_hierarchy(entt::const_handle obj, std::vector<entity_data<entt::con
     }
 }
 
-/// One root's entities, and what its document states about the content it nests: the content of a
-/// prefab file, and of one element of a scene's "roots".
+/// The key of a copy's record list: see load_context::record_list.
+constexpr const char* RECORD_LIST_KEY = "records";
+
+/// The entities a copy of one hierarchy holds records for, named as its records name them, written before the
+/// records so a reader knows them before any reference to them.
 template<typename Archive>
-void save_root_content(Archive& ar, entt::const_handle obj)
+void write_record_list(Archive& ar, const std::vector<entity_data<entt::const_handle>>& entities)
+{
+    if(get_save_context().writes_entity_ids())
+    {
+        std::vector<entt::entity> ids;
+        ids.reserve(entities.size());
+        for(const auto& data : entities)
+        {
+            ids.push_back(data.components.entity.entity());
+        }
+        try_save(ar, ser20::make_nvp(RECORD_LIST_KEY, ids));
+        return;
+    }
+    std::vector<hpp::uuid> uids;
+    uids.reserve(entities.size());
+    for(const auto& data : entities)
+    {
+        // The id its record writes: save_entity_uuid gives one to an entity without.
+        auto& id_comp = const_handle_cast(data.components.entity).get_or_emplace<id_component>();
+        id_comp.generate_if_nil();
+        uids.push_back(id_comp.id);
+    }
+    try_save(ar, ser20::make_nvp(RECORD_LIST_KEY, uids));
+}
+
+/// Whether a single-root save writes a record list: a copy - a clone, an undo snapshot, the clipboard - and not a
+/// prefab file, whose references out of the file are dropped when it is written. Associative documents only: a binary
+/// one is read by position.
+template<typename Archive>
+auto lists_records(bool is_single_root) -> bool
+{
+    return is_single_root && !is_binary_archive<Archive>() && !get_save_context().is_saving_to_prefab();
+}
+
+/// One root's entities, and what its document states about the content it nests: the content of a
+/// prefab file, of one element of a scene's "roots", and of a copy of one hierarchy.
+template<typename Archive>
+void save_root_content(Archive& ar, entt::const_handle obj, bool is_single_root)
 {
     bool pushed = push_save_context();
     if(get_save_context().registry == nullptr)
@@ -1887,6 +1969,11 @@ void save_root_content(Archive& ar, entt::const_handle obj)
     {
         const auto statements = fold_document_statements(const_handle_cast(obj));
         try_save(ar, ser20::make_nvp("statements", statements));
+    }
+
+    if(lists_records<Archive>(is_single_root))
+    {
+        write_record_list(ar, entities);
     }
 
     try_save(ar, ser20::make_nvp("entities", entities));
@@ -1914,7 +2001,7 @@ void save_to_archive(Archive& ar, entt::const_handle obj)
     // First, where a reader that looks only at the head of the file finds it.
     const uint32_t version = PREFAB_DOCUMENT_VERSION;
     try_save(ar, ser20::make_nvp("version", version));
-    save_root_content(ar, obj);
+    save_root_content(ar, obj, true);
 }
 
 /// The document's statements, before its records: the filter asks "does this document state it" while they load.
@@ -1970,12 +2057,46 @@ auto adopt_root_entities(std::vector<entity_data<entt::handle>> entities) -> ent
     return result;
 }
 
+/// A copy's record list, named as the copy names its entities; not set when the document has none.
+template<typename Archive>
+auto read_record_list_entries(Archive& ar) -> load_context::record_list
+{
+    load_context::record_list records;
+    if(get_load_context().reads_entity_ids())
+    {
+        std::vector<entt::entity> ids;
+        records.is_set = try_load(ar, ser20::make_nvp(RECORD_LIST_KEY, ids));
+        records.ids.insert(ids.begin(), ids.end());
+        return records;
+    }
+    std::vector<hpp::uuid> uids;
+    records.is_set = try_load(ar, ser20::make_nvp(RECORD_LIST_KEY, uids));
+    records.uids.insert(uids.begin(), uids.end());
+    return records;
+}
+
+/// A copy's record list, before its records. Only a single-root document that is not a prefab carries one, so
+/// prefab and scene loads do not pay the absent-key probe.
+template<typename Archive>
+auto read_record_list(Archive& ar, bool is_single_root) -> load_context::record_list
+{
+    if(!is_single_root || is_binary_archive<Archive>() || !get_load_context().document_uid.is_nil())
+    {
+        return {};
+    }
+    return read_record_list_entries(ar);
+}
+
 /// Reads one root's content: a single-root document, or one element of a scene's "roots".
 template<typename Archive>
-auto load_from_archive_impl(Archive& ar, entt::registry& registry) -> entt::handle
+auto load_from_archive_impl(Archive& ar, entt::registry& registry, bool is_single_root) -> entt::handle
 {
     read_document_statements(ar);
+    auto& load_ctx = get_load_context();
+    // The list is this document's alone: a document read inside it (a nested load sharing the context) reads its own.
+    auto outer_records = std::exchange(load_ctx.records, read_record_list(ar, is_single_root));
     auto entities = read_root_entities(ar);
+    get_load_context().records = std::move(outer_records);
     read_nesting_resolved(ar);
     return adopt_root_entities(std::move(entities));
 }
@@ -2125,7 +2246,7 @@ auto load_from_archive_start(Archive& ar, entt::registry& registry, entt::handle
         return false;
     }
     bool pushed = push_load_context(registry);
-    e = load_from_archive_impl(ar, registry);
+    e = load_from_archive_impl(ar, registry, true);
     pop_load_context(pushed);
     return true;
 }
@@ -2139,7 +2260,7 @@ auto load_from_archive_start(Archive& ar, entt::registry& registry) -> entt::han
     }
     bool pushed = push_load_context(registry);
 
-    auto obj = load_from_archive_impl(ar, registry);
+    auto obj = load_from_archive_impl(ar, registry, true);
 
     pop_load_context(pushed);
 
@@ -2159,6 +2280,14 @@ struct scene_root_record
     Handle root{};
 };
 
+/// One root of a copy of several hierarchies: its entities. The copy's record list covers every root, so it is
+/// written once for the whole document (save_clone_to_stream).
+template<typename Handle>
+struct clone_root_record
+{
+    Handle root{};
+};
+
 } // namespace
 } // namespace unravel
 
@@ -2166,12 +2295,27 @@ namespace ser20
 {
 SAVE(unravel::scene_root_record<entt::const_handle>)
 {
-    unravel::save_root_content(ar, obj.root);
+    unravel::save_root_content(ar, obj.root, false);
 }
 
 LOAD(unravel::scene_root_record<entt::handle>)
 {
-    obj.root = unravel::load_from_archive_impl(ar, *unravel::get_load_context().reg);
+    obj.root = unravel::load_from_archive_impl(ar, *unravel::get_load_context().reg, false);
+}
+
+SAVE(unravel::clone_root_record<entt::const_handle>)
+{
+    // The hierarchy being written: what tells a link inside the copy from one out of it, and where the prefab
+    // ids a clone keeps stop.
+    auto& save_ctx = unravel::get_save_context();
+    const auto outer_source = std::exchange(save_ctx.save_source, obj.root);
+    unravel::save_root_content(ar, obj.root, false);
+    save_ctx.save_source = outer_source;
+}
+
+LOAD(unravel::clone_root_record<entt::handle>)
+{
+    obj.root = unravel::adopt_root_entities(unravel::read_root_entities(ar));
 }
 } // namespace ser20
 
@@ -3519,7 +3663,7 @@ auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry)
         // nesting_resolved flag can be read before the context is destroyed.
         const bool pushed = push_load_context(registry);
         get_load_context().document_uid = pfb.uid();
-        obj = load_from_archive_impl(ar, registry);
+        obj = load_from_archive_impl(ar, registry, true);
         if(get_load_context().saw_unqualified_ids)
         {
             qualify_legacy_prefab_ids(obj, pfb.uid(), true);
@@ -3580,56 +3724,261 @@ auto has_prefab_component(const entt::const_handle& obj) -> bool
     return false;
 }
 
+namespace
+{
+
+/// The names a copy document gives its clone mode and identity: readable, since the editor's clipboard holds them.
+constexpr const char* CLONE_OBJECT_NAME = "object";
+constexpr const char* CLONE_PREFAB_INSTANCE_NAME = "prefab_instance";
+constexpr const char* CLONE_ENTITY_IDS_NAME = "entity_ids";
+constexpr const char* CLONE_UUIDS_NAME = "uuids";
+
+/// Whether any of the hierarchies is or holds a prefab instance: their copy then keeps the prefab ids at and below each
+/// instance root inside it.
+auto has_any_prefab_instance(const std::vector<entt::const_handle>& roots) -> bool
+{
+    return std::any_of(roots.begin(),
+                       roots.end(),
+                       [](const entt::const_handle& root)
+                       {
+                           return has_prefab_component(root);
+                       });
+}
+
+/// The roots none of the others contains, in their order, each once: a record must be written once per copy.
+auto keep_top_level_roots(const std::vector<entt::const_handle>& roots) -> std::vector<entt::const_handle>
+{
+    std::vector<entt::const_handle> top_level;
+    for(const auto& root : roots)
+    {
+        const bool is_inside_another = std::any_of(roots.begin(),
+                                                   roots.end(),
+                                                   [&](const entt::const_handle& other)
+                                                   {
+                                                       return other != root && is_parent(other, root);
+                                                   });
+        const bool is_listed = std::find(top_level.begin(), top_level.end(), root) != top_level.end();
+        if(root && !is_inside_another && !is_listed)
+        {
+            top_level.push_back(root);
+        }
+    }
+    return top_level;
+}
+
+/// Every entity of the hierarchies, root by root, each root first and its descendants in the order its records are
+/// written.
+auto flatten_roots(const std::vector<entt::const_handle>& roots) -> std::vector<entity_data<entt::const_handle>>
+{
+    std::vector<entity_data<entt::const_handle>> entities;
+    for(const auto& root : roots)
+    {
+        flatten_hierarchy(root, entities);
+    }
+    return entities;
+}
+
+/**
+ * @brief What a copied root becomes once loaded.
+ *
+ * The root itself is nobody's slot: it is an addition to whatever contains it, and only becomes a slot when that
+ * container is written as a prefab. Which of the instances nested below it keep their slots is decided by whose slots
+ * they are - see reconcile_cloned_slots.
+ */
+void settle_cloned_root(entt::handle root)
+{
+    if(!root)
+    {
+        return;
+    }
+    std::vector<hpp::uuid> instance_chain;
+    if(auto* prefab_comp = root.try_get<prefab_component>())
+    {
+        prefab_comp->instance_id = {};
+        prefab_comp->instance_document = {};
+        instance_chain.push_back(prefab_comp->source.uid());
+    }
+    reconcile_cloned_slots(root, std::move(instance_chain));
+}
+
+/// The clone mode a copy document names, or none for a name this build does not know.
+auto parse_clone_mode(const std::string& name) -> clone_mode_t
+{
+    if(name == CLONE_OBJECT_NAME)
+    {
+        return clone_mode_t::cloning_object;
+    }
+    if(name == CLONE_PREFAB_INSTANCE_NAME)
+    {
+        return clone_mode_t::cloning_prefab_instance;
+    }
+    return clone_mode_t::none;
+}
+
+template<typename Archive>
+void save_clone_to_archive(Archive& ar, const std::vector<entt::const_handle>& roots)
+{
+    // First, where a reader that looks only at the head finds it: the layout of the records.
+    const uint32_t version = PREFAB_DOCUMENT_VERSION;
+    try_save(ar, ser20::make_nvp("version", version));
+    const auto& save_ctx = get_save_context();
+    const std::string clone_name = save_ctx.get_clone_mode() == clone_mode_t::cloning_prefab_instance ? CLONE_PREFAB_INSTANCE_NAME
+                                                                                                       : CLONE_OBJECT_NAME;
+    const std::string identity_name = save_ctx.writes_entity_ids() ? CLONE_ENTITY_IDS_NAME : CLONE_UUIDS_NAME;
+    try_save(ar, ser20::make_nvp("clone", clone_name));
+    try_save(ar, ser20::make_nvp("identity", identity_name));
+    // One list for every root, so a reference from one copied root to another lands on the other's copy.
+    write_record_list(ar, flatten_roots(roots));
+    std::vector<clone_root_record<entt::const_handle>> records;
+    records.reserve(roots.size());
+    for(const auto& root : roots)
+    {
+        records.push_back({root});
+    }
+    try_save(ar, ser20::make_nvp("roots", records));
+}
+
+/// Reads a copy document's header into the load context; false, with the reason logged, when it cannot be read.
+template<typename Archive>
+auto read_clone_header(Archive& ar, load_context& load_ctx) -> bool
+{
+    const auto version = read_archive_version(ar);
+    if(!is_readable_prefab_version(version))
+    {
+        APPLOG_ERROR("A copy of entities in layout {} cannot be read by this build, which reads {}.",
+                     version,
+                     describe_readable_versions(PREFAB_DOCUMENT_VERSION));
+        return false;
+    }
+    std::string clone_name;
+    std::string identity_name;
+    try_load(ar, ser20::make_nvp("clone", clone_name));
+    try_load(ar, ser20::make_nvp("identity", identity_name));
+    load_ctx.clone_mode = parse_clone_mode(clone_name);
+    if(load_ctx.clone_mode == clone_mode_t::none || (identity_name != CLONE_ENTITY_IDS_NAME && identity_name != CLONE_UUIDS_NAME))
+    {
+        APPLOG_ERROR("A copy of entities names a clone mode or identity this build does not know ({}, {}).",
+                     clone_name,
+                     identity_name);
+        return false;
+    }
+    load_ctx.identity = identity_name == CLONE_UUIDS_NAME ? clone_identity::uuids : clone_identity::entity_ids;
+    return true;
+}
+
+/// Restores the load context fields a copy document sets, for a context shared with an outer load.
+struct clone_load_state
+{
+    clone_mode_t clone_mode{};
+    clone_identity identity{};
+    load_context::record_list records;
+};
+
+template<typename Archive>
+auto load_clone_from_archive(Archive& ar, entt::registry& registry) -> std::vector<entt::handle>
+{
+    std::vector<entt::handle> roots;
+    const bool pushed = push_load_context(registry);
+    auto& load_ctx = get_load_context();
+    clone_load_state outer{load_ctx.clone_mode, load_ctx.identity, std::move(load_ctx.records)};
+    // Caught here, so the context is always restored and popped: a context left pushed would swallow every later load.
+    try
+    {
+        if(read_clone_header(ar, load_ctx))
+        {
+            load_ctx.records = read_record_list_entries(ar);
+            std::vector<clone_root_record<entt::handle>> records;
+            try_load(ar, ser20::make_nvp("roots", records));
+            roots.reserve(records.size());
+            for(const auto& record : records)
+            {
+                if(record.root)
+                {
+                    roots.push_back(record.root);
+                }
+            }
+        }
+    }
+    catch(const std::exception& e)
+    {
+        APPLOG_ERROR("Failed to load a copy of entities: {}", e.what());
+    }
+    load_ctx.clone_mode = outer.clone_mode;
+    load_ctx.identity = outer.identity;
+    load_ctx.records = std::move(outer.records);
+    // The post-load callbacks run here, over every entity of every root.
+    pop_load_context(pushed);
+    for(auto& root : roots)
+    {
+        settle_cloned_root(root);
+    }
+    return roots;
+}
+
+} // namespace
+
+void save_clone_to_stream(std::ostream& stream, const std::vector<entt::const_handle>& given_roots, clone_identity identity)
+{
+    const auto roots = keep_top_level_roots(given_roots);
+    if(!stream.good() || roots.empty())
+    {
+        return;
+    }
+    const bool pushed = push_save_context();
+    auto& save_ctx = get_save_context();
+    const auto outer_mode = std::exchange(save_ctx.clone_mode,
+                                          has_any_prefab_instance(roots) ? clone_mode_t::cloning_prefab_instance
+                                                                         : clone_mode_t::cloning_object);
+    const auto outer_identity = std::exchange(save_ctx.identity, identity);
+    const bool outer_to_prefab = std::exchange(save_ctx.to_prefab, false);
+    if(save_ctx.registry == nullptr)
+    {
+        save_ctx.registry = roots.front().registry();
+    }
+    try
+    {
+        auto ar = ser20::create_oarchive_associative(stream);
+        save_clone_to_archive(ar, roots);
+    }
+    catch(const std::exception& e)
+    {
+        APPLOG_ERROR("Failed to save a copy of entities: {}", e.what());
+    }
+    save_ctx.clone_mode = outer_mode;
+    save_ctx.identity = outer_identity;
+    save_ctx.to_prefab = outer_to_prefab;
+    pop_save_context(pushed);
+}
+
+auto load_clone_from_view(hpp::string_view view, entt::registry& registry) -> std::vector<entt::handle>
+{
+    if(view.empty())
+    {
+        return {};
+    }
+    try
+    {
+        auto ar = ser20::create_iarchive_associative(view.data(), view.size());
+        return load_clone_from_archive(ar, registry);
+    }
+    catch(const std::exception& e)
+    {
+        APPLOG_ERROR("Failed to load a copy of entities: {}", e.what());
+    }
+    return {};
+}
+
 void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj)
 {
-    // APPLOG_INFO_PERF(std::chrono::microseconds);
-
-    bool has_prefab_instances = has_prefab_component(src_obj);
-
-    auto clone_mode = has_prefab_instances ? clone_mode_t::cloning_prefab_instance : clone_mode_t::cloning_object;
-    bool pushed = push_save_context();
-    auto& save_ctx = get_save_context();
-    save_ctx.save_source = src_obj;
-    save_ctx.to_prefab = false;
-    save_ctx.clone_mode = clone_mode;
-    std::stringstream ss;
+    std::stringstream stream;
     {
         // This buffer is written and read back a few lines below and then discarded, so
         // there is nobody to indent it for.
         serialization::scoped_output_format compact(serialization::output_format::compact);
-        save_to_stream(ss, src_obj);
+        save_clone_to_stream(stream, {src_obj}, clone_identity::entity_ids);
     }
-    save_ctx.to_prefab = false;
-    save_ctx.save_source = {};
-    save_ctx.clone_mode = clone_mode_t::none;
-    pop_save_context(pushed);
-
-
-    pushed = push_load_context(*dst_obj.registry());
-    auto& load_ctx = get_load_context();
-    load_ctx.clone_mode = clone_mode;
-
-    {  
-        load_from(ss, dst_obj);
-    }
-    load_ctx.clone_mode = clone_mode_t::none;
-    pop_load_context(pushed);
-
-    // The clone root itself is nobody's slot: it is an addition to whatever contains it, and
-    // only becomes a slot when that container is written as a prefab. Which of the instances
-    // nested below it keep their slots is decided by whose slots they are - see
-    // reconcile_cloned_slots.
-    if(dst_obj)
-    {
-        std::vector<hpp::uuid> instance_chain;
-        if(auto* prefab_comp = dst_obj.try_get<prefab_component>())
-        {
-            prefab_comp->instance_id = {};
-            prefab_comp->instance_document = {};
-            instance_chain.push_back(prefab_comp->source.uid());
-        }
-        reconcile_cloned_slots(dst_obj, std::move(instance_chain));
-    }
+    const auto roots = load_clone_from_view(stream.str(), *dst_obj.registry());
+    dst_obj = roots.empty() ? entt::handle{} : roots.front();
 }
 
 void save_to_stream(std::ostream& stream, const scene& scn)

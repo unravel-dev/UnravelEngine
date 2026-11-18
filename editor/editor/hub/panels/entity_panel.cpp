@@ -14,6 +14,8 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/engine.h>
 #include <editor/editing/authoring_root.h>
+#include <editor/editing/entity_clipboard.h>
+#include <editor/imgui/integration/imgui_context_menu_style.h>
 
 
 namespace unravel
@@ -25,34 +27,76 @@ entity_panel::entity_panel(imgui_panels* parent, const char* name) : panel_base(
 
 void entity_panel::duplicate_entities(const std::vector<entt::handle>& entities)
 {
-    auto& ctx = engine::context();
-    auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Duplicate Entities",
-        [entities]() mutable
-        {
-            auto& ctx = engine::context();
-            auto& ec = ctx.get_cached<ecs>();
-            auto& em = ctx.get_cached<editing_manager>();
-            em.unselect(false);
+    entity_clipboard::duplicate(engine::context(), entities);
+}
 
-            // Get the active scene based on edit mode
-            auto* active_scene = em.get_active_scene(ctx);
-            if(!active_scene)
-            {
-                return;
-            }
+void entity_panel::handle_entity_shortcuts(rtti::context& ctx, const std::vector<entt::handle>& selections)
+{
+    // The entity a paste lands next to or under: the one selected last.
+    const entt::handle anchor = selections.empty() ? entt::handle{} : selections.back();
+    // Ctrl+V is held inside Ctrl+Shift+V: the longer combination is asked first.
+    if(ImGui::IsCombinationKeyPressed(shortcuts::paste_as_child))
+    {
+        entity_clipboard::paste_from_clipboard(ctx, paste_placement::child_keep_local, anchor);
+    }
+    else if(ImGui::IsCombinationKeyPressed(shortcuts::paste) && !ImGui::GetIO().KeyShift)
+    {
+        entity_clipboard::paste_from_clipboard(ctx, paste_placement::next_to, anchor);
+    }
+    else if(selections.empty())
+    {
+        return;
+    }
+    else if(ImGui::IsCombinationKeyPressed(shortcuts::copy))
+    {
+        entity_clipboard::copy_to_clipboard(selections);
+    }
+    else if(ImGui::IsCombinationKeyPressed(shortcuts::cut))
+    {
+        entity_clipboard::cut_to_clipboard(ctx, selections);
+    }
+    else if(ImGui::IsCombinationKeyPressed(shortcuts::duplicate_item))
+    {
+        entity_clipboard::duplicate(ctx, selections);
+    }
+}
 
-            for(auto entity : entities)
-            {
-                if(!entity.valid())
-                {
-                    return;
-                }
-                auto object = active_scene->clone_entity(entity);
-
-                em.select(object, editing_manager::select_mode::shift);
-            }
-        });
+void entity_panel::draw_clipboard_menu_items(rtti::context& ctx, const std::vector<entt::handle>& targets, entt::handle anchor)
+{
+    const bool has_targets = !targets.empty();
+    if(ImGui::MenuItemIcon(ICON_MDI_CONTENT_CUT, "Cut", ImGui::GetKeyCombinationName(shortcuts::cut).c_str(), has_targets))
+    {
+        entity_clipboard::cut_to_clipboard(ctx, targets);
+    }
+    if(ImGui::MenuItemIcon(ICON_MDI_CONTENT_COPY, "Copy", ImGui::GetKeyCombinationName(shortcuts::copy).c_str(), has_targets))
+    {
+        entity_clipboard::copy_to_clipboard(targets);
+    }
+    const bool can_paste = entity_clipboard::clipboard_holds_entities();
+    if(ImGui::MenuItemIcon(ICON_MDI_CONTENT_PASTE, "Paste", ImGui::GetKeyCombinationName(shortcuts::paste).c_str(), can_paste))
+    {
+        entity_clipboard::paste_from_clipboard(ctx, paste_placement::next_to, anchor);
+    }
+    if(ImGui::MenuItemIcon(ICON_MDI_SUBDIRECTORY_ARROW_RIGHT,
+                           "Paste as Child",
+                           ImGui::GetKeyCombinationName(shortcuts::paste_as_child).c_str(),
+                           can_paste && anchor))
+    {
+        entity_clipboard::paste_from_clipboard(ctx, paste_placement::child_keep_local, anchor);
+    }
+    ImGui::SetItemTooltipEx("Pastes under the selected entity, keeping each copy's position relative to its parent.");
+    if(ImGui::MenuItemIcon(ICON_MDI_SUBDIRECTORY_ARROW_RIGHT, "Paste as Child (Keep World Position)", nullptr, can_paste && anchor))
+    {
+        entity_clipboard::paste_from_clipboard(ctx, paste_placement::child_keep_world, anchor);
+    }
+    ImGui::SetItemTooltipEx("Pastes under the selected entity, keeping each copy where it was in the world.");
+    if(ImGui::MenuItemIcon(ICON_MDI_CONTENT_DUPLICATE,
+                           "Duplicate",
+                           ImGui::GetKeyCombinationName(shortcuts::duplicate_item).c_str(),
+                           has_targets))
+    {
+        entity_clipboard::duplicate(ctx, targets);
+    }
 }
 
 void entity_panel::focus_entities(entt::handle camera, const std::vector<entt::handle>& entities)
@@ -70,12 +114,9 @@ void entity_panel::delete_entities(const std::vector<entt::handle>& entities)
 {
     auto& ctx = engine::context();
     auto& em = ctx.get_cached<editing_manager>();
-    
+
+    // The action drops the entities from the selection itself, in its own step.
     em.push_undo_stack_enabled(true);
-    for(auto entity : entities)
-    {
-        em.unselect(entity);
-    }
     em.queue_action("Delete Entities", std::make_shared<delete_entities_action_t>(entities));
     em.pop_undo_stack_enabled();
 }

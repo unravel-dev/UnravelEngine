@@ -1790,7 +1790,7 @@ void editor_actions::clear_selection(rtti::context& ctx)
     ctx.get_cached<editing_manager>().unselect();
 }
 
-auto editor_actions::select_asset(rtti::context& ctx, const std::string& key, std::string* error) -> bool
+auto editor_actions::select_asset(rtti::context& ctx, const std::string& key, std::string* error, bool add) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto& em = ctx.get_cached<editing_manager>();
@@ -1824,7 +1824,7 @@ auto editor_actions::select_asset(rtti::context& ctx, const std::string& key, st
             {
                 return;
             }
-            em.select(handle, editing_manager::select_mode::normal, name);
+            em.select(handle, add ? editing_manager::select_mode::shift : editing_manager::select_mode::normal, name);
             is_selected = true;
         });
     if(!is_selected && error)
@@ -2258,7 +2258,7 @@ auto editor_actions::find_post_process_material_problem(rtti::context& ctx,
         return "Post-process materials are added in edit mode: stop play first.";
     }
     const auto loaded = mat ? mat.get() : nullptr;
-    if(asset_handle<material>::is_empty(loaded) || get_material_domain(*loaded) != material_domain::post_process)
+    if(!loaded || asset_handle<material>::is_empty(loaded) || get_material_domain(*loaded) != material_domain::post_process)
     {
         return "The material is not a Post Process material: its graph's output node must be Post Process Output.";
     }

@@ -198,10 +198,16 @@ auto make_array_element_proxy(const meta_any_proxy& var_proxy, const entt::meta_
     return value_proxy;
 }
 
+/// Drops the last @p count segments of @p segments, or all there are.
+void drop_last_segments(std::vector<std::string>& segments, std::size_t count)
+{
+    segments.resize(segments.size() - std::min(count, segments.size()));
+}
+
 /**
- * @brief While alive, the prefab override path names element `index` of the paired property in place of the same
- * element of the array ("<paired>[index]" for "<array>[index]"): overrides are read and recorded as the paired
- * element's.
+ * @brief While alive, the path names element `index` of the paired property in place of the same element of the
+ * array ("<paired>[index]" for "<array>[index]"): prefab overrides are read and recorded as the paired element's, and
+ * editing several entities compares and records its rows by it, whether or not a prefab instance is inspected.
  */
 class paired_element_path_scope
 {
@@ -214,45 +220,57 @@ public:
         : override_ctx_(override_ctx)
         , array_path_(override_ctx.path_context)
         , array_pretty_path_(override_ctx.pretty_path_context)
+        , array_rows_(override_ctx.row_segments)
+        , array_pretty_rows_(override_ctx.pretty_row_segments)
         , is_active_(override_ctx.is_active)
         , is_styled_(is_styled)
     {
-        if(!is_active_)
-        {
-            return;
-        }
-        override_ctx_.path_context.pop_segment();
-        override_ctx_.path_context.pop_segment();
-        override_ctx_.pretty_path_context.pop_segment();
-        override_ctx_.pretty_path_context.pop_segment();
         const std::string name = entt::get_name(pairing.prop);
         const std::string pretty_name = entt::get_pretty_name(pairing.prop);
         const std::string index_segment = "[" + std::to_string(index) + "]";
-        if(is_styled_)
+        drop_last_segments(override_ctx_.row_segments, 2);
+        drop_last_segments(override_ctx_.pretty_row_segments, 2);
+        if(is_active_)
         {
+            override_ctx_.path_context.pop_segment();
+            override_ctx_.path_context.pop_segment();
+            override_ctx_.pretty_path_context.pop_segment();
+            override_ctx_.pretty_path_context.pop_segment();
+        }
+        if(is_active_ && is_styled_)
+        {
+            // Names the row segments as well.
             override_ctx_.push_segment(name, pretty_name);
             override_ctx_.push_segment(index_segment, index_segment);
             return;
         }
-        override_ctx_.path_context.push_segment(name);
-        override_ctx_.path_context.push_segment(index_segment);
-        override_ctx_.pretty_path_context.push_segment(pretty_name);
-        override_ctx_.pretty_path_context.push_segment(index_segment);
+        override_ctx_.row_segments.push_back(name);
+        override_ctx_.row_segments.push_back(index_segment);
+        override_ctx_.pretty_row_segments.push_back(pretty_name);
+        override_ctx_.pretty_row_segments.push_back(index_segment);
+        if(is_active_)
+        {
+            override_ctx_.path_context.push_segment(name);
+            override_ctx_.path_context.push_segment(index_segment);
+            override_ctx_.pretty_path_context.push_segment(pretty_name);
+            override_ctx_.pretty_path_context.push_segment(index_segment);
+        }
     }
 
     ~paired_element_path_scope()
     {
-        if(!is_active_)
-        {
-            return;
-        }
-        if(is_styled_)
+        if(is_active_ && is_styled_)
         {
             override_ctx_.pop_segment();
             override_ctx_.pop_segment();
         }
-        override_ctx_.path_context = array_path_;
-        override_ctx_.pretty_path_context = array_pretty_path_;
+        if(is_active_)
+        {
+            override_ctx_.path_context = array_path_;
+            override_ctx_.pretty_path_context = array_pretty_path_;
+        }
+        override_ctx_.row_segments = array_rows_;
+        override_ctx_.pretty_row_segments = array_pretty_rows_;
     }
 
     paired_element_path_scope(const paired_element_path_scope&) = delete;
@@ -262,6 +280,8 @@ private:
     prefab_override_context& override_ctx_;
     property_path_context array_path_;
     property_path_context array_pretty_path_;
+    std::vector<std::string> array_rows_;
+    std::vector<std::string> array_pretty_rows_;
     bool is_active_{};
     bool is_styled_{};
 };

@@ -910,6 +910,96 @@ void transform_component::set_children(const std::vector<entt::handle>& children
     children_ = children;
 }
 
+namespace
+{
+
+/// The roots of a registry by their order, as the hierarchy and a scene save list them.
+auto collect_roots_by_order(entt::registry& registry) -> std::vector<std::pair<uint64_t, entt::entity>>
+{
+    std::vector<std::pair<uint64_t, entt::entity>> roots;
+    registry.view<root_component>().each(
+        [&](entt::entity e, const root_component& root)
+        {
+            roots.emplace_back(root.order, e);
+        });
+    std::sort(roots.begin(), roots.end());
+    return roots;
+}
+
+} // namespace
+
+auto transform_component::get_sibling_index() const -> size_t
+{
+    const auto owner = get_owner();
+    if(parent_)
+    {
+        const auto& siblings = parent_.get<transform_component>().get_children();
+        const auto entity = owner.entity();
+        const auto it = std::find_if(siblings.begin(),
+                                     siblings.end(),
+                                     [&](const entt::handle& sibling)
+                                     {
+                                         return sibling.entity() == entity;
+                                     });
+        return static_cast<size_t>(std::distance(siblings.begin(), it));
+    }
+    const auto* root = owner.try_get<root_component>();
+    if(root == nullptr)
+    {
+        return 0;
+    }
+    size_t index = 0;
+    owner.registry()->view<root_component>().each(
+        [&](const root_component& other)
+        {
+            index += other.order < root->order ? 1 : 0;
+        });
+    return index;
+}
+
+void transform_component::set_sibling_index(size_t index)
+{
+    auto owner = get_owner();
+    if(parent_)
+    {
+        auto& parent_transform = parent_.get<transform_component>();
+        auto children = parent_transform.get_children();
+        children.erase(std::remove(children.begin(), children.end(), owner), children.end());
+        children.insert(children.begin() + static_cast<std::ptrdiff_t>(std::min(index, children.size())), owner);
+        parent_transform.set_children(children);
+        return;
+    }
+    if(!owner.all_of<root_component>())
+    {
+        return;
+    }
+    // The same order values, handed out again in the new sequence: roots made later still come last.
+    auto& registry = *owner.registry();
+    const auto roots = collect_roots_by_order(registry);
+    std::vector<entt::entity> sequence;
+    sequence.reserve(roots.size());
+    for(const auto& root : roots)
+    {
+        if(root.second != owner.entity())
+        {
+            sequence.push_back(root.second);
+        }
+    }
+    sequence.insert(sequence.begin() + static_cast<std::ptrdiff_t>(std::min(index, sequence.size())), owner.entity());
+    for(size_t i = 0; i < sequence.size(); ++i)
+    {
+        const uint64_t order = roots[i].first;
+        if(registry.get<root_component>(sequence[i]).order != order)
+        {
+            registry.patch<root_component>(sequence[i],
+                                           [order](root_component& root)
+                                           {
+                                               root.order = order;
+                                           });
+        }
+    }
+}
+
 void transform_component::on_dirty_transform(bool dirty) noexcept
 {
     if(dirty)

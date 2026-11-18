@@ -1,4 +1,5 @@
 #include "inspector_coretypes.h"
+#include "multi_edit.h"
 #include "editor/format/format_bytes.h"
 #include "imgui/imgui.h"
 // #include <engine/assets/asset_manager.h>
@@ -30,7 +31,7 @@ namespace
 //     tc.set_area({w_m, h_m});
 //     tc.set_is_rich_text(false);
 
-//     // 1) First pass: extract “logical” lines by disabling wrapping
+//     // 1) First pass: extract "logical" lines by disabling wrapping
 //     tc.set_overflow_type(text_component::overflow_type::none);
 //     tc.set_text(raw);
 //     auto orig = tc.get_lines();
@@ -99,7 +100,7 @@ namespace
 //                             h + style.FramePadding.y * 2.0f); // Arbitrary default of 8 lines high for multi-line
 //     bool changed = false;
 
-//     // 1) If we’re not currently editing, regenerate display_buf from raw_buf:
+//     // 1) If we're not currently editing, regenerate display_buf from raw_buf:
 //     auto display_buf = wrap_text(raw_buf, (frame_size.x - style.ScrollbarSize), frame_size.y);
 
 //     // 2) Show InputTextMultiline on display_buf:
@@ -255,6 +256,10 @@ auto inspect_scalar(rtti::context& ctx,
 
             result.changed = ImGui::DragScalarT("##", &data, step, min, max, format);
             ImGui::ActiveItemWrapMousePos();
+            if(result.changed)
+            {
+                multi_edit::note_drag_change(static_cast<double>(min), static_cast<double>(max));
+            }
 
             result.edit_finished = ImGui::IsItemDeactivatedAfterEdit();
             ImGui::DrawItemActivityOutline();

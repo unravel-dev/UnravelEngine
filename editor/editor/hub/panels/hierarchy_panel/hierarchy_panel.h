@@ -103,8 +103,10 @@ private:
     void add_search_path(entt::registry& registry, entt::entity entity);
     auto get_scene_display_name(const editing_manager& em, scene* target_scene) const -> std::string;
     void draw_scene_table(rtti::context& ctx, scene& target_scene);
-    void draw_scene_rows(rtti::context& ctx, scene& target_scene, bool is_focused);
+    void draw_scene_rows(rtti::context& ctx, scene& target_scene);
     void handle_window_empty_click(rtti::context& ctx) const;
+    /// Delete, copy, cut, paste and duplicate by their shortcuts while the panel has the keyboard.
+    void handle_panel_shortcuts(rtti::context& ctx);
 
     ImGuiTextFilter filter_;
     hierarchy_search search_;

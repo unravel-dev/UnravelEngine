@@ -33,6 +33,14 @@ auto get_changed_value_color_u32() -> ImU32;
 
 //-----------------------------------------------------------------------------
 /// <summary>
+/// The color of an inspector row whose value differs between the selected objects: apart from
+/// the accent (selection) and the marks of prefab and material instance overrides.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto get_mixed_value_color() -> ImVec4;
+
+//-----------------------------------------------------------------------------
+/// <summary>
 /// The colors that mark an asset an import writes, such as a model's default material: one
 /// while imports still rewrite it, one once it is edited and imports keep it. The inspector
 /// and the content browser mark it the same way.

@@ -483,12 +483,13 @@ LOAD(ragdoll_component)
     {
         obj.set_blend_time(blend_time);
     }
-    std::vector<ragdoll_body> bodies;
+    // Read over the live list: a load that lists some of its elements keeps the others as they are.
+    auto bodies = obj.get_bodies();
     if(try_load(ar, ser20::make_nvp("bodies", bodies)))
     {
         obj.set_bodies(bodies);
     }
-    std::vector<ragdoll_bone_pair> disabled_collisions;
+    auto disabled_collisions = obj.get_disabled_collisions();
     if(try_load(ar, ser20::make_nvp("disabled_collisions", disabled_collisions)))
     {
         obj.set_disabled_collisions(disabled_collisions);

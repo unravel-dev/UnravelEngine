@@ -273,7 +273,7 @@ struct editor_actions
     static void clear_selection(rtti::context& ctx);
     /// Selects the asset at @p key as a content browser click does, so the inspector shows it. Textures,
     /// materials, meshes, prefabs and scenes.
-    static auto select_asset(rtti::context& ctx, const std::string& key, std::string* error = nullptr) -> bool;
+    static auto select_asset(rtti::context& ctx, const std::string& key, std::string* error = nullptr, bool add = false) -> bool;
     /// Shows the file or folder at @p key in the Content Browser, as an asset field's locate button does: the
     /// browser opens the folder that holds it, scrolls to it and rings it. The Content panel comes to the front.
     static auto reveal_in_content_browser(rtti::context& ctx, const std::string& key, std::string* error = nullptr)

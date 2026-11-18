@@ -50,6 +50,12 @@ Component serialization in general belongs to `unravel-ecs-component`; MCP prefa
   as a prefab). A nested slot keeps its id only when the document that placed it is an instance inside
   the clone; every other slot goes nil (`reconcile_cloned_slots`). Prefab ids are kept only at and below
   an instance root inside the clone.
+- A copy of hierarchies (a clone, an undo snapshot, `save_clone_to_stream`) lists the entities it holds
+  records for before its records (`load_context::record_list`). A reference to a listed entity lands on
+  the copy's own, from any root; any other lands on the registry's entity with that id or uuid, or on
+  nothing. Never resolve a reference by its flags alone in a copy: a link further down the copy then
+  lands on the original and its record loads into the original. Copies in `clone_identity::uuids` load
+  into any registry; `scene::clone_entity` uses entity ids.
 - Edits that record or strip statements (remove, reparent, apply) keep a record for undo
   (`editor/editor/editing/prefab_removal_record.h`) and run as editor actions.
 - A document in a layout newer than the build reads is refused (`find_document_problem`,

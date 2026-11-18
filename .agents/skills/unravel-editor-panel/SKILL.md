@@ -44,6 +44,17 @@ window (`unravel-editor-mcp`), prefab editing and override paths (`unravel-prefa
   script recompile, so handles kept into any scene go stale (`unravel-ecs-component`).
 - Editor timers, highlights and ImGui's `DeltaTime` use `frame_times::real`; the game clocks
   stop while paused and scale with the time scale.
+- An action that destroys entities in its own do or undo drops them from the selection with
+  `editing_manager::forget_entity`, and one that selects what it made uses
+  `restore_selection_impl`: `select` / `unselect` record steps of their own, which make the
+  first undo take back only the selection or wipe the redo history.
+- `load_component_state` of a transform puts back its local transform and active flag only
+  (`get_component_state_paths`): its parent and children loaded alone reparent the entity to
+  an entity made for the purpose.
+- Copy, cut, paste and duplicate of entities go through `entity_clipboard`; of components and
+  property values through `component_clipboard`. The clipboard holds a text document
+  (`clipboard_document`), so a copy outlives play, recompiles and the project. Duplicate is a
+  copy pasted after each source; the panels, the Edit menu and MCP share these functions.
 
 ### Inspectors
 
@@ -61,6 +72,27 @@ window (`unravel-editor-mcp`), prefab editing and override paths (`unravel-prefa
   [add-inspector.md](add-inspector.md).
 - A value that does not survive save and reload is usually missing from the component's
   `SAVE` body; read it before changing the inspector.
+- With several entities selected the Inspector draws the one selected last
+  (`multi_edit`), and `add_property_action` carries each component row's edit to the others:
+  the change between the component's saved state before and after (element by element in
+  arrays), kept to the row's path, is loaded into each, and every entity's override is
+  recorded at the row's path. An inspector that writes a component without
+  `add_property_action` edits the drawn entity alone.
+- Lists across the selection keep their own lengths: an edit of element i reaches element i
+  of each, and a list shorter than i + 1 grows and takes the drawn entity's elements whole; an
+  edit that adds or removes elements gives every entity the drawn list. Each target loads its
+  own document (`edit_carrier`) at its own list lengths. A paired list (material instances)
+  counts its pair's length.
+- A drag field calls `multi_edit::note_drag_change` when it changes: while the mouse drags
+  it, each selected entity's numbers move by the drawn entity's amounts, as the gizmo moves
+  them. Typed values, sliders and every other widget give all of them the drawn value.
+- A row's path is the segments pushed through `prefab_override_context::push_segment` from
+  the component down, and it must name the property as the component's saved document does:
+  multi-edit compares and loads by it, and records overrides at it. An element joins its
+  array without a separator (`material_instances[0]/roughness`), as override paths do; a
+  scope that renames the path (`paired_element_path_scope`) renames `row_segments` too. A row
+  drawn by name gives its path with `property_layout::set_mixed_path` to be marked when the
+  selection's values differ.
 
 ### ImGui conventions
 

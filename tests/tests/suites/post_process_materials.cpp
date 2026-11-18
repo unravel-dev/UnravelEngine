@@ -13,7 +13,9 @@
  *     by its contribution (a volume fading in), and takes the draw's material over from a half on;
  *   - the order: draws of no weight are dropped, the rest run by Location, then Priority, then the order they came in;
  *   - a scene round trip keeps each entry's material, weight, enabled and parameter overrides;
- *   - find_global_volume takes the active global volume of the highest priority.
+ *   - find_global_volume takes the active global volume of the highest priority;
+ *   - a material's domain is unknown, not read, while it has no loaded material (the asset picker filters every
+ *     material of a project by domain, many of them still loading).
  */
 
 #include "../tests.h"
@@ -191,6 +193,17 @@ void test_find_global_volume()
     check(defaults::find_global_volume(scn) == low, "with it inactive, the next active one");
 }
 
+void test_domain_of_a_material_not_loaded()
+{
+    std::printf("test_domain_of_a_material_not_loaded\n");
+    check(!find_loaded_material_domain(asset_handle<material>{}), "a handle without an asset has no domain yet");
+    check(!find_loaded_material_domain(asset_handle<material>::get_empty()), "nor has the empty handle");
+    const auto post = make_post_material("domain");
+    // Loaded first: the domain is read without waiting, as the picker reads it.
+    check(static_cast<bool>(post.get()), "the material loads");
+    check(find_loaded_material_domain(post) == material_domain::post_process, "a loaded material's domain is read");
+}
+
 void run_post_process_materials_suite(rtti::context& /*ctx*/)
 {
     RUN_CASE(test_entries());
@@ -198,6 +211,7 @@ void run_post_process_materials_suite(rtti::context& /*ctx*/)
     RUN_CASE(test_order());
     RUN_CASE(test_round_trip());
     RUN_CASE(test_find_global_volume());
+    RUN_CASE(test_domain_of_a_material_not_loaded());
 }
 
 } // namespace

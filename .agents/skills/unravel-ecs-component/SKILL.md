@@ -30,6 +30,14 @@ inspectors and undo to `unravel-editor-panel`.
 - `SAVE` / `LOAD` write every field with `try_save` / `try_load` under the exact name the
   field is reflected with (`entt::attribute{"name", ...}`): prefab overrides point at fields by
   that name. An empty body saves nothing; nothing is serialized from reflection on its own.
+- A load under a path filter (prefab replay, editing several entities) leaves out the list
+  elements it does not list: the engine's vector load for `iarchive_associative_t`
+  (`associative_archive.h`) steps the reader over them. ser20's own load leaves them unread,
+  which shifts every later element onto the skipped one's data; keep that header included where
+  vectors load from associative documents.
+- A `LOAD` that reads a list into a local and hands it to a setter starts the local from the
+  component (`auto shapes = obj.get_shapes();`): from an empty one, every element a filtered
+  load leaves out comes back as a default.
 - Instantiate all four archives: `SAVE_INSTANTIATE` for `ser20::oarchive_associative_t` and
   `ser20::oarchive_binary_t`, `LOAD_INSTANTIATE` for `ser20::iarchive_associative_t` and
   `ser20::iarchive_binary_t`.

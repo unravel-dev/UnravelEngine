@@ -247,7 +247,8 @@ LOAD(animation_component)
         obj.set_retarget_pose(retarget_pose);
     }
 
-    std::vector<humanoid_pose_offset> retarget_pose_offsets;
+    // Read over the live list: a load that lists some of its elements keeps the others as they are.
+    auto retarget_pose_offsets = obj.get_retarget_pose_offsets();
     if(try_load(ar, ser20::make_nvp("retarget_pose_offsets", retarget_pose_offsets)))
     {
         obj.set_retarget_pose_offsets(retarget_pose_offsets);

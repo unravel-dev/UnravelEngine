@@ -6,6 +6,9 @@
 
 #include <editor/imgui/integration/imgui_context_menu_style.h>
 #include <editor/imgui/integration/imgui_style.h>
+#include <editor/editing/component_clipboard.h>
+#include <editor/editing/actions/composite_action.h>
+#include "multi_edit.h"
 #include <editor/editing/editing_manager.h>
 #include <editor/hub/panels/entity_panel.h>
 #include <editor/imgui/imgui_interface.h>
@@ -246,6 +249,14 @@ struct inspect_callbacks
     std::function<void()> on_remove;
     std::function<bool()> can_remove;
     std::function<bool()> can_merge;
+    /// Puts a copy of the component on the clipboard; empty for a component that is not copied.
+    std::function<void()> on_copy;
+    /// Puts a copy of every component of the entity on the clipboard.
+    std::function<void()> on_copy_all;
+    /// The copy of a component of this type the clipboard holds, when it holds one.
+    std::function<hpp::optional<component_clipboard::copied_component>()> find_pasted;
+    /// Loads a copied component's values into this one.
+    std::function<void(const component_clipboard::copied_component&)> on_paste_values;
 
     std::string icon;
     /// What other components on the entity have taken over from this one, shown above its
@@ -417,6 +428,28 @@ auto inspect_component(inspector_context& inspector_ctx, const std::string& name
         {
             ImGui::ContextMenuStyleScope style_scope;
 
+            if(callbacks.on_copy)
+            {
+                if(ImGui::MenuItemIcon(ICON_MDI_CONTENT_COPY, "Copy Component"))
+                {
+                    callbacks.on_copy();
+                }
+                const auto pasted = callbacks.find_pasted ? callbacks.find_pasted() : hpp::nullopt;
+                if(ImGui::MenuItemIcon(ICON_MDI_CONTENT_PASTE, "Paste Component Values", nullptr, pasted.has_value()))
+                {
+                    callbacks.on_paste_values(*pasted);
+                    result.changed = true;
+                    result.edit_finished = true;
+                }
+                ImGui::SetItemTooltipEx("Gives this component the values of the one copied, which must be of the same type.");
+            }
+            if(callbacks.on_copy_all && ImGui::MenuItemIcon(ICON_MDI_CONTENT_COPY, "Copy All Components"))
+            {
+                callbacks.on_copy_all();
+            }
+            ImGui::SetItemTooltipEx("Copies every component of the entity. Add Component pastes them onto another one.");
+            ImGui::Separator();
+
             bool removal_allowed = callbacks.can_remove();
             if(ImGui::MenuItemIcon(ICON_MDI_RESTORE, "Reset", nullptr, removal_allowed))
             {
@@ -507,6 +540,67 @@ auto sort_component_menu_entries(component_menu_node& node) -> void
     }
 }
 
+/// The entities an edit made in the Inspector reaches: every selected one while several are.
+auto get_edit_targets(entt::handle shown) -> std::vector<entt::handle>
+{
+    return multi_edit::get_targets(shown);
+}
+
+/// One action per target, made by @p make (null for a target it skips), as one undo step named @p name.
+template<typename Make>
+void do_for_targets(rtti::context& ctx, const std::string& name, const std::vector<entt::handle>& targets, Make&& make)
+{
+    auto edits = std::make_shared<composite_action_t>();
+    for(const auto& target : targets)
+    {
+        if(auto action = make(target))
+        {
+            edits->add_sub_action(action);
+        }
+    }
+    if(!edits->sub_actions.empty())
+    {
+        ctx.get_cached<editing_manager>().do_action(name, edits);
+    }
+}
+
+/// The note under the list of a selection of several entities: what it leaves out.
+void draw_hidden_components_note(int hidden_components)
+{
+    if(hidden_components <= 0)
+    {
+        return;
+    }
+    draw_component_disable_note(hidden_components == 1
+                                    ? std::string("1 component is not on every selected entity, so it is not shown.")
+                                    : fmt::format("{} components are not on every selected entity, so they are not shown.",
+                                                  hidden_components));
+}
+
+/// "Paste Light as New" (or "Paste 3 Components as New") when the clipboard holds components.
+auto draw_paste_as_new_item(rtti::context& ctx, const std::vector<entt::handle>& targets) -> inspect_result
+{
+    inspect_result result{};
+    const auto items = component_clipboard::clipboard_components();
+    if(items.empty())
+    {
+        return result;
+    }
+    const auto label = items.size() == 1 ? fmt::format("Paste {} as New", items.front().name)
+                                         : fmt::format("Paste {} Components as New", items.size());
+    if(ImGui::MenuItemIcon(ICON_MDI_CONTENT_PASTE, label.c_str()))
+    {
+        component_clipboard::paste_as_new(ctx, targets, items);
+        result.changed = true;
+        result.edit_finished = true;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SetItemTooltipEx("Adds the copied components with their values. A component the entity has already is left "
+                            "as it is.");
+    ImGui::Separator();
+    return result;
+}
+
 auto build_component_menu(rtti::context& ctx, entt::handle& data, inspect_result& result) -> component_menu_node
 {
     component_menu_node root;
@@ -518,8 +612,13 @@ auto build_component_menu(rtti::context& ctx, entt::handle& data, inspect_result
         entry.icon = ICON_MDI_LANGUAGE_CSHARP;
         entry.on_pick = [&ctx, &data, &result, name = entry.name]()
         {
-            auto& em = ctx.get_cached<editing_manager>();
-            em.do_action<entity_add_script_component_action_t>({}, data, name);
+            do_for_targets(ctx,
+                           "Add " + name,
+                           get_edit_targets(data),
+                           [&](entt::handle target) -> std::shared_ptr<editing_action_t>
+                           {
+                               return std::make_shared<entity_add_script_component_action_t>(target, name);
+                           });
             result.changed |= true;
             result.edit_finished |= true;
         };
@@ -535,12 +634,27 @@ auto build_component_menu(rtti::context& ctx, entt::handle& data, inspect_result
             entry.icon = get_component_icon<ctype>();
             entry.on_pick = [&ctx, &data, &result, type]()
             {
+                const auto targets = get_edit_targets(data);
                 auto& em = ctx.get_cached<editing_manager>();
-                if(data.all_of<ctype>())
+                if(targets.size() > 1)
                 {
-                    em.do_action<entity_remove_component_action_t>({}, data, type);
+                    // Added where it is missing; an entity that has it keeps it as it is.
+                    do_for_targets(ctx,
+                                   "Add " + entt::get_pretty_name(type),
+                                   targets,
+                                   [&](entt::handle target) -> std::shared_ptr<editing_action_t>
+                                   {
+                                       return target.all_of<ctype>() ? nullptr : std::make_shared<entity_add_component_action_t>(target, type);
+                                   });
                 }
-                em.do_action<entity_add_component_action_t>({}, data, type);
+                else
+                {
+                    if(data.all_of<ctype>())
+                    {
+                        em.do_action<entity_remove_component_action_t>({}, data, type);
+                    }
+                    em.do_action<entity_add_component_action_t>({}, data, type);
+                }
                 result.changed |= true;
                 result.edit_finished |= true;
             };
@@ -942,11 +1056,19 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, prefab_override
                 result.changed = true;
                 result.edit_finished = true;
 
-                auto& em = ctx.get_cached<editing_manager>();
-                em.do_action<entity_set_active_action_t>({},
-                    data,
-                    old_active,
-                    is_active);
+                do_for_targets(ctx,
+                               is_active ? "Activate" : "Deactivate",
+                               get_edit_targets(data),
+                               [&](entt::handle target) -> std::shared_ptr<editing_action_t>
+                               {
+                                   const auto* transform = target.try_get<transform_component>();
+                                   if(transform == nullptr)
+                                   {
+                                       return nullptr;
+                                   }
+                                   const bool was_active = target == data ? old_active : transform->is_active();
+                                   return std::make_shared<entity_set_active_action_t>(target, was_active, is_active);
+                               });
             }
             
             override_ctx.pop_segment();
@@ -984,12 +1106,19 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, prefab_override
                 result.changed = true;
                 result.edit_finished = true;
 
-                auto& em = ctx.get_cached<editing_manager>();      
-
-                em.do_action<entity_set_name_action_t>({},
-                    data,
-                    old_name,
-                    tag_comp->name);
+                do_for_targets(ctx,
+                               "Rename",
+                               get_edit_targets(data),
+                               [&](entt::handle target) -> std::shared_ptr<editing_action_t>
+                               {
+                                   const auto* tag = target.try_get<tag_component>();
+                                   if(tag == nullptr)
+                                   {
+                                       return nullptr;
+                                   }
+                                   const auto& was = target == data ? old_name : tag->name;
+                                   return std::make_shared<entity_set_name_action_t>(target, was, tag_comp->name);
+                               });
             }
             
             ImGui::PopStyleVar();
@@ -1026,12 +1155,19 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, prefab_override
 
         if(var_result.changed)
         {
-            auto& em = ctx.get_cached<editing_manager>();      
-
-            em.do_action<entity_set_tag_action_t>({},
-                data,
-                old_tag,
-                tag_comp->tag);
+            do_for_targets(ctx,
+                           "Set Tag",
+                           get_edit_targets(data),
+                           [&](entt::handle target) -> std::shared_ptr<editing_action_t>
+                           {
+                               const auto* tag = target.try_get<tag_component>();
+                               if(tag == nullptr)
+                               {
+                                   return nullptr;
+                               }
+                               const auto& was = target == data ? old_tag : tag->tag;
+                               return std::make_shared<entity_set_tag_action_t>(target, was, tag_comp->tag);
+                           });
 
         }
 
@@ -1295,6 +1431,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
         const auto disable_notes = collect_disable_notes(data);
         int shown_components = 0;
+        int hidden_components = 0;
 
         hpp::for_each_tuple_type<all_inspectable_components>(
             [&](auto index)
@@ -1316,7 +1453,12 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 auto type = entt::resolve<ctype>();
                 auto name = entt::get_name(type);
                 auto pretty_name = entt::get_pretty_name(type);
-                
+                if(!multi_edit::all_have(type))
+                {
+                    ++hidden_components;
+                    return;
+                }
+
                 // Track component type for prefab override context
                 override_ctx.set_component_type(std::string(name), pretty_name);
 
@@ -1375,27 +1517,58 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
                     var_info comp_info;
                     comp_info.is_copyable = false;
-                    return ::unravel::inspect_var(ctx, comp_var, comp_var_proxy, comp_info);
+                    // Edits of its rows reach every selected entity. An id is each entity's own and differs between
+                    // any two: its rows are neither edited nor marked.
+                    multi_edit::set_component(std::is_same_v<ctype, id_component> ? entt::meta_type{} : type);
+                    auto component_result = ::unravel::inspect_var(ctx, comp_var, comp_var_proxy, comp_info);
+                    multi_edit::set_component({});
+                    return component_result;
                     
                 };
 
                 callbacks.on_reset = [&]()
                 {
-                    if(data.all_of<ctype>())
-                    {
-                        auto& em = ctx.get_cached<editing_manager>();
-                        em.do_action<entity_reset_component_action_t>({}, data, type);
-                    }
+                    do_for_targets(ctx,
+                                   "Reset " + pretty_name,
+                                   get_edit_targets(data),
+                                   [&](entt::handle target) -> std::shared_ptr<editing_action_t>
+                                   {
+                                       return target.all_of<ctype>() ? std::make_shared<entity_reset_component_action_t>(target, type)
+                                                                     : nullptr;
+                                   });
                 };
 
                 callbacks.on_remove = [&]()
                 {
-                    if(data.all_of<ctype>())
-                    {
-                        auto& em = ctx.get_cached<editing_manager>();
-                        em.do_action<entity_remove_component_action_t>({}, data, type);
-                    }
+                    do_for_targets(ctx,
+                                   "Remove " + pretty_name,
+                                   get_edit_targets(data),
+                                   [&](entt::handle target) -> std::shared_ptr<editing_action_t>
+                                   {
+                                       return target.all_of<ctype>() ? std::make_shared<entity_remove_component_action_t>(target, type)
+                                                                     : nullptr;
+                                   });
                     
+                };
+
+                if(component_clipboard::is_copyable(type))
+                {
+                    callbacks.on_copy = [&]()
+                    {
+                        component_clipboard::set_clipboard(component_clipboard::copy_component(data, type));
+                    };
+                    callbacks.find_pasted = [&]()
+                    {
+                        return component_clipboard::find_clipboard_component(type);
+                    };
+                    callbacks.on_paste_values = [&](const component_clipboard::copied_component& item)
+                    {
+                        component_clipboard::paste_values(ctx, get_edit_targets(data), item);
+                    };
+                }
+                callbacks.on_copy_all = [&]()
+                {
+                    component_clipboard::set_clipboard(component_clipboard::copy_all_components(data));
                 };
 
                 callbacks.can_remove = []()
@@ -1546,7 +1719,9 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     var_info obj_info;
                     obj_info.is_copyable = false;
 
+                    ImGui::PushReadonly(multi_edit::is_active());
                     inspect_res |= ::unravel::inspect_var(ctx, obj_var, obj_proxy, obj_info);
+                    ImGui::PopReadonly();
                     return inspect_res;
                 };
 
@@ -1560,6 +1735,25 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     index_to_remove = i;
                 };
 
+                const auto script_slot = script.slot;
+                const auto script_full_name = mono_obj.get_type().get_fullname();
+                callbacks.on_copy = [&, script_slot]()
+                {
+                    component_clipboard::set_clipboard(component_clipboard::copy_script(data, script_slot));
+                };
+                callbacks.find_pasted = [script_full_name]()
+                {
+                    return component_clipboard::find_clipboard_component({}, script_full_name);
+                };
+                callbacks.on_paste_values = [&, script_slot](const component_clipboard::copied_component& item)
+                {
+                    component_clipboard::paste_values(ctx, get_edit_targets(data), item, script_slot);
+                };
+                callbacks.on_copy_all = [&]()
+                {
+                    component_clipboard::set_clipboard(component_clipboard::copy_all_components(data));
+                };
+
                 callbacks.can_remove = []()
                 {
                     return true;
@@ -1571,6 +1765,11 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 };
 
                 callbacks.icon = ICON_MDI_LANGUAGE_CSHARP;
+                if(multi_edit::is_active())
+                {
+                    callbacks.disable_notes.push_back("Script fields are edited with one entity selected. Copy Component and "
+                                                      "Paste Component Values give the other entities this script's values.");
+                }
 
 
                 auto script_type = entt::resolve<script_component>();
@@ -1624,6 +1823,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
         {
             draw_filter_empty_note(inspector_ctx.filter);
         }
+        draw_hidden_components_note(hidden_components);
 
         ImGui::EndChild();
         process_script_drop_target(ctx, data, result);
@@ -1662,6 +1862,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     component_menu_path_.clear();
                 }
 
+                result |= draw_paste_as_new_item(ctx, get_edit_targets(data));
                 draw_component_menu_search_field(filter_);
                 ImGui::Spacing();
 

@@ -19,7 +19,10 @@
  *   - an instance saved over a PBR material loads its overrides as the Standard graph's parameters and textures;
  *   - a model without overrides saves an empty instance list, as before;
  *   - the default materials load by the keys they had while they were made at startup ("engine:/embedded/standard");
- *   - a reload that skips one slot's instance (a prefab instance's override of it) keeps that slot's live instance.
+ *   - a reload that skips one slot's instance (a prefab instance's override of it) keeps that slot's live instance;
+ *   - a load that lists some of a slot's overrides (editing several entities at once) sets or reverts those and keeps
+ *     the instance's other overrides, also for a slot the document has no instance for; one listing the whole slot
+ *     replaces it.
  */
 
 #include "../tests.h"
@@ -41,6 +44,7 @@
 #include <uuid/uuid.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <serialization/document_paths.h>
 #include <serialization/serialization.h>
 #include <serialization/types/vector.hpp>
 
@@ -562,6 +566,115 @@ void test_reload_keeps_skipped_slots()
     check(!plain.get_material_instance(0).has_overrides() && !plain.get_material_instance(1).has_overrides(),
           "a load that skips nothing restates every slot");
     check(plain.get_material_instances().size() == 2, "and keeps one instance per slot");
+
+    model overridden_prefab = prefab_model;
+    overridden_prefab.get_material_instance(0).set_graph_parameter(EMISSIVE_COLOR, to_parameter(INSTANCE_EMISSIVE_COLOR));
+    overridden_prefab.get_material_instance(1).set_graph_parameter(ROUGHNESS, math::vec4(0.2f));
+    std::stringstream overridden_stream;
+    {
+        ser20::oarchive_associative_t ar(overridden_stream);
+        try_save(ar, ser20::make_nvp("model", overridden_prefab));
+    }
+    model metallic_live = prefab_model;
+    metallic_live.get_material_instance(0).set_graph_parameter(METALLIC, math::vec4(0.6f));
+    const auto second_slot_reloaded = load_model_over(metallic_live,
+                                                      overridden_stream.str(),
+                                                      [](hpp::string_view path)
+                                                      {
+                                                          return path.ends_with("material_instances[0]");
+                                                      });
+    check(second_slot_reloaded.get_material_instance(0).is_graph_parameter_overridden(METALLIC) &&
+              !second_slot_reloaded.get_material_instance(0).is_graph_parameter_overridden(EMISSIVE_COLOR),
+          "a skipped first slot keeps its live instance");
+    check(second_slot_reloaded.get_material_instance(1).is_graph_parameter_overridden(ROUGHNESS) &&
+              !second_slot_reloaded.get_material_instance(1).is_graph_parameter_overridden(EMISSIVE_COLOR),
+          "the slot after it reads its own instance from the document, not the skipped slot's");
+}
+
+/// @p model saved as a document, under "model".
+auto save_model_document(const model& mdl) -> std::string
+{
+    std::stringstream stream;
+    {
+        ser20::oarchive_associative_t ar(stream);
+        try_save(ar, ser20::make_nvp("model", mdl));
+    }
+    return stream.str();
+}
+
+/// Loads @p document over @p live, limited to @p paths, as editing several entities at once loads an edited value.
+auto load_model_listing(const model& live, const std::string& document, const serialization::path_set& paths) -> model
+{
+    model loaded = live;
+    const serialization::scoped_path_filter filter("model", paths);
+    std::stringstream stream(document);
+    ser20::iarchive_associative_t ar(stream);
+    try_load(ar, ser20::make_nvp("model", loaded));
+    return loaded;
+}
+
+/// Two slots of @p shared, with an Emissive Color override in the first and a Metallic one in the second.
+auto make_two_slot_model(const asset_handle<material>& shared) -> model
+{
+    model mdl;
+    mdl.set_shared_material(shared, 0);
+    mdl.set_shared_material(shared, 1);
+    mdl.get_material_instance(0).set_graph_parameter(EMISSIVE_COLOR, to_parameter(INSTANCE_EMISSIVE_COLOR));
+    mdl.get_material_instance(1).set_graph_parameter(METALLIC, math::vec4(0.6f));
+    return mdl;
+}
+
+void test_load_listing_some_overrides()
+{
+    std::printf("a load that lists some of a slot's overrides sets or reverts them and keeps the others\n");
+    const auto shared = make_shared_material("listing");
+    model source;
+    source.set_shared_material(shared, 0);
+    source.set_shared_material(shared, 1);
+    source.get_material_instance(0).set_graph_parameter(ROUGHNESS, math::vec4(0.2f));
+    const auto rough_document = save_model_document(source);
+    // What an edit of one row lists: the value, and the instance's type when the instance first appears in the list.
+    const serialization::path_set roughness_paths{"material_instances[0]/material_type",
+                                                  "material_instances[0]/graph_parameters/Roughness"};
+
+    const auto live = make_two_slot_model(shared);
+    const auto merged = load_model_listing(live, rough_document, roughness_paths);
+    check(merged.get_material_instance(0).is_graph_parameter_overridden(ROUGHNESS) &&
+              get_parameter(merged.get_material_instance(0), ROUGHNESS).x == 0.2f,
+          "the listed override is set");
+    check(merged.get_material_instance(0).is_graph_parameter_overridden(EMISSIVE_COLOR),
+          "the slot keeps the override the load does not list");
+    check(merged.get_material_instance(1).is_graph_parameter_overridden(METALLIC), "the other slot keeps its override");
+
+    model plain;
+    plain.set_shared_material(shared, 0);
+    plain.set_shared_material(shared, 1);
+    const auto plain_document = save_model_document(plain);
+    const auto reverted = load_model_listing(merged, plain_document, roughness_paths);
+    check(!reverted.get_material_instance(0).is_graph_parameter_overridden(ROUGHNESS),
+          "a listed override the document has no instance for is reverted");
+    check(reverted.get_material_instance(0).is_graph_parameter_overridden(EMISSIVE_COLOR) &&
+              reverted.get_material_instance(1).is_graph_parameter_overridden(METALLIC),
+          "and the overrides the load does not list stay");
+
+    model metallic_source;
+    metallic_source.set_shared_material(shared, 0);
+    metallic_source.set_shared_material(shared, 1);
+    metallic_source.get_material_instance(0).set_graph_parameter(METALLIC, math::vec4(0.9f));
+    const auto unlisted_kept = load_model_listing(merged,
+                                                  save_model_document(metallic_source),
+                                                  {"material_instances[0]/graph_parameters/Roughness"});
+    check(!unlisted_kept.get_material_instance(0).is_graph_parameter_overridden(ROUGHNESS),
+          "a listed override the document's instance lacks is reverted");
+    check(unlisted_kept.get_material_instance(0).is_graph_parameter_overridden(EMISSIVE_COLOR) &&
+              !unlisted_kept.get_material_instance(0).is_graph_parameter_overridden(METALLIC),
+          "an override the load does not list stays, and one only the document has is not taken");
+
+    const auto whole = load_model_listing(live, rough_document, {"material_instances[0]"});
+    check(whole.get_material_instance(0).is_graph_parameter_overridden(ROUGHNESS) &&
+              !whole.get_material_instance(0).is_graph_parameter_overridden(EMISSIVE_COLOR),
+          "a load listing the whole slot replaces its instance");
+    check(whole.get_material_instance(1).is_graph_parameter_overridden(METALLIC), "and keeps the slots it does not list");
 }
 
 void test_default_material_keys()
@@ -628,6 +741,7 @@ void run_material_instances_suite(rtti::context& ctx)
     RUN_CASE(test_legacy_binary_instance());
     RUN_CASE(test_model_saves_an_empty_list_without_overrides());
     RUN_CASE(test_reload_keeps_skipped_slots());
+    RUN_CASE(test_load_listing_some_overrides());
 }
 
 } // namespace

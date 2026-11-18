@@ -1,4 +1,5 @@
 #include "inspector_basetypes.h"
+#include "multi_edit.h"
 #include "imgui_widgets/utils.h"
 
 namespace unravel
@@ -58,6 +59,11 @@ auto inspect_range_scalar(rtti::context& ctx,
                                                    min_ptr,
                                                    max_ptr,
                                                    formats.data());
+    if(result.changed)
+    {
+        multi_edit::note_drag_change(min_ptr != nullptr ? static_cast<double>(*min_ptr) : -std::numeric_limits<double>::infinity(),
+                                     max_ptr != nullptr ? static_cast<double>(*max_ptr) : std::numeric_limits<double>::infinity());
+    }
 
     if(result.changed)
     {
@@ -125,6 +131,11 @@ auto inspect_size_scalar(rtti::context& ctx,
                                                    min_ptr,
                                                    max_ptr,
                                                    formats.data());
+    if(result.changed)
+    {
+        multi_edit::note_drag_change(min_ptr != nullptr ? static_cast<double>(*min_ptr) : -std::numeric_limits<double>::infinity(),
+                                     max_ptr != nullptr ? static_cast<double>(*max_ptr) : std::numeric_limits<double>::infinity());
+    }
     ImGui::ActiveItemWrapMousePos();
 
     result.edit_finished = ImGui::IsItemDeactivatedAfterEdit();

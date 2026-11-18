@@ -475,6 +475,18 @@ public:
     void set_children(const std::vector<entt::handle>& children);
 
     /**
+     * @brief Where the entity stands among its siblings: its parent's children, or for a root, the roots of its
+     *        registry in their order.
+     */
+    auto get_sibling_index() const -> size_t;
+
+    /**
+     * @brief Moves the entity to @p index among its siblings (past the last one, last), keeping the others in their
+     *        order. A root moves among the roots of its registry by their order.
+     */
+    void set_sibling_index(size_t index);
+
+    /**
      * @brief Sorts the child entities.
      */
     void sort_children() noexcept;
