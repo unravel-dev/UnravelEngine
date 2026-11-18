@@ -12,7 +12,7 @@ skill or a directory AGENTS.md; see .agents/README.md. -->
 | Path | Role |
 |------|------|
 | `engine/` | runtime library: `core/` utilities, `engine/` systems (ECS, rendering, assets, physics, audio, scripting, UI) |
-| `editor/` | editor executable: `core/` (asset compiler, deploy, packages), `editor/` (hub, panels, MCP server) |
+| `editor/` | editor executable: `core/` (asset compiler, deploy, packages, project audit), `editor/` (hub, panels, MCP server) |
 | `game/` | player runner (desktop, Android, browser) |
 | `engine_data/`, `editor_data/` | shipped data: shaders, C# scripts, UI documents, MCP guides |
 | `deps/` | first-party libraries (`ospp`, `threadpp`, `audiopp`, `dotnetpp`, `hpp`) and `deps/3rdparty/` |
@@ -111,6 +111,9 @@ When adding a component, reflected field, asset type or file format, check each:
 - C# parity: `engine_data/data/scripts/` mirrors what scripts can reach, enums included.
 - Assets: `.meta` uids stay stable; importers live in `editor/core/asset_compiler/importers/`.
 - Editor MCP tools: they call the editor's own functions (`editor/AGENTS.md`).
+- Project audit: a setting or import option that decides a cost, or content that can break, gets
+  its rule in `editor/core/audit/` (catalog, rule, a case in the "project audit" suite); a setting
+  the phone or web starting values lower joins `audit_settings_table.cpp`.
 
 Designs that span several areas: skill `unravel-architect`.
 

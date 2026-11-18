@@ -72,8 +72,11 @@ MCP captures show only the Scene and Game views. For panels, inspectors and popu
    ImGui viewports a dialog can be a window of its own, so check the size of what you got.
 3. A minimized window (`IsIconic`) is restored with `ShowWindow(hwnd, 4)` (SW_SHOWNOACTIVATE),
    which leaves the user's focus alone; capture a few frames later.
-4. Capture with `PrintWindow(hwnd, hdc, 2)` (PW_RENDERFULLCONTENT) into a bitmap of the client
-   rect. A screen copy (`CopyFromScreen`) grabs whatever window is on top.
+4. Capture with `PrintWindow(hwnd, hdc, 2)` (PW_RENDERFULLCONTENT) into a bitmap of the window
+   rect (`GetWindowRect`), then crop to the client area at `ClientToScreen(0,0)` minus the window
+   rect's corner: PrintWindow draws from the window's corner, title bar and borders included, so a
+   client-sized bitmap is shifted and its points miss what `editor_ui_click` hits. A screen copy
+   (`CopyFromScreen`) grabs whatever window is on top.
 5. A popup opened near the window's edge becomes an OS window of its own that the main
    window's capture does not show: open it away from the edge.
 6. Click and drag in the editor UI with `editor_ui_click`, which moves the editor's virtual

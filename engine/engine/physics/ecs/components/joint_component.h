@@ -2,6 +2,7 @@
 #include <engine/engine_export.h>
 
 #include <engine/ecs/components/basic_component.h>
+#include <hpp/string_view.hpp>
 #include <math/math.h>
 
 #include <bitset>
@@ -253,5 +254,11 @@ private:
     bool requested_repair_{false};
     std::bitset<8> dirty_;
 };
+
+/**
+ * @brief Why the joint cannot be made when play starts, in a sentence that says what to change, or empty when it
+ * can: a body that was deleted or has no physics component, or Body A and Body B the same body.
+ */
+ENGINE_EXPORT auto find_joint_problem(joint_component& joint) -> hpp::string_view;
 
 } // namespace unravel

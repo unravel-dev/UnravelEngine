@@ -1,7 +1,7 @@
 ---
 name: verification
-title: Verifying scenes - captures, play mode, logs, profiling
-description: Scene viewport captures and framing helpers, debug views, the play-mode capture choreography for physics/animation/particles, frame stepping, log tailing and per-pass GPU profiling.
+title: Verifying scenes - captures, play mode, logs, profiling, project audit
+description: Scene viewport captures and framing helpers, debug views, the play-mode capture choreography for physics/animation/particles, frame stepping, log tailing, per-pass GPU profiling and the project audit.
 order: 70
 ---
 # Verifying scenes: captures, play mode, logs, profiling
@@ -162,6 +162,42 @@ silently reads zero.
 - profiler_get_gpu_passes returns per-render-pass CPU/GPU milliseconds. Pass
   enable:true once to switch the GPU profiler on; one frame is noisy, so
   sample several times and average. Use a prefix filter to watch one pass.
+
+## Project audit
+
+- audit_run checks the whole project as the Project Audit window does: each
+  asset's import settings against every settings profile, the settings
+  themselves, what each profile deploys, the scenes, prefabs, materials and
+  controllers (missing references, joints that cannot be made, components a
+  profile turns off) and what the scripts' update methods and coroutines reach
+  (entity searches, allocations, engine calls that allocate, instantiation,
+  asset lookups by key, LINQ, reflection, blocking waits, file access, routine
+  logging). It waits for the run (wait_ms) and returns the counts, the rules
+  with the most issues and notes on what it could not check; while it runs it
+  returns the stage, the item it reads and the share done. Run it before a
+  deploy and after large changes.
+- audit_get lists the issues worst first; filter by severity, rule, profile,
+  area or search, and page with limit and offset. id returns one issue with why
+  it matters and what to do; insight returns one of the report's tables
+  (largest_assets, assets_by_type, unused_assets, textures, audio, meshes,
+  profiles, deploys, deploy_contents, update_methods).
+- audit_fix applies an issue's fix (fix_label says what it changes): import
+  settings change as the inspector's Apply changes them and the asset compiles
+  again; profile settings and content rules change as Project Settings and the
+  Deploy window change them. Run audit_run again to confirm the fix.
+- audit_ignore keeps an issue on purpose, with the reason, and audit_set_rules
+  turns rules off or sets their thresholds per platform (audit_get_rules lists
+  them). Both write settings/audit.cfg, which the project shares in version
+  control: ignore only what the user agreed is fine.
+- A script finding says what code an update method or a coroutine can reach,
+  not how often it runs. Its lines lists every line of the method with the
+  finding, and call_path how the per-frame call reaches it: read both before
+  changing code that runs only on a rare condition. Error paths (code that
+  throws, a catch, a branch that logs a warning or an error), the one-time
+  setup of a cache and a coroutine's code outside its loops are not reported.
+- Outside the editor, unravel-editor --project <folder> --audit <report.json>
+  audits the project once its assets compiled, writes the report as audit_get
+  sees it and quits; a report that could not be made has its error field set.
 
 ## Do
 

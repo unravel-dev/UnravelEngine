@@ -1,6 +1,7 @@
 #include "inspector_physics_components.h"
 #include "inspectors.h"
 #include <editor/editing/editor_actions.h>
+#include <engine/physics/ecs/components/joint_component.h>
 #include <engine/physics/ecs/components/physics_component.h>
 #include <engine/physics/physics_types.h>
 #include <engine/play_mode.h>
@@ -168,61 +169,6 @@ auto draw_auto_setup_button(rtti::context& ctx) -> bool
     ImGui::EndDisabled();
     ImGui::SetItemTooltipEx("%s", is_playing ? AUTO_SETUP_PLAY_TOOLTIP : AUTO_SETUP_TOOLTIP);
     return is_clicked;
-}
-
-/// Whether a body was set and its entity has been deleted since.
-auto is_deleted(entt::handle body) -> bool
-{
-    return body.entity() != entt::null && !body;
-}
-
-/// Why Body A keeps the joint from being made, or empty when it does not.
-auto find_body_a_problem(entt::handle body_a) -> hpp::string_view
-{
-    if(is_deleted(body_a))
-    {
-        return "Body A was deleted: set another body, or clear Body A to hang the joint on the world.";
-    }
-    if(body_a && !body_a.all_of<physics_component>())
-    {
-        return "Body A needs a physics component: add one to it, or clear Body A to hang the joint on the world.";
-    }
-    return {};
-}
-
-/// Why the resolved Body B keeps the joint from being made, or empty when it does not.
-auto find_body_b_problem(entt::handle body_b) -> hpp::string_view
-{
-    if(is_deleted(body_b))
-    {
-        return "Body B was deleted: set another body, or clear Body B to hold this entity.";
-    }
-    if(!body_b || !body_b.all_of<physics_component>())
-    {
-        return "Body B needs a physics component: set Body B, or add one to this entity.";
-    }
-    return {};
-}
-
-/// Why the joint cannot be made when play starts, or empty when it can.
-auto find_joint_problem(joint_component& joint) -> hpp::string_view
-{
-    const auto body_a = joint.get_body_a();
-    const auto body_b = joint.get_resolved_body_b();
-    if(const auto problem = find_body_a_problem(body_a); !problem.empty())
-    {
-        return problem;
-    }
-    if(const auto problem = find_body_b_problem(body_b); !problem.empty())
-    {
-        return problem;
-    }
-    if(body_a == body_b)
-    {
-        return "Body A and Body B are the same body, and a joint connects two: set another Body A, or clear it to "
-               "hang the joint on the world.";
-    }
-    return {};
 }
 
 /// What a running joint of @p type reports, in its units; empty for a fixed joint.

@@ -139,6 +139,8 @@ private:
     /// The game on the device was signed with another key: Uninstall and Install, after a confirmation.
     void draw_install_conflict();
     void draw_status(rtti::context& ctx);
+    /// What the last project audit found for the profile, with a button to its issues.
+    void draw_audit_line(rtti::context& ctx, const std::string& profile);
     void draw_actions(rtti::context& ctx);
     /// Upload to Steam, after a confirmation; disabled with the reason while the build cannot go.
     void draw_steam_upload_button(rtti::context& ctx, const deploy_settings& params);

@@ -167,10 +167,12 @@ void start_page::draw(rtti::context& ctx)
     handle_shortcuts(ctx);
     // The page is a card, not a modal: a modal here would own the popup stack and break every
     // other modal opened while it shows (the engine version confirmation, for one).
+    // Sized in the backdrop the card is drawn in: sizes follow the font of the current window.
+    screen_card::begin_backdrop("START PAGE");
     screen_card::card_layout layout{};
     layout.size = calc_start_page_size(ImGui::GetMainViewport()->WorkSize);
     layout.has_padding = false;
-    if(screen_card::begin("START PAGE", layout))
+    if(screen_card::begin_card(layout))
     {
         const ImVec2 card_min = ImGui::GetWindowPos();
         const ImVec2 card_size = ImGui::GetWindowSize();

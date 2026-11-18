@@ -65,7 +65,8 @@ table is where the ownership of directories is written down.
 | Designs that cross several areas | `unravel-architect` | - |
 
 No skill yet (AGENTS.md and the code are the reference): deploy (`editor/core/deploy/`,
-`editor/editor/deploy/`), the web player (`engine/engine/web/`), update check,
+`editor/editor/deploy/`), the project audit (`editor/core/audit/`, `editor/editor/audit/`), the
+web player (`engine/engine/web/`), update check,
 `engine/core/` utilities, input, settings, threading, `deps/ospp`, `deps/threadpp`, `deps/hpp`.
 
 ## When the user corrects an agent

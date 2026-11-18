@@ -1075,24 +1075,26 @@ void register_editor_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "panel_focus",
          .description = "Make the Scene or the Game panel the active editor tab, as clicking its tab does, or open "
-                        "the MCP Server window (mcp), as the header's MCP indicator does, or the Material Graph window "
-                        "(material_graph), as Windows > Material Graph does.",
+                        "the MCP Server window (mcp), as the header's MCP indicator does, the Material Graph window "
+                        "(material_graph), as Windows > Material Graph does, or the Project Audit window (audit), as "
+                        "Windows > Project Audit does.",
          .input_schema_json =
-             R"({"type":"object","properties":{"panel":{"type":"string","enum":["scene","game","mcp","material_graph"]}},"required":["panel"]})",
+             R"({"type":"object","properties":{"panel":{"type":"string","enum":["scene","game","mcp","material_graph","audit"]}},"required":["panel"]})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
                  std::string panel;
                  read_string(args, "panel", panel);
-                 if(panel != "scene" && panel != "game" && panel != "mcp" && panel != "material_graph")
+                 if(panel != "scene" && panel != "game" && panel != "mcp" && panel != "material_graph" && panel != "audit")
                  {
-                     return {.text = "panel must be scene, game, mcp or material_graph", .is_error = true};
+                     return {.text = "panel must be scene, game, mcp, material_graph or audit", .is_error = true};
                  }
                  std::string error;
-                 const bool is_focused = panel == "scene"  ? editor_actions::focus_scene_panel(ctx, &error)
-                                         : panel == "game" ? editor_actions::focus_game_panel(ctx, &error)
-                                         : panel == "mcp"  ? editor_actions::show_mcp_window(ctx, &error)
-                                                           : editor_actions::show_material_graph_window(ctx, &error);
+                 const bool is_focused = panel == "scene"            ? editor_actions::focus_scene_panel(ctx, &error)
+                                         : panel == "game"           ? editor_actions::focus_game_panel(ctx, &error)
+                                         : panel == "mcp"            ? editor_actions::show_mcp_window(ctx, &error)
+                                         : panel == "material_graph" ? editor_actions::show_material_graph_window(ctx, &error)
+                                                                     : editor_actions::show_audit_window(ctx, &error);
                  if(!is_focused)
                  {
                      return {.text = error, .is_error = true};

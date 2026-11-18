@@ -144,6 +144,8 @@ struct page_content
     std::string step_text{};
     std::string workers_summary{};
     std::vector<worker_row> workers{};
+    /// How many jobs the workers run, the ones the rows do not show included.
+    size_t running_count{};
     std::string queue_text{};
     std::vector<step_row> steps{};
     std::array<memory_meter, LOADING_PAGE_METER_COUNT> meters{};
@@ -404,6 +406,7 @@ void read_workers(page_content& content, rtti::context& ctx)
         waiting_count += kind.second;
     }
     content.workers_summary = fmt::format("{} of {} busy{}{} waiting", running.size(), worker_count, LOADING_PAGE_SEPARATOR, waiting_count);
+    content.running_count = running.size();
     content.queue_text = format_queue(waiting);
     const size_t row_count = std::clamp<size_t>(worker_count, 1, LOADING_PAGE_WORKER_ROWS);
     const bool has_overflow = running.size() > row_count;
@@ -965,17 +968,43 @@ auto measure_page(const page_content& content, float card_width) -> float
     layout_page(cursor, content);
     return cursor.y + 2.0f * screen_card::get_padding().y;
 }
+
+/// The page's height in a card of this width, after dropping the worker rows a window too short
+/// for the whole page has no room for: the idle ones first, then running ones, the last row then
+/// counting the jobs the rows no longer show. One worker row always stays.
+auto fit_page(page_content& content, float card_width) -> float
+{
+    const float room = screen_card::fit_to_viewport(ImVec2(card_width, FLT_MAX)).y;
+    float height = measure_page(content, card_width);
+    while(height > room && content.workers.size() > 1 && !content.workers.back().is_busy)
+    {
+        content.workers.pop_back();
+        height = measure_page(content, card_width);
+    }
+    while(height > room && content.workers.size() > 1)
+    {
+        content.workers.pop_back();
+        worker_row more{};
+        more.is_busy = true;
+        more.title = fmt::format("+{} more running", content.running_count - (content.workers.size() - 1));
+        content.workers.back() = more;
+        height = measure_page(content, card_width);
+    }
+    return height;
+}
 } // namespace
 } // namespace loading_page_detail
 
 void loading_page::draw(rtti::context& ctx, const loading_screen& screen)
 {
     namespace detail = loading_page_detail;
-    const detail::page_content content = detail::read_content(ctx, screen, images_);
+    detail::page_content content = detail::read_content(ctx, screen, images_);
+    // Measured in the backdrop the card is drawn in: sizes follow the font of the current window.
+    screen_card::begin_backdrop("##loading_page");
     const float card_width = detail::calc_card_width();
     screen_card::card_layout layout{};
-    layout.size = screen_card::fit_to_viewport(ImVec2(card_width, detail::measure_page(content, card_width)));
-    if(screen_card::begin("##loading_page", layout))
+    layout.size = screen_card::fit_to_viewport(ImVec2(card_width, detail::fit_page(content, card_width)));
+    if(screen_card::begin_card(layout))
     {
         detail::page_cursor cursor{};
         cursor.draw_list = ImGui::GetWindowDrawList();

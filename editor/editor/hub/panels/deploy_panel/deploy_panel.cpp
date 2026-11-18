@@ -7,6 +7,7 @@
 
 #include <deploy/cancellation.h>
 #include <deploy/steam.h>
+#include <editor/audit/audit_manager.h>
 #include <editor/deploy/deploy_android.h>
 #include <editor/deploy/deploy_steam.h>
 #include <editor/deploy/project_releases.h>
@@ -1899,6 +1900,7 @@ void deploy_panel::draw_status(rtti::context& ctx)
     draw_install_conflict();
     if(!is_in_progress)
     {
+        draw_audit_line(ctx, params.profile);
         const auto& problems = problems_.get(ctx, params);
         for(const auto& problem : problems)
         {
@@ -1955,6 +1957,42 @@ void deploy_panel::draw_status(rtti::context& ctx)
     {
         draw_store_files_note(release_package_);
     }
+}
+
+void deploy_panel::draw_audit_line(rtti::context& ctx, const std::string& profile)
+{
+    const auto* report = ctx.get_cached<audit_manager>().get_report();
+    std::size_t errors = 0;
+    std::size_t warnings = 0;
+    if(report != nullptr)
+    {
+        for(const auto& item : report->issues)
+        {
+            const bool is_profile_issue = item.profiles.empty() ||
+                                          std::find(item.profiles.begin(), item.profiles.end(), profile) != item.profiles.end();
+            if(item.is_ignored || !is_profile_issue)
+            {
+                continue;
+            }
+            errors += item.level == audit::severity::error ? 1 : 0;
+            warnings += item.level == audit::severity::warning ? 1 : 0;
+        }
+    }
+    const bool has_findings = errors + warnings > 0;
+    const std::string text =
+        report == nullptr ? std::string("No project audit has run: it checks assets, settings, scenes and scripts for each profile.")
+        : has_findings    ? fmt::format("The last project audit found {} error(s) and {} warning(s) for {}.", errors, warnings, profile)
+                          : fmt::format("The last project audit found no errors or warnings for {}.", profile);
+    widgets::draw_icon_line(ICON_MDI_CLIPBOARD_CHECK_OUTLINE,
+                            has_findings ? widgets::WARNING_COLOR : widgets::get_muted_color(),
+                            text.c_str(),
+                            has_findings ? ImGui::GetColorU32(ImGuiCol_Text) : widgets::get_muted_color());
+    ImGui::SameLine();
+    if(ImGui::SmallButton(report == nullptr ? "Open Audit##deploy_audit" : "Show Issues##deploy_audit"))
+    {
+        parent_->get_audit_panel().show_profile(profile);
+    }
+    ImGui::SetItemTooltipEx("%s", "Open the Project Audit window on this profile's issues.");
 }
 
 /// Close at the left end; Open Folder and Deploy at the right end.

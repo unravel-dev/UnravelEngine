@@ -3,6 +3,7 @@
 #include <context/context.hpp>
 #include <filesystem/filesystem.h>
 #include <hpp/uuid.hpp>
+#include <entt/entity/handle.hpp>
 
 #include <cstddef>
 #include <string>
@@ -12,6 +13,14 @@ namespace unravel
 {
 
 class scene;
+class asset_manager;
+
+/**
+ * @brief Loads a prefab (its one root into `root`) or a scene into `scratch`, unloading what `scratch` held. Prefab
+ * ids keep their values, so what is saved from it matches the file. Main thread.
+ * @return False when the document does not load; nothing is logged.
+ */
+auto load_prefab_document(asset_manager& am, scene& scratch, const std::string& id, bool is_prefab, entt::handle& root) -> bool;
 
 /**
  * @brief Outcome of checking the prefab nesting graph.

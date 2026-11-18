@@ -13,6 +13,7 @@
 #include <string>
 
 #include "assets/asset_watcher.h"
+#include "audit/audit_manager.h"
 #include "deploy/deploy_runtime.h"
 #include "deploy/web_preview_server.h"
 #include "deploy/web_public_link.h"
@@ -97,6 +98,7 @@ auto editor::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<asset_watcher>();
     ctx.add<version_manager>();
     ctx.add<sample_catalog_manager>();
+    ctx.add<audit_manager>(parser);
     ctx.add<mcp_manager>(parser);
 
     return true;
@@ -243,6 +245,12 @@ auto editor::init(const cmd_line::parser& parser) -> bool
         return false;
     }
 
+    ls.begin_module("Project Audit");
+    if(!ls.check(ctx.get_cached<audit_manager>().init(ctx, parser)))
+    {
+        return false;
+    }
+
     ls.begin_module("MCP Server");
     if(!ls.check(ctx.get_cached<mcp_manager>().init(ctx, parser)))
     {
@@ -359,6 +367,11 @@ auto editor::deinit() -> bool
         return false;
     }
 
+    if(!ctx.get_cached<audit_manager>().deinit(ctx))
+    {
+        return false;
+    }
+
     {
         auto& aw = ctx.get_cached<asset_watcher>();
         aw.unwatch_assets(ctx, "editor:/");
@@ -383,6 +396,7 @@ auto editor::destroy() -> bool
 
     ctx.remove<project_manager>();
     ctx.remove<sample_catalog_manager>();
+    ctx.remove<audit_manager>();
     ctx.remove<version_manager>();
     ctx.remove<mcp_manager>();
 

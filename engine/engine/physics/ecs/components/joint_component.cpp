@@ -1,4 +1,5 @@
 #include "joint_component.h"
+#include "physics_component.h"
 
 #include <engine/ecs/components/transform_component.h>
 
@@ -357,6 +358,65 @@ auto joint_component::take_requested_break() noexcept -> bool
 auto joint_component::take_requested_repair() noexcept -> bool
 {
     return std::exchange(requested_repair_, false);
+}
+
+namespace
+{
+
+/// Whether a body was set and its entity has been deleted since.
+auto is_deleted_body(entt::handle body) -> bool
+{
+    return body.entity() != entt::null && !body;
+}
+
+/// Why Body A keeps the joint from being made, or empty when it does not.
+auto find_body_a_problem(entt::handle body_a) -> hpp::string_view
+{
+    if(is_deleted_body(body_a))
+    {
+        return "Body A was deleted: set another body, or clear Body A to hang the joint on the world.";
+    }
+    if(body_a && !body_a.all_of<physics_component>())
+    {
+        return "Body A needs a physics component: add one to it, or clear Body A to hang the joint on the world.";
+    }
+    return {};
+}
+
+/// Why the resolved Body B keeps the joint from being made, or empty when it does not.
+auto find_body_b_problem(entt::handle body_b) -> hpp::string_view
+{
+    if(is_deleted_body(body_b))
+    {
+        return "Body B was deleted: set another body, or clear Body B to hold this entity.";
+    }
+    if(!body_b || !body_b.all_of<physics_component>())
+    {
+        return "Body B needs a physics component: set Body B, or add one to this entity.";
+    }
+    return {};
+}
+
+} // namespace
+
+auto find_joint_problem(joint_component& joint) -> hpp::string_view
+{
+    const auto body_a = joint.get_body_a();
+    const auto body_b = joint.get_resolved_body_b();
+    if(const auto problem = find_body_a_problem(body_a); !problem.empty())
+    {
+        return problem;
+    }
+    if(const auto problem = find_body_b_problem(body_b); !problem.empty())
+    {
+        return problem;
+    }
+    if(body_a == body_b)
+    {
+        return "Body A and Body B are the same body, and a joint connects two: set another Body A, or clear it to "
+               "hang the joint on the world.";
+    }
+    return {};
 }
 
 } // namespace unravel

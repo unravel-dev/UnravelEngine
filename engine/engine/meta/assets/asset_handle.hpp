@@ -2,6 +2,7 @@
 
 #include <engine/assets/asset_handle.h>
 #include <engine/assets/asset_manager.h>
+#include <engine/assets/missing_asset_recorder.h>
 #include <engine/engine.h>
 #include <engine/meta/core/common/basetypes.hpp>
 
@@ -28,5 +29,9 @@ inline void LOAD_FUNCTION_NAME(Archive& ar, asset_handle<T>& obj)
     // initialized - and an unresolvable handle has to come back empty, not take the load down.
     auto& am = unravel::engine::context().get_cached<unravel::asset_manager>();
     obj = am.try_get_asset<T>(uid, unravel::load_flags::standard, unravel::load_mode::deferred);
+    if(!obj && !uid.is_nil())
+    {
+        unravel::missing_asset_recorder::record(uid, entt::type_id<T>().name());
+    }
 }
 } // namespace ser20

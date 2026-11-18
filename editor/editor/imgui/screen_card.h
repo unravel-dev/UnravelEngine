@@ -33,5 +33,10 @@ auto fit_to_viewport(const ImVec2& wanted_size) -> ImVec2;
 /// Covers the main viewport with the backdrop and begins the card on it. The backdrop takes
 /// every click, so nothing behind the card can be reached. end() follows whatever is returned.
 auto begin(const char* id, const card_layout& layout) -> bool;
+/// The two halves of begin, for a card that measures its content: sizes in font units read the
+/// font of the current window, so a card is measured inside its backdrop, between the two, and
+/// not in whatever window was current before it.
+void begin_backdrop(const char* id);
+auto begin_card(const card_layout& layout) -> bool;
 void end();
 } // namespace unravel::screen_card

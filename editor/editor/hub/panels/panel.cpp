@@ -64,6 +64,7 @@ imgui_panels::imgui_panels()
     material_graph_panel_ = std::make_unique<material_graph_panel>(this);
     mcp_panel_ = std::make_unique<mcp_panel>(this);
     packages_panel_ = std::make_unique<packages_panel>(this);
+    audit_panel_ = std::make_unique<audit_panel>(this);
 
     deploy_panel_ = std::make_unique<deploy_panel>(this);
     project_settings_panel_ = std::make_unique<project_settings_panel>(this);
@@ -200,6 +201,8 @@ void imgui_panels::on_frame_ui_render(rtti::context& ctx)
 
         packages_panel_->on_frame_ui_render(ctx, PACKAGES_VIEW);
 
+        audit_panel_->on_frame_ui_render(ctx, AUDIT_VIEW);
+
         deploy_panel_->on_frame_ui_render(ctx, DEPLOY_VIEW);
 
         project_settings_panel_->on_frame_ui_render(ctx, PROJECT_SETTINGS_VIEW);
@@ -288,6 +291,11 @@ auto imgui_panels::get_mcp_panel() -> mcp_panel&
 auto imgui_panels::get_packages_panel() -> packages_panel&
 {
     return *packages_panel_;
+}
+
+auto imgui_panels::get_audit_panel() -> audit_panel&
+{
+    return *audit_panel_;
 }
 
 auto imgui_panels::get_profiler_timeline_panel() -> profiler_timeline_panel&

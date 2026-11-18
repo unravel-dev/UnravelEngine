@@ -2108,6 +2108,20 @@ auto editor_actions::show_material_graph_window(rtti::context& ctx, std::string*
     return true;
 }
 
+auto editor_actions::show_audit_window(rtti::context& ctx, std::string* error) -> bool
+{
+    if(!ctx.has<hub>())
+    {
+        if(error)
+        {
+            *error = "Hub is not available";
+        }
+        return false;
+    }
+    ctx.get_cached<hub>().get_panels().get_audit_panel().show(true);
+    return true;
+}
+
 auto editor_actions::rebuild_pending_armatures(rtti::context& ctx) -> std::vector<std::shared_ptr<editing_action_t>>
 {
     auto& em = ctx.get_cached<editing_manager>();

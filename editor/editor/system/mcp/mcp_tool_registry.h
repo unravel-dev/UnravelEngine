@@ -143,6 +143,7 @@ void register_editor_tools(mcp_tool_registry& registry);
 void register_skill_tools(mcp_tool_registry& registry);
 void register_animation_tools(mcp_tool_registry& registry);
 void register_physics_tools(mcp_tool_registry& registry);
+void register_audit_tools(mcp_tool_registry& registry);
 
 /**
  * @brief Checks a call's arguments against the tool's input schema: type, enum, const, minimum / maximum,

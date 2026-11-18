@@ -21,6 +21,21 @@
 
 namespace unravel
 {
+
+auto load_prefab_document(asset_manager& am, scene& scratch, const std::string& id, bool is_prefab, entt::handle& root) -> bool
+{
+    scratch.unload();
+    root = {};
+    if(is_prefab)
+    {
+        // load_from_prefab_out rather than instantiate: instantiate regenerates every id_component,
+        // which would rewrite the file with new uids on every bake.
+        auto handle = am.get_asset<prefab>(id);
+        return load_from_prefab_out(handle, *scratch.registry, root) && root;
+    }
+    return load_from_prefab(am.get_asset<scene_prefab>(id), scratch);
+}
+
 namespace
 {
 /// Marks a compiled cache as scrubbed of the nesting marker, so the scrub runs once per cache.
@@ -50,22 +65,9 @@ auto get_baked_path(const std::string& id, const fs::path& staging_root) -> fs::
 /// Loads a prefab (one root) or a scene into `scratch`; false when it does not load (logged).
 auto load_for_bake(asset_manager& am, scene& scratch, const std::string& id, bool is_prefab, entt::handle& root) -> bool
 {
-    scratch.unload();
-    if(is_prefab)
+    if(!load_prefab_document(am, scratch, id, is_prefab, root))
     {
-        // load_from_prefab_out rather than instantiate: instantiate regenerates every id_component,
-        // which would rewrite the file with new uids on every bake.
-        auto handle = am.get_asset<prefab>(id);
-        if(!load_from_prefab_out(handle, *scratch.registry, root) || !root)
-        {
-            APPLOG_ERROR("Bake: could not load prefab {}", id);
-            return false;
-        }
-        return true;
-    }
-    if(!load_from_prefab(am.get_asset<scene_prefab>(id), scratch))
-    {
-        APPLOG_ERROR("Bake: could not load scene {}", id);
+        APPLOG_ERROR("Bake: could not load {} {}", is_prefab ? "prefab" : "scene", id);
         return false;
     }
     return true;

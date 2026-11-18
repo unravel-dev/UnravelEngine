@@ -609,6 +609,10 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
             {
                 parent_->get_packages_panel().show(true);
             }
+            if(ImGui::MenuItem("Project Audit"))
+            {
+                parent_->get_audit_panel().show(true);
+            }
             if(ImGui::MenuItem("Profiler"))
             {
                 parent_->get_profiler_timeline_panel().show(true);

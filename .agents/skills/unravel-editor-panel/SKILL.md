@@ -133,6 +133,11 @@ window (`unravel-editor-mcp`), prefab editing and override paths (`unravel-prefa
 - A tool that uses Alt claims it with `ImGui::SetKeyOwner(ImGuiMod_Alt, id)` while active:
   with keyboard navigation on, an Alt release otherwise toggles the menu layer
   (`scene_panel.cpp`, orbit).
+- `InputScalar` and `InputInt` assert on `ImGuiInputTextFlags_EnterReturnsTrue` (ImGui 1.92):
+  keep the typed value while the field is active and commit it on
+  `IsItemDeactivatedAfterEdit` (`audit_panel_rules.cpp`).
+- Inside `BeginGroup`, `SameLine(x)` adds the group's offset to `x`, so
+  `SameLine(GetCursorPosX() + ...)` lands too far right: right-align by screen position.
 - `ImStricmp` returns `str2 - str1`, the opposite sign of `strcmp`; sort case-insensitively
   with `std::lexicographical_compare` over lowered characters.
 - The view name in `panels_defs.h` is the ImGui window name: `imgui.ini` and the saved layouts

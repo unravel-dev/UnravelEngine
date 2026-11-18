@@ -176,7 +176,8 @@ Building a scene is not shipping a game. The rest of the chain:
   an asset in the Content Browser, and assets_reveal {"key":...} opens its
   folder there and scrolls to it.
 - panel_focus {"panel":"scene"|"game"} switches the center panel ("mcp"
-  opens the MCP Server window, "material_graph" the Material Graph editor);
+  opens the MCP Server window, "material_graph" the Material Graph editor,
+  "audit" the Project Audit window);
   editor_focus_os_window raises the editor window. material_graph_open shows a
   graph material in the Material Graph editor; the material-graphs skill
   covers authoring them (material_graph_get / set / compile).

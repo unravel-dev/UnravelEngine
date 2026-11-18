@@ -305,6 +305,8 @@ struct editor_actions
     static auto show_mcp_window(rtti::context& ctx, std::string* error = nullptr) -> bool;
     /// Opens the Material Graph window, as Windows > Material Graph does.
     static auto show_material_graph_window(rtti::context& ctx, std::string* error = nullptr) -> bool;
+    /// Shows the Project Audit window, as Windows > Project Audit does.
+    static auto show_audit_window(rtti::context& ctx, std::string* error = nullptr) -> bool;
 
     /**
      * @brief Focus/raise the OS main window so asset watcher and similar focus-gated

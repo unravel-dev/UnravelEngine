@@ -32,7 +32,7 @@ void draw_soft_shadow(ImDrawList* draw_list, const ImRect& rect, float rounding)
     }
 }
 
-void begin_backdrop(const char* id, const ImGuiViewport* viewport)
+void begin_backdrop_window(const char* id, const ImGuiViewport* viewport)
 {
     ImGui::SetNextWindowPos(viewport->WorkPos);
     ImGui::SetNextWindowSize(viewport->WorkSize);
@@ -83,10 +83,20 @@ auto fit_to_viewport(const ImVec2& wanted_size) -> ImVec2
                   ImMin(wanted_size.y, viewport_size.y - 2.0f * margin));
 }
 
+void begin_backdrop(const char* id)
+{
+    begin_backdrop_window(id, ImGui::GetMainViewport());
+}
+
 auto begin(const char* id, const card_layout& layout) -> bool
 {
+    begin_backdrop(id);
+    return begin_card(layout);
+}
+
+auto begin_card(const card_layout& layout) -> bool
+{
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    begin_backdrop(id, viewport);
     const ImVec2 card_min = calc_card_min(viewport, layout);
     const float rounding = get_rounding();
     draw_soft_shadow(ImGui::GetWindowDrawList(), ImRect(card_min, card_min + layout.size), rounding);

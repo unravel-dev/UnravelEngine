@@ -20,6 +20,7 @@ target_link_libraries(${target_name} PUBLIC
     packages
     update_check
     sample_catalog
+    audit
     imgui
     filedialog 
     httplib

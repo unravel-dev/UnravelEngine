@@ -8,6 +8,7 @@
 #include <deploy/audio_variants.h>
 #include <deploy/cancellation.h>
 #include <deploy/content.h>
+#include <deploy/deploy_report.h>
 #include <deploy/dependencies.h>
 #include <deploy/extras.h>
 #include <deploy/files.h>
@@ -40,6 +41,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <random>
@@ -132,6 +134,8 @@ struct deploy_plan
     /// The command to run once the build is whole; empty for none.
     std::string post_command;
     post_command_context post_context;
+    /// How long each step took, for the profile's deploy report.
+    std::shared_ptr<deploy_step_times> step_times = std::make_shared<deploy_step_times>();
 };
 
 /// The folder the plan's extra files go into, at the places they have in their own folder: the build's top, which
@@ -215,6 +219,19 @@ struct deploy_step
     std::string name;
     std::function<void()> run;
 };
+
+/// The step, its time kept in the plan's deploy report once it succeeded.
+auto timed(const std::shared_ptr<const deploy_plan>& plan, deploy_step step) -> deploy_step
+{
+    auto run = std::move(step.run);
+    step.run = [times = plan->step_times, name = step.name, run = std::move(run)]()
+    {
+        const auto started = std::chrono::steady_clock::now();
+        run();
+        times->add(name, std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+    };
+    return step;
+}
 
 /// A deploy refused before the folder is touched: one step that fails with the reason.
 auto make_failed_step(threader& th, const std::string& name, const std::string& reason) -> deploy_jobs
@@ -622,9 +639,9 @@ auto make_steps(const std::shared_ptr<const deploy_plan>& plan) -> std::vector<d
     // player's in its own step.
     if(plan->params.deploy_dependencies && plan->params.deploy_target == deploy_platform::desktop)
     {
-        steps.push_back({STEP_DEPENDENCIES, [plan]() { deploy_dependencies(*plan); }});
+        steps.push_back(timed(plan, {STEP_DEPENDENCIES, [plan]() { deploy_dependencies(*plan); }}));
     }
-    steps.push_back({STEP_SETTINGS, [plan]() { deploy_settings_file(*plan); }});
+    steps.push_back(timed(plan, {STEP_SETTINGS, [plan]() { deploy_settings_file(*plan); }}));
     return steps;
 }
 
@@ -807,6 +824,29 @@ void log_unfinished_deploy(const deploy_plan& plan)
     APPLOG_ERROR("Deploy to {} failed. See the Deploy window for the step.", folder);
 }
 
+/// Keeps the finished build's report in the profile's cache: its files are listed on a pool thread, and nothing
+/// waits for it.
+void record_deploy_report(const deploy_plan& plan)
+{
+    deploy_report report;
+    report.profile = plan.params.profile;
+    report.platform = get_platform_name(plan.params.deploy_target);
+    report.engine_version = version::get_full();
+    report.finished_at =
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    report.steps = plan.step_times->get();
+    tpp::async(
+        [report = std::move(report), data_root = plan.data_root, output = plan.output, project_root = get_project_root()]() mutable
+        {
+            report.files = list_deploy_files(data_root);
+            report.build_bytes = measure_build_bytes(output);
+            if(!save_deploy_report(project_root, report))
+            {
+                APPLOG_WARNING("Deploy: the report of profile {} could not be written to its cache.", report.profile);
+            }
+        });
+}
+
 /// Runs on the main thread once every step ended. A failed step left a partial build, which its stamp keeps
 /// marked as unfinished: the Deploy window names the step, and running or showing that build would only hide the
 /// failure.
@@ -827,6 +867,7 @@ void finish_deploy(const deploy_plan& plan, const std::vector<tpp::shared_future
                      BUILD_STAMP_NAME);
         return;
     }
+    record_deploy_report(plan);
     // An Android game was started by the package step, and its session finishes the device steps.
     if(plan.params.deploy_and_run)
     {
@@ -887,15 +928,15 @@ struct cook_jobs
 
 auto schedule_cooks(threader& th, asset_manager& am, const std::shared_ptr<const deploy_plan>& plan) -> cook_jobs
 {
-    const auto textures = schedule_step(th, {STEP_COOK_TEXTURES, [plan]() { cook_texture_sets(plan->textures); }});
+    const auto textures = schedule_step(th, timed(plan, {STEP_COOK_TEXTURES, [plan]() { cook_texture_sets(plan->textures); }}));
     const auto engine_textures =
-        schedule_step(th, {STEP_COOK_ENGINE_TEXTURES, [plan]() { cook_texture_sets(plan->engine_textures); }});
-    const auto audio = schedule_step(th, {STEP_COOK_AUDIO, [plan]() { cook_audio(plan->audio); }});
-    const auto scripts = schedule_step(th, {STEP_COMPILE_SCRIPTS, [plan, &am]() { build_script_library(am, *plan); }});
+        schedule_step(th, timed(plan, {STEP_COOK_ENGINE_TEXTURES, [plan]() { cook_texture_sets(plan->engine_textures); }}));
+    const auto audio = schedule_step(th, timed(plan, {STEP_COOK_AUDIO, [plan]() { cook_audio(plan->audio); }}));
+    const auto scripts = schedule_step(th, timed(plan, {STEP_COMPILE_SCRIPTS, [plan, &am]() { build_script_library(am, *plan); }}));
     cook_jobs cooks{{textures, engine_textures, audio, scripts}, {scripts}, {engine_textures}, {textures, audio, scripts}};
     if(plan->shaders.has_work())
     {
-        const auto shaders = schedule_step(th, {STEP_COOK_SHADERS, [plan]() { cook_shaders(plan->shaders); }});
+        const auto shaders = schedule_step(th, timed(plan, {STEP_COOK_SHADERS, [plan]() { cook_shaders(plan->shaders); }}));
         cooks.all.push_back(shaders);
         cooks.engine.push_back(shaders);
         cooks.app.push_back(shaders);
@@ -923,30 +964,30 @@ auto schedule_steps(threader& th, asset_manager& am, const std::shared_ptr<const
     // trimmed is what the script libraries reference, so that copy waits for the project's.
     if(!is_web(*plan))
     {
-        const deploy_step runtime{plan->runtime.step_name, [plan]() { deploy_runtime(plan->runtime, plan->trim); }};
+        const deploy_step runtime = timed(plan, {plan->runtime.step_name, [plan]() { deploy_runtime(plan->runtime, plan->trim); }});
         const bool reads_scripts = plan->trim.is_on && !plan->runtime.framework_source.empty();
         jobs.push_back(reads_scripts ? schedule_step_after(runtime, cooks.scripts) : schedule_step(th, runtime));
     }
-    jobs.push_back(schedule_step_after({STEP_ENGINE_DATA, [plan]() { deploy_protocol_data(plan->engine); }}, cooks.engine));
-    jobs.push_back(schedule_step_after({STEP_PROJECT_DATA, [plan]() { deploy_protocol_data(plan->app); }}, cooks.app));
+    jobs.push_back(schedule_step_after(timed(plan, {STEP_ENGINE_DATA, [plan]() { deploy_protocol_data(plan->engine); }}), cooks.engine));
+    jobs.push_back(schedule_step_after(timed(plan, {STEP_PROJECT_DATA, [plan]() { deploy_protocol_data(plan->app); }}), cooks.app));
     // The browser player's list of files is the deployed data's.
     if(is_web(*plan))
     {
-        jobs.push_back(schedule_step_after({STEP_WEB_PLAYER, [plan]() { deploy_web_site(*plan); }}, jobs));
+        jobs.push_back(schedule_step_after(timed(plan, {STEP_WEB_PLAYER, [plan]() { deploy_web_site(*plan); }}), jobs));
     }
     // Over everything the other steps wrote: an extra file named like one of the build's replaces it.
     if(plan->params.deploy_target == deploy_platform::desktop && has_extra_files_work(*plan))
     {
-        jobs.push_back(schedule_step_after({STEP_EXTRA_FILES, [plan]() { copy_extra_files(*plan); }}, jobs));
+        jobs.push_back(schedule_step_after(timed(plan, {STEP_EXTRA_FILES, [plan]() { copy_extra_files(*plan); }}), jobs));
     }
     // Once the build is whole. Android's runs inside its package step, between the package and its install.
     if(!is_android(*plan) && !plan->post_command.empty())
     {
-        jobs.push_back(schedule_step_after({STEP_POST_COMMAND, [plan]() { run_post_command(*plan); }}, jobs));
+        jobs.push_back(schedule_step_after(timed(plan, {STEP_POST_COMMAND, [plan]() { run_post_command(*plan); }}), jobs));
     }
     if(is_android(*plan))
     {
-        jobs.push_back(schedule_step_after({STEP_ANDROID_PACKAGE, [plan]() { deploy_android_package(*plan); }},
+        jobs.push_back(schedule_step_after(timed(plan, {STEP_ANDROID_PACKAGE, [plan]() { deploy_android_package(*plan); }}),
                                            jobs,
                                            [plan](const std::string& reason)
                                            {

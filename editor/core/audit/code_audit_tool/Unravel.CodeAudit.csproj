@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The project audit's script analysis: reads a compiled script library with Mono.Cecil and writes what the
+       update methods reach as JSON. Run by the editor with `dotnet exec`; it ships beside the editor, never with a
+       game. -->
+  <PropertyGroup>
+    <!-- Driven by CMake (CLRPP_DOTNET_VERSION) via -p:CodeAuditDotnetVersion; the value here is the fallback for
+         standalone builds. -->
+    <CodeAuditDotnetVersion Condition="'$(CodeAuditDotnetVersion)' == ''">9.0</CodeAuditDotnetVersion>
+    <TargetFramework>net$(CodeAuditDotnetVersion)</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RollForward>LatestMajor</RollForward>
+    <AssemblyName>Unravel.CodeAudit</AssemblyName>
+    <RootNamespace>Unravel.CodeAudit</RootNamespace>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Configuration>Release</Configuration>
+    <Configurations>Release</Configurations>
+    <Optimize>true</Optimize>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <!-- Mono.Cecil must land next to the tool. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The same Mono.Cecil the script bridge weaves with (deps/dotnetpp/dotnetpp/clrpp/managed). -->
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
+  </ItemGroup>
+
+</Project>
