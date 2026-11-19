@@ -74,11 +74,12 @@ WebGPU change, and the shader buffers and skinned draws that keep vertex shaders
 - Depth copies go through `depth_copy_pass`: a blit where `device_caps::has_depth_blit`, else a draw that writes
   depth (bgfx's OpenGL ES blit copies through a color attachment, which fails for depth).
 - OpenGL ES samples depth textures (without comparison) and 32-bit float textures (without
-  `OES_texture_float_linear`) only point-filtered, else they read zero; bgfx patch 0004 forces point sampling.
+  `OES_texture_float_linear`) only point-filtered, else they read zero; bgfx forces point sampling for them.
 - To debug a WebGL frame, read each frame buffer's color attachments back from the page (a browser init script
   wrapping `framebufferTexture2D` and the draw calls) rather than guessing from the final image.
 - WebGPU: storage-texture and workgroup limits are the core ones (shader-side checks:
-  [shader-change.md](shader-change.md)); texture readback in the browser runs through bgfx patch 0002.
+  [shader-change.md](shader-change.md)); texture readback in the browser completes from the browser's event loop: without Asyncify, which the web
+  player does not use, bgfx maps it with spontaneous callbacks instead of waiting.
 
 ## Shader buffers
 

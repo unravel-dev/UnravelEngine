@@ -209,15 +209,18 @@ void profiler_draw_gpu_resources_section()
     ImGui::TableHeadersRow();
 
     draw_category_row(ICON_MDI_DATABASE, "Buffers");
+    // Transient buffers grow on demand: they have a starting size, not a limit.
     draw_resource_row("Transient Index Buffer",
-                      "GPU memory used by transient index buffers this frame.",
+                      "GPU memory used by transient index buffers this frame. The buffer grows on demand, so it has "
+                      "no limit.",
                       static_cast<uint64_t>(stats->transientIbUsed),
-                      caps->limits.maxTransientIbSize,
+                      0,
                       resource_unit::bytes);
     draw_resource_row("Transient Vertex Buffer",
-                      "GPU memory used by transient vertex buffers this frame.",
+                      "GPU memory used by transient vertex buffers this frame. The buffer grows on demand, so it has "
+                      "no limit.",
                       static_cast<uint64_t>(stats->transientVbUsed),
-                      caps->limits.maxTransientVbSize,
+                      0,
                       resource_unit::bytes);
     draw_resource_row("Dynamic Index Buffers",
                       "Number of dynamic index buffers currently allocated.",

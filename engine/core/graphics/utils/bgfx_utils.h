@@ -16,15 +16,12 @@
 #include <bx/string.h>
 #include <bx/filepath.h>
 
-#include <tinystl/allocator.h>
-#include <tinystl/vector.h>
 
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
 
-namespace stl = tinystl;
 
 /// Invoked after the image container has been parsed (with the texture info computed from its
 /// header) and right before the GPU texture is created. Return false to skip the GPU allocation.

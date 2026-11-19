@@ -1421,9 +1421,7 @@ class particle_system_soa
 public:
     void init(uint16_t max_emitters)
     {
-        static bx::DefaultAllocator allocator;
-        allocator_ = &allocator;
-        emitter_alloc_ = bx::createHandleAlloc(allocator_, max_emitters);
+        emitter_alloc_ = std::make_unique<bx::DynamicHandleAlloc>(bx::AllocatorHandle{bx::kAllocatorHandleDefault}, max_emitters);
         emitters_.resize(max_emitters);
         tex_color_ = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
         noise_ = bgfx::createUniform("s_particle_noise", bgfx::UniformType::Sampler);
@@ -1453,11 +1451,9 @@ public:
     {
         if(emitter_alloc_)
         {
-            const uint16_t count = emitter_alloc_->getNumHandles();
-            const uint16_t* handles = emitter_alloc_->getHandles();
-            for(uint16_t i = 0; i < count; ++i)
+            for(uint16_t idx = emitter_alloc_->findFirst(); idx != bx::kInvalidHandle; idx = emitter_alloc_->findNext(idx))
             {
-                emitters_[handles[i]].destroy(gpu_);
+                emitters_[idx].destroy(gpu_);
             }
         }
         gpu_.shutdown();
@@ -1472,13 +1468,8 @@ public:
             bgfx::destroy(no_scene_depth_);
             no_scene_depth_ = BGFX_INVALID_HANDLE;
         }
-        if(emitter_alloc_)
-        {
-            bx::destroyHandleAlloc(allocator_, emitter_alloc_);
-            emitter_alloc_ = nullptr;
-        }
+        emitter_alloc_.reset();
         emitters_.clear();
-        allocator_ = nullptr;
     }
 
     auto create_emitter(uint32_t max_particles) -> emitter_handle
@@ -1562,11 +1553,9 @@ public:
         APP_SCOPE_PERF("Particles/SOA GPU Sync");
         collect_cutout_bakes();
         const bool restage_all = gpu_.take_pool_reset();
-        const uint16_t count = emitter_alloc_->getNumHandles();
-        const uint16_t* handles = emitter_alloc_->getHandles();
-        for(uint16_t i = 0; i < count; ++i)
+        for(uint16_t idx = emitter_alloc_->findFirst(); idx != bx::kInvalidHandle; idx = emitter_alloc_->findNext(idx))
         {
-            emitters_[handles[i]].sync(gpu_, restage_all);
+            emitters_[idx].sync(gpu_, restage_all);
         }
         gpu_.flush();
     }
@@ -1867,8 +1856,7 @@ private:
         return sorted_keys;
     }
 
-    bx::AllocatorI* allocator_ = nullptr;
-    bx::HandleAlloc* emitter_alloc_ = nullptr;
+    std::unique_ptr<bx::DynamicHandleAlloc> emitter_alloc_;
     std::vector<emitter> emitters_;
     particle_gpu gpu_;
     /// A cutout table's polygons, filled by a worker; is_done publishes them.

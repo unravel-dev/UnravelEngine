@@ -5,11 +5,6 @@
 
 #include "common.h"
 
-#include <tinystl/allocator.h>
-#include <tinystl/string.h>
-#include <tinystl/vector.h>
-namespace stl = tinystl;
-
 #include "entry/entry.h"
 #include <bgfx/bgfx.h>
 #include <bx/commandline.h>
@@ -54,7 +49,6 @@ bx::AllocatorI* getDefaultAllocator()
 }
 
 static bx::AllocatorI* g_allocator = getDefaultAllocator();
-typedef bx::StringT<&g_allocator> String;
 
 /// Reads a file from the mounted packs first, then from disk: the textures, shaders and fonts of a
 /// deployed game come out of its packs.

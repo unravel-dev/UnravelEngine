@@ -16,10 +16,7 @@
 #include "text_buffer_manager.h"
 #include "utf8.h"
 
-#include <tinystl/allocator.h>
-#include <tinystl/unordered_map.h>
-#include <tinystl/vector.h>
-namespace stl = tinystl;
+#include <vector>
 
 #include "fs_font_basic.bin.h"
 #include "fs_font_distance_field.bin.h"
@@ -319,9 +316,9 @@ private:
     text_rectangle rectangle_{};
     font_manager* font_manager_;
 
-    stl::vector<text_vertex> vertex_buffer_;
-    stl::vector<uint16_t> index_buffer_;
-    stl::vector<uint8_t> style_buffer_;
+    std::vector<text_vertex> vertex_buffer_;
+    std::vector<uint16_t> index_buffer_;
+    std::vector<uint8_t> style_buffer_;
 
     bool buffers_dirty_{};
 

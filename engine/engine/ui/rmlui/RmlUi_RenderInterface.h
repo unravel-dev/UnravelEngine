@@ -160,10 +160,9 @@ public:
     template<typename Func>
     void for_each(Func func)
     {
-        const uint16_t* handles = handle_allocator_.getHandles();
-        for(uint16_t i = 0; i < handle_allocator_.getNumHandles(); ++i)
+        for(uint16_t idx = handle_allocator_.findFirst(); idx != bx::kInvalidHandle; idx = handle_allocator_.findNext(idx))
         {
-            func(compiled_resources_[handles[i]]);
+            func(compiled_resources_[idx]);
         }
     }
 
@@ -174,14 +173,11 @@ public:
     template<typename CleanupFunc>
     void cleanup_all(CleanupFunc cleanup_func)
     {
-        // The allocated handles, copied: free() reorders the allocator's list, and once a handle
-        // has been freed the allocated ones are no longer 0 .. count - 1.
-        const uint16_t* handles = handle_allocator_.getHandles();
-        const std::vector<uint16_t> allocated(handles, handles + handle_allocator_.getNumHandles());
-        for(const uint16_t handle_idx : allocated)
+        // findNext reads the allocator's bits, so freeing the handle it just returned is safe.
+        for(uint16_t idx = handle_allocator_.findFirst(); idx != bx::kInvalidHandle; idx = handle_allocator_.findNext(idx))
         {
-            cleanup_func(compiled_resources_[handle_idx]);
-            free(handle_idx);
+            cleanup_func(compiled_resources_[idx]);
+            free(idx);
         }
     }
 

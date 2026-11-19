@@ -19,10 +19,8 @@ BX_PRAGMA_DIAGNOSTIC_POP()
 
 #include <wchar.h> // wcslen
 
-#include <tinystl/allocator.h>
-#include <tinystl/unordered_map.h>
-#include <tinystl/vector.h>
-namespace stl = tinystl;
+#include <unordered_map>
+#include <vector>
 
 #include "../cube_atlas.h"
 #include "font_manager.h"
@@ -101,8 +99,8 @@ private:
 
     int quality_{};
 
-    stl::vector<uint8_t> scratch_buffer_;
-    stl::vector<uint8_t> alpha_scratch_;
+    std::vector<uint8_t> scratch_buffer_;
+    std::vector<uint8_t> alpha_scratch_;
 };
 
 auto true_type_font::init(const uint8_t* buffer,
@@ -298,7 +296,7 @@ auto true_type_font::bake_glyph_distance_fast(code_point codepoint, glyph_info& 
         }
         uint8_t* temp = scratch_buffer_.data();
 
-        // 6e) Run the no‐alloc distance‐transform, writing back into out_buffer.
+        // 6e) Run the no-alloc distance-transform, writing back into out_buffer.
         sdfBuildDistanceFieldNoAlloc(out_buffer, // output buffer (one byte per pixel, row-major)
                                      nw,         // outstride = bytes per row
                                      8.0f,       // radius
@@ -330,12 +328,12 @@ auto true_type_font::bake_glyph_distance_stb(code_point codepoint, glyph_info& o
     stbtt_GetCodepointHMetrics(&font_, codepoint, &advance, &lsb);
 
     // 3) Decide on SDF parameters
-    float scale = scale_;         // your font‐to‐pixel scale
+    float scale = scale_;         // your font-to-pixel scale
     int padding = width_padding_; // how many pixels to pad (radius)
-    unsigned char on_edge = 128;  // “middle” of SDF range
+    unsigned char on_edge = 128;  // "middle" of SDF range
     float pixel_dist_scale = float(on_edge) / float(padding);
 
-    // 4) Call into stb to get a freshly‐malloc’d SDF bitmap
+    // 4) Call into stb to get a freshly-malloc'd SDF bitmap
     int w = 0, h = 0, xoff = 0, yoff = 0;
     unsigned char* bitmap =
         stbtt_GetCodepointSDF(&font_, scale, codepoint, padding, on_edge, pixel_dist_scale, &w, &h, &xoff, &yoff);
@@ -350,21 +348,21 @@ auto true_type_font::bake_glyph_distance_stb(code_point codepoint, glyph_info& o
 
     if(bitmap)
     {
-        // 6) Copy row-by-row into the caller’s buffer
+        // 6) Copy row-by-row into the caller's buffer
         //    (assumes out_buffer has at least w*h bytes allocated)
         for(int y = 0; y < h; ++y)
         {
             bx::memCopy(out_buffer + size_t(y) * size_t(w), bitmap + size_t(y) * size_t(w), size_t(w));
         }
 
-        // 7) Free the stb‐malloc’d bitmap
+        // 7) Free the stb-malloc'd bitmap
         stbtt_FreeSDF(bitmap, nullptr);
     }
 
     return true;
 }
 
-using glyph_lut_t = stl::unordered_map<code_point, glyph_info>;
+using glyph_lut_t = std::unordered_map<code_point, glyph_info>;
 
 // cache font data
 struct font_manager::cached_font
@@ -383,7 +381,7 @@ struct font_manager::cached_font
 auto add_white_glyph(Atlas* atlas, uint32_t size) -> glyph_info
 {
     // Create filler rectangle
-    stl::vector<uint8_t> buffer(size * size * 4, 255);
+    std::vector<uint8_t> buffer(size * size * 4, 255);
 
     glyph_info glyph{};
     glyph.width = size;
@@ -408,26 +406,15 @@ void font_manager::init()
 
 font_manager::~font_manager()
 {
-    auto font_handles = font_handles_;
-
-    for(uint16_t i = 0; i < font_handles.getNumHandles(); ++i)
+    // findNext reads the allocator's bits, so freeing the handle it just returned is safe.
+    for(uint16_t idx = font_handles_.findFirst(); idx != bx::kInvalidHandle; idx = font_handles_.findNext(idx))
     {
-        if(font_handles.isValid(i))
-        {
-            font_handle handle{font_handles.getHandleAt(i)};
-            destroy_font(handle);
-        }
+        destroy_font(font_handle{idx});
     }
 
-    auto file_handles = file_handles_;
-
-    for(uint16_t i = 0; i < file_handles.getNumHandles(); ++i)
+    for(uint16_t idx = file_handles_.findFirst(); idx != bx::kInvalidHandle; idx = file_handles_.findNext(idx))
     {
-        if(file_handles.isValid(i))
-        {
-            true_type_handle handle{file_handles.getHandleAt(i)};
-            destroy_ttf(handle);
-        }
+        destroy_ttf(true_type_handle{idx});
     }
 
     BX_ASSERT(font_handles_.getNumHandles() == 0, "All the fonts must be destroyed before destroying the manager");
@@ -570,7 +557,7 @@ auto font_manager::preload_glyph_ranges(font_handle handle, const code_point* ra
     }
 
     // font_profile_scope profile(__func__);
-    // ranges is like { start0, end0, start1, end1, …, 0 }
+    // ranges is like { start0, end0, start1, end1, ..., 0 }
     // Walk it two at a time until the 0 sentinel
     for(const code_point* p = ranges; *p != 0; p += 2)
     {

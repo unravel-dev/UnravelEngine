@@ -147,7 +147,7 @@ GLSL ES (WebGL 2, validated only by the browser):
 
 - No variant with code needs ES 3.1, and each vertex variant stays within 256 uniform vectors (suite "eshader
   files"); large data goes into shader buffers ([gpu-features.md](gpu-features.md)).
-- bgfx patch 0006 keeps shaders using bit encoders (`floatBitsToUint`) at ES 3.00, but every shader compiles for
+- shaderc keeps shaders using bit encoders (`floatBitsToUint`) at ES 3.00, but every shader compiles for
   WebGL 2 without relying on it: write integer-vector selects per component under
   `#if BGFX_SHADER_LANGUAGE_ESSL`.
 - After an ESSL-affecting change, deploy a Web profile, open the page with `?graphics=webgl2` and search the
