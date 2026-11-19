@@ -119,6 +119,12 @@ Performance
   simulated GPU sizes) reserves real GPU memory. The drop goes from the soft budget down to the
   target (85% and 75% of the GPU by default, 2.3 GB on a 24 GB card): a scene with less to evict
   never reaches it, so narrow `graphics.eviction.target_fraction` to also test a target it reaches.
+- Windows drivers page GPU memory out when it runs short; the Linux and Android drivers do not, so there a
+  Vulkan allocation past free VRAM fails, and bgfx outside its debug config carries on with the half-made
+  texture until the device is lost (OpenGL on the same machine pages and works). A reserve on Windows
+  never shows this. The device budget there keeps 256 MiB plus 4% free (`get_safety_margin`), and a
+  draw's create of a texture with a tail takes the largest level that fits: `short_reads` in the
+  paging stats counts the draws that got fewer mips.
 - Crash handlers (`engine/core/crash/crash.hpp`): SEH and CRT signals on Windows, `sigaction`
   elsewhere, and `std::terminate`; a crash-safe write to the crash log comes first, then the
   minidump.

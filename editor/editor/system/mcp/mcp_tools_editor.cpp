@@ -203,7 +203,7 @@ auto paging_stats_json() -> std::string
         R"({{"supported":{},"budget_bytes":{},"target_bytes":{},"used_bytes":{},"tail_size":{},)"
         R"("resident_count":{},"resident_bytes":{},"reduced_count":{},"reduced_bytes":{},"saved_bytes":{},)"
         R"("evicted_count":{},"evicted_bytes":{},"evictions":{},"mip_drops":{},"restores":{},"rises":{},)"
-        R"("raise_backlog":{},"raised_bytes_last_frame":{},"thrash_events":{},"failed_restores":{},"reserved_test_bytes":{}}})",
+        R"("raise_backlog":{},"raised_bytes_last_frame":{},"thrash_events":{},"failed_restores":{},"short_reads":{},"reserved_test_bytes":{}}})",
         bool_to_json(ev::is_supported()),
         s.budget_bytes,
         s.target_bytes,
@@ -224,6 +224,7 @@ auto paging_stats_json() -> std::string
         s.last_pass_raised_bytes,
         s.thrash_events,
         s.failed_restores,
+        s.short_reads,
         ev::debug_consumed_bytes());
 }
 

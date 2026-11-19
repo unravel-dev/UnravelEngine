@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -29,12 +30,6 @@ auto active_registry() -> eviction_registry&
 }
 
 
-auto startup_safety_margin(std::uint64_t hard_limit_bytes) -> std::uint64_t
-{
-    constexpr std::uint64_t k_floor = std::uint64_t(64) * 1024 * 1024;
-    return std::max(k_floor, hard_limit_bytes / 50);
-}
-
 /// The budget published until the first frame's driver runs, matching the default
 /// unravel::eviction_settings fractions so reclaim_for works from the start.
 auto make_startup_budget(std::uint64_t gpu_max) -> eviction::budget_state
@@ -43,7 +38,7 @@ auto make_startup_budget(std::uint64_t gpu_max) -> eviction::budget_state
     b.hard_limit_bytes = gpu_max;
     b.soft_budget_bytes = static_cast<std::uint64_t>(static_cast<double>(gpu_max) * 0.85);
     b.target_bytes = static_cast<std::uint64_t>(static_cast<double>(gpu_max) * 0.75);
-    b.safety_margin_bytes = startup_safety_margin(gpu_max);
+    b.safety_margin_bytes = eviction::get_safety_margin(gpu_max, !eviction::driver_pages_gpu_memory());
     return b;
 }
 
@@ -142,6 +137,21 @@ auto get_load_tail_size() -> std::uint32_t
     return active_registry().get_load_tail_size();
 }
 
+auto driver_pages_gpu_memory() -> bool
+{
+    return !(BX_PLATFORM_LINUX || BX_PLATFORM_ANDROID);
+}
+
+auto get_safety_margin(std::uint64_t hard_limit_bytes, bool without_driver_paging) -> std::uint64_t
+{
+    constexpr std::uint64_t k_mib = 1024 * 1024;
+    if(without_driver_paging)
+    {
+        return 256 * k_mib + hard_limit_bytes / 25;
+    }
+    return std::max(64 * k_mib, hard_limit_bytes / 50);
+}
+
 namespace
 {
 auto live_gpu_used() -> std::uint64_t
@@ -190,6 +200,19 @@ auto soft_budget_usage(const budget_state& budget) -> std::uint64_t
         return registry.peek_held_bytes() + registry.peek_external_queued_bytes();
     }
     return live_gpu_used() + registry.peek_recent_created_bytes();
+}
+
+/// GPU bytes a create may take now and keep the hard limit, its margin and the admitted loads; the
+/// largest number when no budget applies.
+auto get_room_under_hard_limit() -> std::uint64_t
+{
+    const budget_state budget = active_registry().current_budget();
+    if(budget.hard_limit_bytes == 0)
+    {
+        return std::numeric_limits<std::uint64_t>::max();
+    }
+    const std::uint64_t used = hard_limit_usage(budget) + active_registry().peek_admitted_bytes();
+    return budget.hard_limit_bytes > used ? budget.hard_limit_bytes - used : 0;
 }
 
 auto projected_allocation_bytes(std::uint64_t bytes) -> std::uint64_t
@@ -488,7 +511,11 @@ void unregister_resource(ievictable* resource)
 
 void request_residency(ievictable* resource, texture_read read)
 {
-    active_registry().request_residency(resource, read);
+    if(!active_registry().is_api_thread())
+    {
+        return;
+    }
+    active_registry().request_residency(resource, read, get_room_under_hard_limit());
 }
 
 auto get_tail_size() -> std::uint32_t

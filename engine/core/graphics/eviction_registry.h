@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -58,9 +59,12 @@ public:
     void register_evicted_resource(ievictable* r, std::uint64_t admitted_bytes = 0);
     /// Stops tracking @p r; after it returns the registry never calls into @p r. Any thread.
     void unregister_resource(ievictable* r);
-    /// Creates the GPU copy a read of @p read kind needs (see gfx::eviction::request_residency). Does nothing
-    /// off the API thread: the read takes the copy there is.
-    void request_residency(ievictable* r, texture_read read);
+    /// Creates the GPU copy a read of @p read kind needs within @p room_bytes, the bytes a create may take
+    /// under the hard limit (see gfx::eviction::request_residency). Does nothing off the API thread: the
+    /// read takes the copy there is.
+    void request_residency(ievictable* r,
+                           texture_read read,
+                           std::uint64_t room_bytes = std::numeric_limits<std::uint64_t>::max());
 
     /// One pass with @p cfg (gfx::eviction::evict). API thread.
     auto evict(const eviction::config& cfg) -> eviction::stats;
@@ -180,6 +184,10 @@ private:
     auto create_copy_locked(ievictable* r, std::uint8_t level) -> bool;
     /// The copy a read needs, created at once; the read may teach @p r its reuse gap.
     void create_on_demand_locked(ievictable* r, std::uint8_t level);
+    /// The level a read of @p read kind gets at once: its tail for an any_level read of an evicted
+    /// texture, every mip otherwise. A texture with a tail that does not fit in @p room_bytes gets the
+    /// largest level that does, its tail at least; anything else gets every mip.
+    auto get_read_level_locked(const ievictable& r, texture_read read, std::uint64_t room_bytes) const -> std::uint8_t;
     /// A read needed memory a drop took from @p r: remember the gap between its reads, and count a
     /// thrash when the drop was within the minimum age.
     void note_read_after_drop_locked(ievictable* r);
@@ -242,6 +250,7 @@ private:
     std::uint64_t total_bytes_raised_ = 0;
     std::uint64_t failed_restores_ = 0;
     std::uint64_t thrash_events_ = 0;
+    std::uint64_t short_reads_ = 0;
 
     /// The budget_ readers on any thread see, published as a seqlock over atomic fields: a reader
     /// retries while a publish runs and never reads a field while it is written.

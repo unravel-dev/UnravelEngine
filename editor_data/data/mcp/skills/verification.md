@@ -163,7 +163,8 @@ silently reads zero.
   and Metal: simulate_gpu leaves only gpu_mib of GPU memory free, evict_all takes
   textures down to their smallest mips, restore_all brings everything back and
   release frees the simulated reserve. Read stats_get's paging block between
-  frames to watch textures sharpen again.
+  frames to watch textures sharpen again; its short_reads counts the draws that
+  got fewer mips than they read because GPU memory had no room.
 - profiler_get_gpu_passes returns per-render-pass CPU/GPU milliseconds. Pass
   enable:true once to switch the GPU profiler on; one frame is noisy, so
   sample several times and average. Use a prefix filter to watch one pass.

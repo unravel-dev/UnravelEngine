@@ -31,15 +31,6 @@ auto manual_target_ratio(const eviction_settings& s) -> double
     return std::clamp(ratio, 0.1, 1.0);
 }
 
-/// Safety margin used by reclaim_for when projecting future occupancy. 2% of the hard limit, with
-/// a floor of 64 MiB so very small budgets (or simulated debug budgets) keep a usable cushion.
-auto safety_margin_for(std::uint64_t hard_limit_bytes) -> std::uint64_t
-{
-    constexpr std::uint64_t MIN_SAFETY_MARGIN_BYTES = std::uint64_t(64) * 1024 * 1024;
-    constexpr std::uint64_t HARD_LIMIT_PER_MARGIN = 50;
-    return std::max(MIN_SAFETY_MARGIN_BYTES, hard_limit_bytes / HARD_LIMIT_PER_MARGIN);
-}
-
 /// Build the @ref gfx::eviction::budget_state for this frame.
 ///   - Auto mode: hard = gpu_max, soft = gpu_max * budget_fraction, target = gpu_max * target_fraction.
 ///     This is the device-wide budget reclaim_for projects against.
@@ -75,7 +66,10 @@ auto build_budget(const eviction_settings& settings, std::uint64_t gpu_max)
         b.counts_engine_bytes = true;
         b.target_bytes = static_cast<std::uint64_t>(static_cast<double>(mb) * manual_target_ratio(settings));
     }
-    b.safety_margin_bytes = safety_margin_for(b.hard_limit_bytes);
+    // The device's budget keeps room for what the driver cannot page out; a manual budget counts the
+    // engine's own bytes, which page as they always do.
+    const bool without_driver_paging = !b.counts_engine_bytes && !gfx::eviction::driver_pages_gpu_memory();
+    b.safety_margin_bytes = gfx::eviction::get_safety_margin(b.hard_limit_bytes, without_driver_paging);
     return b;
 }
 

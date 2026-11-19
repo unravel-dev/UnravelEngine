@@ -228,6 +228,7 @@ struct stats
     std::uint64_t last_pass_raised = 0;      ///< Rises of the latest frame pass.
     std::uint64_t last_pass_raised_bytes = 0; ///< GPU bytes those rises uploaded.
     std::uint64_t raise_backlog = 0;         ///< Reduced textures read lately that did not rise in the latest frame pass.
+    std::uint64_t short_reads = 0;           ///< Draws that got fewer mips than they read because the hard limit had no room, since start.
     std::uint64_t pending_release_bytes = 0; ///< Destroys queued in bgfx but not yet reflected in gpuMemoryUsed.
     double last_pass_ms = 0.0;               ///< Duration of the most recent sweep in milliseconds.
     double last_restore_ms = 0.0;            ///< Duration of the slowest on-demand restore this frame.
@@ -284,6 +285,18 @@ auto get_tail_size() -> std::uint32_t;
 /// Longest side of the mips a texture loaded over the soft budget starts with; 0 when loads start
 /// whole (paging or mip tails off). Lock-free.
 auto get_load_tail_size() -> std::uint32_t;
+
+/// Whether the graphics driver moves resources to system memory when GPU memory runs out, so an
+/// allocation past it slows down instead of failing. Windows drivers do; the Linux and Android ones
+/// do not, and there a Vulkan allocation past the free memory fails.
+auto driver_pages_gpu_memory() -> bool;
+
+/// Bytes kept free under a hard limit of @p hard_limit_bytes when allocations are projected against
+/// it. 2% with a floor of 64 MiB; for a device budget on a driver that does not page GPU memory
+/// (@p without_driver_paging), 256 MiB plus 4%: the budget sums every device-local heap, the small
+/// host-visible one a GPU without a resizable memory window lists beside its memory included, and
+/// render targets, buffers and the freed memory bgfx keeps for reuse grow after a check.
+auto get_safety_margin(std::uint64_t hard_limit_bytes, bool without_driver_paging) -> std::uint64_t;
 
 /// Admit @p bytes about to be created under @p limit, counting them at once so loads on other threads
 /// see them before the resource registers. A manual budget judges the engine's own tracked bytes.
@@ -403,7 +416,9 @@ void unregister_resource(ievictable* resource);
 
 /// Give @p resource the GPU copy a read of @p read kind needs: any read of an evicted resource, and a
 /// full read of a reduced texture. An any_level read of an evicted texture with a tail creates only
-/// its tail. Called from handle_impl::native_handle; off the graphics API thread it does nothing.
+/// its tail. A texture with a tail whose copy does not fit under the hard limit gets the largest level
+/// that does, its tail at least; anything else is created whole, as a draw cannot use less of it.
+/// Called from handle_impl::native_handle; off the graphics API thread it does nothing.
 void request_residency(ievictable* resource, texture_read read);
 
 } // namespace gfx::eviction

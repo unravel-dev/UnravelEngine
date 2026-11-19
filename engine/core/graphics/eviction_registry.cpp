@@ -219,7 +219,7 @@ void eviction_registry::unregister_resource(ievictable* r)
     publish_held_locked();
 }
 
-void eviction_registry::request_residency(ievictable* r, texture_read read)
+void eviction_registry::request_residency(ievictable* r, texture_read read, std::uint64_t room_bytes)
 {
     if(r == nullptr || !is_api_thread())
     {
@@ -231,9 +231,39 @@ void eviction_registry::request_residency(ievictable* r, texture_read read)
     {
         return;
     }
+    const std::uint8_t level = get_read_level_locked(*r, read, room_bytes);
+    const bool is_reduced = r->get_evict_state() == evict_state::reduced;
+    if(read == texture_read::full && level != 0)
+    {
+        ++short_reads_;
+    }
+    if(is_reduced && level >= r->level_)
+    {
+        // Nothing sharper fits: the read takes the copy there is.
+        return;
+    }
+    create_on_demand_locked(r, level);
+}
+
+auto eviction_registry::get_read_level_locked(const ievictable& r, texture_read read, std::uint64_t room_bytes) const
+    -> std::uint8_t
+{
+    const std::uint8_t tail = get_tail_level_locked(r);
+    if(tail == 0)
+    {
+        return 0;
+    }
     // A sampled read of an evicted texture needs only its tail; a full read needs every mip.
-    const bool tail_will_do = read == texture_read::any_level && r->get_evict_state() == evict_state::evicted;
-    create_on_demand_locked(r, tail_will_do ? get_tail_level_locked(*r) : std::uint8_t(0));
+    const bool tail_will_do = read == texture_read::any_level && r.get_evict_state() == evict_state::evicted;
+    // The new copy is created before the old one goes, so all of it must fit.
+    for(std::uint8_t level = tail_will_do ? tail : std::uint8_t(0); level < tail; ++level)
+    {
+        if(r.gpu_size_at(level) <= room_bytes)
+        {
+            return level;
+        }
+    }
+    return tail;
 }
 
 auto eviction_registry::evict(const eviction::config& cfg) -> eviction::stats
@@ -864,6 +894,7 @@ auto eviction_registry::snapshot_locked() const -> eviction::stats
     s.total_bytes_raised = total_bytes_raised_;
     s.failed_restores = failed_restores_;
     s.thrash_events = thrash_events_;
+    s.short_reads = short_reads_;
     // The soft budget is the "budget" tooling shows: the line above which the driver starts working.
     s.budget_bytes = budget_.soft_budget_bytes;
     s.target_bytes = budget_.target_bytes;

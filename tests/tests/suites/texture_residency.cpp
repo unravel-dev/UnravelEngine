@@ -29,13 +29,20 @@
  *   - the recent creates the load path reads match the traffic window frame by frame;
  *   - restoring everything is no read: it counts no thrash and teaches no reuse gap;
  *   - a resource registered this frame counts as read in full, so no pass takes a level from it first;
- *   - a budget read while another thread publishes one comes back whole, never mixing two.
+ *   - a budget read while another thread publishes one comes back whole, never mixing two;
+ *   - a draw's create keeps under the hard limit: a texture with a tail takes the largest level that
+ *     fits, its tail at least, and keeps the copy it has when nothing sharper fits; anything else is
+ *     created whole;
+ *   - the margin under the hard limit is 2% (64 MiB at least), and 256 MiB plus 4% for a device budget
+ *     on a driver that does not page GPU memory.
  */
 
 #include "../tests.h"
 
 #include <graphics/eviction_registry.h>
 #include <graphics/residency_planner.h>
+
+#include <bx/platform.h>
 
 #include <array>
 #include <atomic>
@@ -832,6 +839,60 @@ void test_budgets_read_whole_while_published()
     check_eq(torn, 0, "every budget read while another thread publishes is one whole budget");
 }
 
+void test_draw_creates_fit_under_the_hard_limit()
+{
+    gfx::eviction_registry registry;
+    activate(registry);
+    set_frame(10);
+    auto texture = std::make_unique<fake_resource>(registry, 1024, 4);
+    auto buffer = std::make_unique<fake_resource>(registry, 256, 0);
+    registry.register_resource(texture.get(), 0);
+    registry.register_resource(buffer.get(), 0);
+    registry.evict_all();
+    require(texture->get_evict_state() == gfx::evict_state::reduced && texture->get_level() == 4,
+            "the texture starts at its tail");
+    require(buffer->get_evict_state() == gfx::evict_state::evicted, "the buffer starts evicted");
+
+    const int changes = texture->level_changes_;
+    registry.request_residency(texture.get(), gfx::texture_read::full, texture->bytes(3) - 1);
+    check(texture->get_level() == 4 && texture->level_changes_ == changes,
+          "with room for no sharper copy than its own, a full read keeps the copy there is");
+    check_eq(registry.get_stats().short_reads, 1, "and counts as short");
+
+    registry.request_residency(texture.get(), gfx::texture_read::full, texture->bytes(2));
+    check(texture->get_evict_state() == gfx::evict_state::reduced && texture->get_level() == 2,
+          "with room for level 2 a full read rises that far");
+    check(texture->copy_level_ == 2, "and the texture holds that copy");
+
+    registry.request_residency(texture.get(), gfx::texture_read::full);
+    check(texture->get_evict_state() == gfx::evict_state::resident, "with room a full read brings it back whole");
+    check_eq(registry.get_stats().short_reads, 2, "only the reads that got less count as short");
+
+    registry.evict_all();
+    registry.restore_all();
+    registry.evict_all();
+    auto evicted_texture = std::make_unique<fake_resource>(registry, 1024, 4);
+    registry.register_evicted_resource(evicted_texture.get());
+    registry.request_residency(evicted_texture.get(), gfx::texture_read::full, 0);
+    check(evicted_texture->get_evict_state() == gfx::evict_state::reduced && evicted_texture->get_level() == 4,
+          "with no room an evicted texture still gets its tail");
+
+    registry.request_residency(buffer.get(), gfx::texture_read::full, 0);
+    check(buffer->get_evict_state() == gfx::evict_state::resident && buffer->has_copy_,
+          "a resource without a tail is created whole: a draw cannot use less of it");
+}
+
+void test_safety_margins()
+{
+    constexpr std::uint64_t k_mib = 1024 * 1024;
+    check_eq(gfx::eviction::get_safety_margin(1024 * k_mib, false), 64 * k_mib, "a small budget keeps 64 MiB");
+    check_eq(gfx::eviction::get_safety_margin(10000 * k_mib, false), 200 * k_mib, "a large one keeps 2%");
+    check_eq(gfx::eviction::get_safety_margin(4000 * k_mib, true), 256 * k_mib + 160 * k_mib,
+             "without driver paging 256 MiB plus 4% stay free");
+    check(gfx::eviction::driver_pages_gpu_memory() == !(BX_PLATFORM_LINUX || BX_PLATFORM_ANDROID),
+          "the Linux and Android drivers do not page GPU memory, the others do");
+}
+
 void test_admissions_hold_to_the_limit()
 {
     constexpr std::uint64_t k_mib = 1024 * 1024;
@@ -909,6 +970,8 @@ void run_texture_residency_suite(rtti::context& /*ctx*/)
     RUN_CASE(test_restore_all_is_no_read());
     RUN_CASE(test_new_resources_count_as_read_in_full());
     RUN_CASE(test_budgets_read_whole_while_published());
+    RUN_CASE(test_draw_creates_fit_under_the_hard_limit());
+    RUN_CASE(test_safety_margins());
     gfx::detail::g_eviction_frame.store(frame);
 }
 
