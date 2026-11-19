@@ -56,6 +56,10 @@ Backends (OpenGL breaks first; the other backends hide these):
   and the draw never allocates. Any other read is `full` and, on the graphics API thread, brings the texture
   back to full size at once; other threads bind the copy there is, live until the end of the frame being built.
   `texture::info` always describes the full texture (eviction: `engine/core/graphics/eviction.h`).
+- `is_valid()` on a texture or buffer stays true while paging holds it without a GPU copy (`has_gpu_copy()`
+  says whether the copy exists): code that skips a draw on `!is_valid()` still reads it, and the read brings it
+  back. A draw whose program samples a texture binds one or is not submitted: bgfx's Vulkan backend leaves an
+  unbound sampler's descriptor unwritten, and NVIDIA loses the device on it.
 - A loaded texture with a tail starts whole only while that keeps the GPU under the soft budget, else at its
   tail (`texture::admit_load_start`); the frame pass sharpens it when draws read it and there is room. A new
   load site asks `gfx::eviction::admit_allocation` and hands the reserved bytes to `register_resource`, so

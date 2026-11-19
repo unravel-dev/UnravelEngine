@@ -66,7 +66,7 @@ public:
 
     void dispose()
     {
-        if(is_valid())
+        if(has_gpu_copy())
         {
             bgfx::destroy(handle_);
         }
@@ -74,7 +74,16 @@ public:
         handle_ = invalid_handle();
     }
 
+    /// Whether the resource can be drawn: it has a GPU copy, or paging took the copy of an idle resource
+    /// and the next read through @ref native_handle creates it again. Code that skips a draw for an
+    /// invalid resource never reads a paged-out one, so it would never come back.
     [[nodiscard]] auto is_valid() const -> bool
+    {
+        return has_gpu_copy() || get_evict_state() == evict_state::evicted;
+    }
+
+    /// Whether a GPU copy exists now. False for a resource paging took, which is still valid.
+    [[nodiscard]] auto has_gpu_copy() const -> bool
     {
         return bgfx::isValid(static_cast<T>(handle_));
     }
@@ -114,7 +123,7 @@ public:
 
     auto on_evict() -> std::uint64_t override
     {
-        if(is_valid())
+        if(has_gpu_copy())
         {
             bgfx::destroy(handle_);
         }
@@ -130,7 +139,7 @@ public:
         }
         const T previous = handle_;
         handle_ = invalid_handle();
-        if(!restore_fn_(static_cast<Base&>(*this)) || !is_valid())
+        if(!restore_fn_(static_cast<Base&>(*this)) || !has_gpu_copy())
         {
             handle_ = previous;
             return false;

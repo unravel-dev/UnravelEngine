@@ -634,16 +634,25 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
         return;
     }
 
+    // A textured program samples whatever is bound, and a sampler left unbound is undefined on the GPU:
+    // some drivers lose the device on it. Without a texture to bind the draw is skipped.
+    bool requires_premultiplication = false;
+    gfx::texture::ptr sampled_texture;
+    if(texture != 0)
+    {
+        sampled_texture = get_sampled_texture(texture, requires_premultiplication);
+        if(!sampled_texture)
+        {
+            return;
+        }
+    }
+
     if(is_world)
     {
         PendingWorldDraw draw = make_pending_world_draw(program_id, internal_handle.idx, translation);
-        if(texture != 0)
+        if(sampled_texture)
         {
-            const gfx::texture::ptr sampled_texture = get_sampled_texture(texture, draw.requires_premultiplication);
-            if(!sampled_texture)
-            {
-                return;
-            }
+            draw.requires_premultiplication = requires_premultiplication;
             draw.texture = sampled_texture->native_handle();
             draw.texture_size = sampled_texture->get_size();
         }
@@ -669,17 +678,11 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
 
         apply_clip();
 
-        // Set texture if provided
-        if(texture != 0)
+        if(sampled_texture)
         {
-            bool requires_premultiplication = false;
-            const gfx::texture::ptr sampled_texture = get_sampled_texture(texture, requires_premultiplication);
-            if(sampled_texture)
-            {
-                set_premultiplication_uniform(requires_premultiplication);
-                bgfx::setTexture(0, get_uniform_handle(RmlUi_UniformId::Tex), sampled_texture->native_handle());
-                set_texture_sampling(geometry.tex_coord_min, geometry.tex_coord_max, sampled_texture->get_size(), false);
-            }
+            set_premultiplication_uniform(requires_premultiplication);
+            bgfx::setTexture(0, get_uniform_handle(RmlUi_UniformId::Tex), sampled_texture->native_handle());
+            set_texture_sampling(geometry.tex_coord_min, geometry.tex_coord_max, sampled_texture->get_size(), false);
         }
 
         // Set stencil test if clip mask is enabled

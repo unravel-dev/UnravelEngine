@@ -405,8 +405,9 @@ void test_loads_start_where_the_budget_allows()
     registry.set_budget(make_budget(tail - 1, tail - 1, false), 0);
     {
         const auto texture = load("no room");
-        check(!texture->is_valid() && texture->get_evict_state() == gfx::evict_state::evicted,
+        check(!texture->has_gpu_copy() && texture->get_evict_state() == gfx::evict_state::evicted,
               "with no room for its tail a texture loads without a GPU copy");
+        check(texture->is_valid(), "a texture without its GPU copy is still valid: a draw creates the copy");
         const auto sampled = texture->native_handle(gfx::texture_read::any_level);
         check(bgfx::isValid(sampled) && texture->get_evict_state() == gfx::evict_state::reduced && texture->get_level() == 2,
               "a sampled draw creates its tail");
@@ -489,7 +490,7 @@ void test_contents_past_the_budget_are_taken()
         &released);
     {
         gfx::texture texture(64, 64, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE, mem);
-        check(texture.is_valid() && texture.get_evict_state() == gfx::evict_state::resident,
+        check(texture.has_gpu_copy() && texture.get_evict_state() == gfx::evict_state::resident,
               "a texture made with contents is created past the budget");
         check_eq(registry.peek_admitted_bytes(), 0, "and holds no admission");
         gfx::frames(2);
@@ -497,6 +498,8 @@ void test_contents_past_the_budget_are_taken()
         contents.assign(bytes, 0);
         registry.evict_all();
         check(texture.get_evict_state() == gfx::evict_state::evicted, "it can be evicted");
+        check(!texture.has_gpu_copy() && texture.is_valid(),
+              "evicted, it has no GPU copy and stays valid, so code that checks before it draws still reads it");
         const auto handle = texture.native_handle();
         check(bgfx::isValid(handle) && texture.get_evict_state() == gfx::evict_state::resident,
               "and a draw brings it back from its own copy of the contents");

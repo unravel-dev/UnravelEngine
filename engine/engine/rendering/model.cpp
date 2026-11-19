@@ -1116,12 +1116,21 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
             return;
         }
 
+        // A buffer paging took comes back on this read; one that could not come back has no handle to bind, and a
+        // shader reading an unbound buffer is undefined on the GPU.
+        const auto vb_handle = vb->native_handle();
+        const auto ib_handle = effective_ib->native_handle();
+        if(!bgfx::isValid(vb_handle) || !bgfx::isValid(ib_handle))
+        {
+            return;
+        }
+
         params.submesh_index = submesh_index;
         params.index_start = static_cast<uint32_t>(sub->face_start) * 3u;
         params.index_count = sub->face_count * 3u;
 
-        bgfx::setBuffer(0, vb->native_handle(), bgfx::Access::Read);
-        bgfx::setBuffer(1, effective_ib->native_handle(), bgfx::Access::Read);
+        bgfx::setBuffer(0, vb_handle, bgfx::Access::Read);
+        bgfx::setBuffer(1, ib_handle, bgfx::Access::Read);
 
         if(callbacks.setup_params_per_submesh)
         {

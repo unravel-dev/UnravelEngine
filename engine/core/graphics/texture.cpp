@@ -269,7 +269,7 @@ texture::texture(const texture_desc& desc, const bgfx::Memory* mem) : flags(desc
     {
         handle_ = create_desc_handle(desc, mem);
     }
-    if(is_valid() && is_gpu_generated())
+    if(has_gpu_copy() && is_gpu_generated())
     {
         gfx::eviction::note_pending_allocation(estimated_size);
     }
@@ -301,9 +301,9 @@ void texture::create_tracked(const texture_desc& desc, const bgfx::Memory* mem, 
     auto restore = [backing, desc](texture& self) -> bool
     {
         self.handle_ = create_desc_handle(desc, eviction::make_backing_ref(backing));
-        return self.is_valid();
+        return self.has_gpu_copy();
     };
-    if(is_valid())
+    if(has_gpu_copy())
     {
         make_evictable(estimated_size, std::move(restore), evict_class::evictable, admitted.reserved_bytes);
     }
@@ -374,7 +374,7 @@ void texture::adopt_image_eviction(const char* name)
         // resident and untracked, and makes room now as a render target does.
         try_make_room_for(level_bytes_[0], what.c_str(), eviction::reclaim_kind::immediate);
         handle_ = create_level(0);
-        if(is_valid())
+        if(has_gpu_copy())
         {
             eviction::note_pending_allocation(level_bytes_[0]);
         }
@@ -389,7 +389,7 @@ void texture::adopt_image_eviction(const char* name)
     {
         handle_ = create_level(start.level);
     }
-    if(is_valid())
+    if(has_gpu_copy())
     {
         eviction::register_resource(this, start.level, start.reserved_bytes);
     }
@@ -449,7 +449,7 @@ auto texture::on_set_level(std::uint8_t level) -> bool
     }
     // bgfx runs destroys after the frame's draws and frees handles at frame end, so a draw this frame
     // that bound the old copy still reads it.
-    if(is_valid())
+    if(has_gpu_copy())
     {
         bgfx::destroy(handle_);
     }

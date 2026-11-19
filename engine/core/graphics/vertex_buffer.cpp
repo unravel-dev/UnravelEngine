@@ -37,7 +37,7 @@ void vertex_buffer::make_evictable_from(const eviction::backing_buffer& backing,
                                         const bgfx::VertexLayout& decl,
                                         std::uint16_t flags)
 {
-    if(!is_valid())
+    if(!has_gpu_copy())
     {
         return;
     }
@@ -46,7 +46,7 @@ void vertex_buffer::make_evictable_from(const eviction::backing_buffer& backing,
                    {
                        const bgfx::Memory* mem = eviction::make_backing_ref(backing);
                        self.handle_ = bgfx::createVertexBuffer(mem, decl, flags);
-                       return self.is_valid();
+                       return self.has_gpu_copy();
                    });
 }
 } // namespace gfx
