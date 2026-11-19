@@ -49,7 +49,17 @@ Backends (OpenGL breaks first; the other backends hide these):
   `BGFX_DISCARD_BINDINGS`.
 - `bgfx::makeRef` without a release callback needs the memory alive for the frame or two the render thread reads
   it; data an owner may free sooner goes through `gfx::eviction::backing_buffer` and the backing constructors of
-  `vertex_buffer` / `index_buffer`.
+  `vertex_buffer` / `index_buffer`. bgfx frees memory from `bgfx::alloc`, `copy` or `makeRef` only through the call
+  it is handed to, so code given such memory always passes it on: a path that skips the create leaks it.
+- A shader that samples a texture by UV with hardware mip selection binds it with `gfx::texture_read::any_level`
+  (graph materials do, `graph_material_programs.cpp`): an evicted texture then binds the mips it keeps on the GPU
+  and the draw never allocates. Any other read is `full` and, on the graphics API thread, brings the texture
+  back to full size at once; other threads bind the copy there is, live until the end of the frame being built.
+  `texture::info` always describes the full texture (eviction: `engine/core/graphics/eviction.h`).
+- A loaded texture with a tail starts whole only while that keeps the GPU under the soft budget, else at its
+  tail (`texture::admit_load_start`); the frame pass sharpens it when draws read it and there is room. A new
+  load site asks `gfx::eviction::admit_allocation` and hands the reserved bytes to `register_resource`, so
+  loads on several threads never pass the budget together.
 - A readback is `bgfx::blit` into a `BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK` texture in a later view, then
   `bgfx::read`; every read drains the GPU on desktop backends, so none runs every frame.
 - D3D12 creates a resource per texture update (batch into boxed region updates) and compiles pipelines at first

@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace stl = tinystl;
@@ -85,7 +86,8 @@ bgfx::TextureHandle loadTexture(const bx::FilePath& _filePath,
 
 /// Load a texture from memory (DDS, KTX, PNG, etc.). @a _name is optional debug label.
 /// @a _preCreate is invoked after the image header has been parsed, right before the GPU texture
-/// is created.
+/// is created. @a _skip drops that many top mips (at most all but the last); @a _info describes the
+/// texture created.
 bgfx::TextureHandle loadTexture(const void* _data,
                                 uint32_t _size,
                                 uint64_t _flags = BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
@@ -95,6 +97,41 @@ bgfx::TextureHandle loadTexture(const void* _data,
                                 const char* _name = NULL,
                                 bx::Error* _err = NULL,
                                 const TexturePreCreateFn& _preCreate = nullptr);
+
+/// A parsed image, shared by the texture that keeps it and the bgfx memory that refers to it.
+using ImagePtr = std::shared_ptr<bimg::ImageContainer>;
+
+/// Parses an image file in memory (KTX2, KTX, DDS, PNG, ...) into the layout bgfx uploads: each layer
+/// or cube face in turn, its mips largest first. ETC1 data reads as ETC2. Null when it does not parse.
+ImagePtr imageParseShared(const void* _data, uint32_t _size, bx::Error* _err = NULL);
+
+/// The creation flags of a texture made from @p _image: @p _flags, plus BGFX_TEXTURE_SRGB when the
+/// container is tagged sRGB and the backend has an sRGB view of its format and shape. Warns when it
+/// has none, and once per format and shape when the backend decodes the format.
+uint64_t imageGetTextureFlags(const bimg::ImageContainer& _image, uint64_t _flags);
+
+/// Fills @p _info with the texture @p _image makes without its @p _skip top mips. False when
+/// @p _skip leaves no mip.
+bool imageGetTextureInfo(const bimg::ImageContainer& _image, uint8_t _skip, bgfx::TextureInfo& _info);
+
+/// Bytes of the mips from @p _skip down, of every layer or face of @p _image: the size of the memory
+/// a texture made at that skip uploads. 0 when @p _skip leaves no mip.
+uint32_t imageGetSkippedSize(const bimg::ImageContainer& _image, uint8_t _skip);
+
+/// The one range of @p _image holding the mips from @p _skip down, when there is one: a single layer
+/// or face in bgfx's layout, or every side at skip 0. Such a texture is made without a copy.
+bool imageGetSkippedRange(const bimg::ImageContainer& _image, uint8_t _skip, uint32_t& _offset, uint32_t& _size);
+
+/// Copies the mips from @p _skip down of every layer or face of @p _image into @p _dst, side after
+/// side, as bgfx reads them. Returns the bytes written: 0 when @p _dstSize is short or @p _skip
+/// leaves no mip.
+uint32_t imageCopySkipped(const bimg::ImageContainer& _image, uint8_t _skip, void* _dst, uint32_t _dstSize);
+
+/// Creates a texture from @p _image without its @p _skip top mips, with @p _flags as given (see
+/// imageGetTextureFlags). One range is referenced, not copied (imageGetSkippedRange): the reference
+/// keeps @p _image alive until bgfx has uploaded it. Invalid when @p _skip leaves no mip or the
+/// backend cannot create the texture.
+bgfx::TextureHandle createTextureFromImage(const ImagePtr& _image, uint64_t _flags, uint8_t _skip);
 
 ///
 bimg::ImageContainer* imageLoad(const void* data, uint32_t size, bgfx::TextureFormat::Enum _dstFormat = bgfx::TextureFormat::Count);

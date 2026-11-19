@@ -3,7 +3,9 @@
 #include "format.h"
 #include "handle_impl.h"
 #include <base/basetypes.hpp>
+#include <array>
 #include <memory>
+#include <string>
 
 namespace gfx
 {
@@ -125,6 +127,9 @@ struct texture : public handle_impl<texture, bgfx::TextureHandle>
      */
     explicit texture(const texture_desc& desc, const bgfx::Memory* mem = nullptr);
 
+    /// Leaves the eviction system before its members go, so a sweep never calls into it half destroyed.
+    ~texture() override;
+
     /**
      * @brief The desc this texture was built from. For a texture loaded from a file or memory it
      * is read from the loaded info.
@@ -180,19 +185,65 @@ struct texture : public handle_impl<texture, bgfx::TextureHandle>
 
     auto get_estimated_gpu_size() const -> std::uint64_t;
 
-    /// Texture detail info.
+    /// Creates the GPU copy at @p level from the parsed image a loaded texture keeps (see
+    /// ievictable::on_set_level); a texture built from a desc restores level 0 only.
+    auto on_set_level(std::uint8_t level) -> bool override;
+
+    /// The estimated GPU bytes of the copy at @p level: what @ref get_estimated_gpu_size gives for the
+    /// texture without its @p level top mips.
+    [[nodiscard]] auto gpu_size_at(std::uint8_t level) const -> std::uint64_t override;
+
+    /// The level that leaves only mips no longer than @p tail_size: non-zero for a single 2D texture
+    /// loaded from a file or memory, with mips above that size.
+    [[nodiscard]] auto get_tail_level(std::uint32_t tail_size) const -> std::uint8_t override;
+
+    /// Texture detail info. Always describes the full texture, whatever level its GPU copy has.
     bgfx::TextureInfo info{};
     /// Creation flags.
     std::uint64_t flags = BGFX_TEXTURE_NONE;
 
 private:
-    void adopt_loaded_eviction(eviction::backing_buffer backing,
-                               std::uint64_t estimated_size,
-                               std::uint64_t load_flags,
-                               std::uint8_t skip,
-                               const char* label);
+    /// What a texture loaded from a file or memory creates its GPU copies from.
+    struct image_source;
+
+    /// The level a loaded texture starts at and the GPU bytes admitted for it.
+    struct load_start
+    {
+        std::uint8_t level{0};
+        /// False when not even the smallest copy fits: the first draw creates it.
+        bool create{false};
+        std::uint64_t reserved_bytes{0};
+    };
+
+    /// Parses @p data and creates the texture, keeping the parsed image when eviction is supported.
+    void load_image(const void* data, std::uint32_t size, std::uint64_t load_flags, std::uint8_t skip, const char* name);
+    /// Creates a texture loaded from an image: a GPU-written one whole and untracked, any other at the
+    /// level @ref admit_load_start picks, registered with the eviction system.
+    void adopt_image_eviction(const char* name);
+    /// Whether a texture made from @p desc with initial contents @p mem is tracked by eviction: it has
+    /// CPU contents to come back from and the GPU never writes it.
+    static auto is_tracked_desc(const texture_desc& desc, const bgfx::Memory* mem) -> bool;
+    /// Creates a tracked texture from @p desc and @p mem, counting its bytes against the hard limit (it is
+    /// created past it too: only the create can free @p mem), and registers it with a copy of @p mem to
+    /// come back from.
+    void create_tracked(const texture_desc& desc, const bgfx::Memory* mem, std::uint64_t estimated_size);
+    /// Where a loaded texture starts. With a tail, whole only while that keeps the GPU under the soft
+    /// budget, else at its tail under the hard limit: past the soft budget the frame pass would take its
+    /// top mips at once, and it sharpens when draws read it and there is room. Without a tail, whole
+    /// under the hard limit. Nothing created when that does not fit either.
+    auto admit_load_start(const std::string& what) const -> load_start;
+    /// A new GPU copy of the kept image without its @p level top mips.
+    auto create_level(std::uint8_t level) const -> bgfx::TextureHandle;
 
     texture_desc desc_{};
+    /// The parsed image of a loaded texture while eviction is supported; null otherwise.
+    std::shared_ptr<const image_source> source_;
+    /// Estimated GPU bytes at each level of a loaded texture.
+    std::array<std::uint64_t, residency::k_max_levels> level_bytes_{};
+    /// Levels the loaded texture has: its mip count.
+    std::uint8_t level_count_{0};
+    /// Whether the texture can keep a tail: one 2D side with mips, loaded, not written by the GPU.
+    bool can_reduce_{false};
     /// Whether the texture's import settings call it a normal map.
     bool is_normal_map_{false};
 };

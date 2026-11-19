@@ -226,9 +226,10 @@ REFLECT_INLINE(eviction_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "strategy"},
             entt::attribute{"pretty_name", "Strategy"},
-            entt::attribute{"min", 0},
-            entt::attribute{"max", 3},
-            entt::attribute{"tooltip", "Victim selection policy: 0=LRU, 1=LFU, 2=Largest first, 3=Age TTL."},
+            entt::attribute{"tooltip",
+                            "The order in which idle resources give up memory over the budget: the least recently "
+                            "used first, the least often used first, the largest first, or every resource idle past "
+                            "the minimum age, the oldest first."},
         })
         .data<&eviction_settings::min_age_frames>("min_age_frames"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -236,7 +237,10 @@ REFLECT_INLINE(eviction_settings)
             entt::attribute{"pretty_name", "Min Age (frames)"},
             entt::attribute{"min", 0},
             entt::attribute{"max", 600},
-            entt::attribute{"tooltip", "Resources used within this many frames are never evicted (anti-thrash)."},
+            entt::attribute{"tooltip",
+                            "Resources used within this many frames are never evicted. A resource that a draw needed "
+                            "again soon after its eviction also stays as long as it went unused then, up to 16 times "
+                            "this age."},
         })
         .data<&eviction_settings::max_evictions>("max_evictions"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -245,6 +249,38 @@ REFLECT_INLINE(eviction_settings)
             entt::attribute{"min", 0},
             entt::attribute{"max", 1024},
             entt::attribute{"tooltip", "Caps how many resources may be evicted per frame (0 = unlimited)."},
+        })
+        .data<&eviction_settings::keep_mip_tails>("keep_mip_tails"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "keep_mip_tails"},
+            entt::attribute{"pretty_name", "Keep Mip Tails"},
+            entt::attribute{"tooltip", "Evicted textures keep their smallest mips on the GPU, so materials draw a blurry "
+                                       "version until the full texture is back. A texture loaded while the GPU is over "
+                                       "its memory budget starts with only those mips."},
+        })
+        .data<&eviction_settings::mip_tail_size>("mip_tail_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "mip_tail_size"},
+            entt::attribute{"pretty_name", "Mip Tail Size"},
+            entt::attribute{"min", 4},
+            entt::attribute{"max", 1024},
+            entt::attribute{"tooltip", "Mips at or below this size in pixels stay on the GPU when a texture is evicted."},
+        })
+        .data<&eviction_settings::max_upload_mb>("max_upload_mb"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_upload_mb"},
+            entt::attribute{"pretty_name", "Max Upload (MiB / frame)"},
+            entt::attribute{"min", 1},
+            entt::attribute{"max", 1024},
+            entt::attribute{"tooltip", "The most texture data brought back to the GPU in one frame. Higher values sharpen "
+                                       "textures sooner after a camera cut. Lower values keep frame times even."},
+        })
+        .data<&eviction_settings::reduce_textures_in_use>("reduce_textures_in_use"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reduce_textures_in_use"},
+            entt::attribute{"pretty_name", "Reduce Textures In Use"},
+            entt::attribute{"tooltip", "When the textures on screen do not fit the budget, materials draw them one mip "
+                                       "lower instead of exceeding the budget."},
         });
 }
 
@@ -258,6 +294,10 @@ SAVE_INLINE(eviction_settings)
     try_save(ar, ser20::make_nvp("strategy", obj.strategy));
     try_save(ar, ser20::make_nvp("min_age_frames", obj.min_age_frames));
     try_save(ar, ser20::make_nvp("max_evictions", obj.max_evictions));
+    try_save(ar, ser20::make_nvp("keep_mip_tails", obj.keep_mip_tails));
+    try_save(ar, ser20::make_nvp("mip_tail_size", obj.mip_tail_size));
+    try_save(ar, ser20::make_nvp("max_upload_mb", obj.max_upload_mb));
+    try_save(ar, ser20::make_nvp("reduce_textures_in_use", obj.reduce_textures_in_use));
 }
 
 LOAD_INLINE(eviction_settings)
@@ -270,6 +310,40 @@ LOAD_INLINE(eviction_settings)
     try_load(ar, ser20::make_nvp("strategy", obj.strategy));
     try_load(ar, ser20::make_nvp("min_age_frames", obj.min_age_frames));
     try_load(ar, ser20::make_nvp("max_evictions", obj.max_evictions));
+    try_load(ar, ser20::make_nvp("keep_mip_tails", obj.keep_mip_tails));
+    try_load(ar, ser20::make_nvp("mip_tail_size", obj.mip_tail_size));
+    try_load(ar, ser20::make_nvp("max_upload_mb", obj.max_upload_mb));
+    try_load(ar, ser20::make_nvp("reduce_textures_in_use", obj.reduce_textures_in_use));
+}
+
+REFLECT_INLINE(gfx::residency::strategy)
+{
+    entt::meta_factory<gfx::residency::strategy>{}
+        .type("eviction_strategy"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "eviction_strategy"},
+            entt::attribute{"pretty_name", "Eviction Strategy"},
+        })
+        .data<gfx::residency::strategy::lru>("lru"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lru"},
+            entt::attribute{"pretty_name", "Least Recently Used"},
+        })
+        .data<gfx::residency::strategy::lfu>("lfu"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lfu"},
+            entt::attribute{"pretty_name", "Least Often Used"},
+        })
+        .data<gfx::residency::strategy::largest_first>("largest_first"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "largest_first"},
+            entt::attribute{"pretty_name", "Largest First"},
+        })
+        .data<gfx::residency::strategy::age_ttl>("age_ttl"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "age_ttl"},
+            entt::attribute{"pretty_name", "Idle Past Min Age"},
+        });
 }
 
 REFLECT_INLINE(preferred_renderer)

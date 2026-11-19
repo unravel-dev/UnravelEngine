@@ -2,16 +2,19 @@
 
 #include "evictable.h"
 #include "graphics.h"
+#include "residency_planner.h"
 
 #include <memory>
 #include <vector>
 
 /// GPU resource eviction / paging service.
 ///
-/// The registry itself is a static singleton defined entirely in eviction.cpp; only the free
-/// functions below are exposed. Resources opt into management through @ref gfx::handle_impl by
-/// retaining a CPU-side backing, after which they are tracked here and may be evicted (GPU memory
-/// released) and restored on demand.
+/// The registry (eviction_registry.h) tracks every resource that opted in through
+/// @ref gfx::handle_impl by retaining a CPU-side backing. Under memory pressure it releases idle
+/// resources; a texture with mips above the tail size keeps its smallest mips on the GPU instead, so
+/// a material sampling it draws a blurry copy and never waits for an allocation. At frame begin,
+/// while there is room, textures read lately rise back toward their full size, a capped number of
+/// bytes per frame.
 namespace gfx::eviction
 {
 
@@ -47,13 +50,7 @@ enum class init_status : std::uint8_t
 };
 
 /// Selection policy used by a sweep to choose eviction victims.
-enum class strategy : std::uint8_t
-{
-    lru,           ///< Least recently used first (smallest last-use frame).
-    lfu,           ///< Least frequently used first (smallest use count).
-    largest_first, ///< Largest resources first (fastest headroom recovery).
-    age_ttl,       ///< Every resource idle for longer than @ref config::max_idle_frames.
-};
+using strategy = residency::strategy;
 
 /// Outcome of a @ref reclaim_for call. Callers may log @ref insufficient as a warning but should
 /// still proceed with the allocation: a bgfx-side OOM is non-fatal (the handle returns invalid and
@@ -94,19 +91,22 @@ enum class reclaim_kind : std::uint8_t
 /// the user-facing settings; @ref reclaim_for then reads it back via @ref current_budget.
 ///
 /// Field semantics, expressed in absolute bytes (no fractions of anything):
-///   - @ref hard_limit_bytes      — never cross this; an allocation projected past it must flush.
-///   - @ref soft_budget_bytes     — begin evicting once usage exceeds this (defines the "begin work" line).
-///   - @ref target_bytes          — evict down to this watermark (hysteresis; should be < soft_budget).
-///   - @ref safety_margin_bytes   — added on top of pending allocations when deciding whether
+///   - @ref hard_limit_bytes      - never cross this; an allocation projected past it must flush.
+///   - @ref soft_budget_bytes     - begin evicting once usage exceeds this (defines the "begin work" line).
+///   - @ref target_bytes          - evict down to this watermark (hysteresis; should be < soft_budget).
+///   - @ref safety_margin_bytes   - added on top of pending allocations when deciding whether
 ///                                  to evict; keeps reclaim_for from edging exactly to the limit.
 ///
-/// All-zero state means "no budget reported" — every entry point treats this as "do nothing".
+/// All-zero state means "no budget reported" - every entry point treats this as "do nothing".
 struct budget_state
 {
     std::uint64_t hard_limit_bytes = 0;
     std::uint64_t soft_budget_bytes = 0;
     std::uint64_t target_bytes = 0;
     std::uint64_t safety_margin_bytes = 0;
+    /// Whether the limits hold the GPU bytes the engine's tracked resources hold (a manual budget)
+    /// rather than the device's whole usage.
+    bool counts_engine_bytes = false;
 };
 
 /// Configuration for a single eviction pass.
@@ -114,7 +114,7 @@ struct config
 {
     /// Victim selection policy.
     strategy strat = strategy::lru;
-    /// Run a budget-driven pass only while resident bytes exceed this value. 0 disables the budget,
+    /// Run a budget-driven pass only while held bytes exceed this value. 0 disables the budget,
     /// in which case only @ref strategy::age_ttl performs any work.
     std::uint64_t budget_bytes = 0;
     /// Evict down to this watermark (<= budget) to provide hysteresis. 0 falls back to budget_bytes.
@@ -127,29 +127,110 @@ struct config
     std::uint32_t max_evictions = 0;
 };
 
+/// How textures keep and regain their mips. Set every frame by the driver from the project settings.
+struct residency_options
+{
+    /// Longest side of the mips an evicted texture keeps on the GPU; 0 evicts textures whole.
+    std::uint32_t tail_size = 64;
+    /// Most bytes rises upload in one frame; 0 for no limit.
+    std::uint64_t max_upload_bytes = std::uint64_t(32) * 1024 * 1024;
+    /// Whether textures in use lose top mips when the textures on screen exceed the budget.
+    bool reduce_in_use = true;
+    /// Whether paging may take GPU memory from resources: the frame pass drops, a texture loaded over the
+    /// soft budget starts at its tail (sharpening once draws read it and there is room), and making
+    /// room for a render target evicts idle resources. Off, nothing is taken and reduced textures
+    /// sharpen again.
+    bool paging_enabled = true;
+};
+
+/// The limit @ref admit_allocation holds a new GPU copy to.
+enum class admit_limit : std::uint8_t
+{
+    /// The soft budget, with usage judged as rises judge it: every create bgfx's memory stats may not
+    /// show yet added, no release credited. For a load that can start smaller instead.
+    soft_budget,
+    /// The hard limit with the safety margin, projected as @ref would_allocation_fit does. For a load
+    /// with no smaller form.
+    hard_limit,
+};
+
+/// GPU bytes admitted for a copy about to be created.
+struct admission
+{
+    /// Whether the copy may be created.
+    bool admitted = false;
+    /// Bytes counted against the budget until the resource registers: pass them to register_resource,
+    /// or to register_evicted_resource when the create failed. 0 when no budget applies.
+    std::uint64_t reserved_bytes = 0;
+};
+
+/// GPU bytes created and released over the frames bgfx's memory stats may not show yet: the frame
+/// being built and the few before it.
+struct recent_traffic
+{
+    std::uint64_t created = 0;
+    std::uint64_t released = 0;
+};
+
+/// One frame's residency pass, filled by the per-frame driver.
+struct frame_request
+{
+    /// Usage with recent releases credited: what drops are judged by, so they never take more than
+    /// the pressure asks while released memory has not shown in the stats yet.
+    std::uint64_t used_for_drops = 0;
+    /// Usage with recent creates added and releases not credited: what rises are judged by, so they
+    /// never overshoot the target while new memory has not shown in the stats yet.
+    std::uint64_t used_for_rises = 0;
+    /// Drops start above this.
+    std::uint64_t soft_budget_bytes = 0;
+    /// Drops go down to this; rises stay under it.
+    std::uint64_t target_bytes = 0;
+    /// Victim order for idle resources.
+    strategy strat = strategy::lru;
+    /// Resources read within this many frames are not idle; nothing rises within this many frames of
+    /// a drop.
+    std::uint32_t min_age_frames = 60;
+    /// Most drops this frame; 0 for no limit (over the hard limit).
+    std::uint32_t max_drops = 0;
+    /// Most drops of textures in use this frame, each a texture created; 0 for no limit.
+    std::uint32_t max_in_use_drops = 0;
+    /// Most rises this frame, each a texture created; 0 for no limit.
+    std::uint32_t max_rises = 0;
+};
+
 /// Cumulative and last-pass statistics reported by the eviction system.
 struct stats
 {
-    std::uint64_t resident_count = 0;        ///< Resources currently resident on the GPU.
-    std::uint64_t resident_bytes = 0;        ///< GPU bytes currently resident.
-    std::uint64_t evicted_count = 0;         ///< Resources currently evicted.
-    std::uint64_t evicted_bytes = 0;         ///< GPU bytes currently reclaimed.
-    std::uint64_t registered_count = 0;      ///< Total tracked resources (resident + evicted).
-    std::uint64_t total_evictions = 0;       ///< Lifetime number of evictions.
-    std::uint64_t total_restores = 0;        ///< Lifetime number of restores.
-    std::uint64_t total_bytes_evicted = 0;   ///< Lifetime GPU bytes evicted.
-    std::uint64_t total_bytes_restored = 0;  ///< Lifetime GPU bytes restored.
-    std::uint64_t failed_restores = 0;       ///< Restores that failed to recreate a handle.
-    std::uint64_t thrash_events = 0;         ///< Restores within min_age_frames of their eviction.
+    std::uint64_t resident_count = 0;        ///< Resources whose full copy is on the GPU.
+    std::uint64_t resident_bytes = 0;        ///< GPU bytes of those full copies.
+    std::uint64_t reduced_count = 0;         ///< Textures on the GPU without their top mips.
+    std::uint64_t reduced_bytes = 0;         ///< GPU bytes those reduced textures hold.
+    std::uint64_t saved_bytes = 0;           ///< GPU bytes the reduced textures save against their full size.
+    std::uint64_t evicted_count = 0;         ///< Resources with no GPU copy.
+    std::uint64_t evicted_bytes = 0;         ///< Full GPU size of the evicted resources.
+    std::uint64_t registered_count = 0;      ///< Total tracked resources (resident + reduced + evicted).
+    std::uint64_t total_evictions = 0;       ///< Lifetime number of whole evictions.
+    std::uint64_t total_reductions = 0;      ///< Lifetime number of drops to a lower level.
+    std::uint64_t total_restores = 0;        ///< Lifetime GPU copies created for an evicted resource.
+    std::uint64_t total_raises = 0;          ///< Lifetime rises of a reduced texture.
+    std::uint64_t total_bytes_evicted = 0;   ///< Lifetime GPU bytes freed by whole evictions.
+    std::uint64_t total_bytes_reduced = 0;   ///< Lifetime GPU bytes freed by drops to a lower level.
+    std::uint64_t total_bytes_restored = 0;  ///< Lifetime GPU bytes created for evicted resources.
+    std::uint64_t total_bytes_raised = 0;    ///< Lifetime GPU bytes created by rises.
+    std::uint64_t failed_restores = 0;       ///< GPU copies that could not be created.
+    std::uint64_t thrash_events = 0;         ///< Copies created on demand within min_age_frames of a drop.
     std::uint64_t budget_bytes = 0;          ///< Active budget reported by the driver (0 = none).
     std::uint64_t target_bytes = 0;          ///< Watermark the driver evicts down to.
     std::uint64_t budget_used_bytes = 0;     ///< Metric compared against the budget (e.g. GPU mem used).
     std::uint64_t last_pass_scanned = 0;     ///< Candidates considered by the most recent sweep.
-    std::uint64_t last_pass_evicted = 0;     ///< Resources evicted by the most recent sweep.
-    std::uint64_t last_pass_freed_bytes = 0; ///< GPU bytes reclaimed by the most recent sweep.
+    std::uint64_t last_pass_evicted = 0;     ///< Drops (whole or to a level) of the most recent sweep.
+    std::uint64_t last_pass_freed_bytes = 0; ///< GPU bytes those drops freed.
+    std::uint64_t last_pass_raised = 0;      ///< Rises of the latest frame pass.
+    std::uint64_t last_pass_raised_bytes = 0; ///< GPU bytes those rises uploaded.
+    std::uint64_t raise_backlog = 0;         ///< Reduced textures read lately that did not rise in the latest frame pass.
     std::uint64_t pending_release_bytes = 0; ///< Destroys queued in bgfx but not yet reflected in gpuMemoryUsed.
     double last_pass_ms = 0.0;               ///< Duration of the most recent sweep in milliseconds.
-    double last_restore_ms = 0.0;            ///< Duration of the most recent restore in milliseconds.
+    double last_restore_ms = 0.0;            ///< Duration of the slowest on-demand restore this frame.
 };
 
 /// Initialize the system and set the default config used by the argument-less @ref evict.
@@ -173,44 +254,72 @@ auto evict(const config& cfg) -> stats;
 /// Run a single eviction pass using the config supplied to @ref init.
 auto evict() -> stats;
 
-/// Evict resources (in @p strat order) until at least @p free_bytes have been reclaimed, the
-/// candidate pool is exhausted, or @p max_evictions is reached. This is the byte-pressure driven
-/// entry point used when a budget is computed externally (e.g. from the GPU memory stats).
-/// @p min_age_frames protects recently used resources (0 disables the protection). Must run on the
-/// graphics API thread.
+/// Free at least @p free_bytes from idle resources (in @p strat order) until the candidate pool is
+/// exhausted or @p max_evictions is reached. A texture with a tail goes to its tail; anything else
+/// is evicted whole. @p min_age_frames protects recently used resources (0 disables the
+/// protection). Must run on the graphics API thread.
 auto evict_bytes(std::uint64_t free_bytes,
                  strategy strat = strategy::lru,
                  std::uint32_t min_age_frames = 0,
                  std::uint32_t max_evictions = 0) -> stats;
 
-/// Evict every evictable resource regardless of budget or age. Intended for testing/diagnostics.
-/// Must run on the graphics API thread.
+/// Take every resource down, regardless of budget or age: textures with a tail to it, the rest
+/// evicted. Intended for testing/diagnostics. Must run on the graphics API thread.
 auto evict_all() -> stats;
+
+/// The frame's residency pass: above the soft budget, idle resources give up memory and, with
+/// @ref residency_options::reduce_in_use, textures in use lose a level; under the target, textures
+/// read lately rise within the upload limit. Must run on the graphics API thread.
+auto update_residency(const frame_request& request) -> stats;
+
+/// Set how textures keep and regain their mips. Cheap; called every frame.
+void set_residency_options(const residency_options& options);
+
+/// The options last set.
+auto get_residency_options() -> residency_options;
+
+/// The tail size of the options last set, lock-free for the load path on worker threads.
+auto get_tail_size() -> std::uint32_t;
+
+/// Longest side of the mips a texture loaded over the soft budget starts with; 0 when loads start
+/// whole (paging or mip tails off). Lock-free.
+auto get_load_tail_size() -> std::uint32_t;
+
+/// Admit @p bytes about to be created under @p limit, counting them at once so loads on other threads
+/// see them before the resource registers. A manual budget judges the engine's own tracked bytes.
+/// Any thread, lock-free. Admits everything and reserves nothing when eviction is unsupported or no
+/// budget is set.
+auto admit_allocation(std::uint64_t bytes, admit_limit limit) -> admission;
+
+/// GPU bytes created and released by tracked resources and noted allocations over the frames
+/// bgfx's memory stats may not show yet.
+auto get_recent_traffic() -> recent_traffic;
 
 /// Synchronously guarantee headroom for an imminent GPU allocation of @p bytes (@ref reclaim_kind::immediate).
 /// Reads the active @ref budget_state and live backend stats:
 ///   - If projected occupancy stays under the soft budget, returns @ref reclaim_result::headroom.
 ///   - Otherwise evicts resident victims (using @ref config::strat and @ref config::min_age_frames from
 ///     @ref init) down toward @ref budget_state::target_bytes, then flushes so VRAM is free before create.
+///   - Called off the graphics API thread it only projects, as @ref reclaim_kind::evictable does.
 /// @ref reclaim_kind::evictable is projection-only; prefer @ref would_allocation_fit at load sites.
 /// Restore-on-bind must not call this; frame_begin eviction already shaped the pool.
 /// Must run on the graphics API thread. A no-op when eviction is unsupported or no budget is set.
 auto reclaim_for(std::uint64_t bytes, reclaim_kind kind = reclaim_kind::immediate) -> reclaim_result;
 
-/// Project whether @p bytes fit under the hard limit without running an eviction sweep. Used by
-/// speculative CPU-backed texture loads; defers the create when false (CPU backing retained).
+/// Project whether @p bytes fit under the hard limit without running an eviction sweep, counting the
+/// bytes admitted for loads still being created. A manual budget judges the engine's own tracked
+/// bytes. Used by CPU-backed loads with no smaller form; defers the create when false (CPU backing
+/// retained).
 auto would_allocation_fit(std::uint64_t bytes) -> bool;
 
-/// Restore every currently evicted resource immediately. Calls @ref reclaim_for once up front
-/// for the full evicted byte count so a large pending pool cannot push the device past the hard
-/// limit. The actual restore loop runs under the registry mutex to keep the evicted set stable.
-/// Useful for tests and for turning paging off. Must run on the graphics API thread.
+/// Bring every tracked resource back to its full size immediately, warning when that does not fit
+/// the budget. Useful for tests and for turning paging off. Must run on the graphics API thread.
 auto restore_all() -> stats;
 
 /// Publish the active memory budget for this frame so @ref reclaim_for and tooling see the same
-/// numbers. Pure bookkeeping — it does not trigger eviction itself. @p used_bytes is the metric
+/// numbers. Pure bookkeeping - it does not trigger eviction itself. @p used_bytes is the metric
 /// the driver compares against the budget (e.g. gpuMemoryUsed + queued for auto budget, or
-/// evictable resident bytes for a manual budget); it is recorded only for diagnostics.
+/// evictable held bytes for a manual budget); it is recorded only for diagnostics.
 void set_budget(const budget_state& budget, std::uint64_t used_bytes);
 
 /// Snapshot the most recently published @ref budget_state. Returns an all-zero struct when no
@@ -237,8 +346,9 @@ auto peek_external_queued_bytes() -> std::uint64_t;
 /// it visible in @ref peek_queued_bytes for later same-frame creates until @ref clear_queued_allocations.
 void note_pending_allocation(std::uint64_t bytes);
 
-/// Clear the queued-allocation counter after bgfx::frame or bgfx::flush has processed the command
-/// stream. Called from the graphics layer; user code should not need this.
+/// Clear the queued-allocation counters after bgfx::frame or bgfx::flush has processed the command
+/// stream; their bytes move into @ref get_recent_traffic for the next few frames. Called from the
+/// graphics layer; user code should not need this.
 void clear_queued_allocations();
 
 /// Snapshot the current statistics.
@@ -278,18 +388,22 @@ auto debug_consumed_bytes() -> std::uint64_t;
 
 // --- Internal surface used by gfx::handle_impl ----------------------------------------------
 
-/// Begin tracking a resource (assumed resident). Called from handle_impl::make_evictable.
-void register_resource(ievictable* resource);
+/// Begin tracking a resource whose GPU copy is live at @p level (0: full). Called from
+/// handle_impl::make_evictable and from a texture loaded without its top mips. @p reserved_bytes
+/// from @ref admit_allocation now count as the resource's copy.
+void register_resource(ievictable* resource, std::uint8_t level = 0, std::uint64_t reserved_bytes = 0);
 
 /// Begin tracking a resource with no live GPU handle (deferred create / allocation skipped).
-/// Counts toward @ref stats::evicted_bytes; @ref restore_resource recreates it on access.
-void register_evicted_resource(ievictable* resource);
+/// Counts toward @ref stats::evicted_bytes; @ref request_residency recreates it on access.
+/// Releases @p reserved_bytes from @ref admit_allocation for a copy that was not created.
+void register_evicted_resource(ievictable* resource, std::uint64_t reserved_bytes = 0);
 
-/// Stop tracking a resource. Called from handle_impl's destructor.
+/// Stop tracking a resource. Called from handle_impl's destructor, or earlier from a derived one.
 void unregister_resource(ievictable* resource);
 
-/// Restore a resource immediately if it is evicted. Called from handle_impl::native_handle on
-/// access. Must run on the graphics API thread. No-op if the resource is already resident.
-void restore_resource(ievictable* resource);
+/// Give @p resource the GPU copy a read of @p read kind needs: any read of an evicted resource, and a
+/// full read of a reduced texture. An any_level read of an evicted texture with a tail creates only
+/// its tail. Called from handle_impl::native_handle; off the graphics API thread it does nothing.
+void request_residency(ievictable* resource, texture_read read);
 
 } // namespace gfx::eviction

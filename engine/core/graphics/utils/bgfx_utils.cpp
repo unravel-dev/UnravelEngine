@@ -282,13 +282,6 @@ bgfx::ProgramHandle loadProgram(const bx::StringView& _vsName, const bx::StringV
     return loadProgram(&reader, _vsName, _fsName);
 }
 
-static void imageReleaseCb(void* _ptr, void* _userData)
-{
-    BX_UNUSED(_ptr);
-    bimg::ImageContainer* imageContainer = (bimg::ImageContainer*)_userData;
-    bimg::imageFree(imageContainer);
-}
-
 // KTX2 has no ETC1 format of its own: bimg reads an ETC2 RGB container as ETC1, which Vulkan and
 // Direct3D have no format for (the texture would be decoded to BGRA8 when it is created) and which
 // has no sRGB view. Every ETC1 block is an ETC2 block that decodes the same, so it is read as ETC2.
@@ -426,86 +419,173 @@ static void warnEmulatedFormat(const bimg::ImageContainer* imageContainer)
              uint16_t(__LINE__));
 }
 
-static bgfx::TextureHandle loadTextureFromContainer(bimg::ImageContainer* imageContainer,
-                                                    uint64_t _flags,
-                                                    bgfx::TextureInfo* _info,
-                                                    const TexturePreCreateFn& _preCreate = nullptr)
+/// Whether @p _image is laid out as bgfx reads texture memory: each side's mips largest first, sides
+/// one after the other, from the start of its data. Images parsed with an allocator always are.
+static bool isUploadLayout(const bimg::ImageContainer& _image)
 {
-    if(NULL == imageContainer)
+    return NULL != _image.m_data && 0 == _image.m_offset && !_image.m_ktx && !_image.m_ktx2 && !_image.m_pvr3;
+}
+
+static uint16_t getSideCount(const bimg::ImageContainer& _image)
+{
+    return uint16_t(bx::max<uint16_t>(1, _image.m_numLayers) * (_image.m_cubeMap ? 6 : 1));
+}
+
+static void releaseImageRef(void* _ptr, void* _userData)
+{
+    BX_UNUSED(_ptr);
+    delete static_cast<ImagePtr*>(_userData);
+}
+
+static void releaseGatheredMips(void* _ptr, void* _userData)
+{
+    BX_UNUSED(_ptr);
+    delete static_cast<std::vector<uint8_t>*>(_userData);
+}
+
+ImagePtr imageParseShared(const void* _data, uint32_t _size, bx::Error* _err)
+{
+    bx::Error localErr;
+    bx::Error* err = (NULL != _err) ? _err : &localErr;
+    bimg::ImageContainer* image =
+        bimg::imageParse(entry::getAllocator(), _data, _size, bimg::TextureFormat::Count, err);
+    if(NULL == image)
     {
-        return BGFX_INVALID_HANDLE;
+        return {};
     }
+    readEtc1AsEtc2(*image);
+    return ImagePtr(image, bimg::imageFree);
+}
 
-    readEtc1AsEtc2(*imageContainer);
-    warnEmulatedFormat(imageContainer);
-    _flags = applyContainerSrgbFlag(imageContainer, _flags);
+uint64_t imageGetTextureFlags(const bimg::ImageContainer& _image, uint64_t _flags)
+{
+    warnEmulatedFormat(&_image);
+    return applyContainerSrgbFlag(&_image, _flags);
+}
 
-    const bgfx::Memory* mem = bgfx::makeRef(
-        imageContainer->m_data,
-        imageContainer->m_size,
-        imageReleaseCb,
-        imageContainer);
+bool imageGetTextureInfo(const bimg::ImageContainer& _image, uint8_t _skip, bgfx::TextureInfo& _info)
+{
+    if(_skip >= _image.m_numMips)
+    {
+        return false;
+    }
+    bgfx::calcTextureSize(_info,
+                          uint16_t(bx::max<uint32_t>(1, _image.m_width >> _skip)),
+                          uint16_t(bx::max<uint32_t>(1, _image.m_height >> _skip)),
+                          uint16_t(bx::max<uint32_t>(1, _image.m_depth >> _skip)),
+                          _image.m_cubeMap,
+                          1 < _image.m_numMips - _skip,
+                          _image.m_numLayers,
+                          bgfx::TextureFormat::Enum(_image.m_format));
+    return true;
+}
 
+uint32_t imageGetSkippedSize(const bimg::ImageContainer& _image, uint8_t _skip)
+{
     bgfx::TextureInfo info;
-    bgfx::calcTextureSize(
-        info,
-        uint16_t(imageContainer->m_width),
-        uint16_t(imageContainer->m_height),
-        uint16_t(imageContainer->m_depth),
-        imageContainer->m_cubeMap,
-        1 < imageContainer->m_numMips,
-        imageContainer->m_numLayers,
-        bgfx::TextureFormat::Enum(imageContainer->m_format));
+    return imageGetTextureInfo(_image, _skip, info) ? info.storageSize : 0;
+}
 
-    if(NULL != _info)
+bool imageGetSkippedRange(const bimg::ImageContainer& _image, uint8_t _skip, uint32_t& _offset, uint32_t& _size)
+{
+    const uint32_t size = imageGetSkippedSize(_image, _skip);
+    if(0 == size || !isUploadLayout(_image) || (0 != _skip && 1 != getSideCount(_image)))
     {
-        *_info = info;
+        return false;
     }
-
-    // The image is parsed and its exact GPU footprint is known; give the caller a chance to
-    // reject the allocation before the create lands.
-    if(_preCreate && !_preCreate(info))
+    bimg::ImageMip mip;
+    if(!bimg::imageGetRawData(_image, 0, _skip, _image.m_data, _image.m_size, mip))
     {
-        bimg::imageFree(imageContainer);
+        return false;
+    }
+    const uint64_t offset = uint64_t(mip.m_data - static_cast<const uint8_t*>(_image.m_data));
+    if(offset + size > _image.m_size)
+    {
+        return false;
+    }
+    _offset = uint32_t(offset);
+    _size = size;
+    return true;
+}
+
+uint32_t imageCopySkipped(const bimg::ImageContainer& _image, uint8_t _skip, void* _dst, uint32_t _dstSize)
+{
+    const uint32_t size = imageGetSkippedSize(_image, _skip);
+    if(0 == size || _dstSize < size)
+    {
+        return 0;
+    }
+    uint8_t* dst = static_cast<uint8_t*>(_dst);
+    uint32_t written = 0;
+    for(uint16_t side = 0, numSides = getSideCount(_image); side < numSides; ++side)
+    {
+        for(uint8_t lod = _skip; lod < _image.m_numMips; ++lod)
+        {
+            bimg::ImageMip mip;
+            if(!bimg::imageGetRawData(_image, side, lod, _image.m_data, _image.m_size, mip) || written + mip.m_size > size)
+            {
+                return 0;
+            }
+            bx::memCopy(dst + written, mip.m_data, mip.m_size);
+            written += mip.m_size;
+        }
+    }
+    return written == size ? written : 0;
+}
+
+/// The memory a texture of @p _image made at @p _skip uploads: a reference to the image when one
+/// range holds it, a copy gathered from every side otherwise. Null when there is nothing to upload or
+/// the gather fails: memory handed to bgfx cannot be taken back, so it is filled first.
+static const bgfx::Memory* makeImageMemory(const ImagePtr& _image, uint8_t _skip)
+{
+    uint32_t offset = 0;
+    uint32_t size = 0;
+    if(imageGetSkippedRange(*_image, _skip, offset, size))
+    {
+        auto* ref = new ImagePtr(_image);
+        return bgfx::makeRef(static_cast<const uint8_t*>(_image->m_data) + offset, size, releaseImageRef, ref);
+    }
+    size = imageGetSkippedSize(*_image, _skip);
+    if(0 == size)
+    {
+        return NULL;
+    }
+    auto* gathered = new std::vector<uint8_t>(size);
+    if(0 == imageCopySkipped(*_image, _skip, gathered->data(), size))
+    {
+        delete gathered;
+        return NULL;
+    }
+    return bgfx::makeRef(gathered->data(), size, releaseGatheredMips, gathered);
+}
+
+bgfx::TextureHandle createTextureFromImage(const ImagePtr& _image, uint64_t _flags, uint8_t _skip)
+{
+    bgfx::TextureInfo info;
+    if(!_image || !imageGetTextureInfo(*_image, _skip, info))
+    {
         return BGFX_INVALID_HANDLE;
     }
-
-    if(imageContainer->m_cubeMap)
+    const bool isVolume = 1 < info.depth;
+    if(!_image->m_cubeMap && !isVolume && !bgfx::isTextureValid(0, false, info.numLayers, info.format, _flags))
     {
-        return bgfx::createTextureCube(
-            uint16_t(imageContainer->m_width),
-            1 < imageContainer->m_numMips,
-            imageContainer->m_numLayers,
-            bgfx::TextureFormat::Enum(imageContainer->m_format),
-            _flags,
-            mem);
+        return BGFX_INVALID_HANDLE;
     }
-
-    if(bimg::isVolume(*imageContainer))
+    const bgfx::Memory* mem = makeImageMemory(_image, _skip);
+    if(NULL == mem)
     {
-        return bgfx::createTexture3D(
-            uint16_t(imageContainer->m_width),
-            uint16_t(imageContainer->m_height),
-            uint16_t(imageContainer->m_depth),
-            1 < imageContainer->m_numMips,
-            bgfx::TextureFormat::Enum(imageContainer->m_format),
-            _flags,
-            mem);
+        return BGFX_INVALID_HANDLE;
     }
-
-    if(bgfx::isTextureValid(0, false, imageContainer->m_numLayers, bgfx::TextureFormat::Enum(imageContainer->m_format), _flags))
+    const bool hasMips = 1 < info.numMips;
+    if(_image->m_cubeMap)
     {
-        return bgfx::createTexture2D(
-            uint16_t(imageContainer->m_width),
-            uint16_t(imageContainer->m_height),
-            1 < imageContainer->m_numMips,
-            imageContainer->m_numLayers,
-            bgfx::TextureFormat::Enum(imageContainer->m_format),
-            _flags,
-            mem);
+        return bgfx::createTextureCube(info.width, hasMips, info.numLayers, info.format, _flags, mem);
     }
-
-    return BGFX_INVALID_HANDLE;
+    if(isVolume)
+    {
+        return bgfx::createTexture3D(info.width, info.height, info.depth, hasMips, info.format, _flags, mem);
+    }
+    return bgfx::createTexture2D(info.width, info.height, hasMips, info.numLayers, info.format, _flags, mem);
 }
 
 namespace
@@ -707,38 +787,51 @@ bgfx::TextureHandle loadTexture(const void* _data,
                                 bx::Error* _err,
                                 const TexturePreCreateFn& _preCreate)
 {
-    BX_UNUSED(_skip);
     bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
 
-    if (NULL != _info)
-	{
-		bx::memSet(_info, 0, sizeof(*_info) );
-		_info->format = bgfx::TextureFormat::Unknown;
-	}
-
-	if (NULL != _orientation)
-	{
-		*_orientation = bimg::Orientation::R0;
-	}
-
-    bx::Error localErr;
-    bx::Error* err = (NULL != _err) ? _err : &localErr;
-    bimg::ImageContainer* imageContainer = bimg::imageParse(entry::getAllocator(), _data, _size, bimg::TextureFormat::Count, err);
-    if(NULL != imageContainer)
+    if(NULL != _info)
     {
-        if(NULL != _orientation)
-        {
-            *_orientation = imageContainer->m_orientation;
-        }
-
-        handle = loadTextureFromContainer(imageContainer, _flags, _info, _preCreate);
-
-        if(bgfx::isValid(handle) && NULL != _name)
-        {
-            bgfx::setName(handle, _name, int32_t(bx::strLen(_name)));
-        }
+        bx::memSet(_info, 0, sizeof(*_info));
+        _info->format = bgfx::TextureFormat::Unknown;
     }
 
+    if(NULL != _orientation)
+    {
+        *_orientation = bimg::Orientation::R0;
+    }
+
+    const ImagePtr image = imageParseShared(_data, _size, _err);
+    if(!image)
+    {
+        return handle;
+    }
+    if(NULL != _orientation)
+    {
+        *_orientation = image->m_orientation;
+    }
+
+    const uint8_t skip = bx::min<uint8_t>(_skip, uint8_t(image->m_numMips - 1));
+    bgfx::TextureInfo info;
+    if(!imageGetTextureInfo(*image, skip, info))
+    {
+        return handle;
+    }
+    if(NULL != _info)
+    {
+        *_info = info;
+    }
+
+    // The image is parsed and its GPU footprint is known; the caller may reject the allocation.
+    if(_preCreate && !_preCreate(info))
+    {
+        return handle;
+    }
+
+    handle = createTextureFromImage(image, imageGetTextureFlags(*image, _flags), skip);
+    if(bgfx::isValid(handle) && NULL != _name)
+    {
+        bgfx::setName(handle, _name, int32_t(bx::strLen(_name)));
+    }
     return handle;
 }
 
@@ -751,7 +844,6 @@ bgfx::TextureHandle loadTexture(bx::FileReaderI* _reader,
                                 bx::Error* _err,
                                 const TexturePreCreateFn& _preCreate = nullptr)
 {
-    BX_UNUSED(_skip);
     bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
 
     if (NULL != _info)

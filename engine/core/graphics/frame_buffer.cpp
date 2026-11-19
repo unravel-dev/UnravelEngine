@@ -101,7 +101,7 @@ void frame_buffer::populate(const std::vector<fbo_attachment>& textures)
     dispose();
     handle_ = bgfx::createFrameBuffer(static_cast<std::uint8_t>(buffer.size()), buffer.data(), false);
     cached_size_ = size;
-    if(!bgfx::isValid(handle_) && !textures.empty())
+    if(!is_valid() && !textures.empty())
     {
         report_invalid_frame_buffer(textures);
     }

@@ -390,6 +390,8 @@ void test_settings_rules()
         profile.resolved = profile.start;
         profile.resolved.graphics.limits.global_illumination = true;
         profile.resolved.physics.fixed_timestep = 0.004f;
+        profile.resolved.graphics.eviction.keep_mip_tails = false;
+        profile.resolved.graphics.eviction.max_upload_mb = profile.start.graphics.eviction.max_upload_mb * 8;
         in.profiles.push_back(profile);
     }
     auto web = make_profile("Web", target_platform::web, {});
@@ -418,6 +420,18 @@ void test_settings_rules()
         }
     }
     check_eq(gi, 2, "each phone profile reports its GI");
+    std::size_t paging = 0;
+    for(const auto& item : issues)
+    {
+        if(item.rule == audit::rules::COSTLIER_THAN_START &&
+           (item.where.key == "graphics/eviction/keep_mip_tails" || item.where.key == "graphics/eviction/max_upload_mb"))
+        {
+            ++paging;
+        }
+        check(!(item.rule == audit::rules::COSTLIER_THAN_START && item.where.key == "graphics/eviction/reduce_textures_in_use"),
+              "a paging setting left at its start is not reported");
+    }
+    check_eq(paging, 4, "each phone profile reports mip tails turned off and a raised upload limit");
     std::size_t rates = 0;
     for(const auto& item : issues)
     {

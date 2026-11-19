@@ -112,7 +112,8 @@ public:
     void set_texture(std::uint8_t stage,
                      const hpp::string_view& sampler,
                      const gfx::texture* texture,
-                     std::uint32_t flags = std::numeric_limits<std::uint32_t>::max());
+                     std::uint32_t flags = std::numeric_limits<std::uint32_t>::max(),
+                     gfx::texture_read read = gfx::texture_read::full);
 
     /**
      * @brief Sets a uniform value in the shader program.
@@ -337,7 +338,8 @@ void set_texture(const gfx::program::uniform_ptr& uniform,
 void set_texture(const gfx::program::uniform_ptr& uniform,
                  std::uint8_t stage,
                  const gfx::texture::ptr& texture,
-                 std::uint32_t flags = std::numeric_limits<std::uint32_t>::max());
+                 std::uint32_t flags = std::numeric_limits<std::uint32_t>::max(),
+                 gfx::texture_read read = gfx::texture_read::full);
 
 /**
  * @brief Sets the texture for a specific stage using a frame buffer.
@@ -361,11 +363,14 @@ void set_texture(const gfx::program::uniform_ptr& uniform,
  * @param _stage The stage number.
  * @param _texture The texture handle.
  * @param _flags The texture flags.
+ * @param read Whether a copy without the top mips will do: texture_read::any_level for a shader that
+ * samples by UV with hardware mip selection, so an evicted texture binds its tail and never allocates.
  */
 void set_texture(const gfx::program::uniform_ptr& uniform,
                  std::uint8_t stage,
                  const gfx::texture* texture,
-                 std::uint32_t flags = std::numeric_limits<std::uint32_t>::max());
+                 std::uint32_t flags = std::numeric_limits<std::uint32_t>::max(),
+                 gfx::texture_read read = gfx::texture_read::full);
 
 /**
  * @brief Sets the texture for a specific stage using a texture.
@@ -378,7 +383,8 @@ void set_texture(const gfx::program::uniform_ptr& uniform,
 void set_texture(const gfx::program::uniform_ptr& uniform,
                  std::uint8_t stage,
                  const asset_handle<gfx::texture>& texture,
-                 std::uint32_t flags = std::numeric_limits<std::uint32_t>::max());
+                 std::uint32_t flags = std::numeric_limits<std::uint32_t>::max(),
+                 gfx::texture_read read = gfx::texture_read::full);
 
 /**
  * @brief Sets a uniform value.

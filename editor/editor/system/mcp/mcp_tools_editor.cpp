@@ -22,6 +22,7 @@
 #include <engine/rendering/renderer.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <graphics/device_caps.h>
+#include <graphics/eviction.h>
 #include <graphics/graphics.h>
 #include <imgui/imgui_internal.h>
 #include <simulation/simulation.h>
@@ -191,6 +192,41 @@ auto pipeline_stats_json(const rendering::pipeline_stats& stats) -> std::string
 
 /// The frame as the viewport statistics overlay shows it: time, draw counts without the editor UI,
 /// GPU memory, the shaders and programs alive, and what the Scene view's and the game's cameras drew.
+/// GPU eviction as the overlay's Paging rows show it: the budget, what is resident, reduced to its
+/// mip tail or evicted, and the lifetime counts. "supported" is false when the backend has no budget.
+auto paging_stats_json() -> std::string
+{
+    namespace ev = gfx::eviction;
+    const auto s = ev::get_stats();
+    const auto options = ev::get_residency_options();
+    return fmt::format(
+        R"({{"supported":{},"budget_bytes":{},"target_bytes":{},"used_bytes":{},"tail_size":{},)"
+        R"("resident_count":{},"resident_bytes":{},"reduced_count":{},"reduced_bytes":{},"saved_bytes":{},)"
+        R"("evicted_count":{},"evicted_bytes":{},"evictions":{},"mip_drops":{},"restores":{},"rises":{},)"
+        R"("raise_backlog":{},"raised_bytes_last_frame":{},"thrash_events":{},"failed_restores":{},"reserved_test_bytes":{}}})",
+        bool_to_json(ev::is_supported()),
+        s.budget_bytes,
+        s.target_bytes,
+        s.budget_used_bytes,
+        options.tail_size,
+        s.resident_count,
+        s.resident_bytes,
+        s.reduced_count,
+        s.reduced_bytes,
+        s.saved_bytes,
+        s.evicted_count,
+        s.evicted_bytes,
+        s.total_evictions,
+        s.total_reductions,
+        s.total_restores,
+        s.total_raises,
+        s.raise_backlog,
+        s.last_pass_raised_bytes,
+        s.thrash_events,
+        s.failed_restores,
+        ev::debug_consumed_bytes());
+}
+
 auto frame_stats_json(rtti::context& ctx) -> std::string
 {
     const auto* stats = bgfx::getStats();
@@ -211,8 +247,8 @@ auto frame_stats_json(rtti::context& ctx) -> std::string
         R"({{"frame":{{"fps":{:.1f},"frame_ms":{:.2f},"cpu_submit_ms":{:.2f},"gpu_ms":{:.2f},"gpu_latency_frames":{}}},)"
         R"("draw":{{"triangles":{},"draw_calls":{},"compute_calls":{},"blit_calls":{},"render_passes":{}}},)"
         R"("memory":{{"gpu_used_bytes":{},"gpu_max_bytes":{},"texture_bytes":{},"render_target_bytes":{}}},)"
-        R"("resources":{{"shaders":{},"programs":{},"max_programs":{}}},)"
-        R"("entities":{},"play_phase":{},"scene_view":{},"game":{}}})",
+        R"("resources":{{"shaders":{},"programs":{},"max_programs":{},"textures":{},"max_textures":{}}},)"
+        R"("paging":{},"entities":{},"play_phase":{},"scene_view":{},"game":{}}})",
         fps,
         fps > 0.0f ? static_cast<float>(k_milliseconds_per_second) / fps : 0.0f,
         cpu_ms,
@@ -230,6 +266,9 @@ auto frame_stats_json(rtti::context& ctx) -> std::string
         stats->numShaders,
         stats->numPrograms,
         bgfx::getCaps()->limits.maxPrograms,
+        stats->numTextures,
+        bgfx::getCaps()->limits.maxTextures,
+        paging_stats_json(),
         scn != nullptr && scn->registry ? count_live_entities(*scn->registry) : 0,
         make_json_string(play_phase_from_ctx(ctx)),
         scene_view_json,
@@ -1218,8 +1257,9 @@ void register_editor_tools(mcp_tool_registry& registry)
         {.name = "stats_get",
          .description =
              "Frame statistics, as the viewport statistics overlay shows them: fps, CPU and GPU ms, triangles and "
-             "draw calls without the editor UI, GPU memory, the shaders and programs alive (bgfx holds at most "
-             "max_programs), live entities, and per view (scene_view, game) the "
+             "draw calls without the editor UI, GPU memory, the shaders, programs and textures alive (bgfx holds at "
+             "most max_programs and max_textures), GPU paging (budget, resources resident, reduced to their mip "
+             "tails or evicted, and the textures waiting to sharpen), live entities, and per view (scene_view, game) the "
              "models, lights, shadow casters, particles and decals drawn and the post-process material passes run. Last frame's values; with vsync on, times "
              "include waiting for the display.",
          .input_schema_json = empty_object_schema(),
@@ -1230,6 +1270,60 @@ void register_editor_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .effect = tool_effect::read_only});
+
+    registry.add(
+        {.name = "gpu_eviction_test",
+         .description =
+             "Exercise GPU paging as the profiler's GPU Eviction section does. action \"evict_all\" takes every "
+             "evictable resource down now (textures to their mip tails, the rest evicted), \"restore_all\" brings "
+             "everything back to full size, \"simulate_gpu\" reserves real GPU memory so the device behaves as one "
+             "with gpu_mib free (any earlier reserve is released first), \"release\" frees that reserve. Paging "
+             "runs only on backends that report a memory budget (Vulkan, Direct3D 12, Metal); elsewhere the call "
+             "is refused. Returns the paging stats after the action, as stats_get reports them.",
+         .input_schema_json =
+             R"({"type":"object","properties":{"action":{"type":"string","enum":["evict_all","restore_all","simulate_gpu","release"]},"gpu_mib":{"type":"integer","minimum":64}},"required":["action"]})",
+         .handler =
+             [](rtti::context& /*ctx*/, const simdjson::dom::object& args) -> tool_result
+         {
+             namespace ev = gfx::eviction;
+             if(!ev::is_supported())
+             {
+                 return {.text = "GPU paging is off on this backend. Start the editor with --renderer vulkan or "
+                                 "--renderer dx12 to use it.",
+                         .is_error = true};
+             }
+             hpp::string_view action;
+             (void)args["action"].get(action);
+             if(action == "evict_all")
+             {
+                 ev::evict_all();
+             }
+             else if(action == "restore_all")
+             {
+                 ev::restore_all();
+             }
+             else if(action == "simulate_gpu")
+             {
+                 const int64_t gpu_mib = read_int64_or(args, "gpu_mib", 0);
+                 if(gpu_mib < 64)
+                 {
+                     return {.text = "simulate_gpu needs gpu_mib, the free GPU memory to leave, of at least 64.",
+                             .is_error = true};
+                 }
+                 ev::debug_simulate_budget(static_cast<std::uint64_t>(gpu_mib) * 1024ull * 1024ull);
+             }
+             else if(action == "release")
+             {
+                 ev::debug_release_memory();
+             }
+             else
+             {
+                 return {.text = "action must be evict_all, restore_all, simulate_gpu or release.", .is_error = true};
+             }
+             return {.text = paging_stats_json(), .is_error = false};
+         },
+         .mutates_scene = false,
+         .developer_only = true});
 
     registry.add(
         {.name = "profiler_get_gpu_passes",

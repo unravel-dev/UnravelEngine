@@ -202,9 +202,10 @@ void gpu_program::set_texture(uint8_t stage,
 void gpu_program::set_texture(uint8_t stage,
                               const hpp::string_view& sampler,
                               const gfx::texture* texture,
-                              uint32_t flags)
+                              uint32_t flags,
+                              gfx::texture_read read)
 {
-    program_->set_texture(stage, sampler, texture, flags);
+    program_->set_texture(stage, sampler, texture, flags, read);
 }
 
 void gpu_program::set_uniform(const hpp::string_view& name, const void* value, uint16_t num)
@@ -347,9 +348,10 @@ void set_texture(const gfx::program::uniform_ptr& uniform,
 void set_texture(const gfx::program::uniform_ptr& uniform,
                  std::uint8_t stage,
                  const gfx::texture::ptr& texture,
-                 std::uint32_t flags)
+                 std::uint32_t flags,
+                 gfx::texture_read read)
 {
-    set_texture(uniform, stage, texture.get(), flags);
+    set_texture(uniform, stage, texture.get(), flags, read);
 }
 
 void set_texture(const gfx::program::uniform_ptr& uniform,
@@ -369,22 +371,24 @@ void set_texture(const gfx::program::uniform_ptr& uniform,
 void set_texture(const gfx::program::uniform_ptr& uniform,
                  std::uint8_t stage,
                  const gfx::texture* texture,
-                 std::uint32_t flags)
+                 std::uint32_t flags,
+                 gfx::texture_read read)
 {
     if(!uniform)
     {
         return;
     }
 
-    uniform->set_texture(stage, texture, flags);
+    uniform->set_texture(stage, texture, flags, read);
 }
 
 void set_texture(const gfx::program::uniform_ptr& uniform,
                  std::uint8_t stage,
                  const asset_handle<gfx::texture>& texture,
-                 std::uint32_t flags)
+                 std::uint32_t flags,
+                 gfx::texture_read read)
 {
-    set_texture(uniform, stage, texture.get(), flags);
+    set_texture(uniform, stage, texture.get(), flags, read);
 }
 
 void set_uniform(const gfx::program::uniform_ptr& uniform, const void* value, std::uint16_t num)

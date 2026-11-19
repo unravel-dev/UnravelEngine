@@ -72,7 +72,8 @@ struct  program : public handle_impl<program, bgfx::ProgramHandle>
     void set_texture(uint8_t _stage,
                      const hpp::string_view& _sampler,
                      const gfx::texture* _texture,
-                     uint32_t _flags = std::numeric_limits<uint32_t>::max());
+                     uint32_t _flags = std::numeric_limits<uint32_t>::max(),
+                     texture_read _read = texture_read::full);
 
     //-----------------------------------------------------------------------------
     //  Name : set_uniform ()

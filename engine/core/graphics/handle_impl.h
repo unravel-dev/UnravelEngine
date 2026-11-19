@@ -2,12 +2,44 @@
 
 #include "eviction.h"
 #include "graphics.h"
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <hpp/string_view.hpp>
 
 namespace gfx
 {
+
+/// A bgfx handle the graphics API thread writes and any thread reads: a relaxed atomic, a plain load or
+/// store on every platform, so a reader on another thread gets one whole handle, the old or the new.
+/// Converts to and assigns from the handle type, so the bgfx functions that take one take it.
+template<typename T>
+class shared_handle
+{
+public:
+    shared_handle(T handle) noexcept : value_(handle)
+    {
+    }
+    shared_handle(const shared_handle&) = delete;
+    auto operator=(const shared_handle&) -> shared_handle& = delete;
+    shared_handle(shared_handle&&) = delete;
+    auto operator=(shared_handle&&) -> shared_handle& = delete;
+    ~shared_handle() = default;
+
+    auto operator=(T handle) noexcept -> shared_handle&
+    {
+        value_.store(handle, std::memory_order_relaxed);
+        return *this;
+    }
+
+    operator T() const noexcept
+    {
+        return value_.load(std::memory_order_relaxed);
+    }
+
+private:
+    std::atomic<T> value_;
+};
 
 template<typename Base, typename T>
 class handle_impl : public ievictable
@@ -28,10 +60,7 @@ public:
 
     ~handle_impl() override
     {
-        if(evict_class_ != evict_class::non_evictable)
-        {
-            eviction::unregister_resource(this);
-        }
+        leave_eviction();
         dispose();
     }
 
@@ -47,22 +76,29 @@ public:
 
     [[nodiscard]] auto is_valid() const -> bool
     {
-        return bgfx::isValid(handle_);
+        return bgfx::isValid(static_cast<T>(handle_));
     }
 
-    auto native_handle() const -> T
+    /// The handle to bind for a read of @p read kind. On the graphics API thread an evicted resource
+    /// gets a GPU copy first: the full one, or for an @ref texture_read::any_level read of a texture
+    /// with a tail, its tail; a full read of a reduced texture brings it back to level 0. Other threads
+    /// get the copy there is, which stays valid until the end of the frame being built: bgfx destroys
+    /// a copy the API thread replaces only after that frame's draws. Falls back to the base type's
+    /// fallback handle when there is none.
+    auto native_handle(texture_read read = texture_read::full) const -> T
     {
-        if(evict_state_ == evict_state::evicted)
+        if(needs_residency_for(read))
         {
-            eviction::restore_resource(const_cast<handle_impl*>(this));
+            eviction::request_residency(const_cast<handle_impl*>(this), read);
         }
-        touch();
+        touch(read);
 
-        if(!is_valid())
+        const T handle = handle_;
+        if(!bgfx::isValid(handle))
         {
             return get_fallback_handle();
         }
-        return handle_;
+        return handle;
     }
 
     static auto invalid_handle() -> T
@@ -78,29 +114,32 @@ public:
 
     auto on_evict() -> std::uint64_t override
     {
-        if(evict_state_ == evict_state::evicted)
-        {
-            return 0;
-        }
-        const std::uint64_t freed = gpu_size_;
         if(is_valid())
         {
             bgfx::destroy(handle_);
         }
         handle_ = invalid_handle();
-        evict_state_ = evict_state::evicted;
-        return freed;
+        return gpu_size_;
     }
 
-    auto on_restore() -> bool override
+    auto on_set_level(std::uint8_t level) -> bool override
     {
-        if(evict_state_ == evict_state::resident)
+        if(level != 0 || !restore_fn_)
         {
-            return true;
+            return false;
         }
-        const bool ok = restore_fn_ && restore_fn_(static_cast<Base&>(*this));
-        evict_state_ = ok ? evict_state::resident : evict_state::evicted;
-        return ok;
+        const T previous = handle_;
+        handle_ = invalid_handle();
+        if(!restore_fn_(static_cast<Base&>(*this)) || !is_valid())
+        {
+            handle_ = previous;
+            return false;
+        }
+        if(bgfx::isValid(previous))
+        {
+            bgfx::destroy(previous);
+        }
+        return true;
     }
 
     [[nodiscard]] auto gpu_size() const -> std::uint64_t override
@@ -120,11 +159,12 @@ protected:
     }
     /// Opt the resource into the eviction system. Call once, after the GPU handle is created and a
     /// CPU-side backing exists. @p restore_fn recreates the handle from that backing and returns
-    /// true on success. Resources that never call this stay @ref evict_class::non_evictable and
-    /// incur no tracking cost.
+    /// true on success. @p reserved_bytes from eviction::admit_allocation now count as the handle.
+    /// Resources that never call this stay @ref evict_class::non_evictable and incur no tracking cost.
     void make_evictable(std::uint64_t gpu_bytes,
                         std::function<bool(Base&)> restore_fn,
-                        evict_class cls = evict_class::evictable)
+                        evict_class cls = evict_class::evictable,
+                        std::uint64_t reserved_bytes = 0)
     {
         if(!eviction::is_supported())
         {
@@ -133,15 +173,17 @@ protected:
         gpu_size_ = gpu_bytes;
         restore_fn_ = std::move(restore_fn);
         evict_class_ = cls;
-        eviction::register_resource(this);
+        eviction::register_resource(this, 0, reserved_bytes);
         touch();
     }
 
     /// Opt in with CPU backing but no GPU handle yet (create skipped or deferred). Restored on the
-    /// next @ref native_handle access via the same path as post-eviction restore.
+    /// next @ref native_handle access via the same path as post-eviction restore. Releases
+    /// @p reserved_bytes from eviction::admit_allocation for the create that did not happen.
     void make_evictable_deferred(std::uint64_t gpu_bytes,
                                  std::function<bool(Base&)> restore_fn,
-                                 evict_class cls = evict_class::evictable)
+                                 evict_class cls = evict_class::evictable,
+                                 std::uint64_t reserved_bytes = 0)
     {
         if(!eviction::is_supported())
         {
@@ -150,11 +192,21 @@ protected:
         gpu_size_ = gpu_bytes;
         restore_fn_ = std::move(restore_fn);
         evict_class_ = cls;
-        evict_state_ = evict_state::evicted;
-        eviction::register_evicted_resource(this);
+        eviction::register_evicted_resource(this, reserved_bytes);
     }
 
-    T handle_ = invalid_handle();
+    /// Stop being tracked. A derived class whose callbacks use its own members calls this first in its
+    /// destructor, so the registry never calls into it once those members are gone.
+    void leave_eviction()
+    {
+        if(evict_class_ != evict_class::non_evictable)
+        {
+            eviction::unregister_resource(this);
+            evict_class_ = evict_class::non_evictable;
+        }
+    }
+
+    shared_handle<T> handle_ = invalid_handle();
     std::function<bool(Base&)> restore_fn_;
     std::uint64_t gpu_size_ = 0;
 };

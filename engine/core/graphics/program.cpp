@@ -70,7 +70,8 @@ void program::set_texture(uint8_t _stage,
 void program::set_texture(uint8_t _stage,
                           const hpp::string_view& _sampler,
                           const gfx::texture* _texture,
-                          uint32_t _flags /*= std::numeric_limits<uint32_t>::max()*/)
+                          uint32_t _flags /*= std::numeric_limits<uint32_t>::max()*/,
+                          texture_read _read /*= texture_read::full*/)
 {
     if(_texture == nullptr)
     {
@@ -84,7 +85,7 @@ void program::set_texture(uint8_t _stage,
         return;
     }
 
-    bgfx::setTexture(_stage, uniform->native_handle(), _texture->native_handle(), _flags);
+    bgfx::setTexture(_stage, uniform->native_handle(), _texture->native_handle(_read), _flags);
 }
 
 void program::set_uniform(const hpp::string_view& _name, const void* _value, uint16_t _num)

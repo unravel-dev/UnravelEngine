@@ -28,10 +28,10 @@ ImVec4 muted_text_color_ex{0.55f, 0.55f, 0.55f, 1.0f};
 ImVec4 warn_text_color_ex{0.93f, 0.74f, 0.20f, 1.0f};
 ImVec4 bad_text_color_ex{1.0f, 0.3f, 0.3f, 1.0f};
 
-std::array<const char*, 4> strategy_names{"LRU (least recently used)",
-                                                    "LFU (least frequently used)",
-                                                    "Largest first",
-                                                    "Age TTL"};
+std::array<const char*, 4> strategy_names{"Least Recently Used",
+                                          "Least Often Used",
+                                          "Largest First",
+                                          "Idle Past Min Age"};
 
 auto clamp_u64(std::int64_t value) -> std::uint64_t
 {
@@ -72,6 +72,29 @@ void draw_count_row(const char* label, std::uint64_t count, const ImVec4* color 
 {
     const auto value = fmt::format("{}", count);
     draw_stat_row(label, value.c_str(), color);
+}
+
+void draw_bytes_row(const char* label, std::uint64_t bytes)
+{
+    const auto value = format_bytes(bytes);
+    draw_stat_row(label, value.c_str());
+}
+
+/// Texture handles in use against bgfx's limit: textures that keep their tails hold a handle while
+/// evicted, so a project near the limit sees it here first.
+void draw_texture_handle_row()
+{
+    const auto* caps = bgfx::getCaps();
+    const auto* gpu_stats = bgfx::getStats();
+    if(caps == nullptr || gpu_stats == nullptr)
+    {
+        return;
+    }
+    const auto used = static_cast<std::uint64_t>(gpu_stats->numTextures);
+    const auto limit = static_cast<std::uint64_t>(caps->limits.maxTextures);
+    const auto value = fmt::format("{} / {}", used, limit);
+    const bool is_near_limit = limit > 0 && used * 10 >= limit * 9;
+    draw_stat_row("Texture handles", value.c_str(), is_near_limit ? &warn_text_color_ex : nullptr);
 }
 
 void draw_ms_row(const char* label, double ms)
@@ -171,20 +194,21 @@ void profiler_draw_eviction_section(eviction_settings& state)
                                  ICON_MDI_SWAP_HORIZONTAL " Paging",
                                  state.enabled,
                                  "Evict GPU resources each frame to keep memory under the budget.\n"
-                                 "Evicted resources restore on their next use."))
+                                 "Evicted resources restore on their next use. Textures keep their smallest mips meanwhile."))
         {
             state.enabled = !state.enabled;
         }
         panel_toolbar::separator();
         if(panel_toolbar::button("##evict_all",
                                  ICON_MDI_DELETE_SWEEP " Force Evict All",
-                                 "Test: evict every evictable resource now, whatever the budget and age."))
+                                 "Test: evict every evictable resource now, whatever the budget and age.\n"
+                                 "Textures with mips above the tail size keep their tails."))
         {
             ev::evict_all();
         }
         if(panel_toolbar::button("##restore_all",
                                  ICON_MDI_BACKUP_RESTORE " Restore All",
-                                 "Test: restore every evicted resource now."))
+                                 "Test: bring every evicted or reduced resource back to its full size now."))
         {
             ev::restore_all();
         }
@@ -192,8 +216,12 @@ void profiler_draw_eviction_section(eviction_settings& state)
     panel_toolbar::end_strip();
 
     {
-        property_layout layout("Strategy", "Policy that picks the victims once over budget.");
-        ImGui::Combo("##strategy", &state.strategy, strategy_names.data(), static_cast<int>(strategy_names.size()));
+        property_layout layout("Strategy", "The order in which idle resources give up memory over the budget.");
+        int strategy = static_cast<int>(state.strategy);
+        if(ImGui::Combo("##strategy", &strategy, strategy_names.data(), static_cast<int>(strategy_names.size())))
+        {
+            state.strategy = static_cast<gfx::eviction::strategy>(strategy);
+        }
     }
     {
         property_layout layout("Auto Budget",
@@ -246,12 +274,41 @@ void profiler_draw_eviction_section(eviction_settings& state)
     }
 
     {
-        property_layout layout("Min Age (frames)", "Resources used this recently are never evicted (anti-thrash).");
+        property_layout layout("Min Age (frames)",
+                               "Resources used this recently are never evicted.\n"
+                               "A resource a draw needed again soon after its eviction also stays as long as it "
+                               "went unused then, up to 16 times this age.");
         ImGui::SliderInt("##min_age", &state.min_age_frames, 0, 600);
     }
     {
-        property_layout layout("Max Evictions / Frame", "Caps the cost of one pass. 0 means unlimited.");
+        property_layout layout("Max Evictions / Frame",
+                               "Caps the cost of one pass: evictions, and textures sharpening again.\n"
+                               "0 means unlimited.");
         ImGui::SliderInt("##max_evictions", &state.max_evictions, 0, 1024);
+    }
+    {
+        property_layout layout("Keep Mip Tails",
+                               "Evicted textures keep their smallest mips on the GPU, so materials draw a\n"
+                               "blurry version until the full texture is back.\n"
+                               "A texture loaded while the GPU is over its memory budget starts with only those mips.");
+        ImGui::Checkbox("##keep_mip_tails", &state.keep_mip_tails);
+    }
+    if(state.keep_mip_tails)
+    {
+        property_layout layout("Mip Tail Size", "Mips at or below this size in pixels stay on the GPU when a texture is evicted.");
+        ImGui::SliderInt("##mip_tail_size", &state.mip_tail_size, 4, 1024);
+    }
+    {
+        property_layout layout("Max Upload (MiB / frame)",
+                               "The most texture data brought back to the GPU in one frame. Higher values\n"
+                               "sharpen textures sooner after a camera cut. Lower values keep frame times even.");
+        ImGui::SliderInt("##max_upload_mb", &state.max_upload_mb, 1, 1024);
+    }
+    {
+        property_layout layout("Reduce Textures In Use",
+                               "When the textures on screen do not fit the budget, materials draw them one\n"
+                               "mip lower instead of exceeding the budget.");
+        ImGui::Checkbox("##reduce_textures_in_use", &state.reduce_textures_in_use);
     }
 
     draw_reserve_test_controls(gpu_max);
@@ -271,15 +328,20 @@ void profiler_draw_eviction_section(eviction_settings& state)
     ImGui::TextColored(category_text_color_ex, "Residency");
 
     draw_count_bytes_row("Resident", stats.resident_count, stats.resident_bytes);
+    draw_count_bytes_row("Reduced", stats.reduced_count, stats.reduced_bytes);
+    draw_bytes_row("Saved by reduced", stats.saved_bytes);
     draw_count_bytes_row("Evicted", stats.evicted_count, stats.evicted_bytes);
     draw_count_row("Registered", stats.registered_count);
+    draw_texture_handle_row();
 
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
     ImGui::TextColored(category_text_color_ex, "Lifetime");
 
     draw_count_bytes_row("Evictions", stats.total_evictions, stats.total_bytes_evicted);
+    draw_count_bytes_row("Mip drops", stats.total_reductions, stats.total_bytes_reduced);
     draw_count_bytes_row("Restores", stats.total_restores, stats.total_bytes_restored);
+    draw_count_bytes_row("Rises", stats.total_raises, stats.total_bytes_raised);
     draw_count_row("Failed restores",
                    stats.failed_restores,
                    stats.failed_restores > 0 ? &warn_text_color_ex : nullptr);
@@ -290,7 +352,11 @@ void profiler_draw_eviction_section(eviction_settings& state)
     ImGui::TextColored(category_text_color_ex, "Last pass");
 
     draw_count_row("Scanned", stats.last_pass_scanned);
-    draw_count_row("Evicted", stats.last_pass_evicted);
+    draw_count_bytes_row("Dropped", stats.last_pass_evicted, stats.last_pass_freed_bytes);
+    draw_count_bytes_row("Raised", stats.last_pass_raised, stats.last_pass_raised_bytes);
+    draw_count_row("Waiting to sharpen",
+                   stats.raise_backlog,
+                   stats.raise_backlog > 0 ? &warn_text_color_ex : nullptr);
     draw_ms_row("Sweep time", stats.last_pass_ms);
     draw_ms_row("Last restore", stats.last_restore_ms);
 

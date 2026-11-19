@@ -358,33 +358,40 @@ struct stat_row
     ImU32 value_color{};
 };
 
-/// A muted label, and the value right aligned in the mono font so the digits line up.
+/// A muted label, and the value right aligned in the mono font so the digits line up. A value too wide
+/// to sit beside its label goes on a line of its own under it.
 void draw_row(const stat_row& row)
 {
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
-    const float height = ImGui::GetTextLineHeight();
-    ImGui::Dummy(ImVec2(width, height));
+    const float line_height = ImGui::GetTextLineHeight();
+    const float label_left = min.x + panel_section::get_row_indent();
+    const float label_right = label_left + ImGui::CalcTextSize(row.label).x;
+    ImGui::PushFont(ImGui::Font::Mono);
+    const ImVec2 value_size = ImGui::CalcTextSize(row.value.c_str());
+    const float space = ImGui::CalcTextSize(" ").x;
+    ImGui::PopFont();
+    const float value_left = min.x + width - value_size.x;
+    const bool fits_beside = value_left >= label_right + space;
+    const float value_top = fits_beside ? min.y : min.y + line_height;
+    ImGui::Dummy(ImVec2(width, fits_beside ? line_height : line_height * 2.0f));
     if(row.tooltip != nullptr)
     {
         ImGui::SetItemTooltipEx("%s", row.tooltip);
     }
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    draw_list->AddText(ImVec2(min.x + panel_section::get_row_indent(), min.y), imgui_style::get_muted_text_color_u32(), row.label);
+    draw_list->AddText(ImVec2(label_left, min.y), imgui_style::get_muted_text_color_u32(), row.label);
     ImGui::PushFont(ImGui::Font::Mono);
-    const ImVec2 value_size = ImGui::CalcTextSize(row.value.c_str());
     const ImU32 value_color = row.value_color != 0 ? row.value_color : ImGui::GetColorU32(ImGuiCol_Text);
-    draw_list->AddText(ImVec2(min.x + width - value_size.x, min.y + (height - value_size.y) * 0.5f),
-                       value_color,
-                       row.value.c_str());
+    draw_list->AddText(ImVec2(value_left, value_top + (line_height - value_size.y) * 0.5f), value_color, row.value.c_str());
     ImGui::PopFont();
 }
 
 struct pair_row
 {
     const char* label{};
-    std::uint32_t first{};
-    std::uint32_t second{};
+    std::uint64_t first{};
+    std::uint64_t second{};
     const char* tooltip{};
 };
 
@@ -559,7 +566,7 @@ void draw_paging_rows()
     draw_subheading(ICON_MDI_SWAP_HORIZONTAL " Paging");
     ImGui::SetItemTooltipEx("%s",
                             "GPU resource eviction. Idle CPU backed resources leave GPU memory under pressure\n"
-                            "and come back on their next use.");
+                            "and come back on their next use. Textures keep their smallest mips meanwhile.");
     // The bar carries the pressure that drives paging: GPU memory against the budget, with the
     // target marked on it. The rows under it are the pool paging owns, which is a different and
     // much smaller quantity - keeping both as bars read as if one repeated the other.
@@ -584,14 +591,34 @@ void draw_paging_rows()
     draw_row({"Resident",
               fmt::format("{} ({})", format_bytes(static_cast<std::uint64_t>(evict_stats.resident_bytes)), evict_stats.resident_count),
               "Tracked resources still on the GPU, and how many: what a pass can free."});
+    if(evict_stats.reduced_count > 0)
+    {
+        draw_row({"Reduced",
+                  fmt::format("{} ({})", format_bytes(static_cast<std::uint64_t>(evict_stats.reduced_bytes)), evict_stats.reduced_count),
+                  "Textures on the GPU without their top mips, and how many.\n"
+                  "Materials draw them blurrier until they sharpen again. Amber while some wait for room.",
+                  evict_stats.raise_backlog > 0 ? ImGui::GetColorU32(COLOR_WARNING) : 0u});
+        draw_row({"Saved",
+                  format_bytes(static_cast<std::uint64_t>(evict_stats.saved_bytes)),
+                  "GPU memory the reduced textures give up by keeping only their smaller mips."});
+    }
     draw_row({"Evicted",
               fmt::format("{} ({})", format_bytes(static_cast<std::uint64_t>(evict_stats.evicted_bytes)), evict_stats.evicted_count),
               "Tracked resources paged out. They come back on their next use.",
               evict_stats.evicted_count > 0 ? ImGui::GetColorU32(COLOR_WARNING) : 0u});
-    draw_row({"Lifetime",
-              fmt::format("{} evicted / {} restored", evict_stats.total_evictions, evict_stats.total_restores),
-              "Evictions and restores since start. An eviction count that climbs every frame means\n"
-              "constant paging: raise the budget or the minimum age."});
+    draw_pair_captions("Dropped", "Restored");
+    draw_pair_row({"Whole",
+                   evict_stats.total_evictions,
+                   evict_stats.total_restores,
+                   "Resources evicted whole and brought back, since start. An eviction count that climbs\n"
+                   "every frame means constant paging: raise the budget or the minimum age."});
+    if(evict_stats.total_reductions > 0)
+    {
+        draw_pair_row({"Top Mips",
+                       evict_stats.total_reductions,
+                       evict_stats.total_raises,
+                       "Times textures lost top mips and times they got them back, since start."});
+    }
     if(evict_stats.thrash_events > 0)
     {
         draw_row({"Thrash",

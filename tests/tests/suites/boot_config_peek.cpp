@@ -15,7 +15,9 @@
  * These pin the contract that keeps that from coming back:
  *   - the peek reports the persisted renderer and physics backend;
  *   - the peek leaves the asset-bearing sections untouched, so it cannot reach a storage;
- *   - the app section loads on its own, for the user folders the player names before init.
+ *   - the app section loads on its own, for the user folders the player names before init;
+ *   - the eviction strategy, an enum, is saved as the number the int it replaced was, so older
+ *     settings files keep their strategy.
  */
 
 #include "../tests.h"
@@ -27,6 +29,8 @@
 #include <filesystem/filesystem.h>
 
 #include <cstdio>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 using namespace unravel::test;
@@ -110,6 +114,36 @@ void test_app_section_loads(const fs::path& root, const settings& authored)
     check(app.product == authored.app.product, "a failed load leaves the app section as it was");
 }
 
+void test_eviction_strategy_keeps_its_number(const fs::path& root)
+{
+    const fs::path settings_path = root / "strategy" / "settings.cfg";
+    fs::error_code err;
+    fs::create_directories(settings_path.parent_path(), err);
+    settings authored{};
+    authored.graphics.eviction.strategy = gfx::residency::strategy::largest_first;
+    save_to_file(settings_path.string(), authored);
+
+    std::string text;
+    {
+        std::ifstream in(settings_path.string(), std::ios::binary);
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    const std::string saved = "\"strategy\": 2";
+    const auto at = text.find(saved);
+    require(at != std::string::npos, "the strategy is saved as its number");
+
+    // A file from before the enum holds the same number; age TTL was 3.
+    text.replace(at, saved.size(), "\"strategy\": 3");
+    {
+        std::ofstream out(settings_path.string(), std::ios::binary | std::ios::trunc);
+        out << text;
+    }
+    settings loaded{};
+    check(load_boot_sections_from_file(settings_path.string(), loaded), "the settings load");
+    check(loaded.graphics.eviction.strategy == gfx::residency::strategy::age_ttl,
+          "a strategy saved as a number loads as that strategy");
+}
+
 void test_missing_settings_peeks_defaults(const fs::path& root)
 {
     const boot_config peeked = peek_project_boot_config(root / "absent_project");
@@ -138,6 +172,7 @@ void run_boot_config_peek_suite(rtti::context& ctx)
     RUN_CASE(test_peek_leaves_asset_sections_untouched(root, authored));
     RUN_CASE(test_app_section_loads(root, authored));
     RUN_CASE(test_missing_settings_peeks_defaults(root));
+    RUN_CASE(test_eviction_strategy_keeps_its_number(root));
 
     fs::remove_all(root, err);
 }

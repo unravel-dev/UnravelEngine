@@ -112,14 +112,15 @@ void uniform::set_texture(uint8_t _stage,
 
 void uniform::set_texture(uint8_t _stage,
                           const gfx::texture* _texture,
-                          uint32_t _flags /*= std::numeric_limits<uint32_t>::max()*/)
+                          uint32_t _flags /*= std::numeric_limits<uint32_t>::max()*/,
+                          texture_read _read /*= texture_read::full*/)
 {
     if(_texture == nullptr)
     {
         return;
     }
 
-    bgfx::setTexture(_stage, native_handle(), _texture->native_handle(), _flags);
+    bgfx::setTexture(_stage, native_handle(), _texture->native_handle(_read), _flags);
 }
 
 void uniform::set_uniform(const void* _value, uint16_t _num)

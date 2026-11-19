@@ -60,9 +60,11 @@ struct uniform : public handle_impl<uniform, bgfx::UniformHandle>
     ///
     /// </summary>
     //-----------------------------------------------------------------------------
+    /// Binds @p _texture; @p _read says whether a copy without its top mips will do (texture_read).
     void set_texture(uint8_t _stage,
                      const gfx::texture* _texture,
-                     uint32_t _flags = std::numeric_limits<uint32_t>::max());
+                     uint32_t _flags = std::numeric_limits<uint32_t>::max(),
+                     texture_read _read = texture_read::full);
 
     //-----------------------------------------------------------------------------
     //  Name : set_uniform ()

@@ -248,7 +248,12 @@ void graph_material_programs::submit_values(const std::vector<math::vec4>& regis
                 loaded = (texture.is_normal_map ? material::default_normal_map() : material::default_color_map()).get();
             }
         }
-        gfx::set_texture(samplers_[i], uint8_t(texture.stage), loaded, get_material_sampler_flags(loaded, texture.address, texture.filter));
+        // Graph nodes sample by UV, so a texture short of GPU memory binds its resident mips and never allocates.
+        gfx::set_texture(samplers_[i],
+                         uint8_t(texture.stage),
+                         loaded,
+                         get_material_sampler_flags(loaded, texture.address, texture.filter),
+                         gfx::texture_read::any_level);
         if(texture.is_normal_map && loaded)
         {
             normal_channels[i / REGISTER_COMPONENTS][int(i % REGISTER_COMPONENTS)] = float(loaded->get_normal_map_channels());

@@ -155,10 +155,15 @@ silently reads zero.
   after_id to the next to read only what was logged since (has_more says
   another page waits).
 - stats_get: the frame as the statistics overlay shows it - fps, CPU submit
-  and GPU ms, triangles and draw calls without the editor UI, GPU memory, and
-  per view (scene_view, game) models, lights, shadow casters and particles
-  drawn. The first check for "is this scene too heavy"; with vsync on the
-  times include waiting for the display.
+  and GPU ms, triangles and draw calls without the editor UI, GPU memory, GPU
+  paging, and per view (scene_view, game) models, lights, shadow casters and
+  particles drawn. The first check for "is this scene too heavy"; with vsync on
+  the times include waiting for the display.
+- gpu_eviction_test (developer profile) drives GPU paging on Vulkan, Direct3D 12
+  and Metal: simulate_gpu leaves only gpu_mib of GPU memory free, evict_all takes
+  textures down to their smallest mips, restore_all brings everything back and
+  release frees the simulated reserve. Read stats_get's paging block between
+  frames to watch textures sharpen again.
 - profiler_get_gpu_passes returns per-render-pass CPU/GPU milliseconds. Pass
   enable:true once to switch the GPU profiler on; one frame is noisy, so
   sample several times and average. Use a prefix filter to watch one pass.

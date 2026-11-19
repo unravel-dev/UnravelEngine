@@ -1,6 +1,7 @@
 #include "texture.h"
 #include "utils/bgfx_utils.h"
 
+#include <algorithm>
 #include <cassert>
 #include <limits>
 #include <string>
@@ -8,47 +9,35 @@
 
 namespace gfx
 {
+
+struct texture::image_source
+{
+    /// The parsed image, shared with the bgfx references of copies still uploading.
+    ImagePtr image;
+    /// Creation flags with the container's sRGB view applied.
+    std::uint64_t flags{};
+    /// Top mips the texture never has: the skip it was loaded with.
+    std::uint8_t base_skip{};
+    /// Debug name of every GPU copy.
+    std::string name;
+};
+
 namespace
 {
 
-auto clamp_non_negative(std::int64_t bytes) -> std::uint64_t
+auto format_bytes(std::uint64_t bytes) -> std::string
 {
-    return static_cast<std::uint64_t>(std::max<std::int64_t>(0, bytes));
+    const bx::FixedStringT<32> formatted = bx::toHuman<32>(bytes, bx::Units::KibiByte, 2);
+    return formatted.getCPtr();
 }
 
-void write_formatted(std::uint64_t bytes, char* out, std::size_t out_size, std::uint8_t num_frac)
+auto is_gpu_generated_flags(std::uint64_t flags) -> bool
 {
-    if(out == nullptr || out_size == 0)
-    {
-        return;
-    }
-    if(num_frac == 0)
-    {
-        bx::prettify(out, static_cast<int32_t>(out_size), bytes, bx::Units::KibiByte);
-        return;
-    }
-    const bx::FixedStringT<32> formatted = bx::toHuman<32>(bytes, bx::Units::KibiByte, num_frac);
-    bx::strCopy(out, static_cast<int32_t>(out_size), formatted.getCPtr());
+    return 0 != (flags & (BGFX_TEXTURE_RT_MASK | BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_BLIT_DST));
 }
 
-auto format_bytes(std::uint64_t bytes, std::uint8_t num_frac = 2) -> std::string
-{
-    std::array<char, 32> buffer{};
-    write_formatted(bytes, buffer.data(), buffer.size(), num_frac);
-    return buffer.data();
-}
-
-auto format_bytes(std::int64_t bytes, std::uint8_t num_frac = 2) -> std::string
-{
-    return format_bytes(clamp_non_negative(bytes), num_frac);
-}
-
-void format_bytes(std::uint64_t bytes, char* out, std::size_t out_size, std::uint8_t num_frac)
-{
-    write_formatted(bytes, out, out_size, num_frac);
-}
 /// Returns whether the caller should proceed with the GPU allocation.
-/// Evictable (CPU-backed loads): @ref eviction::would_allocation_fit only — no sweep.
+/// Evictable (CPU-backed loads): @ref eviction::would_allocation_fit only - no sweep.
 /// Immediate (render targets): full @ref eviction::reclaim_for with sweep and flush.
 auto try_make_room_for(std::uint64_t bytes, const char* what, eviction::reclaim_kind kind) -> bool
 {
@@ -62,8 +51,8 @@ auto try_make_room_for(std::uint64_t bytes, const char* what, eviction::reclaim_
         {
             return true;
         }
-        const std::string msg = std::string("Eviction: Insufficient headroom for ") + what + " (" +
-                                format_bytes(bytes) + "); Skipping allocation (fallback texture).";
+        const std::string msg = std::string("The ") + what + " (" + format_bytes(bytes) +
+                                ") does not fit in GPU memory now. It is created when a draw first needs it.";
         gfx::log("warning", msg, __FILE__, __LINE__);
         return false;
     }
@@ -72,25 +61,15 @@ auto try_make_room_for(std::uint64_t bytes, const char* what, eviction::reclaim_
     {
         return true;
     }
-    const std::string msg = std::string("Eviction: Insufficient headroom for ") + what + " (" +
-                            format_bytes(bytes) + "); Allocation may fail.";
+    const std::string msg = std::string("Eviction could not make room for the ") + what + " (" + format_bytes(bytes) +
+                            "). Creating it may fail.";
     gfx::log("warning", msg, __FILE__, __LINE__);
     return true;
 }
 
 auto texture_reclaim_kind(std::uint64_t flags) -> eviction::reclaim_kind
 {
-    const bool gpu_generated = 0 != (flags & (BGFX_TEXTURE_RT_MASK | BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_BLIT_DST));
-    return gpu_generated ? eviction::reclaim_kind::immediate : eviction::reclaim_kind::evictable;
-}
-
-auto make_load_precreate(std::uint64_t flags, const char* what) -> TexturePreCreateFn
-{
-    const eviction::reclaim_kind kind = texture_reclaim_kind(flags);
-    return [flags, what, kind](const bgfx::TextureInfo& info) -> bool
-    {
-        return try_make_room_for(estimate_texture_gpu_size(info, flags), what, kind);
-    };
+    return is_gpu_generated_flags(flags) ? eviction::reclaim_kind::immediate : eviction::reclaim_kind::evictable;
 }
 
 /// The 16-bit dimension bgfx takes for @p value.
@@ -167,61 +146,32 @@ auto describe_loaded(const bgfx::TextureInfo& info, std::uint64_t flags) -> text
                         .depth = info.depth,
                         .kind = kind};
 }
-} // namespace
 
-void texture::adopt_loaded_eviction(eviction::backing_buffer backing,
-                                      std::uint64_t estimated_size,
-                                      std::uint64_t load_flags,
-                                      std::uint8_t skip,
-                                      const char* label)
+void name_handle(bgfx::TextureHandle handle, const std::string& name)
 {
-    auto restore = [backing, load_flags, skip, label = std::string(label)](texture& self) -> bool
+    if(bgfx::isValid(handle) && !name.empty())
     {
-        bx::Error e;
-        self.handle_ = loadTexture(backing->data(),
-                                   static_cast<std::uint32_t>(backing->size()),
-                                   load_flags,
-                                   skip,
-                                   &self.info,
-                                   nullptr,
-                                   label.c_str(),
-                                   &e);
-        return self.is_valid();
-    };
-    if(is_valid())
-    {
-        make_evictable(estimated_size, std::move(restore));
-    }
-    else
-    {
-        make_evictable_deferred(estimated_size, std::move(restore));
+        bgfx::setName(handle, name.c_str(), static_cast<std::int32_t>(name.size()));
     }
 }
+
+/// Whether a loaded texture of @p info can keep a tail: one 2D side with mips.
+auto is_single_2d_with_mips(const bgfx::TextureInfo& info) -> bool
+{
+    return !info.cubeMap && info.numLayers <= 1 && info.depth <= 1 && info.numMips > 1;
+}
+} // namespace
 
 texture::texture(const char* _path,
                  std::uint64_t _flags,
                  std::uint8_t _skip /*= 0 */,
                  bgfx::TextureInfo* _info /*= nullptr*/)
 {
-    bx::Error err;
     std::uint32_t size = 0;
     void* data = load(bx::FilePath(_path), &size);
     if(data != nullptr)
     {
-        if(gfx::eviction::is_supported())
-        {
-            eviction::backing_buffer backing = eviction::make_backing(data, size);
-            handle_ = loadTexture(data, size, _flags, _skip, &info, nullptr, _path, &err, make_load_precreate(_flags, _path));
-            adopt_loaded_eviction(backing,
-                                  estimate_texture_gpu_size(info, _flags),
-                                  _flags,
-                                  _skip,
-                                  _path);
-        }
-        else
-        {
-            handle_ = loadTexture(data, size, _flags, _skip, &info, nullptr, _path, &err);
-        }
+        load_image(data, size, _flags, _skip, _path);
         unload(data);
     }
 
@@ -241,18 +191,7 @@ texture::texture(const void* _data,
                  bgfx::TextureInfo* _info,
                  const char* _name)
 {
-    bx::Error err;
-    const char* label = (_name != nullptr) ? _name : "memory texture";
-    if(gfx::eviction::is_supported())
-    {
-        eviction::backing_buffer backing = eviction::make_backing(_data, _size);
-        handle_ = loadTexture(_data, _size, _flags, _skip, &info, nullptr, _name, &err, make_load_precreate(_flags, label));
-        adopt_loaded_eviction(backing, estimate_texture_gpu_size(info, _flags), _flags, _skip, label);
-    }
-    else
-    {
-        handle_ = loadTexture(_data, _size, _flags, _skip, &info, nullptr, _name, &err);
-    }
+    load_image(_data, _size, _flags, _skip, _name != nullptr ? _name : "memory texture");
 
     if(_info != nullptr)
     {
@@ -320,35 +259,225 @@ texture::texture(const texture_desc& desc, const bgfx::Memory* mem) : flags(desc
     assert((desc.kind != texture_kind::tex_cube || desc.size.width == desc.size.height) && "Cube faces are square");
     calc_desc_info(info, desc);
     const std::uint64_t estimated_size = estimate_texture_gpu_size(info, desc.flags);
+    if(is_tracked_desc(desc, mem))
+    {
+        create_tracked(desc, mem, estimated_size);
+        return;
+    }
     const eviction::reclaim_kind kind = texture_reclaim_kind(desc.flags);
-    const bool can_allocate = try_make_room_for(estimated_size, get_kind_label(desc.kind), kind);
-    if(can_allocate)
+    if(try_make_room_for(estimated_size, get_kind_label(desc.kind), kind))
     {
         handle_ = create_desc_handle(desc, mem);
     }
-    const bool valid = is_valid();
-    if(valid && is_gpu_generated())
+    if(is_valid() && is_gpu_generated())
     {
         gfx::eviction::note_pending_allocation(estimated_size);
     }
-    if(mem == nullptr || !gfx::eviction::is_supported())
-    {
-        return;
-    }
+}
+
+auto texture::is_tracked_desc(const texture_desc& desc, const bgfx::Memory* mem) -> bool
+{
+    // The GPU writes a render target or a compute or blit destination after creation, so its initial
+    // contents could not bring back what it holds: it stays resident.
+    return mem != nullptr && eviction::is_supported() && !is_gpu_generated_flags(desc.flags);
+}
+
+void texture::create_tracked(const texture_desc& desc, const bgfx::Memory* mem, std::uint64_t estimated_size)
+{
+    // The backing copies the contents before mem goes to bgfx, which frees it once uploaded.
     eviction::backing_buffer backing = eviction::make_backing(mem->data, mem->size);
+    // Created whether or not its bytes fit: bgfx frees mem only through the create it goes to, and the
+    // frame pass gives the memory back from idle resources.
+    const eviction::admission admitted = eviction::admit_allocation(estimated_size, eviction::admit_limit::hard_limit);
+    if(!admitted.admitted)
+    {
+        gfx::log("warning",
+                 std::string("The ") + get_kind_label(desc.kind) + " (" + format_bytes(estimated_size) +
+                     ") is created past the GPU memory budget because its contents come with it.",
+                 __FILE__,
+                 __LINE__);
+    }
+    handle_ = create_desc_handle(desc, mem);
     auto restore = [backing, desc](texture& self) -> bool
     {
         self.handle_ = create_desc_handle(desc, eviction::make_backing_ref(backing));
         return self.is_valid();
     };
-    if(valid)
+    if(is_valid())
     {
-        make_evictable(estimated_size, std::move(restore));
+        make_evictable(estimated_size, std::move(restore), evict_class::evictable, admitted.reserved_bytes);
     }
     else
     {
-        make_evictable_deferred(estimated_size, std::move(restore));
+        make_evictable_deferred(estimated_size, std::move(restore), evict_class::evictable, admitted.reserved_bytes);
     }
+}
+
+texture::~texture()
+{
+    leave_eviction();
+}
+
+void texture::load_image(const void* data,
+                         std::uint32_t size,
+                         std::uint64_t load_flags,
+                         std::uint8_t skip,
+                         const char* name)
+{
+    bx::Error err;
+    ImagePtr image = imageParseShared(data, size, &err);
+    if(!image)
+    {
+        return;
+    }
+    const auto base_skip = std::min<std::uint8_t>(skip, static_cast<std::uint8_t>(image->m_numMips - 1));
+    if(!imageGetTextureInfo(*image, base_skip, info))
+    {
+        return;
+    }
+    const std::uint64_t create_flags = imageGetTextureFlags(*image, load_flags);
+    const std::string label = name != nullptr ? name : "";
+    if(!eviction::is_supported())
+    {
+        // Nothing keeps the image: bgfx frees it once uploaded.
+        handle_ = createTextureFromImage(image, create_flags, base_skip);
+        name_handle(handle_, label);
+        return;
+    }
+
+    auto source = std::make_shared<image_source>();
+    source->image = std::move(image);
+    source->flags = create_flags;
+    source->base_skip = base_skip;
+    source->name = label;
+    source_ = std::move(source);
+
+    level_count_ = static_cast<std::uint8_t>(std::min<std::size_t>(info.numMips, level_bytes_.size()));
+    for(std::uint8_t level = 0; level < level_count_; ++level)
+    {
+        bgfx::TextureInfo level_info;
+        if(imageGetTextureInfo(*source_->image, static_cast<std::uint8_t>(base_skip + level), level_info))
+        {
+            level_bytes_[level] = estimate_texture_gpu_size(level_info, load_flags);
+        }
+    }
+    can_reduce_ = is_single_2d_with_mips(info) && !is_gpu_generated_flags(load_flags);
+    adopt_image_eviction(label.c_str());
+}
+
+void texture::adopt_image_eviction(const char* name)
+{
+    const std::string what = std::string("texture ") + name;
+    if(is_gpu_generated_flags(source_->flags))
+    {
+        // The GPU writes it after creation, so the image could not bring back what it holds: it stays
+        // resident and untracked, and makes room now as a render target does.
+        try_make_room_for(level_bytes_[0], what.c_str(), eviction::reclaim_kind::immediate);
+        handle_ = create_level(0);
+        if(is_valid())
+        {
+            eviction::note_pending_allocation(level_bytes_[0]);
+        }
+        source_.reset();
+        return;
+    }
+
+    gpu_size_ = level_bytes_[0];
+    evict_class_ = evict_class::evictable;
+    const load_start start = admit_load_start(what);
+    if(start.create)
+    {
+        handle_ = create_level(start.level);
+    }
+    if(is_valid())
+    {
+        eviction::register_resource(this, start.level, start.reserved_bytes);
+    }
+    else
+    {
+        eviction::register_evicted_resource(this, start.reserved_bytes);
+    }
+}
+
+auto texture::admit_load_start(const std::string& what) const -> load_start
+{
+    const std::uint8_t tail = get_tail_level(eviction::get_load_tail_size());
+    const auto full_limit = tail != 0 ? eviction::admit_limit::soft_budget : eviction::admit_limit::hard_limit;
+    const eviction::admission full = eviction::admit_allocation(level_bytes_[0], full_limit);
+    if(full.admitted)
+    {
+        return {0, true, full.reserved_bytes};
+    }
+    if(tail != 0)
+    {
+        const eviction::admission tail_only = eviction::admit_allocation(level_bytes_[tail], eviction::admit_limit::hard_limit);
+        if(tail_only.admitted)
+        {
+            return {tail, true, tail_only.reserved_bytes};
+        }
+    }
+    gfx::log("warning",
+             "The " + what + " (" + format_bytes(level_bytes_[0]) +
+                 ") does not fit in GPU memory now. It is created when a draw first needs it.",
+             __FILE__,
+             __LINE__);
+    return {};
+}
+
+auto texture::create_level(std::uint8_t level) const -> bgfx::TextureHandle
+{
+    if(!source_ || level >= level_count_)
+    {
+        return BGFX_INVALID_HANDLE;
+    }
+    const bgfx::TextureHandle created =
+        createTextureFromImage(source_->image, source_->flags, static_cast<std::uint8_t>(source_->base_skip + level));
+    name_handle(created, source_->name);
+    return created;
+}
+
+auto texture::on_set_level(std::uint8_t level) -> bool
+{
+    if(!source_)
+    {
+        return handle_impl::on_set_level(level);
+    }
+    const bgfx::TextureHandle created = create_level(level);
+    if(!bgfx::isValid(created))
+    {
+        return false;
+    }
+    // bgfx runs destroys after the frame's draws and frees handles at frame end, so a draw this frame
+    // that bound the old copy still reads it.
+    if(is_valid())
+    {
+        bgfx::destroy(handle_);
+    }
+    handle_ = created;
+    return true;
+}
+
+auto texture::gpu_size_at(std::uint8_t level) const -> std::uint64_t
+{
+    if(!source_)
+    {
+        return handle_impl::gpu_size_at(level);
+    }
+    return level < level_count_ ? level_bytes_[level] : 0;
+}
+
+auto texture::get_tail_level(std::uint32_t tail_size) const -> std::uint8_t
+{
+    if(!can_reduce_)
+    {
+        return 0;
+    }
+    // Direct3D wants whole blocks in the top mip of a BC texture, its only block-compressed kind (4x4).
+    // ASTC's other blocks run on Vulkan and Metal, which take any size.
+    const bimg::ImageBlockInfo& block = bimg::getBlockInfo(bimg::TextureFormat::Enum(info.format));
+    const bool has_4x4_blocks = block.blockWidth == 4 && block.blockHeight == 4;
+    const std::uint32_t block_side = has_4x4_blocks ? 4 : 1;
+    return residency::calc_tail_level(info.width, info.height, level_count_, tail_size, block_side, block_side);
 }
 
 auto texture::get_desc() const -> const texture_desc&
@@ -378,7 +507,7 @@ auto texture::is_render_target() const -> bool
 
 auto texture::is_gpu_generated() const -> bool
 {
-    return 0 != (flags & (BGFX_TEXTURE_RT_MASK | BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_BLIT_DST));
+    return is_gpu_generated_flags(flags);
 }
 
 auto texture::fallback_handle() const -> bgfx::TextureHandle

@@ -253,6 +253,54 @@ auto make_settings() -> std::vector<performance_setting>
          {
              to.graphics.limits.max_shadow_resolution = from.graphics.limits.max_shadow_resolution;
          }},
+        {"graphics/eviction/keep_mip_tails",
+         "Graphics > GPU Eviction / Paging > Keep Mip Tails",
+         "Without mip tails an evicted texture leaves the GPU whole and its first draw waits for all of it.",
+         [](const settings& value) -> std::int64_t
+         {
+             // Off is the costlier value.
+             return value.graphics.eviction.keep_mip_tails ? 0 : 1;
+         },
+         [](const settings& value)
+         {
+             return describe_switch(value.graphics.eviction.keep_mip_tails);
+         },
+         [](settings& to, const settings& from)
+         {
+             to.graphics.eviction.keep_mip_tails = from.graphics.eviction.keep_mip_tails;
+         }},
+        {"graphics/eviction/reduce_textures_in_use",
+         "Graphics > GPU Eviction / Paging > Reduce Textures In Use",
+         "Without it the textures on screen may hold more GPU memory than the budget, which a phone shares with "
+         "the system.",
+         [](const settings& value) -> std::int64_t
+         {
+             // Off is the costlier value.
+             return value.graphics.eviction.reduce_textures_in_use ? 0 : 1;
+         },
+         [](const settings& value)
+         {
+             return describe_switch(value.graphics.eviction.reduce_textures_in_use);
+         },
+         [](settings& to, const settings& from)
+         {
+             to.graphics.eviction.reduce_textures_in_use = from.graphics.eviction.reduce_textures_in_use;
+         }},
+        {"graphics/eviction/max_upload_mb",
+         "Graphics > GPU Eviction / Paging > Max Upload (MiB / frame)",
+         "Each megabyte brought back to the GPU in one frame adds to that frame's time.",
+         [](const settings& value) -> std::int64_t
+         {
+             return value.graphics.eviction.max_upload_mb;
+         },
+         [](const settings& value)
+         {
+             return std::to_string(value.graphics.eviction.max_upload_mb);
+         },
+         [](settings& to, const settings& from)
+         {
+             to.graphics.eviction.max_upload_mb = from.graphics.eviction.max_upload_mb;
+         }},
         {"graphics/limits/max_bloom_mips",
          "Graphics > Allowed Features > Max Bloom Mips",
          "Each bloom mip is two render passes.",

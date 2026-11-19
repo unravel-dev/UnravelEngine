@@ -107,6 +107,8 @@ editor, and never under a hard timeout. Times are a full parallel run, RelWithDe
 | `render feature support` | which rendering features a device runs, from its capabilities |
 | `feature limits` | project feature limits and render scale (`pipeline::apply_feature_limits`) |
 | `render view` | texture descs, `gfx::render_view` texture access, the transient texture pool |
+| `texture mip skip` | a texture made from a parsed image without its top mips: sizes, bytes, zero-copy ranges, the tail level |
+| `texture residency` | the eviction planner and registry: drops to mip tails, rises, read kinds, accounting, the frame pass |
 | `render change` | render change tracking: what an edit changes, per aspect |
 | `render culling / batching` | CPU culling and batching, shadow culling |
 | `shadow atlas` | where each light's shadow map sits |

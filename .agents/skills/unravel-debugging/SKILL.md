@@ -105,9 +105,20 @@ Performance
   GPU ms, draw counts, GPU memory and eviction; the profiler panel adds the timeline, GPU frame
   stats, submit latency, GPU resources and eviction sections.
 - GPU eviction (`engine/core/graphics/eviction.h`, `gfx::eviction::get_stats()`) stays off when
-  the backend reports no memory budget. `thrash_events` counts restores within
-  `min_age_frames` (default 60) of their eviction: the budget is too tight or the minimum age
-  too low.
+  the backend reports no memory budget, and on D3D11 and OpenGL. `thrash_events` counts drops a
+  read undid within `min_age_frames` (default 60). Such a resource then stays unread that much
+  longer before it drops again (up to 16 minimum ages), so reads on a cycle stop churning; a count
+  that keeps rising means reads come back after longer gaps, or the budget is too tight. Textures
+  keep their mip tails when evicted (`reduced_count`, `saved_bytes`); `raise_backlog` counts
+  textures drawn lately that still wait to sharpen: a tight budget, or a low `max_upload_mb`. The
+  test suites cannot see a budget: suite "texture residency" drives a registry of its own.
+- Check paging under real pressure, not only under a manual budget: a manual budget counts the
+  engine's own bytes exactly, while the automatic one judges bgfx's memory stats, which lag a few
+  frames, move with the OS budget, and on Vulkan keep up to 128 MiB of freed allocations for reuse.
+  In an editor on Vulkan or D3D12, MCP `gpu_eviction_test` `simulate_gpu` (or the profiler's
+  simulated GPU sizes) reserves real GPU memory. The drop goes from the soft budget down to the
+  target (85% and 75% of the GPU by default, 2.3 GB on a 24 GB card): a scene with less to evict
+  never reaches it, so narrow `graphics.eviction.target_fraction` to also test a target it reaches.
 - Crash handlers (`engine/core/crash/crash.hpp`): SEH and CRT signals on Windows, `sigaction`
   elsewhere, and `std::terminate`; a crash-safe write to the crash log comes first, then the
   minidump.
