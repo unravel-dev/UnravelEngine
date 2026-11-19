@@ -343,6 +343,10 @@ void test_profile_files(const fs::path& root)
     check(android.settings.is_overridden("graphics/material_quality") &&
               deployment::resolve_settings(base, android).graphics.material_quality == unravel::material_graph_quality::low,
           "and with the materials' Low quality");
+    check(android.settings.is_overridden("graphics/reflection_probe_faces_per_frame") &&
+              deployment::resolve_settings(base, android).graphics.reflection_probe_faces_per_frame <
+                  base.graphics.reflection_probe_faces_per_frame,
+          "and with fewer reflection probe faces a frame");
     check(deployment::make_profile("Desktop", target_platform::desktop, base).settings.is_empty(), "a new Desktop profile overrides nothing");
     check(base.graphics.material_quality == unravel::material_graph_quality::high, "so Desktop draws the materials' High quality");
     const auto web = deployment::make_profile("Web", target_platform::web, base);

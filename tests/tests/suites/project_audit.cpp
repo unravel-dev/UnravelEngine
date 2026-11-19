@@ -392,6 +392,7 @@ void test_settings_rules()
         profile.resolved.physics.fixed_timestep = 0.004f;
         profile.resolved.graphics.eviction.keep_mip_tails = false;
         profile.resolved.graphics.eviction.max_upload_mb = profile.start.graphics.eviction.max_upload_mb * 8;
+        profile.resolved.graphics.reflection_probe_faces_per_frame = profile.start.graphics.reflection_probe_faces_per_frame + 4;
         in.profiles.push_back(profile);
     }
     auto web = make_profile("Web", target_platform::web, {});
@@ -432,6 +433,17 @@ void test_settings_rules()
               "a paging setting left at its start is not reported");
     }
     check_eq(paging, 4, "each phone profile reports mip tails turned off and a raised upload limit");
+    std::size_t probe_faces = 0;
+    for(const auto& item : issues)
+    {
+        if(item.rule == audit::rules::COSTLIER_THAN_START && item.where.key == "graphics/reflection_probe_faces_per_frame")
+        {
+            ++probe_faces;
+            check(item.level == audit::severity::warning && item.fix == audit::fixes::USE_PLATFORM_START,
+                  "more probe faces a frame than a phone starts with is a warning that offers the start");
+        }
+    }
+    check_eq(probe_faces, 2, "each phone profile reports its raised reflection probe faces");
     std::size_t rates = 0;
     for(const auto& item : issues)
     {

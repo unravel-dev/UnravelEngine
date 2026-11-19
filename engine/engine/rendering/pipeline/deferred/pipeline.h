@@ -28,6 +28,9 @@ namespace unravel
 class graph_material;
 class surface_cache_system;
 class surface_cache_view;
+class reflection_probe_component;
+class probe_face_budget;
+struct probe_bake_candidate;
 
 namespace rendering
 {
@@ -377,9 +380,24 @@ public:
     auto make_gi_run_params(const camera& camera, gfx::render_view& rview, const gi_settings& gi)
         -> gi_run_params;
 
-    /// Captures the reflection probes the camera sees that are due; the captures render every light as `limits`
-    /// limit it.
-    void build_reflections(scene& scn, const camera& camera, delta_t dt, const feature_limits& limits);
+    /// Captures the reflection probes the camera sees that are due and the view uses (only environment probes where
+    /// @p gi_reflections_own_view), within @p budget; the captures render every light as `limits` limit it.
+    void build_reflections(scene& scn,
+                           const camera& camera,
+                           delta_t dt,
+                           const feature_limits& limits,
+                           probe_face_budget& budget,
+                           bool gi_reflections_own_view);
+
+    /// Renders face @p face (0-5) of @p candidate's cubemap: a nested run of the pipeline from the probe's position.
+    void render_reflection_probe_face(scene& scn,
+                                      const probe_bake_candidate& candidate,
+                                      std::uint32_t face,
+                                      delta_t dt,
+                                      const feature_limits& limits);
+
+    /// Prefilters @p probe_comp's six rendered faces into its product cubemaps and marks its capture ready.
+    void prefilter_reflection_probe(reflection_probe_component& probe_comp);
 
     /// Reserves the shadow atlas tiles of the local lights @p camera sees, before any of them renders.
     void reserve_shadow_atlas_tiles(scene& scn, const camera& camera, const feature_limits& limits);

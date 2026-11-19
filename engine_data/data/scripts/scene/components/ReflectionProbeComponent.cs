@@ -169,7 +169,8 @@ namespace Unravel.Core
         /// Requests a cubemap rebuild.
         /// </summary>
         /// <param name="forceFullFirstFrame">
-        /// When <c>true</c>, all six faces bake in a single frame instead of being time-sliced.
+        /// When <c>true</c>, the faces bake as fast as the project's Reflection Probe Faces Per Frame allows
+        /// instead of being time-sliced by this probe's Faces Per Frame.
         /// </param>
         public void MarkDirty(bool forceFullFirstFrame = false)
         {

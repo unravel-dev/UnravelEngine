@@ -154,6 +154,16 @@ finish_camera_image           post (TAA, exposure, bloom, tonemapping, FXAA) wit
 finish_run_batches            packs the skinning palette rows the run reserved
 ```
 
+- A probe face is a whole nested run, dozens of render passes, and a frame has 4095 views (`render_pass`
+  flushes the frame part-way when it runs out). `reflection_probe_system::bake_due_probes` drives every bake:
+  faces come from one budget every camera of the frame spends (`probe_face_budget`, refilled each frame by the
+  renderer from `graphics.reflection_probe_faces_per_frame`), probes without a capture first, then whole bakes,
+  then refreshes, and a face starts only while the frame has render passes left for one
+  (`render_pass::get_passes_left`). A view on the engine's defaults (thumbnails, the graph preview:
+  `run_params::shares_probe_face_budget` off) bakes its probes whole within that room, so its picture has
+  resolved reflections. Where the GI reflections own a view, only Environment probes are baked and drawn there
+  (`is_used_in_view`); a probe some view left out and none used is set aside as if disabled (capture released,
+  no bake pending, "Not used" in the inspector) and bakes whole when a view uses it again.
 - `run_params` (`engine/engine/rendering/pipeline/pipeline.h`) carries the run: `run_type` (camera or probe
   capture), `pflags` (`deferred::pipeline_steps`; probe captures build theirs from 0), `limits`
   (`feature_limits`) and one `fill_<pass>_params` callback per optional pass, whose presence enables it.

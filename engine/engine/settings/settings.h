@@ -14,6 +14,7 @@
 #include <engine/rendering/gi/gi_project_settings.h>
 #include <engine/rendering/material_graph/material_graph_quality.h>
 #include <engine/rendering/particles/ps/particle_types.h>
+#include <engine/rendering/probe_face_budget.h>
 #include <engine/settings/boot_config.h>
 #include <engine/settings/target_platform.h>
 #include <graphics/texture.h>
@@ -104,6 +105,10 @@ struct settings
         /// Keeps a light's shadow map, or a cascade of the sun, across frames while nothing it shows changed,
         /// instead of rendering it again every frame. The renderer applies it every frame.
         bool shadow_map_caching{true};
+        /// The cubemap faces all reflection probes together render in one frame (at least 1). Each face is a whole
+        /// scene render, so bakes of many probes at once (a scene loading, play starting) spread over frames. The
+        /// renderer applies it every frame.
+        uint32_t reflection_probe_faces_per_frame{probe_face_budget::default_faces_per_frame};
         /// GPU resource eviction/paging policy. Persisted with the project so paging behaves the same
         /// in standalone builds; the renderer drives it every frame from this configuration.
         eviction_settings eviction;

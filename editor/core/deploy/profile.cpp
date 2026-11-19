@@ -89,6 +89,8 @@ constexpr const char* PROFILE_DEPLOY_FILE_NAME = "deploy.cfg";
 constexpr auto ANDROID_DEFAULT_MAX_TEXTURE_SIZE = texture_importer_meta::texture_size::size_1024;
 /// The most mips a new Android profile lets bloom use.
 constexpr int ANDROID_MAX_BLOOM_MIPS = 5;
+/// The reflection probe faces a new Android profile renders in one frame: a probe bakes over three frames.
+constexpr uint32_t ANDROID_REFLECTION_PROBE_FACES_PER_FRAME = 2;
 
 /// profile.cfg: what a profile is, apart from its overrides.
 struct profile_header
@@ -256,6 +258,10 @@ void set_android_starting_values(settings& resolved)
     limits.decal_surface_channels = false;
     // The cheaper input of every Quality Switch.
     resolved.graphics.material_quality = material_graph_quality::low;
+    // A reflection probe face renders the scene again: fewer faces a frame keep the frames of a bake closer to the
+    // others on a phone's GPU.
+    resolved.graphics.reflection_probe_faces_per_frame =
+        std::min(resolved.graphics.reflection_probe_faces_per_frame, ANDROID_REFLECTION_PROBE_FACES_PER_FRAME);
 }
 
 /// The values a new Web profile starts with. Global illumination is off: it runs only where the browser's GPU has

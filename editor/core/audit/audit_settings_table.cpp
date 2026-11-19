@@ -301,6 +301,22 @@ auto make_settings() -> std::vector<performance_setting>
          {
              to.graphics.eviction.max_upload_mb = from.graphics.eviction.max_upload_mb;
          }},
+        {"graphics/reflection_probe_faces_per_frame",
+         "Graphics > Reflection Probe Faces Per Frame",
+         "Each reflection probe face renders the scene again, so the faces a frame renders while probes bake add to "
+         "that frame's cost on a phone's graphics processor.",
+         [](const settings& value)
+         {
+             return static_cast<std::int64_t>(value.graphics.reflection_probe_faces_per_frame);
+         },
+         [](const settings& value)
+         {
+             return std::to_string(value.graphics.reflection_probe_faces_per_frame);
+         },
+         [](settings& to, const settings& from)
+         {
+             to.graphics.reflection_probe_faces_per_frame = from.graphics.reflection_probe_faces_per_frame;
+         }},
         {"graphics/limits/max_bloom_mips",
          "Graphics > Allowed Features > Max Bloom Mips",
          "Each bloom mip is two render passes.",

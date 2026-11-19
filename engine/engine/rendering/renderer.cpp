@@ -14,6 +14,7 @@
 #include <engine/profiler/profiler.h>
 #include <engine/settings/boot_config.h>
 #include <engine/settings/settings.h>
+#include <engine/rendering/ecs/systems/reflection_probe_system.h>
 #include <engine/rendering/particles/ps/particle_system_soa.h>
 
 #include <base/assert.hpp>
@@ -1006,6 +1007,11 @@ void renderer::frame_begin(rtti::context& ctx, const frame_times& /*times*/)
                              particles.max_particles_scale,
                              particles.max_lighting});
     }
+    // Every frame refills the probe face budget, the engine's default before a settings instance exists: a budget
+    // left spent would stop every bake.
+    const std::uint32_t probe_faces = ctx.has<settings>() ? ctx.get<settings>().graphics.reflection_probe_faces_per_frame
+                                                          : probe_face_budget::default_faces_per_frame;
+    reflection_probe_system::get_face_budget().begin_frame(probe_faces);
 
     sync_main_surface();
     skinning_palettes_->begin_frame();

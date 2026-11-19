@@ -243,6 +243,11 @@ public:
         /// The features the run may use. apply_feature_limits applies them to the hooks above; the shadow
         /// and lighting passes render every light as limit_light limits it.
         feature_limits limits;
+
+        /// Camera runs: the reflection probe faces the run renders come from the frame's budget, which every camera
+        /// of the frame shares (graphics.reflection_probe_faces_per_frame). Off, the run bakes its probes whole: an
+        /// asset preview takes its picture in one render, with its reflections resolved.
+        bool shares_probe_face_budget = true;
     };
 
     pipeline() = default;

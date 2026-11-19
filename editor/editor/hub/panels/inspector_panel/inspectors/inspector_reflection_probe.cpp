@@ -22,7 +22,13 @@ auto inspector_reflection_probe_component::inspect(rtti::context& ctx,
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Status:");
     ImGui::SameLine();
-    if(is_realitme && is_realitme_live)
+    if(data.is_set_aside())
+    {
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Not used");
+        ImGui::SetItemTooltip("Global illumination reflects the scene in the views that show this probe.\n"
+                              "They bake and draw only Environment probes, for the reflections that reach the sky.");
+    }
+    else if(is_realitme && is_realitme_live)
     {
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), ICON_MDI_REFRESH " Realtime");
     }
@@ -39,15 +45,16 @@ auto inspector_reflection_probe_component::inspect(rtti::context& ctx,
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "Ready");
     }
 
-    // "Bake Now" triggers a full 1-frame rebuild so the user sees an instant result.
+    // "Bake Now" bakes every face as fast as the project's face budget allows, so the result shows at once.
     if(ImGui::Button(ICON_MDI_HAMMER " Bake Now"))
     {
         data.mark_dirty(true);
         result.changed = true;
     }
     ImGui::SetItemTooltip(
-        "Force an immediate full rebuild of this probe's cubemap in the next frame.\n"
-        "Ignores time-slicing so the result is visible right away.");
+        "Rebuild this probe's cubemap now, ignoring its Faces Per Frame.\n"
+        "The project's Reflection Probe Faces Per Frame still applies: with a low value, or other probes baking,\n"
+        "the bake takes a few frames.");
 
     ImGui::SameLine();
     if(ImGui::Button(ICON_MDI_RELOAD " Refresh"))

@@ -1,4 +1,6 @@
 #include "pipeline_internal.h"
+#include <engine/rendering/ecs/systems/reflection_probe_system.h>
+#include <hpp/small_vector.hpp>
 
 namespace unravel
 {
@@ -113,6 +115,7 @@ void strip_post_effects_for_reflection_probe_capture(pipeline::run_params& param
     params.force_hdr_buffers = true;
 }
 
+
 void clear_reflection_probe_face(const gfx::frame_buffer::ptr& fbo)
 {
     if(!fbo)
@@ -124,6 +127,48 @@ void clear_reflection_probe_face(const gfx::frame_buffer::ptr& fbo)
     pass.bind(fbo.get());
     pass.set_view_proj(nullptr, nullptr);
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
+}
+
+/// A face starts only while the frame has render passes left for it: a frame that runs out is flushed part-way.
+/// Until a face has been measured, a face is assumed to take this many.
+constexpr bgfx::ViewId UNMEASURED_PROBE_FACE_PASSES = 256;
+
+/// The most render passes one probe face has taken so far.
+auto get_largest_probe_face_passes() -> hpp::optional<bgfx::ViewId>&
+{
+    static hpp::optional<bgfx::ViewId> passes;
+    return passes;
+}
+
+/// Whether the frame has render passes left for one more probe face.
+auto has_room_for_probe_face() -> bool
+{
+    return gfx::render_pass::get_passes_left() > get_largest_probe_face_passes().value_or(UNMEASURED_PROBE_FACE_PASSES);
+}
+
+/// Records the render passes a probe face took, from the pass count before it and after it.
+void note_probe_face_passes(bgfx::ViewId before, bgfx::ViewId after)
+{
+    // A frame flushed during the face starts its count again: that face says nothing.
+    if(after < before)
+    {
+        return;
+    }
+    auto& largest = get_largest_probe_face_passes();
+    largest = std::max<bgfx::ViewId>(largest.value_or(0), bgfx::ViewId(after - before));
+}
+
+/// Before a probe's first face in a view: a bake cycle that has not started clears its six faces.
+void begin_probe_bake(reflection_probe_component& probe_comp)
+{
+    gfx::render_pass::push_scope("Build Reflections");
+    if(probe_comp.is_bake_cycle_unstarted())
+    {
+        for(std::uint32_t face = 0; face < 6; ++face)
+        {
+            clear_reflection_probe_face(probe_comp.get_cubemap_fbo(face));
+        }
+    }
 }
 } // namespace
 
@@ -148,123 +193,119 @@ auto deferred::get_light_program_no_shadows(const light& l) const -> const color
     return ANONYMOUS::pick_light_variant(l, gbuffer_has_subsurface_, color_lighting_no_shadow_[uint8_t(l.type)]);
 }
 
-void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt, const feature_limits& limits)
+void deferred::build_reflections(scene& scn,
+                                 const camera& camera,
+                                 delta_t dt,
+                                 const feature_limits& limits,
+                                 probe_face_budget& budget,
+                                 bool gi_reflections_own_view)
 {
     APP_SCOPE_PERF("Rendering/Reflection Generation Pass");
 
+    hpp::small_vector<probe_bake_candidate, 16> candidates;
     scn.registry->view<transform_component, reflection_probe_component, active_component>().each(
-        [&](auto e, auto&& transform_comp, auto&& reflection_probe_comp, auto&& active)
+        [&](auto e, auto&& transform_comp, auto&& probe_comp, auto&& active)
         {
-            if(reflection_probe_comp.already_generated())
-            {
-                return;
-            }
-
-            // reflection_probe_comp.set_generation_frame(gfx::get_render_frame());
-
-            const auto& world_transform = transform_comp.get_transform_global();
-
-            const auto& bounds = reflection_probe_comp.get_bounds();
-            if(!camera.test_obb(bounds, world_transform))
-            {
-                return;
-            }
-
-            const auto& probe = reflection_probe_comp.get_probe();
-
-            auto handle = scn.create_handle(e);
-            {
-                gfx::render_pass::push_scope("Build Reflections");
-
-                if(reflection_probe_comp.is_bake_cycle_unstarted())
-                {
-                    for(std::uint32_t face = 0; face < 6; ++face)
-                    {
-                        clear_reflection_probe_face(reflection_probe_comp.get_cubemap_fbo(face));
-                    }
-                }
-
-                bool any_face_dirty = false;
-                // iterate trough each cube face
-                for(std::uint32_t face = 0; face < 6; ++face)
-                {
-                    if(reflection_probe_comp.already_generated(face))
-                    {
-                        continue;
-                    }
-
-                    reflection_probe_comp.set_generation_frame(face, gfx::get_render_frame());
-
-                    auto camera = camera::get_face_camera(face, world_transform);
-                    camera.set_far_clip(probe.get_face_extents(face, world_transform));
-                    auto& rview = reflection_probe_comp.get_render_view(face);
-                    const auto& cubemap_fbo = reflection_probe_comp.get_cubemap_fbo(face);
-
-                    camera.set_viewport_size(usize32_t(cubemap_fbo->get_size()));
-
-                    bool not_environment = probe.method != reflect_method::environment;
-
-                    pipeline_flags pflags = 0;
-                    visibility_flags vflags = visibility_query::is_static;
-
-                    if(not_environment)
-                    {
-                        pflags |= pipeline_steps::geometry_pass;
-                    }
-
-                    if(reflection_probe_comp.get_capture_sky())
-                    {
-                        pflags |= pipeline_steps::atmospheric;
-                    }
-
-                    if(not_environment && reflection_probe_comp.get_capture_shadows())
-                    {
-                        pflags |= pipeline_steps::shadow_pass;
-                        vflags |= visibility_query::is_shadow_caster;
-                    }
-
-                    auto params = create_run_params(handle, &scn, &camera);
-                    params.run_type = pipeline_run_type::reflection_probe_capture;
-                    params.vflags = vflags;
-                    params.pflags = pflags;
-                    // The camera's limits: its shadow maps are shared with the captures, so both render
-                    // every light the same way.
-                    apply_feature_limits(params, limits);
-                    strip_post_effects_for_reflection_probe_capture(params);
-
-                    //if(!reflection_probe_comp.get_capture_sky())
-                    {
-                        clear_reflection_probe_face(cubemap_fbo);
-                    }
-
-                    run_pipeline_impl(cubemap_fbo, scn, camera, rview, dt, params);
-                    any_face_dirty = true;
-                }
-
-                if(any_face_dirty && reflection_probe_comp.is_bake_complete())
-                {
-                    auto env_cube = reflection_probe_comp.get_cubemap();
-                    auto env_cube_prefiltered = reflection_probe_comp.get_cubemap_prefiltered();
-                    prefilter_pass::run_params prefilter_params;
-
-                    prefilter_params.apply_prefilter = reflection_probe_comp.get_apply_prefilter();
-
-                    for(std::uint32_t face = 0; face < 6; ++face)
-                    {
-                        const auto& cubemap_fbo = reflection_probe_comp.get_cubemap_fbo(face);
-                        prefilter_params.input_faces[face] = cubemap_fbo->get_texture();
-                    }
-
-                    prefilter_params.output_cube = env_cube;
-                    prefilter_params.output_cube_prefiltered = env_cube_prefiltered;
-
-                    prefilter_pass_.run(prefilter_params);
-                    reflection_probe_comp.mark_capture_ready();
-                }
-
-                gfx::render_pass::pop_scope();
-            }
+            candidates.push_back({e, &probe_comp});
         });
+    if(candidates.empty())
+    {
+        return;
+    }
+
+    probe_bake_steps steps;
+    steps.sees = [&](const probe_bake_candidate& candidate)
+    {
+        const auto& world_transform = scn.registry->get<transform_component>(candidate.entity).get_transform_global();
+        return camera.test_obb(candidate.probe->get_bounds(), world_transform);
+    };
+    steps.has_room_for_face = &has_room_for_probe_face;
+    steps.begin_probe = [](const probe_bake_candidate& candidate)
+    {
+        begin_probe_bake(*candidate.probe);
+    };
+    steps.render_face = [&](const probe_bake_candidate& candidate, std::uint32_t face)
+    {
+        const bgfx::ViewId before = gfx::render_pass::get_pass_count();
+        render_reflection_probe_face(scn, candidate, face, dt, limits);
+        note_probe_face_passes(before, gfx::render_pass::get_pass_count());
+    };
+    steps.end_probe = [&](const probe_bake_candidate& candidate, bool is_complete)
+    {
+        if(is_complete)
+        {
+            prefilter_reflection_probe(*candidate.probe);
+        }
+        gfx::render_pass::pop_scope();
+    };
+    reflection_probe_system::bake_due_probes(candidates, budget, gi_reflections_own_view, gfx::get_render_frame(), steps);
+}
+
+void deferred::render_reflection_probe_face(scene& scn,
+                                            const probe_bake_candidate& candidate,
+                                            std::uint32_t face,
+                                            delta_t dt,
+                                            const feature_limits& limits)
+{
+    auto& probe_comp = *candidate.probe;
+    const auto& probe = probe_comp.get_probe();
+    const auto& world_transform = scn.registry->get<transform_component>(candidate.entity).get_transform_global();
+
+    auto face_camera = camera::get_face_camera(face, world_transform);
+    face_camera.set_far_clip(probe.get_face_extents(face, world_transform));
+    auto& rview = probe_comp.get_render_view(face);
+    const auto& cubemap_fbo = probe_comp.get_cubemap_fbo(face);
+
+    face_camera.set_viewport_size(usize32_t(cubemap_fbo->get_size()));
+
+    bool not_environment = probe.method != reflect_method::environment;
+
+    pipeline_flags pflags = 0;
+    visibility_flags vflags = visibility_query::is_static;
+
+    if(not_environment)
+    {
+        pflags |= pipeline_steps::geometry_pass;
+    }
+
+    if(probe_comp.get_capture_sky())
+    {
+        pflags |= pipeline_steps::atmospheric;
+    }
+
+    if(not_environment && probe_comp.get_capture_shadows())
+    {
+        pflags |= pipeline_steps::shadow_pass;
+        vflags |= visibility_query::is_shadow_caster;
+    }
+
+    auto params = create_run_params(scn.create_handle(candidate.entity), &scn, &face_camera);
+    params.run_type = pipeline_run_type::reflection_probe_capture;
+    params.vflags = vflags;
+    params.pflags = pflags;
+    // The camera's limits: its shadow maps are shared with the captures, so both render
+    // every light the same way.
+    apply_feature_limits(params, limits);
+    strip_post_effects_for_reflection_probe_capture(params);
+
+    clear_reflection_probe_face(cubemap_fbo);
+
+    run_pipeline_impl(cubemap_fbo, scn, face_camera, rview, dt, params);
+}
+
+void deferred::prefilter_reflection_probe(reflection_probe_component& probe_comp)
+{
+    prefilter_pass::run_params prefilter_params;
+    prefilter_params.apply_prefilter = probe_comp.get_apply_prefilter();
+    for(std::uint32_t face = 0; face < 6; ++face)
+    {
+        prefilter_params.input_faces[face] = probe_comp.get_cubemap_fbo(face)->get_texture();
+    }
+    prefilter_params.output_cube = probe_comp.get_cubemap();
+    prefilter_params.output_cube_prefiltered = probe_comp.get_cubemap_prefiltered();
+
+    prefilter_pass_.run(prefilter_params);
+    probe_comp.mark_capture_ready();
 }
 
 void deferred::run_temporal_probe_pass(const camera& camera,
@@ -1040,11 +1081,18 @@ void deferred::run_reflection_probe_pass(scene& scn,
 
     std::vector<entt::entity> sorted_probes;
 
-    // Collect the active probes that hold a bake: an unbaked probe's cubemap is uninitialized
-    // memory, and a single NaN texel from it spreads across the frame through bloom.
+    // Collect the active probes the view uses that hold a bake: an unbaked probe's cubemap is uninitialized
+    // memory, and a single NaN texel from it spreads across the frame through bloom. Where the GI reflections
+    // read the layer they own the view, and only environment probes stay in it.
     scn.registry->view<transform_component, reflection_probe_component, active_component>().each(
         [&](auto e, auto&& transform_comp_ref, auto&& probe_comp_ref, auto&& active)
         {
+            const bool is_used = reflection_probe_system::is_used_in_view(probe_comp_ref.get_probe(), is_layer_read_by_gi);
+            probe_comp_ref.note_view_use(is_used);
+            if(!is_used)
+            {
+                return;
+            }
             if(probe_comp_ref.has_capture())
             {
                 sorted_probes.emplace_back(e);

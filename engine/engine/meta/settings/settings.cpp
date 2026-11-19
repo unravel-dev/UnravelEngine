@@ -816,6 +816,18 @@ REFLECT_INLINE(settings::graphics_settings)
                             "or the camera's cascades change. A spot or point light with moving casters in reach "
                             "keeps a copy of the casters that hold still and draws only the moving ones over it."},
         })
+        .data<&settings::graphics_settings::reflection_probe_faces_per_frame>("reflection_probe_faces_per_frame"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reflection_probe_faces_per_frame"},
+            entt::attribute{"pretty_name", "Reflection Probe Faces Per Frame"},
+            entt::attribute{"tooltip",
+                            "The cubemap faces all reflection probes together render in one frame. Each face renders "
+                            "the scene again, and a probe needs six. When a scene loads or play starts, every probe "
+                            "bakes, and a lower value spreads those bakes over more frames: each frame costs less, "
+                            "and the reflections arrive a few frames later. Probes without a reflection yet go first."},
+            entt::attribute{"min", 1},
+            entt::attribute{"max", 36},
+        })
         .data<&settings::graphics_settings::render_scale>("render_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "render_scale"},
@@ -871,6 +883,7 @@ SAVE_INLINE(settings::graphics_settings)
     try_save(ar, ser20::make_nvp("limits", obj.limits));
     try_save(ar, ser20::make_nvp("skinned_mesh_batching", obj.skinned_mesh_batching));
     try_save(ar, ser20::make_nvp("shadow_map_caching", obj.shadow_map_caching));
+    try_save(ar, ser20::make_nvp("reflection_probe_faces_per_frame", obj.reflection_probe_faces_per_frame));
     try_save(ar, ser20::make_nvp("material_quality", obj.material_quality));
 }
 
@@ -884,6 +897,7 @@ LOAD_INLINE(settings::graphics_settings)
     try_load(ar, ser20::make_nvp("limits", obj.limits));
     try_load(ar, ser20::make_nvp("skinned_mesh_batching", obj.skinned_mesh_batching));
     try_load(ar, ser20::make_nvp("shadow_map_caching", obj.shadow_map_caching));
+    try_load(ar, ser20::make_nvp("reflection_probe_faces_per_frame", obj.reflection_probe_faces_per_frame));
     try_load(ar, ser20::make_nvp("material_quality", obj.material_quality));
 }
 

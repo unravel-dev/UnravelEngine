@@ -164,7 +164,11 @@ REFLECT(reflection_probe)
         .data<&reflection_probe::method>("method"_hs)
         .custom<entt::attributes>(entt::attributes{ 
             entt::attribute{"name", "method"},
-            entt::attribute{"pretty_name", "Method"} 
+            entt::attribute{"pretty_name", "Method"},
+            entt::attribute{"tooltip",
+                            "Environment captures the sky and lights the reflections that reach it. Static Only "
+                            "captures the static scene around the probe. Where global illumination reflects the "
+                            "scene, Static Only probes are not baked or drawn."},
         })
         .data<&reflection_probe::intensity>("intensity"_hs)
         .custom<entt::attributes>(entt::attributes{

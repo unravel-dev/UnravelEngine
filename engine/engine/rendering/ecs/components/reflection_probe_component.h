@@ -73,6 +73,10 @@ public:
 
     /**
      * @brief Advances the probe's update bookkeeping. Called once per frame by reflection_probe_system.
+     *
+     * First settles whether the probe is set aside, from what the views reported in the frame before
+     * (note_view_use): a probe some view left out and none used is treated as disabled - its cubemaps are
+     * released and no bake waits on it - and one a view uses again bakes whole.
      * @param[in] dt Frame delta time in seconds. Used to drive the realtime update interval.
      */
     void update(float dt);
@@ -99,11 +103,18 @@ public:
      * @brief Requests the probe to rebuild its cubemap.
      *
      * The next reflection-generation pass will begin emitting new faces.
-     * When force_full_first_frame is true, all six faces are baked in a single frame
-     * (matching the first-ever-generation behavior) instead of being time-sliced by faces_per_frame.
-     * Use this for manual "Bake now" actions where the user wants an instant result.
+     * When force_full_first_frame is true, the faces bake as fast as the frame's face budget allows
+     * (graphics.reflection_probe_faces_per_frame, shared by every probe), as a first bake does, instead
+     * of being time-sliced by faces_per_frame. Use this for manual "Bake now" actions where the user
+     * wants the result as soon as possible.
      */
     void mark_dirty(bool force_full_first_frame = false);
+
+    /**
+     * @brief Returns true when the pending bake is not time-sliced by faces_per_frame: the probe's first
+     * bake, or one requested with mark_dirty(true). The frame's face budget still applies.
+     */
+    auto is_whole_bake() const -> bool;
 
     /**
      * @brief Returns true if the probe has pending or in-flight cubemap generation work.
@@ -133,6 +144,19 @@ public:
      * @brief Records that a bake has written the product cubemaps. Called by the pipeline after the prefilter.
      */
     void mark_capture_ready();
+
+    /**
+     * @brief Records whether a view that drew the probe's scene used the probe (@p is_used) or left it out,
+     * because the global illumination's reflections own that view (reflection_probe_system::is_used_in_view).
+     * update() settles the frame's reports. Not saved.
+     */
+    void note_view_use(bool is_used);
+
+    /**
+     * @brief Returns true while the probe is set aside: in the last frame a view reported on, some view left it
+     * out and none used it. A set-aside probe is treated as disabled.
+     */
+    auto is_set_aside() const -> bool;
 
     /**
      * @brief Gets the number of faces generated per frame.
@@ -237,7 +261,7 @@ private:
     size_t faces_per_frame_ = 1;
     /// Number of faces generated in the current cycle.
     size_t generated_faces_count_ = 0;
-    /// When true, all six faces are baked in a single frame instead of being time-sliced.
+    /// When true, the faces bake as fast as the frame's face budget allows instead of being time-sliced.
     /// Stays true until the first bake completes, or while mark_dirty(true) is honored for manual "bake now" actions.
     bool first_generation_{true};
     /// Seconds accumulated since the last realtime refresh started.
@@ -248,6 +272,16 @@ private:
     bool has_pending_bake_{true};
     /// True once a bake has written the product cubemaps; cleared when they are released or recreated.
     bool has_capture_{false};
+    /// What the views reported this frame (note_view_use): some view left the probe out, some view used it.
+    bool is_left_out_by_view_{false};
+    bool is_used_by_view_{false};
+    /// Settled by update() from the reports (is_set_aside).
+    bool is_set_aside_{false};
+
+    /// Settles is_set_aside_ from the frame's reports and treats the probe as disabled while it holds.
+    void settle_view_use();
+    /// Forgets the pending bake and the faces it rendered: nothing waits on the probe.
+    void drop_pending_bake();
 
     /// When the probe should refresh its cubemap. "Once" is the default because it matches the
     /// typical use case (probes covering static environment): bake on load, then stop. Scripts that

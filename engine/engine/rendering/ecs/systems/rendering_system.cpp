@@ -40,6 +40,8 @@ void apply_view_params(rtti::context& ctx, rendering::pipeline::run_params& para
     params.is_being_edited = view.is_being_edited;
     params.render_resolution = view.render_resolution;
     params.needs_output_depth = view.needs_output_depth;
+    // The probe face budget is a graphics setting: a view on the engine's defaults bakes its probes whole.
+    params.shares_probe_face_budget = view.settings_use == graphics_settings_use::project;
     // What the device cannot run stays off in every view, the engine's defaults included.
     const auto& support = get_render_feature_support();
     const auto device_limits = support.get_device_limits();

@@ -106,6 +106,12 @@ struct render_pass
     static auto get_max_pass_id() -> bgfx::ViewId;
 
     static auto get_last_frame_max_pass_id() -> bgfx::ViewId;
+
+    /// The render pass ids this frame may still hand out before it runs out of them and is flushed part-way.
+    static auto get_passes_left() -> bgfx::ViewId;
+
+    /// The render pass ids this frame has handed out so far.
+    static auto get_pass_count() -> bgfx::ViewId;
     ///
     bgfx::ViewId id;
 };

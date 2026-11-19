@@ -136,6 +136,14 @@ auto reflection_probe_component::get_cubemap_fbo(size_t face) -> const gfx::fram
 
 void reflection_probe_component::update(float dt)
 {
+    settle_view_use();
+    if(is_set_aside_)
+    {
+        // As a disabled probe: a bake asked for meanwhile (play starting, a script) does not wait on it.
+        drop_pending_bake();
+        return;
+    }
+
     // Dormant path: no active bake. Drive the realtime refresh timer and release transient resources.
     if(!has_pending_bake_)
     {
@@ -271,8 +279,9 @@ auto reflection_probe_component::already_generated(size_t face) const -> bool
         return true;
     }
 
-    // Time-slice: once we've emitted the per-frame budget, treat remaining faces as done-for-now.
-    // first_generation_ waives the budget so the initial bake produces a usable result in one frame.
+    // Time-slice: once we've emitted the probe's per-frame slice, treat remaining faces as done-for-now.
+    // first_generation_ waives the slice so the initial bake finishes as soon as the frame's face budget
+    // (reflection_probe_system::get_face_budget) allows.
     if(!first_generation_)
     {
         if(faces_per_frame_ > 0 && generated_faces_count_ >= faces_per_frame_)
@@ -302,10 +311,66 @@ void reflection_probe_component::mark_dirty(bool force_full_first_frame)
 
     if(force_full_first_frame)
     {
-        // first_generation_ semantics: when true, no per-frame face budget is enforced,
-        // so the pipeline pushes all six faces in a single frame. Good for manual "Bake now".
+        // first_generation_ semantics: when true, the probe's own per-frame slice is not enforced, so the
+        // pipeline renders its faces as fast as the frame's face budget allows. Good for manual "Bake now".
         first_generation_ = true;
     }
+}
+
+void reflection_probe_component::note_view_use(bool is_used)
+{
+    if(is_used)
+    {
+        is_used_by_view_ = true;
+    }
+    else
+    {
+        is_left_out_by_view_ = true;
+    }
+}
+
+auto reflection_probe_component::is_set_aside() const -> bool
+{
+    return is_set_aside_;
+}
+
+void reflection_probe_component::settle_view_use()
+{
+    // A frame in which no view drew the probe's scene keeps the state the probe had.
+    if(!is_left_out_by_view_ && !is_used_by_view_)
+    {
+        return;
+    }
+    const bool was_set_aside = is_set_aside_;
+    is_set_aside_ = is_left_out_by_view_ && !is_used_by_view_;
+    is_left_out_by_view_ = false;
+    is_used_by_view_ = false;
+
+    if(is_set_aside_ && !was_set_aside)
+    {
+        // As a disabled probe: its cubemaps go.
+        release_resources();
+    }
+    else if(!is_set_aside_ && was_set_aside)
+    {
+        // Used again: it needs a capture, as a probe that comes back active does.
+        mark_dirty(true);
+    }
+}
+
+void reflection_probe_component::drop_pending_bake()
+{
+    for(auto& frame : generated_frame_)
+    {
+        frame = uint64_t(-1);
+    }
+    generated_faces_count_ = 0;
+    has_pending_bake_ = false;
+}
+
+auto reflection_probe_component::is_whole_bake() const -> bool
+{
+    return has_pending_bake_ && first_generation_;
 }
 
 auto reflection_probe_component::is_dirty() const -> bool

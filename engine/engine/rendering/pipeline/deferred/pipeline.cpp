@@ -1,4 +1,5 @@
 #include "pipeline_internal.h"
+#include <engine/rendering/ecs/systems/reflection_probe_system.h>
 
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/material_graph/material_graph_library.h>
@@ -442,10 +443,14 @@ void deferred::begin_camera_frame(const run_context& run)
 
 void deferred::capture_reflection_probes(const run_context& run)
 {
-    if(run.runs_probe_step())
+    if(!run.runs_probe_step())
     {
-        build_reflections(run.scn, run.cam, run.dt, run.params.limits);
+        return;
     }
+    // A run outside the frame's budget (an asset preview) bakes its probes whole in this render.
+    probe_face_budget own_budget = probe_face_budget::unlimited();
+    auto& budget = run.params.shares_probe_face_budget ? reflection_probe_system::get_face_budget() : own_budget;
+    build_reflections(run.scn, run.cam, run.dt, run.params.limits, budget, gi_reflections_own_view(run.params));
 }
 
 void deferred::prepare_passes(const run_context& run)

@@ -151,4 +151,17 @@ auto render_pass::get_last_frame_max_pass_id() -> bgfx::ViewId
 {
     return get_last_frame_counter();
 }
+
+auto render_pass::get_passes_left() -> bgfx::ViewId
+{
+    // generate_id flushes the frame once the counter reaches the last id, which the backbuffer keeps.
+    const bgfx::ViewId last = get_max_pass_id();
+    const bgfx::ViewId count = get_counter();
+    return count < last ? bgfx::ViewId(last - count) : bgfx::ViewId(0);
+}
+
+auto render_pass::get_pass_count() -> bgfx::ViewId
+{
+    return get_counter();
+}
 } // namespace gfx

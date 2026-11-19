@@ -246,8 +246,9 @@ struct editor_actions
      * @brief Flags every reflection probe across all loaded scenes for rebuild.
      *
      * Backs the editor's "Build Reflection Captures" menu item. When force_full_first_frame
-     * is true, each probe bakes all six faces in a single frame for instant visible results;
-     * when false, bakes are time-sliced to avoid editor hitches.
+     * is true, each probe bakes its faces as fast as the frame's face budget allows
+     * (graphics.reflection_probe_faces_per_frame); when false, bakes are also time-sliced by
+     * each probe's Faces Per Frame.
      *
      * @return Number of probes that were flagged.
      */
