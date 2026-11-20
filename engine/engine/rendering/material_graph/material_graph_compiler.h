@@ -34,6 +34,14 @@ constexpr uint32_t MATERIAL_GRAPH_MAX_FORWARD_LIT_TEXTURES = 7;
 /// The most textures an unlit surface of the translucency pass reads: its main reads the sky's SH (for the
 /// pre-exposure) and the fog's froxel column on stages of its own.
 constexpr uint32_t MATERIAL_GRAPH_MAX_FORWARD_UNLIT_TEXTURES = 13;
+/// The most textures, its own and its scene reads, a lit surface of the translucency pass reads and still has the
+/// "gi" variant, which reads the GI's radiance cache on the two stages above them (mg_forward.sh FORWARD_GI).
+constexpr uint32_t MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES = 5;
+/// The stages of the radiance cache's indirection and SH in the "gi" variant: the two the lit graph limit gives up.
+constexpr uint8_t MATERIAL_FORWARD_GI_INDIRECTION_STAGE = 6;
+constexpr uint8_t MATERIAL_FORWARD_GI_SH_STAGE = 5;
+static_assert(MATERIAL_GRAPH_MAX_FORWARD_LIT_TEXTURES - MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES == 2,
+              "the gi variant gives up two stages, for the radiance cache's indirection and SH");
 /// The roughness from which a refracting surface blurs what it shows through itself (MATERIAL_ROUGH_REFRACTION): a
 /// smoother constant Roughness reads the sharp copy alone and takes no stage for the blurred one.
 constexpr float MATERIAL_ROUGH_REFRACTION_MIN = 0.03f;
@@ -53,7 +61,11 @@ struct forward_scene_texture_stages
     uint8_t depth{};
     uint8_t blurred_color{};
 };
-auto get_forward_scene_texture_stages(bool is_lit, uint32_t scene_textures) -> forward_scene_texture_stages;
+/// The stages of @p scene_textures for a lit (@p is_lit) surface, in its "gi" variant when @p is_gi: there they sit
+/// below the GI's two stages (MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES).
+auto get_forward_scene_texture_stages(bool is_lit, uint32_t scene_textures, bool is_gi = false) -> forward_scene_texture_stages;
+/// How many stages the scene reads of @p scene_textures take (material_scene_texture_bits: colour, depth, blurred).
+auto count_forward_scene_reads(uint32_t scene_textures) -> uint32_t;
 
 /// What a decal material writes (material_graph_compile_result::decal_writes): the channels its Decal Output links.
 enum material_decal_write_bits : uint32_t
@@ -278,6 +290,9 @@ struct material_graph_compile_result
     /// Translucent and Premultiplied surfaces: blended without sorting (MATERIAL_ORDER_INDEPENDENT_SETTING); the shader
     /// has the "oit" variant.
     bool order_independent{};
+    /// A lit surface of the translucency pass whose textures leave the GI's stages free: the shader has the "gi" variant
+    /// (and "oit_gi" when Order Independent), lit by the GI's radiance cache where the view runs the GI.
+    bool has_gi_variant{};
     /// Sorted Translucent and Premultiplied surfaces: the depth draws before the colour (MATERIAL_DEPTH_PREPASS_SETTING).
     bool depth_prepass{};
     /// Surfaces of the translucency pass that draw their motion into the velocity buffer (MATERIAL_WRITE_VELOCITY_SETTING).
@@ -371,6 +386,7 @@ struct material_graph_binding
     bool preserve_specular{true};
     float taa_response{MATERIAL_DEFAULT_TAA_RESPONSE};
     bool order_independent{};
+    bool has_gi_variant{};
     bool depth_prepass{};
     bool writes_velocity{};
     bool casts_forward_shadow{};

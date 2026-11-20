@@ -663,7 +663,10 @@ auto deferred::render_particles(const run_context& run,
     }
     const gfx::texture::ptr hiz_depth = run.rview.tex_find("HIZBUFFER");
     const bool wants_reactive = static_cast<bool>(run.params.fill_taa_params);
-    return run_particle_pass(run.scn,
+    // A camera run's lit see-through surfaces read the radiance cache its GI updated this frame.
+    forward_gi_cache_ = run.is_camera_run() ? gi_gather_pass_.get_radiance_cache() : nullptr;
+    forward_gi_intensity_ = get_gi_resolve_scale(run.rview);
+    auto reactive = run_particle_pass(run.scn,
                              run.cam,
                              run.rview,
                              target,
@@ -677,6 +680,8 @@ auto deferred::render_particles(const run_context& run,
                              run.render_mask,
                              has_meshes ? &meshes : nullptr,
                              run.runs_particle_step());
+    forward_gi_cache_ = nullptr;
+    return reactive;
 }
 
 void deferred::finish_camera_image(const run_context& run, const lit_scene& lit)

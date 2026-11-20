@@ -287,6 +287,7 @@ auto deferred::make_gi_run_params(const camera& camera, gfx::render_view& rview,
     }
     params.camera_cut = has_camera_cut(camera);
     params.global_lighting_change = params.surface_cache->has_global_lighting_change();
+    params.surface_points = collect_translucent_gi_points(camera.get_position());
     return params;
 }
 

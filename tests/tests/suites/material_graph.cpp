@@ -1050,14 +1050,23 @@ struct forward_stage_defines
 {
     std::map<std::string, std::set<int>> lit;
     std::map<std::string, std::set<int>> unlit;
+    /// A lit surface's "gi" variant (FORWARD_GI).
+    std::map<std::string, std::set<int>> gi;
 };
 
 auto read_forward_stage_defines() -> forward_stage_defines
 {
     forward_stage_defines defines;
     std::ifstream file(fs::resolve_protocol("engine:/data/shaders/material_graph/mg_forward.sh"));
-    // Each open #if: whether it tests MATERIAL_UNLIT, and which branch (true: the unlit one) the lines are in.
-    std::vector<std::pair<bool, bool>> blocks;
+    // Each open #if chain: what its first branch tests (0 other, 1 MATERIAL_UNLIT, 2 FORWARD_GI), whether an #elif
+    // FORWARD_GI follows that, and which branch the lines are in (0 the first).
+    struct block
+    {
+        int test = 0;
+        bool has_gi_branch = false;
+        int branch = 0;
+    };
+    std::vector<block> blocks;
     std::string line;
     while(std::getline(file, line))
     {
@@ -1067,13 +1076,13 @@ auto read_forward_stage_defines() -> forward_stage_defines
         }
         if(line.rfind("#if", 0) == 0)
         {
-            const bool is_unlit_test = line == "#if MATERIAL_UNLIT";
-            blocks.emplace_back(is_unlit_test, is_unlit_test);
+            blocks.push_back({line == "#if MATERIAL_UNLIT" ? 1 : line == "#if FORWARD_GI" ? 2 : 0, false, 0});
             continue;
         }
         if(line.rfind("#el", 0) == 0 && !blocks.empty())
         {
-            blocks.back().second = false;
+            blocks.back().has_gi_branch = blocks.back().has_gi_branch || line == "#elif FORWARD_GI";
+            blocks.back().branch++;
             continue;
         }
         if(line.rfind("#endif", 0) == 0 && !blocks.empty())
@@ -1091,13 +1100,29 @@ auto read_forward_stage_defines() -> forward_stage_defines
         }
         bool for_lit = true;
         bool for_unlit = true;
-        for(const auto& [is_unlit_test, is_unlit_branch] : blocks)
+        bool for_gi = true;
+        for(const auto& chain : blocks)
         {
-            if(is_unlit_test)
+            // Which kinds of main the branch the line is in compiles into.
+            bool in_lit = true;
+            bool in_gi = true;
+            bool in_unlit = true;
+            if(chain.test == 1)
             {
-                for_lit = for_lit && !is_unlit_branch;
-                for_unlit = for_unlit && is_unlit_branch;
+                // #if MATERIAL_UNLIT, then #elif FORWARD_GI when the chain has it, then the lit branch.
+                in_unlit = chain.branch == 0;
+                in_lit = chain.branch == (chain.has_gi_branch ? 2 : 1);
+                in_gi = chain.has_gi_branch ? chain.branch == 1 : in_lit;
             }
+            else if(chain.test == 2)
+            {
+                in_gi = chain.branch == 0;
+                in_lit = chain.branch != 0;
+                in_unlit = chain.branch != 0;
+            }
+            for_lit = for_lit && in_lit;
+            for_gi = for_gi && in_gi;
+            for_unlit = for_unlit && in_unlit;
         }
         if(for_lit)
         {
@@ -1106,6 +1131,10 @@ auto read_forward_stage_defines() -> forward_stage_defines
         if(for_unlit)
         {
             defines.unlit[name].insert(value);
+        }
+        if(for_gi)
+        {
+            defines.gi[name].insert(value);
         }
     }
     return defines;
@@ -1117,17 +1146,21 @@ void test_forward_stages()
     const auto defines = read_forward_stage_defines();
     require(!defines.lit.empty() && !defines.unlit.empty(), "mg_forward.sh declares its stages");
     const uint32_t reads = material_scene_texture_color | material_scene_texture_depth | material_scene_texture_blurred_color;
-    for(const bool is_lit : {true, false})
+    for(const int kind : {0, 1, 2})
     {
-        const auto& declared = is_lit ? defines.lit : defines.unlit;
-        const uint32_t limit = is_lit ? MATERIAL_GRAPH_MAX_FORWARD_LIT_TEXTURES : MATERIAL_GRAPH_MAX_FORWARD_UNLIT_TEXTURES;
+        const bool is_lit = kind != 1;
+        const bool is_gi = kind == 2;
+        const auto& declared = is_gi ? defines.gi : is_lit ? defines.lit : defines.unlit;
+        const uint32_t limit = is_gi    ? MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES
+                               : is_lit ? MATERIAL_GRAPH_MAX_FORWARD_LIT_TEXTURES
+                                        : MATERIAL_GRAPH_MAX_FORWARD_UNLIT_TEXTURES;
         std::set<int> graph_stages;
         for(uint32_t i = 0; i < limit; ++i)
         {
             graph_stages.insert(get_material_graph_texture_stage(i));
         }
-        const auto stages = get_forward_scene_texture_stages(is_lit, reads);
-        const std::string model = is_lit ? "lit" : "unlit";
+        const auto stages = get_forward_scene_texture_stages(is_lit, reads, is_gi);
+        const std::string model = is_gi ? "lit gi" : is_lit ? "lit" : "unlit";
         // The scene reads take the graph's top stages, the ones its limit gives up for them.
         check(stages.color == get_material_graph_texture_stage(limit - 1) && stages.depth == get_material_graph_texture_stage(limit - 2) &&
                   stages.blurred_color == get_material_graph_texture_stage(limit - 3),
@@ -1143,6 +1176,12 @@ void test_forward_stages()
         {
             check(declares("FORWARD_SCENE_BLURRED_STAGE", stages.blurred_color), "and the blurred copy of a rough Refraction");
         }
+        if(is_gi)
+        {
+            check(declares("FORWARD_GI_INDIRECTION_STAGE", MATERIAL_FORWARD_GI_INDIRECTION_STAGE) &&
+                      declares("FORWARD_GI_SH_STAGE", MATERIAL_FORWARD_GI_SH_STAGE),
+                  "mg_forward.sh reads the radiance cache where the pipeline binds it");
+        }
         // Every stage of the engine's own reads lies above the graph's.
         for(const auto& [name, values] : declared)
         {
@@ -1156,6 +1195,56 @@ void test_forward_stages()
             }
         }
     }
+}
+
+void test_gi_variant()
+{
+    std::printf("test_gi_variant\n");
+    // A lit see-through surface has the "gi" variant while its textures and scene reads leave the radiance cache's
+    // two stages free; an unlit one, an opaque one and a full one have none.
+    const auto make_glass = [](material_blend_mode mode, size_t textures)
+    {
+        auto graph = make_graph_with_output();
+        set_material_graph_blend_mode(graph, mode);
+        std::string sum;
+        for(size_t i = 0; i < textures; ++i)
+        {
+            const std::string id = "map" + std::to_string(i);
+            add_node(graph, id, "texture_sample");
+            if(sum.empty())
+            {
+                sum = id + ".rgb";
+                continue;
+            }
+            const std::string add_id = "sum" + std::to_string(i);
+            add_node(graph, add_id, "add");
+            link(graph, add_id, "a", sum);
+            link(graph, add_id, "b", id + ".rgb");
+            sum = add_id;
+        }
+        if(!sum.empty())
+        {
+            link(graph, "output", "base_color", sum);
+        }
+        return graph;
+    };
+    const auto glass = compile_material_graph(make_glass(material_blend_mode::translucent, 0));
+    check(!glass.has_errors() && glass.has_gi_variant && contains(glass.shader, "FORWARD_GI") && !contains(glass.shader, "oit_gi"),
+          "a lit Translucent surface has the gi variant" + describe(glass));
+    auto weighed_graph = make_glass(material_blend_mode::translucent, 0);
+    set_material_graph_setting(weighed_graph.nodes[size_t(find_material_graph_output(weighed_graph))], MATERIAL_ORDER_INDEPENDENT_SETTING, "on");
+    const auto weighed = compile_material_graph(weighed_graph);
+    check(weighed.has_gi_variant && contains(weighed.shader, "oit_gi"), "an Order Independent one has oit_gi too" + describe(weighed));
+    auto unlit_graph = make_glass(material_blend_mode::translucent, 0);
+    set_material_graph_setting(unlit_graph.nodes[size_t(find_material_graph_output(unlit_graph))], MATERIAL_SHADING_MODEL_SETTING, "unlit");
+    check(!compile_material_graph(unlit_graph).has_gi_variant, "an unlit one takes no light, so it has none");
+    check(!compile_material_graph(make_glass(material_blend_mode::opaque, 0)).has_gi_variant,
+          "an opaque surface takes the GI in the G-buffer");
+    const auto fits = compile_material_graph(make_glass(material_blend_mode::translucent, MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES));
+    const auto full = compile_material_graph(make_glass(material_blend_mode::translucent, MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES + 1));
+    check(fits.textures.size() == MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES && fits.has_gi_variant && full.textures.size() > MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES &&
+              !full.has_gi_variant,
+          "a surface whose textures take the GI's stages draws without the GI" + describe(full));
 }
 
 void test_blend_modes_and_shading_models()
@@ -1758,7 +1847,10 @@ constexpr size_t VERTEX_VARIANT_COUNT = 23;
 /// 3.1, and its *_textures twin draws there instead (compile_eshader_variants).
 auto is_storage_buffer_variant(const std::string& name) -> bool
 {
-    return name.find("skinned") != std::string::npos && !name.ends_with("_textures");
+    const bool is_skinned_buffer = name.find("skinned") != std::string::npos && !name.ends_with("_textures");
+    // The GI variants of the translucency pass read the radiance cache's buffers: never drawn where the GI does not run.
+    const bool is_gi = name == "gi" || name == "oit_gi";
+    return is_skinned_buffer || is_gi;
 }
 
 /// One shader file's compile for one renderer.
@@ -1794,6 +1886,7 @@ public:
         const size_t domain_variant_count = result.domain == material_domain::decal ? DECAL_VARIANT_COUNT : POST_PROCESS_VARIANT_COUNT;
         const size_t surface_variant_count =
             result.is_forward() ? FORWARD_VARIANT_COUNT + (result.order_independent ? 1 : 0) +
+                                      (result.has_gi_variant ? (result.order_independent ? 2 : 1) : 0) +
                                       (result.casts_forward_shadow ? MASKED_VARIANT_COUNT - PLAIN_VARIANT_COUNT : 0)
                                 : (has_casters ? MASKED_VARIANT_COUNT : PLAIN_VARIANT_COUNT);
         const size_t variant_count = is_preview ? PREVIEW_VARIANT_COUNT
@@ -3141,6 +3234,7 @@ void run_material_graph_suite(rtti::context& ctx)
     RUN_CASE(test_graph_upgrade());
     RUN_CASE(test_blend_modes_and_shading_models());
     RUN_CASE(test_forward_stages());
+    RUN_CASE(test_gi_variant());
     RUN_CASE(test_binding_limits());
     RUN_CASE(test_opacity_mask_shadows());
     RUN_CASE(test_world_position_offset());

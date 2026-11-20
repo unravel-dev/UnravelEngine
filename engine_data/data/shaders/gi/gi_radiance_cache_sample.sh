@@ -12,6 +12,8 @@
  * the source texel's hit distance) and includes gi_common.sh and gi_radiance_cache_common.sh.
  */
 
+#include "gi/gi_radiance_cache_lattice.sh"
+
 struct GiRcSample
 {
 	/// Cached lighting (GI_CACHED_LIGHTING_PRE_EXPOSURE, gi_pre_exposure.sh).
@@ -34,21 +36,13 @@ GiRcCorner GiRcInterpolationCorner(vec3 origin, int clipmap, int corner)
 	GiRcCorner result;
 	result.offset_weight = vec4_splat(0.0);
 	result.tile = vec4_splat(0.0);
-	vec4 clip = u_gi_rc_clipmaps[clipmap];
-	vec3 lattice = (origin - clip.xyz) / clip.w - 0.5;
-	vec3 base_float = floor(lattice);
-	vec3 fraction = lattice - base_float;
-	ivec3 step_xyz = ivec3(corner & 1, (corner >> 1) & 1, corner >> 2);
-	vec3 axis_weight = mix(vec3_splat(1.0) - fraction, fraction, vec3(step_xyz));
-	float weight = axis_weight.x * axis_weight.y * axis_weight.z;
-	ivec3 cell = ivec3(base_float) + step_xyz;
-	uint probe = b_gi_rc_indirection[GiRcIndirectionIndex(cell, clipmap)];
-	if(weight <= 0.0 || probe == GI_RC_INVALID || probe == GI_RC_USED)
+	GiRcLatticeProbe lattice = GiRcInterpolationProbe(origin, clipmap, corner);
+	if(lattice.weight <= 0.0 || lattice.probe == GI_RC_INVALID)
 	{
 		return result;
 	}
-	result.offset_weight = vec4(origin - GiRcProbePosition(cell, clipmap), weight);
-	result.tile = vec4(vec2(GiRcProbeTileOrigin(probe, u_gi_rc_final_res) + ivec2(1, 1)), 0.0, 0.0);
+	result.offset_weight = vec4(origin - GiRcProbePosition(lattice.cell, clipmap), lattice.weight);
+	result.tile = vec4(vec2(GiRcProbeTileOrigin(lattice.probe, u_gi_rc_final_res) + ivec2(1, 1)), 0.0, 0.0);
 	return result;
 }
 

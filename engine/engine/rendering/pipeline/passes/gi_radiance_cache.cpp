@@ -12,6 +12,7 @@
 #include <graphics/render_pass.h>
 #include <logging/logging.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace unravel
@@ -37,8 +38,8 @@ constexpr uint32_t counter_count = 32u;
 constexpr uint32_t indirection_group = 64u;
 /// The probe-state buffer holds LastUsed, LastTraced and the free list.
 constexpr uint32_t probe_state_arrays = 3u;
-/// Indirect dispatch slots: tile generation, trace, filter.
-constexpr uint16_t indirect_slots = 3;
+/// Indirect dispatch slots: tile generation, trace, filter, and one group per traced probe (the SH).
+constexpr uint16_t indirect_slots = 4;
 /// A trace budget no frame reaches: a frame that does not continue the cache traces every probe.
 constexpr float unlimited_budget = 1.0e9f;
 /// The cache's frame counter travels as a float (u_gi_rc_params.x): it restarts below 2^24, where floats stop
@@ -49,7 +50,11 @@ constexpr uint64_t storage_flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_U_C
 /// The final atlas is read bilinearly; its octahedral border makes the filtering seamless.
 constexpr uint64_t final_flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
 
+/// vec4s per probe in the SH buffer: the red, green and blue L1 coefficients, and the cell they were projected at.
+constexpr uint32_t sh_vec4s_per_probe = 4u;
+
 using gi_pass::destroy_handle;
+using gi_pass::get_vec4_layout;
 using gi_pass::make_uint_buffer;
 } // namespace
 
@@ -82,6 +87,8 @@ void gi_radiance_cache::uniforms::cache_uniforms()
     cache_uniform(nullptr, s_sdf_clipmap, "s_sdf_clipmap", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_sdf_clipmap_coverage, "s_sdf_clipmap_coverage", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_sdf_clipmap_mip, "s_sdf_clipmap_mip", bgfx::UniformType::Sampler);
+    cache_uniform(nullptr, u_gi_rc_points, "u_gi_rc_points", bgfx::UniformType::Vec4);
+    cache_uniform(nullptr, u_gi_rc_sh_params, "u_gi_rc_sh_params", bgfx::UniformType::Vec4);
 }
 
 gi_radiance_cache::~gi_radiance_cache()
@@ -107,6 +114,8 @@ auto gi_radiance_cache::init(rtti::context& ctx) -> bool
     tiles_program_ = load("cs_gi_rc_tiles");
     trace_program_ = load("cs_gi_rc_trace");
     filter_program_ = load("cs_gi_rc_filter");
+    mark_points_program_ = load("cs_gi_rc_mark_points");
+    sh_program_ = load("cs_gi_rc_sh");
     if(!has_programs() && gi_pass::is_supported())
     {
         APPLOG_WARNING("[GI] Radiance cache programs failed to load; the gather traces without it.");
@@ -124,7 +133,9 @@ auto gi_radiance_cache::has_programs() const -> bool
                                &select_program_,
                                &tiles_program_,
                                &trace_program_,
-                               &filter_program_})
+                               &filter_program_,
+                               &mark_points_program_,
+                               &sh_program_})
     {
         if(!*program || !(*program)->is_valid())
         {
@@ -150,9 +161,15 @@ auto gi_radiance_cache::ensure_resources(uint32_t probe_res) -> bool
         traces_ = make_uint_buffer(2u * max_probes);
         tiles_ = make_uint_buffer(2u * max_probes * max_tiles_per_probe);
         args_ = bgfx::createIndirectBuffer(indirect_slots);
+        // Zeroed: a probe's SH reads as never projected (cs_gi_rc_sh.eshader's key) until it is.
+        const std::vector<math::vec4> zero(size_t(sh_vec4s_per_probe) * max_probes, math::vec4(0.0f));
+        sh_ = bgfx::createDynamicVertexBuffer(bgfx::copy(zero.data(), uint32_t(zero.size() * sizeof(math::vec4))),
+                                              get_vec4_layout(),
+                                              BGFX_BUFFER_COMPUTE_READ_WRITE);
     }
     // New atlases at another resolution start the cache over: no probe carries over.
     probe_res_ = probe_res;
+    has_surfaces_ = false;
     const uint32_t final_res = probe_res + final_border_texels;
     radiance_atlas_ = std::make_shared<gfx::texture>(uint16_t(atlas_probes_x * probe_res),
                                                      uint16_t(atlas_probes_y * probe_res),
@@ -179,8 +196,81 @@ void gi_radiance_cache::release_resources()
     destroy_handle(traces_);
     destroy_handle(tiles_);
     destroy_handle(args_);
+    destroy_handle(sh_);
+    destroy_handle(surface_points_);
+    has_surfaces_ = false;
     radiance_atlas_.reset();
     final_atlas_.reset();
+}
+
+auto gi_radiance_cache::get_cell_size(uint32_t clipmap) -> float
+{
+    return 2.0f * float(GI_RADIANCE_CACHE_EXTENT) / float(grid) * float(1u << clipmap);
+}
+
+auto gi_radiance_cache::get_reach(uint32_t clipmap) -> float
+{
+    // A lookup's lattice stays half a cell inside the grid, which sits up to a cell off the camera after snapping.
+    return (0.5f * float(grid) + 0.5f) * get_cell_size(clipmap);
+}
+
+auto gi_radiance_cache::get_inner_reach(uint32_t clipmap) -> float
+{
+    return (0.5f * float(grid) - 2.0f) * get_cell_size(clipmap);
+}
+
+auto gi_radiance_cache::make_surface_points(const math::bbox& bounds,
+                                            const math::vec3& eye,
+                                            size_t budget,
+                                            float spacing,
+                                            std::vector<math::vec4>& points) -> bool
+{
+    // Each clipmap's share of the box, a cell apart in that clipmap: a point marks the eight probes around it, so
+    // neighbours a cell apart mark every probe a surface between them interpolates. The shares overlap where the
+    // snapped clipmaps' edges may fall, so the finer clipmap's points reach as far as it may cover. A box several cells
+    // wide on every axis keeps the points near its faces: its inside is mostly empty.
+    const math::vec3 size = bounds.max - bounds.min;
+    for(uint32_t clipmap = 0; clipmap < uint32_t(GI_RADIANCE_CACHE_CLIPMAPS); ++clipmap)
+    {
+        const float cell = get_cell_size(clipmap) * spacing;
+        const float reach = get_reach(clipmap);
+        const float inner = clipmap == 0 ? 0.0f : get_inner_reach(clipmap - 1);
+        const math::vec3 low = math::max(bounds.min, eye - reach);
+        const math::vec3 high = math::min(bounds.max, eye + reach);
+        if(math::any(math::greaterThan(low, high)))
+        {
+            continue;
+        }
+        const bool faces_only = math::all(math::greaterThan(size, math::vec3(4.0f * cell)));
+        const math::vec3 extent = high - low;
+        const math::ivec3 counts = math::ivec3(math::floor(extent / cell)) + 1;
+        const math::vec3 last = math::max(math::vec3(counts - 1), math::vec3(1.0f));
+        const math::vec3 is_spread = math::vec3(math::greaterThan(counts, math::ivec3(1)));
+        for(int z = 0; z < counts.z; ++z)
+        {
+            for(int y = 0; y < counts.y; ++y)
+            {
+                for(int x = 0; x < counts.x; ++x)
+                {
+                    const math::vec3 along = math::mix(math::vec3(0.5f), math::vec3{float(x), float(y), float(z)} / last, is_spread);
+                    const math::vec3 point = low + extent * along;
+                    const bool is_finer = clipmap > 0 && math::all(math::lessThan(math::abs(point - eye), math::vec3(inner)));
+                    const math::vec3 to_faces = math::min(point - bounds.min, bounds.max - point);
+                    const bool is_inside = faces_only && math::all(math::greaterThan(to_faces, math::vec3(cell)));
+                    if(is_finer || is_inside)
+                    {
+                        continue;
+                    }
+                    if(points.size() >= budget)
+                    {
+                        return false;
+                    }
+                    points.emplace_back(point, 1.0f);
+                }
+            }
+        }
+    }
+    return true;
 }
 
 void gi_radiance_cache::place_clipmaps(const math::vec3& camera)
@@ -279,6 +369,30 @@ void gi_radiance_cache::run_mark(const frame_inputs& inputs) const
     mark_program_->end();
 }
 
+auto gi_radiance_cache::has_surface_points(const frame_inputs& inputs) -> bool
+{
+    return inputs.surface_points != nullptr && !inputs.surface_points->empty();
+}
+
+void gi_radiance_cache::run_mark_surfaces(const frame_inputs& inputs)
+{
+    if(!has_surface_points(inputs))
+    {
+        return;
+    }
+    const auto& points = *inputs.surface_points;
+    const uint32_t count = std::min(uint32_t(points.size()), max_surface_points);
+    gi_pass::upload_vec4_table(surface_points_, points);
+    gfx::render_pass pass("GI/Cache Mark Surfaces");
+    mark_points_program_->begin();
+    bgfx::setBuffer(0, surface_points_, bgfx::Access::Read);
+    bgfx::setBuffer(1, indirection_[current_], bgfx::Access::ReadWrite);
+    gfx::set_uniform(uniforms_.u_gi_rc_points, math::vec4(float(count), 0.0f, 0.0f, 0.0f));
+    set_cache_uniforms(bookkeeping::frame_start);
+    gfx::dispatch(pass.id, mark_points_program_->native_handle(), (count + indirection_group - 1u) / indirection_group, 1, 1);
+    mark_points_program_->end();
+}
+
 void gi_radiance_cache::run_trace(const frame_inputs& inputs) const
 {
     const auto& params = *inputs.params;
@@ -325,6 +439,26 @@ void gi_radiance_cache::run_trace(const frame_inputs& inputs) const
     gfx::set_uniform(uniforms_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
     gfx::dispatch_indirect(pass.id, trace_program_->native_handle(), args_, 1, 1);
     trace_program_->end();
+}
+
+void gi_radiance_cache::run_sh(bool is_full) const
+{
+    gfx::render_pass pass("GI/Cache SH");
+    sh_program_->begin();
+    gfx::set_texture(uniforms_.s_gi_rc_final, 0, final_atlas_);
+    bgfx::setBuffer(3, traces_, bgfx::Access::Read);
+    bgfx::setBuffer(4, sh_, bgfx::Access::ReadWrite);
+    set_cache_uniforms(bookkeeping::frame_start);
+    gfx::set_uniform(uniforms_.u_gi_rc_sh_params, math::vec4(is_full ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f));
+    if(is_full)
+    {
+        gfx::dispatch(pass.id, sh_program_->native_handle(), 1, 1, max_probes);
+    }
+    else
+    {
+        gfx::dispatch_indirect(pass.id, sh_program_->native_handle(), args_, 3, 1);
+    }
+    sh_program_->end();
 }
 
 void gi_radiance_cache::run_filter() const
@@ -379,6 +513,7 @@ auto gi_radiance_cache::update(const frame_inputs& inputs) -> bool
         run_bookkeeping(bookkeeping::reset);
     }
     run_mark(inputs);
+    run_mark_surfaces(inputs);
     run_over_indirection(*update_program_, "GI/Cache Update");
     run_bookkeeping(bookkeeping::frame_start);
     run_over_indirection(*allocate_program_, "GI/Cache Allocate");
@@ -387,8 +522,23 @@ auto gi_radiance_cache::update(const frame_inputs& inputs) -> bool
     run_bookkeeping(bookkeeping::trace_list);
     run_trace(inputs);
     run_filter();
+    // The SH runs from the first frame surfaces read it: the whole pool that frame (its probes were traced while nothing
+    // projected them), then the traced probes every frame, so surfaces coming back into view find it current.
+    if(has_surface_points(inputs) || has_surfaces_)
+    {
+        run_sh(!has_surfaces_);
+        has_surfaces_ = true;
+    }
     persistent_ = true;
     return true;
+}
+
+void gi_radiance_cache::bind_for_surfaces(uint8_t indirection_stage, uint8_t sh_stage) const
+{
+    bgfx::setBuffer(indirection_stage, indirection_[current_], bgfx::Access::Read);
+    bgfx::setBuffer(sh_stage, sh_, bgfx::Access::Read);
+    gfx::set_uniform(uniforms_.u_gi_rc_clipmaps, clipmaps_.data(), uint16_t(clipmaps));
+    set_layout_uniform();
 }
 
 void gi_radiance_cache::bind_for_sampling(uint8_t indirection_stage, uint8_t final_stage) const

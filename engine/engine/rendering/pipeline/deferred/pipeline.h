@@ -477,6 +477,8 @@ private:
         bool has_sorted = false;
         /// A surface writes its depth before its colour (Depth Prepass).
         bool has_depth_prepass = false;
+        /// A surface has the "gi" variant: lit by the GI's radiance cache.
+        bool has_gi_variant = false;
         /// A surface writes its motion (writes_translucent_velocity).
         bool writes_velocity = false;
         /// The scene's colour and depth they read (material_scene_texture_bits).
@@ -486,6 +488,18 @@ private:
     /// Whether a surface of the translucency pass draws its motion: Write Velocity, or a Depth Prepass, whose depth
     /// replaces the scene's.
     static auto writes_translucent_velocity(const graph_material& graph) -> bool;
+    /// Whether a surface of @p graph on translucent_models_[@p index] draws its "gi" variant this run: it has one, the
+    /// run's GI updated the radiance cache with its probes' SH, and the model's points were marked.
+    auto draws_with_gi(const graph_material& graph, size_t index) const -> bool;
+    /// Adds the points of a model with @p bounds to translucent_gi_points_, coarser when it is too large for its share:
+    /// false, adding none, when they do not fit.
+    auto add_translucent_gi_points(const math::bbox& bounds, const math::vec3& eye) -> bool;
+    /// The world points the radiance cache keeps probes around for the run's lit see-through surfaces that read it, the
+    /// models nearest @p eye first, each whole or not at all (translucent_gi_points_, gi_run_params::surface_points);
+    /// null when none does.
+    auto collect_translucent_gi_points(const math::vec3& eye) -> const std::vector<math::vec4>*;
+    /// The most points one model marks (gi_radiance_cache::make_surface_points' budget).
+    static constexpr size_t max_gi_points_per_model = 1024;
     /// Where the composite of the run's Order Independent surfaces sorts, seen from @p eye: the lowest Sort Priority of
     /// their models, and the distance to the middle of the box around them all.
     auto get_order_independent_key(const math::vec3& eye) const -> translucent_mesh_list::key;
@@ -1124,6 +1138,8 @@ private:
     /// The visible models the G-buffer left surfaces of the translucency pass out of (graph_material::is_forward): the
     /// translucency pass draws those surfaces. Cleared with batch_collector_.
     std::vector<visibility_data> translucent_models_;
+    /// What each of translucent_models_ needs besides its draws (get_translucent_reads), taken as it is collected.
+    std::vector<translucent_reads> translucent_reads_;
     /// The translucent_models_ with a sorted surface in draw order, and those with an Order Independent surface
     /// (collect_translucent_draws).
     std::vector<size_t> translucent_order_;
@@ -1134,6 +1150,12 @@ private:
     /// translucent_models_ reflects (collect_translucent_draws).
     std::vector<entt::entity> translucent_probes_;
     std::vector<forward_probe> translucent_model_probes_;
+    /// collect_translucent_gi_points' points, kept for the GI's frame; which of translucent_models_ they mark (1); and
+    /// its scratch lists.
+    std::vector<math::vec4> translucent_gi_points_;
+    std::vector<char> translucent_gi_marked_;
+    std::vector<std::pair<float, size_t>> translucent_gi_order_;
+    std::vector<math::vec4> translucent_gi_model_points_;
 
     /// Every shadow caster of the scene, split by how often it has to be refreshed. Both are
     /// rebuilt WHOLESALE (clear + refill) by refresh_shadow_casters, so a destroyed entity

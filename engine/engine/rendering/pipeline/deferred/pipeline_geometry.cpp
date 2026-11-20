@@ -3,6 +3,7 @@
 #include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
 #include <engine/rendering/particles/ps/particle_system_soa.h>
+#include <engine/rendering/pipeline/passes/gi_radiance_cache.h>
 
 #include <limits>
 
@@ -215,6 +216,7 @@ void deferred::run_g_buffer_pass(hpp::span<const visibility_data> visibility_set
         decal_receiver_batches_.clear();
         decal_receiver_skinned_batches_.clear();
         translucent_models_.clear();
+        translucent_reads_.clear();
         // The limits alone decide it: checking every drawn material would cost a scene with many of them on the CPU.
         gbuffer_has_subsurface_ = limits.subsurface;
         skinned_batching_run_ = is_skinned_batching_active();
@@ -425,6 +427,7 @@ void deferred::run_g_buffer_pass(hpp::span<const visibility_data> visibility_set
         if(has_forward)
         {
             translucent_models_.push_back(element);
+            translucent_reads_.push_back(get_translucent_reads(element));
         }
     }
 
@@ -1141,7 +1144,7 @@ auto deferred::collect_translucent_draws(const run_context& run) -> translucent_
     {
         const auto& model_comp = translucent_models_[i].entity.get<model_component>();
         keys.push_back({model_comp.get_sort_priority(), math::distance2(eye, model_comp.get_world_bounds().get_center())});
-        const auto reads = get_translucent_reads(translucent_models_[i]);
+        const auto& reads = translucent_reads_[i];
         if(reads.has_sorted)
         {
             translucent_order_.push_back(i);
@@ -1282,6 +1285,49 @@ void deferred::draw_translucent_velocity(bgfx::ViewId view, const visibility_dat
                  extras);
 }
 
+auto deferred::collect_translucent_gi_points(const math::vec3& eye) -> const std::vector<math::vec4>*
+{
+    translucent_gi_points_.clear();
+    translucent_gi_marked_.assign(translucent_models_.size(), 0);
+    // The nearest models first: past the budget, the farthest go without and take the sky's light, whole.
+    auto& order = translucent_gi_order_;
+    order.clear();
+    for(size_t i = 0; i < translucent_models_.size(); ++i)
+    {
+        if(translucent_reads_[i].has_gi_variant)
+        {
+            const auto center = translucent_models_[i].entity.get<model_component>().get_world_bounds().get_center();
+            order.emplace_back(math::distance2(eye, center), i);
+        }
+    }
+    std::sort(order.begin(), order.end());
+    for(const auto& [distance, index] : order)
+    {
+        const auto& bounds = translucent_models_[index].entity.get<model_component>().get_world_bounds();
+        if(add_translucent_gi_points(bounds, eye))
+        {
+            translucent_gi_marked_[index] = 1;
+        }
+    }
+    return translucent_gi_points_.empty() ? nullptr : &translucent_gi_points_;
+}
+
+auto deferred::add_translucent_gi_points(const math::bbox& bounds, const math::vec3& eye) -> bool
+{
+    // A cell apart, else two cells apart for a model too large for its share; past that it is left out.
+    const size_t budget = std::min(gi_radiance_cache::max_surface_points - translucent_gi_points_.size(), max_gi_points_per_model);
+    for(const float spacing : {1.0f, 2.0f})
+    {
+        translucent_gi_model_points_.clear();
+        if(gi_radiance_cache::make_surface_points(bounds, eye, budget, spacing, translucent_gi_model_points_))
+        {
+            translucent_gi_points_.insert(translucent_gi_points_.end(), translucent_gi_model_points_.begin(), translucent_gi_model_points_.end());
+            return true;
+        }
+    }
+    return false;
+}
+
 auto deferred::get_order_independent_key(const math::vec3& eye) const -> translucent_mesh_list::key
 {
     // The composite sorts as one object: the box around every model with an Order Independent surface.
@@ -1305,6 +1351,13 @@ auto deferred::get_order_independent_key(const math::vec3& eye) const -> translu
     return {sort_priority, math::distance2(eye, bounds.get_center())};
 }
 
+auto deferred::draws_with_gi(const graph_material& graph, size_t index) const -> bool
+{
+    const auto* cache = get_forward_gi_cache();
+    const bool is_marked = index < translucent_gi_marked_.size() && translucent_gi_marked_[index] != 0;
+    return graph.has_gi_variant() && is_marked && cache != nullptr && cache->has_surface_sh();
+}
+
 auto deferred::writes_translucent_velocity(const graph_material& graph) -> bool
 {
     // A prepass puts the surface's depth in the scene's: its motion goes with it, so TAA reprojects the two alike.
@@ -1324,6 +1377,7 @@ auto deferred::get_translucent_reads(const visibility_data& element) -> transluc
             reads.has_order_independent = reads.has_order_independent || graph->is_order_independent();
             reads.has_sorted = reads.has_sorted || !graph->is_order_independent();
             reads.has_depth_prepass = reads.has_depth_prepass || graph->has_depth_prepass();
+            reads.has_gi_variant = reads.has_gi_variant || graph->has_gi_variant();
             reads.writes_velocity = reads.writes_velocity || writes_translucent_velocity(*graph);
             reads.scene_textures |= graph->get_scene_textures();
         }
@@ -1465,8 +1519,17 @@ void deferred::draw_translucent_model(bgfx::ViewId view, size_t index, const run
         geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
         // The sorted draws and the order-independent ones each take their own surfaces.
         const bool is_drawn = graph != nullptr && graph->is_forward() && graph->is_order_independent() == order_independent;
-        const char* variant = order_independent ? "oit" : gfx::shader::DEFAULT_VARIANT;
-        gpu_program* program = is_drawn ? graph_material_programs_.begin(*graph, prog.vertex_variant, variant) : nullptr;
+        // Lit surfaces take the GI's light in their "gi" variants where the run's GI updated its radiance cache; until
+        // that variant is compiled they draw without it.
+        bool uses_gi = is_drawn && draws_with_gi(*graph, index);
+        const char* plain_variant = order_independent ? "oit" : gfx::shader::DEFAULT_VARIANT;
+        gpu_program* program = uses_gi ? graph_material_programs_.begin(*graph, prog.vertex_variant, order_independent ? "oit_gi" : "gi")
+                                       : nullptr;
+        if(program == nullptr)
+        {
+            uses_gi = false;
+            program = is_drawn ? graph_material_programs_.begin(*graph, prog.vertex_variant, plain_variant) : nullptr;
+        }
         if(program == nullptr)
         {
             // Not compiled yet: the surface draws once its shader is there.
@@ -1474,7 +1537,11 @@ void deferred::draw_translucent_model(bgfx::ViewId view, size_t index, const run
             return;
         }
         graph_material_programs_.submit_values(*graph);
-        bind_forward_lighting(bounds, graph->get_shading_model() == material_shading_model::default_lit, probe, graph->get_scene_textures());
+        bind_forward_lighting(bounds,
+                              graph->get_shading_model() == material_shading_model::default_lit,
+                              probe,
+                              graph->get_scene_textures(),
+                              uses_gi);
         if(order_independent)
         {
             // Weighed sums in any order (fs_material_graph_forward.sh FORWARD_OIT): one blend serves both targets.

@@ -23,6 +23,7 @@
 #include <engine/rendering/material_graph/material_graph.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/pipeline/pipeline.h>
+#include <engine/rendering/pipeline/passes/gi_radiance_cache.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -89,6 +90,65 @@ void test_draw_order()
     check(!list.is_empty(), "Order Independent surfaces alone are something to draw");
 }
 
+void test_gi_surface_points()
+{
+    std::printf("test_gi_surface_points\n");
+    const math::vec3 eye(0.0f);
+    const float cell = gi_radiance_cache::get_cell_size(0);
+    std::vector<math::vec4> points;
+    // A small model near the camera: one point in the middle.
+    check(gi_radiance_cache::make_surface_points(math::bbox(math::vec3(4.0f, -0.4f, -0.4f), math::vec3(4.8f, 0.4f, 0.4f)), eye, 64, 1.0f, points) &&
+              points.size() == 1 && math::distance(math::vec3(points[0]), math::vec3(4.4f, 0.0f, 0.0f)) < 1e-4f,
+          "a model under a cell wide marks around its middle");
+    // A pane a cell apart along its length: neighbours mark every probe between them.
+    points.clear();
+    check(gi_radiance_cache::make_surface_points(math::bbox(math::vec3(2.0f, 0.0f, -5.0f), math::vec3(2.1f, 2.0f, 5.0f)), eye, 1024, 1.0f, points),
+          "a pane fits its budget");
+    float widest_gap = 0.0f;
+    for(size_t i = 1; i < points.size(); ++i)
+    {
+        if(points[i].y == points[i - 1].y)
+        {
+            widest_gap = std::max(widest_gap, std::abs(points[i].z - points[i - 1].z));
+        }
+    }
+    check(!points.empty() && widest_gap <= cell + 1e-4f, "its points along the pane are at most a cell apart");
+    // A large box keeps its points near its faces.
+    points.clear();
+    const math::bbox room(math::vec3(-6.0f), math::vec3(6.0f));
+    check(gi_radiance_cache::make_surface_points(room, eye, 100000, 1.0f, points), "a room-sized box fits a large budget");
+    const bool all_near_faces = std::all_of(points.begin(), points.end(), [&](const math::vec4& point)
+    {
+        const math::vec3 to_faces = math::min(math::vec3(point) - room.min, room.max - math::vec3(point));
+        return std::min(to_faces.x, std::min(to_faces.y, to_faces.z)) <= cell + 1e-4f;
+    });
+    check(all_near_faces, "a box several cells wide marks near its faces, not its empty inside");
+    // A model reaching past the finest clipmap: its far part is a coarser clipmap's cell apart, and no point there sits
+    // in the finer clipmap's reach.
+    points.clear();
+    const float reach0 = gi_radiance_cache::get_reach(0);
+    check(gi_radiance_cache::make_surface_points(math::bbox(math::vec3(0.0f, 0.0f, 1.0f), math::vec3(0.1f, 0.1f, reach0 * 3.0f)), eye, 100000, 1.0f, points),
+          "a long model fits a large budget");
+    size_t near_points = 0;
+    size_t far_points = 0;
+    for(const auto& point : points)
+    {
+        (point.z <= reach0 ? near_points : far_points)++;
+    }
+    check(near_points > 0 && far_points > 0 && far_points < near_points * 2 + 2,
+          "past the finest clipmap the points spread to the coarser cells");
+    // Twice the spacing for a model too large for its share: fewer points over the same box.
+    std::vector<math::vec4> coarse;
+    const math::bbox pool(math::vec3(-8.0f, 0.0f, -8.0f), math::vec3(8.0f, 0.2f, 8.0f));
+    points.clear();
+    check(gi_radiance_cache::make_surface_points(pool, eye, 100000, 1.0f, points) &&
+              gi_radiance_cache::make_surface_points(pool, eye, 100000, 2.0f, coarse) && coarse.size() * 3 < points.size() && !coarse.empty(),
+          "twice the spacing lays a quarter of the points over a flat model");
+    // Past its budget a model marks nothing: it is left out whole.
+    points.clear();
+    check(!gi_radiance_cache::make_surface_points(room, eye, 8, 1.0f, points), "a model past its budget is refused");
+}
+
 void test_sort_priority_round_trip()
 {
     std::printf("test_sort_priority_round_trip\n");
@@ -114,6 +174,7 @@ void run_translucency_suite(rtti::context& /*ctx*/)
     RUN_CASE(test_material_passes());
     RUN_CASE(test_draw_order());
     RUN_CASE(test_sort_priority_round_trip());
+    RUN_CASE(test_gi_surface_points());
 }
 
 } // namespace

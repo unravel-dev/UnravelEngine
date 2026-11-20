@@ -67,6 +67,7 @@ namespace ps_soa
 {
 struct render_batch;
 } // namespace ps_soa
+class gi_radiance_cache;
 
 namespace rendering
 {
@@ -487,7 +488,17 @@ public:
      * their shadows and the reflection @p probe, and the scene's colour and depth where the surface reads them
      * (@p scene_textures, material_scene_texture_bits). Only inside run_particle_pass's draws of its meshes.
      */
-    void bind_forward_lighting(const math::bbox& bounds, bool is_lit, const forward_probe& probe, uint32_t scene_textures);
+    void bind_forward_lighting(const math::bbox& bounds,
+                               bool is_lit,
+                               const forward_probe& probe,
+                               uint32_t scene_textures,
+                               bool uses_gi = false);
+    /// The GI's radiance cache the translucency pass's lit surfaces read in their "gi" variant (mg_forward.sh
+    /// FORWARD_GI) while this run draws them: the one its GI updated this frame, else null and they draw without it.
+    auto get_forward_gi_cache() const -> const gi_radiance_cache*
+    {
+        return forward_gi_cache_;
+    }
     /// Packs into forward_light_pick_ the shadow records of the first @p light_count lights of @p lighting that
     /// @p picked names, in that order.
     void pack_forward_light_shadows(const particle_scene_lighting* lighting, const size_t* picked, uint32_t light_count);
@@ -621,6 +632,11 @@ protected:
     /// The translucency pass draws its coverage into TAA's reactive mask too (its second target): the mesh draws blend
     /// it as the particles do.
     bool forward_has_reactive_target_{false};
+    /// get_forward_gi_cache: set by the pipeline that runs the GI around its translucency pass, with the GI's diffuse
+    /// intensity (mg_forward.sh u_fwd_gi).
+    const gi_radiance_cache* forward_gi_cache_{nullptr};
+    float forward_gi_intensity_{1.0f};
+    gfx::program::uniform_ptr forward_gi_uniform_{};
     /// The opaque scene's depth from before Depth Prepass surfaces wrote theirs, taken only when one draws in the
     /// frame; the history (PREV_DEPTH) copies it instead of the depth the prepass changed. Null otherwise.
     gfx::texture::ptr opaque_depth_before_translucency_{};

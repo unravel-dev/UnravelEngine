@@ -223,6 +223,9 @@ public:
     /// Translucent and Premultiplied surfaces blended without sorting (weighted blended order-independent
     /// transparency): their shader's "oit" variant draws them.
     auto is_order_independent() const -> bool;
+    /// A lit surface of the translucency pass whose shader has the "gi" variant (and "oit_gi"): lit by the GI's radiance
+    /// cache where the view runs the GI.
+    auto has_gi_variant() const -> bool;
     /// A sorted Translucent or Premultiplied surface whose depth draws before its colour: only its nearest layer shows.
     auto has_depth_prepass() const -> bool;
     /// A surface of the translucency pass that draws its motion into the velocity buffer, over the whole surface.

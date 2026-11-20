@@ -10,6 +10,8 @@
 #include <graphics/frame_buffer.h>
 #include <graphics/texture.h>
 
+#include <vector>
+
 namespace unravel
 {
 
@@ -75,6 +77,9 @@ struct gi_run_params
     /// The lighting changed globally this frame (surface_cache_system::has_global_lighting_change): the radiance cache
     /// rebuilds and the gather history starts over.
     bool global_lighting_change = false;
+    /// World points (xyz) of the lit surfaces outside the G-buffer that read the radiance cache this frame: the cache
+    /// keeps probes around them (gi_radiance_cache::frame_inputs::surface_points). Null for none.
+    const std::vector<math::vec4>* surface_points = nullptr;
 };
 
 } // namespace unravel

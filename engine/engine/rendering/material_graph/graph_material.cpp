@@ -596,6 +596,11 @@ auto graph_material::is_order_independent() const -> bool
     return is_forward() && binding_.order_independent;
 }
 
+auto graph_material::has_gi_variant() const -> bool
+{
+    return is_forward() && binding_.has_gi_variant;
+}
+
 auto graph_material::has_depth_prepass() const -> bool
 {
     return is_forward() && binding_.depth_prepass;

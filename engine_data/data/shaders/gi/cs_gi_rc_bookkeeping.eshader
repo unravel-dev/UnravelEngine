@@ -58,6 +58,8 @@ void GiRcWriteTraceArgs()
 	uint rows = (tiles + GI_RC_TRACE_DISPATCH_WIDTH - 1u) / GI_RC_TRACE_DISPATCH_WIDTH;
 	dispatchIndirect(b_gi_rc_args, 1u, min(tiles, GI_RC_TRACE_DISPATCH_WIDTH), rows, 1u);
 	dispatchIndirect(b_gi_rc_args, 2u, filter_groups, filter_groups, traces);
+	// One group per traced probe: the SH projection (cs_gi_rc_sh.eshader).
+	dispatchIndirect(b_gi_rc_args, 3u, 1u, 1u, traces);
 }
 
 NUM_THREADS(1, 1, 1)

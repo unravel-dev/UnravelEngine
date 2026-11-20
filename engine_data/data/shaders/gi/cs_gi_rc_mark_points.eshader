@@ -1,0 +1,43 @@
+[code]
+/*
+ * Radiance cache marking for surfaces outside the G-buffer (the translucency pass's lit surfaces): every point of
+ * b_gi_rc_points marks the eight lattice probes around it in the finest clipmap that covers it, as a screen probe marks
+ * those of its own position (cs_gi_rc_mark.eshader), so the probes those surfaces interpolate exist and are traced.
+ * One thread per point.
+ */
+
+#include "bgfx_compute.sh"
+#include "../common.sh"
+#include "gi/gi_common.sh"
+#include "gi/gi_radiance_cache_common.sh"
+
+/// xyz = world position.
+BUFFER_RO(b_gi_rc_points, vec4, 0);
+BUFFER_RW(b_gi_rc_indirection, uint, 1);
+/// x = points.
+uniform vec4 u_gi_rc_points;
+
+NUM_THREADS(64, 1, 1)
+void main()
+{
+	uint index = uint(gl_GlobalInvocationID.x);
+	if(index >= uint(u_gi_rc_points.x))
+	{
+		return;
+	}
+	vec3 position = b_gi_rc_points[index].xyz;
+	int clipmap = GiRcClipmapOf(position);
+	if(clipmap >= GI_RADIANCE_CACHE_CLIPMAPS)
+	{
+		return;
+	}
+	ivec3 base = GiRcInterpolationBase(position, clipmap);
+	for(int corner = 0; corner < 8; ++corner)
+	{
+		ivec3 cell = base + ivec3(corner & 1, (corner >> 1) & 1, corner >> 2);
+		if(all(greaterThanEqual(cell, ivec3(0, 0, 0))) && all(lessThan(cell, ivec3(GI_RADIANCE_CACHE_GRID, GI_RADIANCE_CACHE_GRID, GI_RADIANCE_CACHE_GRID))))
+		{
+			b_gi_rc_indirection[GiRcIndirectionIndex(cell, clipmap)] = GI_RC_USED;
+		}
+	}
+}

@@ -178,6 +178,7 @@ void save_binding(Archive& ar, const material_graph_binding& binding)
     try_save(ar, ser20::make_nvp("casts_forward_shadow", binding.casts_forward_shadow));
     try_save(ar, ser20::make_nvp("depth_prepass", binding.depth_prepass));
     try_save(ar, ser20::make_nvp("writes_velocity", binding.writes_velocity));
+    try_save(ar, ser20::make_nvp("has_gi_variant", binding.has_gi_variant));
 }
 
 template<typename Archive>
@@ -224,6 +225,7 @@ void load_binding(Archive& ar, material_graph_binding& binding)
     try_load(ar, ser20::make_nvp("casts_forward_shadow", binding.casts_forward_shadow));
     try_load(ar, ser20::make_nvp("depth_prepass", binding.depth_prepass));
     try_load(ar, ser20::make_nvp("writes_velocity", binding.writes_velocity));
+    try_load(ar, ser20::make_nvp("has_gi_variant", binding.has_gi_variant));
 }
 } // namespace
 

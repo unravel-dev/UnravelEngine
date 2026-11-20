@@ -318,7 +318,8 @@ inline auto get_format_version<unravel::material>() -> uint64_t
     // 11: a decal writes the channels its output sets by value as well as by link.
     // 12: Blend Mode and Shading Model on the Surface Output, kept in the binding.
     // 13: the translucency pass's options (Order Independent, Cast Shadow, Depth Prepass, Write Velocity) in the binding.
-    return 13;
+    // 14: lit surfaces of the translucency pass keep whether their shader has the "gi" variant.
+    return 14;
 }
 
 template<>

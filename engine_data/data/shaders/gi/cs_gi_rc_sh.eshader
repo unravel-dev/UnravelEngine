@@ -1,0 +1,93 @@
+[code]
+/*
+ * Radiance cache L1 SH: the probes traced this frame project their filtered radiance map (the final atlas's interior
+ * texels) onto the first two SH bands, which surfaces outside the G-buffer read for their diffuse light and their rough
+ * reflections (mg_forward.sh FORWARD_GI). The equal-area octahedral map gives every texel the same solid angle. A
+ * probe traced again at the same place blends its new projection into the last by GI_RC_SH_BLEND, so a single re-trace
+ * eases in instead of popping; a probe at a new place, and every probe on a frame that rebuilds the cache, takes its
+ * projection whole.
+ * One 8x8 group per probe: (1, 1, traces) for the traced probes, the bookkeeping's fourth slot; u_gi_rc_sh_params.x
+ * = 1 instead projects every probe of the pool, (1, 1, MAX_PROBES), the frame such surfaces start reading it.
+ * Output, per probe, four vec4 in b_gi_rc_sh: the red, green and blue coefficients (Y00, Y1-1, Y10, Y11), cached
+ * lighting (GI_CACHED_LIGHTING_PRE_EXPOSURE), then xyz = the world position it was projected at, w = 1 (0.5: the
+ * full pass, which knows no position; 0: never projected).
+ * The position, not the cell, tells a re-trace from a moved probe: the update re-keys carried probes to new cells
+ * as the clipmaps scroll.
+ */
+
+#include "bgfx_compute.sh"
+#include "../common.sh"
+#include "gi/gi_common.sh"
+#include "gi/gi_radiance_cache_common.sh"
+
+/// The filtered radiance atlas: rgb = radiance, a = hit distance, with a one-texel octahedral border per tile.
+SAMPLER2D(s_gi_rc_final, 0);
+BUFFER_RO(b_gi_rc_traces, uint, 3);
+BUFFER_RW(b_gi_rc_sh, vec4, 4);
+/// x = 1: every probe of the pool, the group's z its probe; 0: the probes traced this frame.
+uniform vec4 u_gi_rc_sh_params;
+
+#define GI_RC_SH_THREADS 64
+/// The solid angle of the sphere.
+#define GI_RC_SH_SPHERE 12.566371
+/// The share of a re-trace's projection in a probe's SH.
+#define GI_RC_SH_BLEND 0.5
+
+SHARED vec4 s_red[GI_RC_SH_THREADS];
+SHARED vec4 s_green[GI_RC_SH_THREADS];
+SHARED vec4 s_blue[GI_RC_SH_THREADS];
+
+NUM_THREADS(8, 8, 1)
+void main()
+{
+	uint group = uint(gl_WorkGroupID.z);
+	bool is_full = u_gi_rc_sh_params.x > 0.5;
+	uint probe = is_full ? group : b_gi_rc_traces[2u * group + 1u];
+	// The probe's world position, to tell a re-trace from a probe that moved; unknown in a full pass.
+	ivec4 cell = GiRcUnpackTrace(b_gi_rc_traces[2u * group]);
+	vec4 position_key = is_full ? vec4(0.0, 0.0, 0.0, 0.5) : vec4(GiRcProbePosition(cell.xyz, cell.w), 1.0);
+	ivec2 origin = GiRcProbeTileOrigin(probe, u_gi_rc_final_res) + ivec2(1, 1);
+	int thread = int(gl_LocalInvocationIndex);
+	int texels = u_gi_rc_probe_res * u_gi_rc_probe_res;
+	vec4 red = vec4_splat(0.0);
+	vec4 green = vec4_splat(0.0);
+	vec4 blue = vec4_splat(0.0);
+	for(int index = thread; index < texels; index += GI_RC_SH_THREADS)
+	{
+		ivec2 texel = ivec2(index % u_gi_rc_probe_res, index / u_gi_rc_probe_res);
+		vec3 radiance = texelFetch(s_gi_rc_final, origin + texel, 0).xyz;
+		vec3 direction = GiEquiAreaSphericalMapping((vec2(texel) + 0.5) / float(u_gi_rc_probe_res));
+		vec4 basis = vec4(0.282095, 0.488603 * direction.y, 0.488603 * direction.z, 0.488603 * direction.x);
+		red += radiance.x * basis;
+		green += radiance.y * basis;
+		blue += radiance.z * basis;
+	}
+	s_red[thread] = red;
+	s_green[thread] = green;
+	s_blue[thread] = blue;
+	barrier();
+	for(int stride = GI_RC_SH_THREADS / 2; stride > 0; stride >>= 1)
+	{
+		if(thread < stride)
+		{
+			s_red[thread] += s_red[thread + stride];
+			s_green[thread] += s_green[thread + stride];
+			s_blue[thread] += s_blue[thread + stride];
+		}
+		barrier();
+	}
+	if(thread == 0)
+	{
+		// Each texel stands for 4 pi / texels of the sphere.
+		float solid_angle = GI_RC_SH_SPHERE / float(texels);
+		uint base = 4u * probe;
+		vec4 stored = b_gi_rc_sh[base + 3u];
+		bool is_same_probe = position_key.w > 0.75 && stored.w > 0.75 && all(equal(stored.xyz, position_key.xyz));
+		// A rebuild (a global lighting change) replaces every probe's SH, so surfaces follow the new light at once.
+		float blend = is_same_probe && u_gi_rc_persistent ? GI_RC_SH_BLEND : 1.0;
+		b_gi_rc_sh[base] = mix(b_gi_rc_sh[base], s_red[0] * solid_angle, blend);
+		b_gi_rc_sh[base + 1u] = mix(b_gi_rc_sh[base + 1u], s_green[0] * solid_angle, blend);
+		b_gi_rc_sh[base + 2u] = mix(b_gi_rc_sh[base + 2u], s_blue[0] * solid_angle, blend);
+		b_gi_rc_sh[base + 3u] = position_key;
+	}
+}

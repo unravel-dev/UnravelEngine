@@ -228,6 +228,10 @@ constexpr const char* FORWARD_SHADER_VARIANTS = "[variants]\n"
 /// The variant of an Order Independent surface: its weighted sums into the order-independent targets.
 constexpr const char* FORWARD_OIT_VARIANT = "// oit: the order-independent targets (fs_material_graph_forward.sh).\n"
                                             "oit                 FORWARD_OIT";
+/// The variants lit by the GI's radiance cache (mg_forward.sh FORWARD_GI), drawn where the view runs the GI.
+constexpr const char* FORWARD_GI_VARIANT = "// gi: lit by the GI's radiance cache (mg_forward.sh FORWARD_GI).\n"
+                                           "gi                  FORWARD_GI";
+constexpr const char* FORWARD_OIT_GI_VARIANT = "oit_gi              FORWARD_OIT FORWARD_GI";
 /// The forward main and the header of what it reads besides the graph.
 constexpr const char* FORWARD_MAIN_INCLUDE = "material_graph/fs_material_graph_forward.sh";
 constexpr const char* FORWARD_HEADER_INCLUDE = "material_graph/mg_forward.sh";
@@ -838,6 +842,13 @@ private:
     {
         return output_ >= 0 && states_[size_t(output_)].node != nullptr &&
                is_material_blend_mode_forward(get_material_blend_mode(*states_[size_t(output_)].node));
+    }
+
+    /// A lit surface whose textures and scene reads leave the radiance cache's stages free (the "gi" variant).
+    auto fits_gi_variant() const -> bool
+    {
+        const uint32_t stages = uint32_t(result_.textures.size()) + count_forward_scene_reads(result_.scene_textures);
+        return result_.shading_model == material_shading_model::default_lit && stages <= MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES;
     }
 
     /// The Surface Output bends the view (Refraction linked or set off 1) and its Blend Mode refracts.
@@ -3957,6 +3968,15 @@ private:
         {
             add_lines(lines, FORWARD_OIT_VARIANT);
         }
+        result_.has_gi_variant = is_forward && fits_gi_variant();
+        if(result_.has_gi_variant)
+        {
+            add_lines(lines, FORWARD_GI_VARIANT);
+            if(result_.order_independent)
+            {
+                add_lines(lines, FORWARD_OIT_GI_VARIANT);
+            }
+        }
         const bool has_shadow_casters =
             is_forward ? result_.casts_forward_shadow : (result_.uses_opacity_mask || result_.uses_world_position_offset);
         if(has_shadow_casters)
@@ -4446,6 +4466,7 @@ auto make_material_graph_binding(const material_graph_compile_result& result) ->
     binding.preserve_specular = result.preserve_specular;
     binding.taa_response = result.taa_response;
     binding.order_independent = result.order_independent;
+    binding.has_gi_variant = result.has_gi_variant;
     binding.depth_prepass = result.depth_prepass;
     binding.writes_velocity = result.writes_velocity;
     binding.casts_forward_shadow = result.casts_forward_shadow;
@@ -4471,21 +4492,28 @@ auto get_material_graph_max_textures(material_blend_mode mode, material_shading_
         return MATERIAL_GRAPH_MAX_TEXTURES;
     }
     const uint32_t limit = model == material_shading_model::unlit ? MATERIAL_GRAPH_MAX_FORWARD_UNLIT_TEXTURES : MATERIAL_GRAPH_MAX_FORWARD_LIT_TEXTURES;
-    const uint32_t reads = ((scene_textures & material_scene_texture_color) != 0 ? 1u : 0u) +
-                           ((scene_textures & material_scene_texture_depth) != 0 ? 1u : 0u) +
-                           ((scene_textures & material_scene_texture_blurred_color) != 0 ? 1u : 0u);
-    return limit - reads;
+    return limit - count_forward_scene_reads(scene_textures);
 }
 
-auto get_forward_scene_texture_stages(bool is_lit, uint32_t scene_textures) -> forward_scene_texture_stages
+auto count_forward_scene_reads(uint32_t scene_textures) -> uint32_t
+{
+    return ((scene_textures & material_scene_texture_color) != 0 ? 1u : 0u) +
+           ((scene_textures & material_scene_texture_depth) != 0 ? 1u : 0u) +
+           ((scene_textures & material_scene_texture_blurred_color) != 0 ? 1u : 0u);
+}
+
+auto get_forward_scene_texture_stages(bool is_lit, uint32_t scene_textures, bool is_gi) -> forward_scene_texture_stages
 {
     const bool reads_color = (scene_textures & material_scene_texture_color) != 0;
     const bool reads_depth = (scene_textures & material_scene_texture_depth) != 0;
     // The stage just below the engine's, then the next free ones down (stage 7 is the skinning palette's, stage 8 a lit
     // surface's shadow atlas). The blurred copy only comes with both reads (a rough Refraction).
-    const uint8_t first = is_lit ? 6 : 13;
-    const uint8_t second = is_lit ? 5 : 12;
-    const uint8_t third = is_lit ? 4 : 11;
+    // The "gi" variant keeps stages 5 and 6 for the radiance cache: its reads take the three below.
+    const uint8_t gi_shift =
+        is_lit && is_gi ? uint8_t(MATERIAL_GRAPH_MAX_FORWARD_LIT_TEXTURES - MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES) : uint8_t(0);
+    const uint8_t first = uint8_t((is_lit ? 6 : 13) - gi_shift);
+    const uint8_t second = uint8_t((is_lit ? 5 : 12) - gi_shift);
+    const uint8_t third = uint8_t((is_lit ? 4 : 11) - gi_shift);
     forward_scene_texture_stages stages;
     stages.color = first;
     stages.depth = reads_color && reads_depth ? second : first;

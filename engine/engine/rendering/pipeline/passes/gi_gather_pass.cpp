@@ -867,6 +867,7 @@ auto gi_gather_pass::run(gfx::render_view& rview, const gi_run_params& params) -
                                 ? gi_pass::quality_level::epic
                                 : params.gi_quality;
     cache_inputs.probe_resolution = gi_pass::get_radiance_cache_probe_resolution(cache_tier);
+    cache_inputs.surface_points = params.surface_points;
     const bool radiance_cache_ready =
         (experiments_ & experiment_no_radiance_cache) == 0u && radiance_cache_.update(cache_inputs);
     is_radiance_cache_ready_ = radiance_cache_ready;

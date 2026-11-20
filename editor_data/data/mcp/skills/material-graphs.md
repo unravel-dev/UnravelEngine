@@ -85,9 +85,13 @@ result to go back.
   after the lighting, sorted far to near among themselves and the particles,
   lit by the sun with its shadow, up to 4 nearby lights with their shadow maps
   (the translucent_lights feature limit, 2 on phones and the web), the sky and
-  the reflection probe covering them; they get no GI, SSR or screen-space AO
-  and take no decals (what they refract is the lit scene, GI included). Their
-  graphs read at most 7 textures (13 unlit), one fewer for each scene read.
+  the reflection probe covering them. Where the view runs the GI, a lit one
+  whose graph reads at most 5 textures (scene reads included) takes the GI's
+  light for its diffuse and rough reflections, from the GI's radiance cache
+  (the room's bounce light instead of the sky's); sharp reflections stay the
+  probe's. They get no SSR or screen-space AO and take no decals (what they
+  refract is the lit scene, GI included). Their graphs read at most 7 textures
+  (13 unlit), one fewer for each scene read.
   Older files' translucent "on" loads as dithered. The GI lets light through
   every see-through mode. Only Model components draw them: mesh particles and
   scripted instanced draws (Graphics.DrawMeshInstanced) draw such a material as

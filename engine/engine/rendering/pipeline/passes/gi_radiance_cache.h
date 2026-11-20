@@ -7,6 +7,7 @@
 #include <graphics/texture.h>
 
 #include <array>
+#include <vector>
 
 namespace unravel
 {
@@ -16,6 +17,8 @@ namespace unravel
  *        cells (1.04 m doubling), marked by the screen probes that will read them, new probes traced the frame
  *        they appear, the rest re-traced oldest first within a budget that grows with the final gather update
  *        speed, filtered over their face neighbours and stored with an octahedral border for bilinear reads.
+ *        Lit surfaces outside the G-buffer (the translucency pass) mark the probes around them too, and read each
+ *        probe's L1 SH, projected when it is traced.
  *
  * Owned by gi_gather_pass, which updates it after the probe placement and binds it to the probe trace
  * for the hand-off. The probes' rays read the surface cache at global distance field hits.
@@ -36,7 +39,39 @@ public:
         const float* view{};
         /// The probes' radiance texels per axis (gi_pass::get_radiance_cache_probe_resolution, a multiple of 16).
         uint32_t probe_resolution = uint32_t(gi::GI_RADIANCE_CACHE_PROBE_RES);
+        /// World points (xyz) of the lit surfaces outside the G-buffer that read the cache this frame
+        /// (bind_for_surfaces): each marks the probes around it. Null or empty marks none.
+        const std::vector<math::vec4>* surface_points{};
     };
+
+    /// The most surface points a frame marks (frame_inputs::surface_points): about a quarter of the probe pool at most,
+    /// the rest staying the screen probes'.
+    static constexpr uint32_t max_surface_points = 2048;
+
+    /// The cell size of @p clipmap (0 the finest): its probes' spacing in world units.
+    static auto get_cell_size(uint32_t clipmap) -> float;
+    /// How far from the camera, along each axis, a lookup may still read @p clipmap (GiRcClipmapOf): the most it covers
+    /// wherever its snapping puts it.
+    static auto get_reach(uint32_t clipmap) -> float;
+    /// How far from the camera, along each axis, a lookup reads @p clipmap or a finer one wherever the snapping puts
+    /// them: the least it covers.
+    static auto get_inner_reach(uint32_t clipmap) -> float;
+    /// Appends to @p points the surface points (frame_inputs::surface_points) of a model with @p bounds seen from
+    /// @p eye: per clipmap, a grid of its share of the box @p spacing cells apart (1 marks every probe between points,
+    /// 2 nearly every one), near the box's faces only where it is several cells wide on every axis. False, with
+    /// @p points partly filled, when they would pass @p budget.
+    static auto make_surface_points(const math::bbox& bounds,
+                                    const math::vec3& eye,
+                                    size_t budget,
+                                    float spacing,
+                                    std::vector<math::vec4>& points) -> bool;
+
+    /// Whether the probes' SH is kept for surfaces (bind_for_surfaces): from the first frame that marked surface
+    /// points.
+    auto has_surface_sh() const -> bool
+    {
+        return has_surfaces_;
+    }
 
     ~gi_radiance_cache();
 
@@ -48,6 +83,10 @@ public:
     /// Binds the cache for the hand-off read (gi_radiance_cache_sample.sh) at the given stages and sets
     /// the clipmap and layout uniforms.
     void bind_for_sampling(uint8_t indirection_stage, uint8_t final_stage) const;
+
+    /// Binds what a surface outside the G-buffer reads of the cache (mg_forward.sh FORWARD_GI): the indirection and
+    /// the probes' L1 SH at the given stages, and the clipmap uniforms.
+    void bind_for_surfaces(uint8_t indirection_stage, uint8_t sh_stage) const;
 
     /// Frees the probe atlases and buffers; the next update allocates them again and rebuilds the cache.
     void release_resources();
@@ -79,6 +118,8 @@ private:
         gfx::program::uniform_ptr s_sdf_clipmap;
         gfx::program::uniform_ptr s_sdf_clipmap_coverage;
         gfx::program::uniform_ptr s_sdf_clipmap_mip;
+        gfx::program::uniform_ptr u_gi_rc_points;
+        gfx::program::uniform_ptr u_gi_rc_sh_params;
 
         void cache_uniforms();
     } uniforms_;
@@ -107,8 +148,15 @@ private:
     /// One dispatch over every indirection entry.
     void run_over_indirection(gpu_program& program, const char* name) const;
     void run_mark(const frame_inputs& inputs) const;
+    /// Marks the probes around frame_inputs::surface_points (cs_gi_rc_mark_points.eshader).
+    void run_mark_surfaces(const frame_inputs& inputs);
     void run_trace(const frame_inputs& inputs) const;
     void run_filter() const;
+    /// Projects the probes traced this frame onto L1 SH (cs_gi_rc_sh.eshader), or every probe of the pool when
+    /// @p is_full.
+    void run_sh(bool is_full) const;
+    /// Whether this frame has surface points to mark.
+    static auto has_surface_points(const frame_inputs& inputs) -> bool;
 
     gpu_program::ptr clear_program_;
     gpu_program::ptr mark_program_;
@@ -119,6 +167,8 @@ private:
     gpu_program::ptr tiles_program_;
     gpu_program::ptr trace_program_;
     gpu_program::ptr filter_program_;
+    gpu_program::ptr mark_points_program_;
+    gpu_program::ptr sh_program_;
 
     /// Ping-pong indirection: this frame's and last frame's.
     std::array<bgfx::DynamicIndexBufferHandle, 2> indirection_{bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle},
@@ -130,6 +180,11 @@ private:
     bgfx::IndirectBufferHandle args_{bgfx::kInvalidHandle};
     gfx::texture::ptr radiance_atlas_;
     gfx::texture::ptr final_atlas_;
+    /// Per probe, four vec4: its radiance map's L1 SH, red, green and blue, and the cell it was projected at
+    /// (cs_gi_rc_sh.eshader).
+    bgfx::DynamicVertexBufferHandle sh_{bgfx::kInvalidHandle};
+    /// This frame's surface points (frame_inputs::surface_points), uploaded for the marking.
+    bgfx::DynamicVertexBufferHandle surface_points_{bgfx::kInvalidHandle};
 
     /// Per clipmap: xyz = corner of cell (0, 0, 0), w = cell size; this frame's and last frame's.
     std::array<float, 16> clipmaps_{};
@@ -146,6 +201,8 @@ private:
     uint32_t probe_res_ = 0;
     /// False until a frame has run with these resources: the next frame then starts from scratch.
     bool persistent_ = false;
+    /// Surfaces have read the SH since the pool was built: it is current and kept so every frame.
+    bool has_surfaces_ = false;
 };
 
 } // namespace unravel

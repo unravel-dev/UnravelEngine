@@ -26,6 +26,7 @@
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/shadow.h>
+#include <engine/rendering/pipeline/passes/gi_radiance_cache.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
 #include <engine/rendering/particles/ps/particle_gpu.h>
 #include <engine/rendering/shader_buffer.h>
@@ -851,6 +852,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
     forward_scene_color_sampler_ = std::make_shared<gfx::uniform>("s_fwd_scene_color", bgfx::UniformType::Sampler);
     forward_scene_depth_sampler_ = std::make_shared<gfx::uniform>("s_fwd_scene_depth", bgfx::UniformType::Sampler);
     forward_scene_blurred_sampler_ = std::make_shared<gfx::uniform>("s_fwd_scene_blurred", bgfx::UniformType::Sampler);
+    forward_gi_uniform_ = std::make_shared<gfx::uniform>("u_fwd_gi", bgfx::UniformType::Vec4);
     forward_light_shadow_atlas_sampler_ = std::make_shared<gfx::uniform>("s_fwd_light_shadow_atlas", bgfx::UniformType::Sampler);
     forward_light_shadows_uniform_ =
         std::make_shared<gfx::uniform>("u_fwd_light_shadows", bgfx::UniformType::Vec4, uint16_t(k_forward_light_shadow_vec4s));
@@ -1937,12 +1939,21 @@ auto is_drawn_before(const translucent_mesh_list::key& a, const translucent_mesh
     return a.distance > b.distance;
 }
 
-void pipeline::bind_forward_lighting(const math::bbox& bounds, bool is_lit, const forward_probe& probe, uint32_t scene_textures)
+void pipeline::bind_forward_lighting(const math::bbox& bounds,
+                                     bool is_lit,
+                                     const forward_probe& probe,
+                                     uint32_t scene_textures,
+                                     bool uses_gi)
 {
+    if(uses_gi && forward_gi_cache_ != nullptr)
+    {
+        forward_gi_cache_->bind_for_surfaces(MATERIAL_FORWARD_GI_INDIRECTION_STAGE, MATERIAL_FORWARD_GI_SH_STAGE);
+        gfx::set_uniform(forward_gi_uniform_, math::vec4(forward_gi_intensity_, 0.0f, 0.0f, 0.0f));
+    }
     if(scene_textures != 0)
     {
         // Without a copy the colour reads black (the zero SH stands in) and the shader leaves its refraction off.
-        const auto stages = get_forward_scene_texture_stages(is_lit, scene_textures);
+        const auto stages = get_forward_scene_texture_stages(is_lit, scene_textures, uses_gi);
         const bool has_color = bgfx::isValid(forward_scene_color_);
         if((scene_textures & material_scene_texture_color) != 0)
         {

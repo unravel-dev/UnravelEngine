@@ -73,6 +73,13 @@ draws them: skill `unravel-rendering`. Driving materials through the editor's MC
 - A forward graph's own textures get the stages the engine leaves: 7 lit, 13 unlit, one fewer per scene read
   (`get_material_graph_max_textures`, `get_forward_scene_texture_stages`); mg_forward.sh's stage defines and those two
   functions change together, with the "material graphs" suite's stage checks.
+- GI on forward surfaces: a lit graph whose textures and scene reads fit MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES (5)
+  also compiles "gi" / "oit_gi" (FORWARD_GI), which read the radiance cache's indirection and per-probe L1 SH on
+  stages 6 and 5. The deferred pipeline draws them only when its GI updated the cache this frame
+  (`pipeline::get_forward_gi_cache`), and the see-through models mark the cache cells around them
+  (`deferred::collect_translucent_gi_points`). The SH pass (`cs_gi_rc_sh`) starts the first frame such surfaces mark
+  points (a full pass) and then runs over the traced probes every frame until the cache is released; a scene without
+  them never runs it.
 - The binding (`material_graph_binding`, meta/rendering/graph_material.cpp) is binary in compiled materials: a new
   field goes at the end of SAVE and LOAD alike, with a material format bump (`asset_extensions.h`). A LOAD of a key
   SAVE does not write desyncs every later field and can allocate without bound.
