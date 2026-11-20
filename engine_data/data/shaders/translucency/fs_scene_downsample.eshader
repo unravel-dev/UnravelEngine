@@ -1,0 +1,26 @@
+[inputs]
+vec2 v_texcoord0
+
+[code]
+/*
+ * Halves the copy of the lit scene that rough refracting surfaces read blurred (pipeline::prepare_forward_scene_reads):
+ * four bilinear reads one source texel off the centre, each the mean of four texels, average a 4 x 4 block. Two runs
+ * make the quarter-size copy.
+ */
+
+#include "../common.sh"
+
+SAMPLER2D(s_scene, 0);
+/// xy: the size of one texel of the source.
+uniform vec4 u_downsample_params;
+
+void main()
+{
+	vec2 uv = v_texcoord0;
+	vec2 texel = u_downsample_params.xy;
+	vec3 sum = texture2DLod(s_scene, uv + vec2(-texel.x, -texel.y), 0.0).rgb;
+	sum += texture2DLod(s_scene, uv + vec2(texel.x, -texel.y), 0.0).rgb;
+	sum += texture2DLod(s_scene, uv + vec2(-texel.x, texel.y), 0.0).rgb;
+	sum += texture2DLod(s_scene, uv + vec2(texel.x, texel.y), 0.0).rgb;
+	gl_FragColor = vec4(sum * 0.25, 1.0);
+}

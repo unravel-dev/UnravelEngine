@@ -46,6 +46,9 @@ struct texture_slot_candidate
 
 auto material_workflow_label(material_workflow workflow) -> const char*;
 
+/// Whether @p material shows its color without lighting: glTF's KHR_materials_unlit (Assimp's Unlit shading mode).
+auto is_material_unlit(const aiMaterial* material) -> bool;
+
 /**
  * @brief Classify material input workflow.
  *

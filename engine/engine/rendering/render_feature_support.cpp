@@ -546,6 +546,8 @@ auto intersect_feature_limits(const feature_limits& lhs, const feature_limits& r
     limits.decals = lhs.decals && rhs.decals;
     limits.decal_surface_channels = lhs.decal_surface_channels && rhs.decal_surface_channels;
     limits.post_process_materials = lhs.post_process_materials && rhs.post_process_materials;
+    limits.translucent_scene_color = lhs.translucent_scene_color && rhs.translucent_scene_color;
+    limits.translucent_lights = std::min(lhs.translucent_lights, rhs.translucent_lights);
     return limits;
 }
 

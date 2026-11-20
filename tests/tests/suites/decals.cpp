@@ -203,7 +203,10 @@ auto make_output_material(const std::string& name, const char* output_type) -> a
     auto& am = engine::context().get_cached<asset_manager>();
     const std::string key = "engine:/embedded/decals_test/" + name;
     am.unload_asset<material>(key);
-    return am.get_asset_from_instance<material>(key, made);
+    auto handle = am.get_asset_from_instance<material>(key, made);
+    // The picks read the material without waiting (try_get): wait here until it is ready, however busy the machine.
+    handle.get();
+    return handle;
 }
 
 void test_find_decal_at()

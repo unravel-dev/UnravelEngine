@@ -207,10 +207,101 @@ inline constexpr const char* MATERIAL_TWO_SIDED_ON = "on";
 /// (a sky dome, an interior); Two Sided takes precedence. A render state alone: it changes no code.
 inline constexpr const char* MATERIAL_CULL_FRONT_FACES_SETTING = "cull_front_faces";
 inline constexpr const char* MATERIAL_CULL_FRONT_FACES_ON = "on";
-/// The Surface Output's setting that makes the surface see-through ("on" / "off"): dithered out by its Opacity Mask as
-/// an alpha, casting no shadow, and letting the GI's light through.
+/// The setting files written before Blend Mode used to make a surface see-through ("on" / "off");
+/// upgrade_material_graph turns "on" into the Blend Mode k_default_translucent_blend_mode names.
 inline constexpr const char* MATERIAL_TRANSLUCENT_SETTING = "translucent";
 inline constexpr const char* MATERIAL_TRANSLUCENT_ON = "on";
+
+/**
+ * @brief How a surface covers what is behind it: the Surface Output's Blend Mode. Opaque and Dithered draw into the
+ * G-buffer; the others draw in the translucency pass after the lighting, blended over the scene. The values are saved
+ * in compiled materials: append only.
+ */
+enum class material_blend_mode : uint8_t
+{
+    /// Covers what is behind it; an Opacity Mask clips it (masked).
+    opaque,
+    /// See-through by a dither of its Opacity, in the G-buffer: lit, shadowed and reflected like opaque surfaces.
+    dithered,
+    /// Blended over the scene by its Opacity, lit in the translucency pass: glass, water, fades.
+    translucent,
+    /// Its colour is added as it is, and Opacity covers what is behind: light that also occludes.
+    premultiplied,
+    /// Adds its light to the scene, scaled by Opacity: glows, beams, holograms.
+    additive,
+    /// Multiplies the scene behind it by its colour (unlit): tints, stains, shade.
+    modulate,
+};
+
+inline constexpr uint32_t MATERIAL_BLEND_MODE_COUNT = 6;
+
+/**
+ * @brief The Blend Mode a surface made see-through takes where nothing names one: the Translucent setting of older
+ * files, a glTF material's BLEND alpha mode, a PBR material's Blend. Changing it here moves every such default.
+ */
+inline constexpr material_blend_mode k_default_translucent_blend_mode = material_blend_mode::dithered;
+
+/// The Surface Output's setting naming its Blend Mode (material_blend_mode's keys); "opaque" by default.
+inline constexpr const char* MATERIAL_BLEND_MODE_SETTING = "blend_mode";
+
+/// The Blend Mode as files and tools name it ("opaque", "dithered", ...).
+auto get_material_blend_mode_key(material_blend_mode mode) -> const char*;
+/// The Blend Mode as the editor names it ("Opaque", "Dithered", ...).
+auto get_material_blend_mode_label(material_blend_mode mode) -> const char*;
+/// The Blend Mode a file or tool names; empty for an unknown name.
+auto find_material_blend_mode(hpp::string_view key) -> hpp::optional<material_blend_mode>;
+/// Whether surfaces of @p mode draw in the translucency pass rather than the G-buffer.
+auto is_material_blend_mode_forward(material_blend_mode mode) -> bool;
+/// Whether @p mode blends by an order (Translucent, Premultiplied): the modes that sort, may be Order Independent and
+/// refract.
+auto is_material_blend_mode_order_dependent(material_blend_mode mode) -> bool;
+
+/**
+ * @brief Which light a surface takes: the Surface Output's Shading Model. Unlit shows its Emissive alone. The values
+ * are saved in compiled materials: append only.
+ */
+enum class material_shading_model : uint8_t
+{
+    default_lit,
+    unlit,
+};
+
+inline constexpr uint32_t MATERIAL_SHADING_MODEL_COUNT = 2;
+
+/// The Surface Output's setting naming its Shading Model ("default_lit", "unlit"); "default_lit" by default.
+inline constexpr const char* MATERIAL_SHADING_MODEL_SETTING = "shading_model";
+
+/// The key a Surface Output's MATERIAL_SHADING_MODEL_SETTING stores for @p model ("default_lit", "unlit").
+auto get_material_shading_model_key(material_shading_model model) -> const char*;
+/// The name the editor shows for @p model ("Default Lit", "Unlit").
+auto get_material_shading_model_label(material_shading_model model) -> const char*;
+/// The Shading Model a setting value names; none for an unknown key.
+auto find_material_shading_model(hpp::string_view key) -> hpp::optional<material_shading_model>;
+
+/// The Surface Output's setting that adds a Translucent surface's highlights and reflections at full strength instead
+/// of scaled by its Opacity ("on", the default, / "off").
+inline constexpr const char* MATERIAL_PRESERVE_SPECULAR_SETTING = "preserve_specular";
+inline constexpr const char* MATERIAL_PRESERVE_SPECULAR_ON = "on";
+/// The Surface Output's setting of how strongly a surface of a translucency-pass Blend Mode makes TAA keep less of
+/// its history under it (0 to 1).
+inline constexpr const char* MATERIAL_TAA_RESPONSE_SETTING = "taa_response";
+inline constexpr float MATERIAL_DEFAULT_TAA_RESPONSE = 0.5f;
+/// The Surface Output's setting that blends a Translucent or Premultiplied surface without sorting ("on" / "off", the
+/// default): weighted blended order-independent transparency, for overlaps no order per object gets right.
+inline constexpr const char* MATERIAL_ORDER_INDEPENDENT_SETTING = "order_independent";
+inline constexpr const char* MATERIAL_ORDER_INDEPENDENT_ON = "on";
+/// The Surface Output's setting that lets a surface of the translucency pass cast a shadow dithered by its Opacity
+/// ("dithered" / "off", the default).
+inline constexpr const char* MATERIAL_CAST_SHADOW_SETTING = "cast_shadow";
+inline constexpr const char* MATERIAL_CAST_SHADOW_DITHERED = "dithered";
+/// The Surface Output's setting that draws a sorted Translucent or Premultiplied surface's depth before its colour, so
+/// only its nearest layer shows where it overlaps itself ("on" / "off", the default).
+inline constexpr const char* MATERIAL_DEPTH_PREPASS_SETTING = "depth_prepass";
+/// The Surface Output's setting that draws a surface of the translucency pass's motion into the velocity buffer over
+/// the scene behind it ("on" / "off", the default).
+inline constexpr const char* MATERIAL_WRITE_VELOCITY_SETTING = "write_velocity";
+/// The value of the on / off settings that turns them on.
+inline constexpr const char* MATERIAL_SETTING_ON = "on";
 /// The Surface Output's setting picking how the surface is described: base color, metallic and roughness
 /// ("metallic", the default), or diffuse, specular and glossiness ("specular"), which the shader converts to the
 /// first per pixel (mg_specular_to_metallic in material_graph.sh).
@@ -222,6 +313,10 @@ inline constexpr const char* MATERIAL_METALLIC_PIN = "metallic";
 inline constexpr const char* MATERIAL_ROUGHNESS_PIN = "roughness";
 inline constexpr const char* MATERIAL_SPECULAR_PIN = "specular";
 inline constexpr const char* MATERIAL_GLOSSINESS_PIN = "glossiness";
+/// The Surface Output's index of refraction (1: no refraction), read by Translucent and Premultiplied surfaces.
+inline constexpr const char* MATERIAL_REFRACTION_PIN = "refraction";
+/// The node reading how far the opaque surface behind lies past this one, faded over a distance.
+inline constexpr const char* MATERIAL_DEPTH_FADE_TYPE = "depth_fade";
 /// The Surface Output's input holding the value the Opacity Mask clips below.
 inline constexpr const char* MATERIAL_OPACITY_MASK_CLIP_PIN = "opacity_mask_clip";
 /// The settings of a scalar parameter naming the range the editor offers its value in.
@@ -355,12 +450,42 @@ auto is_material_graph_specular_workflow(const material_graph& graph) -> bool;
 /// The workflow of @p graph as its Surface Output's Workflow setting names it to the user ("Metallic", "Specular").
 auto get_material_graph_workflow_label(const material_graph& graph) -> std::string;
 
-/// Whether input @p pin of Surface Output @p output feeds the surface in its workflow: Metallic and Roughness do not in
-/// the specular workflow, Specular and Glossiness not in the metallic one; every other input does.
-auto is_material_workflow_pin_used(const material_graph_node& output, hpp::string_view pin) -> bool;
+/// The Blend Mode of Surface Output @p output (MATERIAL_BLEND_MODE_SETTING); Opaque when it names none or an unknown one.
+auto get_material_blend_mode(const material_graph_node& output) -> material_blend_mode;
 
-/// Brings a graph to the current node library: a Surface Output that names Opacity Mask Clip as a setting, as files
-/// written before it was an input do, gets the input's value from it (an input set too wins).
+/// The Blend Mode of @p graph's Surface Output; Opaque without one.
+auto get_material_graph_blend_mode(const material_graph& graph) -> material_blend_mode;
+
+/// Sets the Blend Mode of @p graph's Surface Output. False when the graph has no Surface Output or already has it.
+auto set_material_graph_blend_mode(material_graph& graph, material_blend_mode mode) -> bool;
+
+/// The Shading Model of Surface Output @p output: its setting, and Unlit for the Modulate Blend Mode, which never lights.
+auto get_material_shading_model(const material_graph_node& output) -> material_shading_model;
+
+/// The Shading Model of @p graph's Surface Output; Default Lit without one.
+auto get_material_graph_shading_model(const material_graph& graph) -> material_shading_model;
+
+/// Whether input @p pin of Surface Output @p output feeds the surface: Metallic and Roughness do not in the specular
+/// workflow, Specular and Glossiness not in the metallic one; Unlit reads Emissive, Opacity, World Position Offset and
+/// Camera Fade Distance alone (and Normal in the translucency pass); Opacity Mask Clip clips Opaque surfaces only, and
+/// the subsurface channels light G-buffer surfaces only.
+auto is_material_output_pin_used(const material_graph_node& output, hpp::string_view pin) -> bool;
+
+/// Whether the editor shows setting @p setting of Surface Output @p output: Preserve Specular for Translucent surfaces,
+/// Order Independent for Translucent and Premultiplied ones, TAA Response for those of the translucency pass; every
+/// other setting always.
+auto is_material_output_setting_shown(const material_graph_node& output, hpp::string_view setting) -> bool;
+
+/// What the editor names input @p pin of Surface Output @p output: Opacity Mask is Opacity on see-through surfaces, and
+/// Base Color the diffuse color in the specular workflow. Null: the pin's own label.
+auto get_material_output_pin_label(const material_graph_node& output, hpp::string_view pin) -> const char*;
+
+/**
+ * @brief Brings a graph to the current node library: a Surface Output that names Opacity Mask Clip as a setting, as
+ * files written before it was an input do, gets the input's value from it (an input set too wins); one that names the
+ * old Translucent setting gets the Blend Mode it means (k_default_translucent_blend_mode for "on") unless it names a
+ * Blend Mode too.
+ */
 void upgrade_material_graph(material_graph& graph);
 
 /// The range the editor offers a parameter node's value in, its Slider Min and Slider Max: empty unless the maximum is

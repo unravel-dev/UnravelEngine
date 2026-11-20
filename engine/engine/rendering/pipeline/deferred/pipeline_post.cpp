@@ -101,14 +101,15 @@ void deferred::snapshot_prev_depth(gfx::render_view& rview, bool has_consumer)
 {
     if(!has_consumer)
     {
+        opaque_depth_before_translucency_.reset();
         rview.tex_remove("PREV_DEPTH");
         rview.fbo_remove("PREV_DEPTH");
         return;
     }
-    depth_copy_pass_.run(rview,
-                         {.name = "PREV_DEPTH",
-                          .source = rview.fbo_get("GBUFFER")->get_texture(4),
-                          .pass_name = "History/Prev Depth Copy Pass"});
+    // The opaque depth: where Depth Prepass surfaces wrote theirs this frame, the copy taken before them.
+    const auto source = opaque_depth_before_translucency_ ? opaque_depth_before_translucency_ : rview.fbo_get("GBUFFER")->get_texture(4);
+    opaque_depth_before_translucency_.reset();
+    depth_copy_pass_.run(rview, {.name = "PREV_DEPTH", .source = source, .pass_name = "History/Prev Depth Copy Pass"});
 }
 
 void deferred::run_velocity_debug_pass(const camera& camera,

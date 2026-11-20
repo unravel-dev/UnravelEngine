@@ -158,6 +158,19 @@ public:
     /// Point and spot lights the volumetric fog scatters at most: one bit each in a cluster's light mask
     /// (fog/fog_lights.sh FOG_MAX_LOCAL_LIGHTS).
     static constexpr std::uint32_t max_local_lights = 32;
+    /// The vec4s of one light's shadow record (pack_light_shadow).
+    static constexpr std::uint32_t light_shadow_vec4s = 18;
+
+    /**
+     * @brief Writes the shadow record of a light (light_shadow_vec4s vec4s at @p record) as the fog and the translucency
+     * pass read it: (the map's rect in the shadow atlas, uv), (0 unshadowed, 1 spot, 2 point; 1 for a linear-depth map;
+     * half a texel of the map in its own uv; 0), then the world -> map matrix of each map by columns (one for a spot
+     * light, four for a point light's faces). A null @p shadow, or one without a tile, writes an unshadowed record.
+     */
+    static void pack_light_shadow(const shadow::shadowmap_generator* shadow, bool is_spot, math::vec4* record);
+    /// The map a reader may take from the atlas for @p generator's light: its tile, once this frame's casters are in it
+    /// (a tile the view did not resolve may hold another light's map since the atlas last moved); null otherwise.
+    static auto find_light_shadow(const shadow::shadowmap_generator& generator) -> const shadow::shadowmap_generator*;
 
     /// A fog volume's own settings (fog_volume_component).
     struct volume_settings
@@ -332,6 +345,10 @@ public:
     /// Binds the integrated froxel column of @p params at @p stage for an unlit particle draw (a white stand-in
     /// without one: the sampler must hold a 3D texture).
     void bind_particle_volume(std::uint8_t stage, const shader_params& params) const;
+
+    /// Binds the integrated froxel column of @p params at @p stage through @p sampler, for a shader of its own name (the
+    /// translucency pass's surfaces); a white stand-in without one.
+    void bind_volume(std::uint8_t stage, bgfx::UniformHandle sampler, const shader_params& params) const;
 
 private:
     /// Lights and integrates the froxels; @return the integrated column, null when the grid could not run.

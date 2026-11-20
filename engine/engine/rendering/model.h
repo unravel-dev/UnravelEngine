@@ -257,6 +257,20 @@ auto compute_bounds_screen_radius_squared(const math::vec3& origin,
                                           const math::vec3& view_origin,
                                           const math::mat4& projection) -> float;
 
+/// The submeshes a pass draws, by where their material draws.
+enum class model_material_pass : uint8_t
+{
+    all,
+    /// The G-buffer's: every material but those of the translucency pass (graph_material::is_forward).
+    deferred,
+    /// The translucency pass's alone.
+    forward,
+};
+
+/// Whether a submesh of @p mat draws in a pass of @p pass; reports a forward one left out of a deferred pass to
+/// @p found_forward when it is not null.
+auto is_material_drawn_in(const material& mat, model_material_pass pass, bool* found_forward) -> bool;
+
 /**
  * @struct model_submit_extras
  * @brief Optional retained render data consumed by the model submit paths.
@@ -289,6 +303,14 @@ struct model_submit_extras
     const math::mat4* prev_world_transform{nullptr};
     const submesh_pose_mat4* prev_submesh_transforms{nullptr};
     const std::vector<pose_mat4>* prev_skinning_transforms{nullptr};
+
+    /// Which submeshes the pass draws by where their material draws (is_material_drawn_in): every one, the G-buffer's
+    /// (every surface but those of the translucency pass), or the translucency pass's alone.
+    model_material_pass material_pass{model_material_pass::all};
+
+    /// Set to true when the submit left out a submesh whose material draws in the translucency pass (only while
+    /// material_pass is deferred): the model then has translucency-pass work. Null: not reported.
+    bool* found_forward{nullptr};
 };
 /// Every shadow view is a candidate (compute_shadow_view_mask).
 constexpr uint8_t ALL_SHADOW_VIEWS = 0xFF;

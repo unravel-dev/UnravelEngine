@@ -9,7 +9,10 @@
  * The generated shader defines, from its Surface Output node:
  *   MATERIAL_TWO_SIDED          back faces turn their normal toward the viewer
  *   MATERIAL_OPACITY_MASK       Opacity Mask clips pixels below Opacity Mask Clip, dithered like a masked material
- *   MATERIAL_TRANSLUCENT        the surface is see-through: dithered out by its Opacity Mask as an alpha
+ *   MATERIAL_DITHERED           the surface is see-through: dithered out by its Opacity as an alpha
+ *   MATERIAL_UNLIT              the surface shows its Emissive alone: written as a black surface that reflects
+ *                               nothing (Metallic 1 makes F0 0, which the shading's micro-occlusion term turns into no
+ *                               specular; AO 0 takes the indirect light) and glows with its Emissive
  *   MATERIAL_SPECULAR_WORKFLOW  the surface is diffuse, specular and glossiness, converted to the G-buffer's base
  *                               color, metallic and roughness (mg_specular_to_metallic)
  * Opacity Mask Clip and Camera Fade Distance are the surface's.
@@ -18,7 +21,7 @@
 // per frame
 uniform vec4 u_camera_clip_planes; //.x = near, .y = far, .z = material texture mip bias
 
-// The clip a translucent surface's alpha dithers at: alpha 1 draws every pixel, alpha 0 none, and the pixels between
+// The clip a dithered surface's alpha dithers at: alpha 1 draws every pixel, alpha 0 none, and the pixels between
 // spread over the dither pattern.
 #define TRANSLUCENT_DITHER_CLIP 0.25
 
@@ -88,7 +91,7 @@ void main()
 	bool lod_discard = (dither - threshold) * sign(lod_param) > 0.0;
 
 	bool alpha_discard = false;
-#if MATERIAL_TRANSLUCENT
+#if MATERIAL_DITHERED
 	// Card captures too: the GI lets light through the surface, and its cards show what the view shows.
 	alpha_discard = s.opacity_mask + 0.01 + (dither * (1.0 - TRANSLUCENT_DITHER_CLIP)) < 1.0;
 #elif MATERIAL_OPACITY_MASK && !DEFERRED_GEOM_CARD_CAPTURE
@@ -100,7 +103,15 @@ void main()
 		discard;
 	}
 
-#if MATERIAL_SPECULAR_WORKFLOW
+#if MATERIAL_UNLIT
+	s.base_color = vec3_splat(0.0);
+	s.metallic = 1.0;
+	s.roughness = 1.0;
+	s.ambient_occlusion = 0.0;
+	s.subsurface_color = vec3_splat(0.0);
+	s.subsurface_opacity = 0.0;
+	s.normal = vec3(0.0, 0.0, 1.0);
+#elif MATERIAL_SPECULAR_WORKFLOW
 	mg_specular_to_metallic(s.base_color, s.specular, s.glossiness, s.base_color, s.metallic, s.roughness);
 #endif
 

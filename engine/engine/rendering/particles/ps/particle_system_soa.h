@@ -281,6 +281,10 @@ struct render_batch
     /// its vector.
     bgfx::TextureHandle normal_texture = BGFX_INVALID_HANDLE;
     gfx::normal_map_channels normal_channels = gfx::normal_map_channels::xyz;
+    /// Where the batch sorts among the view's translucent draws: its first emitter's sort priority and squared
+    /// distance from the camera (the farthest of the batch).
+    int32_t sort_priority = 0;
+    float distance = 0.0f;
 };
 
 /// The reactive target's blend (the second render target) under BGFX_STATE_BLEND_INDEPENDENT, as bgfx::setState's
@@ -336,6 +340,9 @@ struct render_view_params
     /// Above 0: the overdraw debug view. Every fragment the draws rasterize adds this weight (0..1) to the
     /// color target, whatever the batch's blend; no lighting, one program for both texture modes.
     float overdraw_weight = 0.0f;
+    /// Called before each batch's draw, drawn or not, in the order of the batches: the translucency pass draws there
+    /// the meshes that sort before the batch. Empty: nothing is called.
+    std::function<void(const render_batch&)> before_batch;
 };
 
 struct render_view_stats

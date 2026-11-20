@@ -501,6 +501,15 @@ void test_scene_rules()
           "only the profile that turns decals off reports them");
     check(contains(feature->message, "draw nothing") && feature->details.size() == 2, "the issue says what happens and lists the entities");
 
+    in.scan.scene_color_materials = {"app:/data/Main.spfb"};
+    in.profiles[1].resolved.graphics.limits.translucent_scene_color = false;
+    const auto glass_issues = check_with(in, &audit::detail::check_scenes);
+    const auto* glass = find_rule_issue(glass_issues, audit::rules::SCENE_COLOR_OFF);
+    require(glass != nullptr, "a material reading the scene where the Android profile turns the copy off is reported");
+    check(glass->profiles == std::vector<std::string>{"Android"} && count_rule(glass_issues, audit::rules::SCENE_COLOR_OFF) == 1 &&
+              contains(glass->message, "refracts nothing"),
+          "only the profile without the scene copy reports it, saying what happens");
+
     in.scan.ran = false;
     check(check_with(in, &audit::detail::check_scenes).empty(), "without a scan the scene rules report nothing");
 }

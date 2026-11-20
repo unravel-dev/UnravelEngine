@@ -1,0 +1,23 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "link": "tint"},
+    {"pin": "metallic", "value": [0.0]},
+    {"pin": "roughness", "link": "smoothness_roughness"},
+    {"pin": "opacity_mask", "link": "opacity"}
+   ], "settings": [{"name": "blend_mode", "value": "translucent"}, {"name": "preserve_specular", "value": "on"}]},
+   {"id": "tint", "type": "color_parameter", "inputs": [{"pin": "value", "value": [0.85, 0.95, 1.0, 1.0]}],
+    "settings": [{"name": "name", "value": "Tint"}, {"name": "description", "value": "The colour the glass gives what is seen through it, at its edges most."}]},
+   {"id": "clarity", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [0.06]}],
+    "settings": [{"name": "name", "value": "Opacity"}, {"name": "description", "value": "How much of what is behind the glass it covers where it is seen straight on."},
+                 {"name": "slider_min", "value": "0"}, {"name": "slider_max", "value": "1"}]},
+   {"id": "smoothness_roughness", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [0.03]}],
+    "settings": [{"name": "name", "value": "Roughness"}, {"name": "description", "value": "How blurred its reflections are: 0 is a mirror, frosted glass is higher."},
+                 {"name": "slider_min", "value": "0"}, {"name": "slider_max", "value": "1"}]},
+   {"id": "rim", "type": "fresnel", "inputs": [{"pin": "power", "value": [4.0]}]},
+   {"id": "opacity", "type": "lerp", "inputs": [{"pin": "a", "link": "clarity"}, {"pin": "b", "value": [0.6]}, {"pin": "alpha", "link": "rim"}]}
+  ]
+ }
+}

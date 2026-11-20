@@ -1194,6 +1194,16 @@ auto model_component::get_post_process_mask() const -> int
     return post_process_mask_;
 }
 
+void model_component::set_sort_priority(int value)
+{
+    sort_priority_ = value;
+}
+
+auto model_component::get_sort_priority() const -> int
+{
+    return sort_priority_;
+}
+
 void model_component::set_static(bool is_static)
 {
     is_dynamic_for_skinning_ = false;

@@ -201,10 +201,34 @@ public:
     /// The shader's own shadow casters draw the shadow: the Opacity Mask clips it, or World Position Offset moves it.
     auto draws_own_shadow() const -> bool;
 
-    /// The surface is see-through (the Surface Output's Translucent): dithered out by its Opacity Mask.
+    /// The surface is see-through: any Blend Mode but Opaque. It casts no shadow, places no distance field, and the GI
+    /// lets light through it.
     auto is_translucent() const -> bool;
 
-    /// The material casts a shadow: every one but a translucent one.
+    /// The Surface Output's Blend Mode (Opaque for decal and post-process materials).
+    auto get_blend_mode() const -> material_blend_mode;
+
+    /// The surface draws in the translucency pass, blended over the lit scene, rather than in the G-buffer.
+    auto is_forward() const -> bool;
+
+    /// The Surface Output's Shading Model.
+    auto get_shading_model() const -> material_shading_model;
+
+    /// Translucent surfaces: highlights and reflections at full strength whatever the Opacity.
+    auto preserves_specular() const -> bool;
+
+    /// Surfaces of the translucency pass: how strongly they mark the TAA reactive mask (0 to 1).
+    auto get_taa_response() const -> float;
+
+    /// Translucent and Premultiplied surfaces blended without sorting (weighted blended order-independent
+    /// transparency): their shader's "oit" variant draws them.
+    auto is_order_independent() const -> bool;
+    /// A sorted Translucent or Premultiplied surface whose depth draws before its colour: only its nearest layer shows.
+    auto has_depth_prepass() const -> bool;
+    /// A surface of the translucency pass that draws its motion into the velocity buffer, over the whole surface.
+    auto writes_velocity() const -> bool;
+
+    /// The material casts a shadow: an opaque surface, or one of the translucency pass whose Cast Shadow is Dithered.
     auto casts_shadow() const -> bool;
 
     /// What the material draws: a surface of a mesh, a decal, or a post-process pass (its graph's output node).

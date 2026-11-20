@@ -70,6 +70,16 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Where the model's see-through surfaces of the translucency pass draw among the other see-through surfaces
+        /// and particles: a lower value draws first, behind the others; equal values draw from far to near.
+        /// </summary>
+        public int sortPriority
+        {
+            get => internal_m2n_model_get_sort_priority(owner);
+            set => internal_m2n_model_set_sort_priority(owner, value);
+        }
+
+        /// <summary>
         /// Whether the model is treated as static for rendering.
         /// </summary>
         public bool isStatic
@@ -162,6 +172,12 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern int internal_m2n_model_get_post_process_mask(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_model_get_sort_priority(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_model_set_sort_priority(Entity eid, int value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_model_set_post_process_mask(Entity eid, int value);

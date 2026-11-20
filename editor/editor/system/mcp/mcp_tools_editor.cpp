@@ -151,7 +151,8 @@ auto request_modal_answer(const std::string& label, std::string& title, std::str
 auto pipeline_stats_json(const rendering::pipeline_stats& stats) -> std::string
 {
     return fmt::format(
-        R"({{"models":{},"submeshes":{},"skinned_models":{},"skinned_submeshes":{},"shadow_models":{},)"
+        R"({{"models":{},"submeshes":{},"skinned_models":{},"skinned_submeshes":{},"translucent_models":{},)"
+        R"("translucent_submeshes":{},"shadow_models":{},)"
         R"("shadow_submeshes":{},"lights":{},"shadow_lights":{},"shadow_maps":{{"rendered":{},"reused":{},"restored":{}}},)"
         R"("gi":{{"cards":{},"captures":{},"material_changes":{},"direct_dirty_pages":{},"pages_used":{},)"
         R"("direct_invalidated":{}}},)"
@@ -162,6 +163,8 @@ auto pipeline_stats_json(const rendering::pipeline_stats& stats) -> std::string
         stats.drawn_static_submeshes,
         stats.drawn_skinned_models,
         stats.drawn_skinned_submeshes,
+        stats.drawn_translucent_models,
+        stats.drawn_translucent_submeshes,
         stats.drawn_models_for_shadows + stats.drawn_skinned_models_for_shadows,
         stats.drawn_submeshes_for_shadows + stats.drawn_skinned_submeshes_for_shadows,
         stats.drawn_lights,

@@ -241,6 +241,13 @@ auto describe_compile(const material_graph_compile_result& result, bool include_
                             make_json_string(get_material_post_process_location_key(result.post_location)),
                             result.post_priority);
     }
+    else
+    {
+        json += fmt::format(R"(,"blend_mode":{},"shading_model":{},"draws_in_translucency_pass":{})",
+                            make_json_string(get_material_blend_mode_key(result.blend_mode)),
+                            make_json_string(get_material_shading_model_key(result.shading_model)),
+                            bool_to_json(result.is_forward()));
+    }
     if(include_code)
     {
         json += fmt::format(R"(,"code":{})", make_json_string(result.shader));

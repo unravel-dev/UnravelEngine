@@ -26,6 +26,7 @@
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/taa_component.h>
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <reflection/reflection.h>
 #include <ser20/external/simdjson/simdjson.h>
 #include <string_utils/utils.h>
@@ -364,6 +365,11 @@ void audit_document_scanner::scan_material(const audit_document& document, const
         return;
     }
     add_missing(document.key, recorder.get_missing(), {}, out);
+    const auto* graph = loaded ? loaded->safe_cast<graph_material>() : nullptr;
+    if(graph != nullptr && graph->is_forward() && (graph->get_scene_textures() & material_scene_texture_color) != 0)
+    {
+        out.scene_color_materials.push_back(document.key);
+    }
 }
 
 void audit_document_scanner::scan_controller(const audit_document& document,

@@ -20,9 +20,6 @@ namespace
 {
 // Node anatomy, in graph units (pixels at zoom 1).
 constexpr float NODE_MIN_WIDTH = 110.0f;
-/// The Surface Output's Base Color, labeled as what it is in the specular workflow.
-constexpr const char* SURFACE_BASE_COLOR_PIN = "base_color";
-constexpr const char* SPECULAR_WORKFLOW_BASE_COLOR_LABEL = "Diffuse";
 constexpr float NODE_HEADER_HEIGHT = 26.0f;
 constexpr float NODE_ROW_HEIGHT = 22.0f;
 constexpr float BODY_PADDING = 6.0f;
@@ -365,13 +362,14 @@ auto get_material_pin_presentation(const material_graph_node& node, const materi
     }
     if(def.code == material_node_code::surface_output && !is_output)
     {
-        // The other workflow's inputs are not drawn; in the specular workflow Base Color is the diffuse color.
-        if(!is_material_workflow_pin_used(node, pins[pin].name))
+        // The inputs the surface does not read (the other workflow's, Unlit's unlit channels) are not drawn; some read
+        // under another name (Opacity, Diffuse).
+        if(!is_material_output_pin_used(node, pins[pin].name))
         {
             return {};
         }
-        const bool is_diffuse = pins[pin].name == SURFACE_BASE_COLOR_PIN && is_material_specular_workflow(node);
-        return {true, is_diffuse ? std::string(SPECULAR_WORKFLOW_BASE_COLOR_LABEL) : pins[pin].label};
+        const char* label = get_material_output_pin_label(node, pins[pin].name);
+        return {true, label != nullptr ? std::string(label) : pins[pin].label};
     }
     if(def.code != material_node_code::function_call)
     {

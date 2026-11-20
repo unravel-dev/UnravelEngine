@@ -91,6 +91,8 @@ constexpr auto ANDROID_DEFAULT_MAX_TEXTURE_SIZE = texture_importer_meta::texture
 constexpr int ANDROID_MAX_BLOOM_MIPS = 5;
 /// The reflection probe faces a new Android profile renders in one frame: a probe bakes over three frames.
 constexpr uint32_t ANDROID_REFLECTION_PROBE_FACES_PER_FRAME = 2;
+/// The nearby lights a see-through surface of the translucency pass is lit by on a phone or in a browser.
+constexpr int ANDROID_TRANSLUCENT_LIGHTS = 2;
 
 /// profile.cfg: what a profile is, apart from its overrides.
 struct profile_header
@@ -256,6 +258,8 @@ void set_android_starting_values(settings& resolved)
     // Decals lay their colour in one pass over the G-buffer; normals and roughness would add three targets and two
     // passes.
     limits.decal_surface_channels = false;
+    // See-through surfaces are lit by the two brightest nearby lights: each one lights every pixel they cover again.
+    limits.translucent_lights = std::min(limits.translucent_lights, ANDROID_TRANSLUCENT_LIGHTS);
     // The cheaper input of every Quality Switch.
     resolved.graphics.material_quality = material_graph_quality::low;
     // A reflection probe face renders the scene again: fewer faces a frame keep the frames of a bake closer to the
@@ -274,6 +278,7 @@ void set_web_starting_values(settings& resolved)
     // Browsers on phones run the build too: decals lay their colour alone, and the cheaper input of every Quality
     // Switch.
     resolved.graphics.limits.decal_surface_channels = false;
+    resolved.graphics.limits.translucent_lights = std::min(resolved.graphics.limits.translucent_lights, ANDROID_TRANSLUCENT_LIGHTS);
     resolved.graphics.material_quality = material_graph_quality::low;
 }
 

@@ -218,12 +218,12 @@ auto get_assigned_map_names(const graph_material& mat) -> std::string
     return names.empty() ? "None" : names;
 }
 
-/// How a graph material covers its surface.
+/// How a graph material covers its surface: its Blend Mode, an opaque one Masked when its Opacity Mask clips.
 auto get_coverage_text(const graph_material& mat) -> std::string
 {
     if(mat.is_translucent())
     {
-        return "Translucent";
+        return get_material_blend_mode_label(mat.get_blend_mode());
     }
     return mat.uses_opacity_mask() ? "Masked" : "Opaque";
 }

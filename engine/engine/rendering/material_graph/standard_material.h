@@ -52,6 +52,11 @@ struct standard_surface
     /// Within this distance of the camera the surface dithers out; 0: it does not.
     float camera_fade_distance{0.0f};
     cull_type cull{cull_type::counter_clockwise};
+    /// The surface shows its color without lighting (Shading Model Unlit): the base color, tinted by the color map, is
+    /// its Emissive.
+    bool unlit{false};
+    /// The index of refraction of a see-through surface (the Surface Output's Refraction): 1 bends nothing.
+    float refraction{1.0f};
     asset_handle<gfx::texture> color_map;
     asset_handle<gfx::texture> normal_map;
     /// Roughness in red, or in green when it is the metallic map too (one map packing both, glTF 2.0).

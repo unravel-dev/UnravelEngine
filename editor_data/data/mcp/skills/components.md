@@ -506,8 +506,10 @@ a viewer standing on -Z reads it; rotate the entity 180 in yaw for viewers on
   entity's forward axis (-normal of the surface): scene_place_decals_batch
   sets that up.
 - Model: receive_decals (Auto: every model but a skinned one; On; Off for
-  water, glass and characters) and post_process_mask (1-255: post-process
-  materials find it by that value, also through walls; 0 none).
+  water, glass and characters), post_process_mask (1-255: post-process
+  materials find it by that value, also through walls; 0 none) and
+  sort_priority (where its translucency-pass surfaces draw among the other
+  see-through surfaces and particles: lower first; equal values far to near).
 - Post Process Materials (on a Volume or a Camera): entries [{material, weight,
   enabled, material_overrides}]. Entries of one material in overlapping
   volumes blend their weights and parameters by the volumes' contributions; a

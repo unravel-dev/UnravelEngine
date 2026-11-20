@@ -107,6 +107,8 @@ struct MaterialSurface
 	float subsurface_opacity;
 	// Within this distance of the camera the surface dithers out; 0: it does not.
 	float camera_fade_distance;
+	// The translucency pass: the index of refraction of what the surface bends its view through (1: it bends nothing).
+	float refraction;
 	// Decal and post-process: how much of the output shows (Opacity), and a decal's opacities of its normal and of its
 	// metallic and roughness.
 	float opacity;
@@ -196,6 +198,7 @@ MaterialSurface mg_default_surface()
 	s.subsurface_color = vec3_splat(0.0);
 	s.subsurface_opacity = 0.0;
 	s.camera_fade_distance = 0.0;
+	s.refraction = 1.0;
 	s.opacity = 1.0;
 	s.normal_opacity = 1.0;
 	s.surface_opacity = 1.0;

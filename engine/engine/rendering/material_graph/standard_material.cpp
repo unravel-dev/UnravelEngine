@@ -246,8 +246,8 @@ void link_emissive(material_graph& graph)
 }
 
 /// The albedo's alpha becomes the Opacity Mask: a masked material clips below the Alpha Cutoff parameter; a transparent
-/// one (Blend) is Translucent, dithered out by it and casting no shadow; an opaque one whose base color's alpha is below
-/// 1 dithers at DITHERED_ALPHA_CLIP. Each as the PBR material drew it.
+/// one (Blend) takes the see-through Blend Mode k_default_translucent_blend_mode names and reads it as its Opacity; an
+/// opaque one whose base color's alpha is below 1 dithers at DITHERED_ALPHA_CLIP.
 void link_alpha(material_graph& graph, const standard_surface& surface)
 {
     switch(surface.alpha)
@@ -258,7 +258,7 @@ void link_alpha(material_graph& graph, const standard_surface& surface)
             break;
         case alpha_mode::blend:
             link_output(graph, "opacity_mask", "albedo.out.a");
-            set_material_graph_setting(get_output(graph), MATERIAL_TRANSLUCENT_SETTING, MATERIAL_TRANSLUCENT_ON);
+            set_material_graph_setting(get_output(graph), MATERIAL_BLEND_MODE_SETTING, get_material_blend_mode_key(k_default_translucent_blend_mode));
             break;
         case alpha_mode::opaque:
             if(surface.base_color.value.w < 1.0f)
@@ -448,10 +448,23 @@ auto make_standard_material_graph(const standard_surface& surface) -> material_g
     }
     link_output(graph, "normal", "normal_map");
     link_output(graph, "ambient_occlusion", "ao_map.r");
-    link_emissive(graph);
+    if(surface.unlit)
+    {
+        // Unlit shows the albedo as it is: its Emissive.
+        set_material_graph_setting(get_output(graph), MATERIAL_SHADING_MODEL_SETTING, get_material_shading_model_key(material_shading_model::unlit));
+        link_output(graph, "emissive", "albedo.out.rgb");
+    }
+    else
+    {
+        link_emissive(graph);
+    }
     link_output(graph, "subsurface_color", "subsurface_color.rgb");
     link_output(graph, "subsurface_opacity", "subsurface_color.a");
     link_alpha(graph, surface);
+    if(surface.refraction != 1.0f)
+    {
+        set_input_value(get_output(graph), MATERIAL_REFRACTION_PIN, math::vec4(surface.refraction));
+    }
     link_output(graph, "camera_fade_distance", "dither_threshold");
     set_culling(graph, surface);
     return graph;

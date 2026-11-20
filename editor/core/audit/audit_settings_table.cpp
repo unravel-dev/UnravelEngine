@@ -223,6 +223,24 @@ auto make_settings() -> std::vector<performance_setting>
         AUDIT_LIMIT_SWITCH(decal_surface_channels,
                            "Decal Normals And Roughness",
                            "Decal normals and roughness add three targets and two passes."),
+        AUDIT_LIMIT_SWITCH(translucent_scene_color,
+                           "Translucency Scene Color",
+                           "Refracting see-through surfaces copy the whole lit view once a frame they are drawn."),
+        {"graphics/limits/translucent_lights",
+         "Graphics > Allowed Features > Translucency Lights",
+         "Each nearby light lights every pixel of every see-through surface of the translucency pass again.",
+         [](const settings& value)
+         {
+             return static_cast<std::int64_t>(value.graphics.limits.translucent_lights);
+         },
+         [](const settings& value)
+         {
+             return std::to_string(value.graphics.limits.translucent_lights);
+         },
+         [](settings& to, const settings& from)
+         {
+             to.graphics.limits.translucent_lights = from.graphics.limits.translucent_lights;
+         }},
         {"graphics/limits/max_anti_aliasing",
          "Graphics > Allowed Features > Max Anti-Aliasing",
          "Temporal anti-aliasing's extra passes cost several milliseconds a frame on a phone.",

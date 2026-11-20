@@ -64,8 +64,18 @@ draws them: skill `unravel-rendering`. Driving materials through the editor's MC
   for the velocity pass's EQUAL depth test: change both or neither.
 - An Opacity Mask (or a Discard node) clips the shadow too; a mask that reads time, the camera or the screen keeps
   its caster out of cached shadow maps (`is_shadow_animated`).
-- Translucent (the Surface Output setting) dithers by alpha, casts no shadow and occludes nothing for the GI:
-  there is no blended pass.
+- Blend Mode (the Surface Output setting): Opaque and Dithered draw in the G-buffer; Translucent, Premultiplied,
+  Additive and Modulate draw in the translucency pass after the lighting (`material_graph/fs_material_graph_forward.sh`
+  with `mg_forward.sh`), sorted with the particles by Sort Priority then distance (`is_drawn_before`). Every
+  "make it see-through" default (old files' translucent "on", glTF BLEND, legacy PBR Blend, transmission) maps to
+  `k_default_translucent_blend_mode` (Dithered today): change that one constant to change them all. See-through
+  surfaces occlude nothing for the GI; a forward surface casts a shadow only with Cast Shadow Dithered.
+- A forward graph's own textures get the stages the engine leaves: 7 lit, 13 unlit, one fewer per scene read
+  (`get_material_graph_max_textures`, `get_forward_scene_texture_stages`); mg_forward.sh's stage defines and those two
+  functions change together, with the "material graphs" suite's stage checks.
+- The binding (`material_graph_binding`, meta/rendering/graph_material.cpp) is binary in compiled materials: a new
+  field goes at the end of SAVE and LOAD alike, with a material format bump (`asset_extensions.h`). A LOAD of a key
+  SAVE does not write desyncs every later field and can allocate without bound.
 - The GI treats a material as a light source from `graph_material::get_emissive_estimate`: the constants and
   parameters along Multiply nodes into Emissive, a texture reading white; anything else there is unknown and no
   light source.
@@ -127,7 +137,7 @@ those names and `make_standard_parameter_value` converts values (picker colors a
 material is 1 - Glossiness), and a property the graph lacks warns once per material. Instances saved over a PBR
 material load their overrides as Standard parameter and texture overrides, and a whole PBR material kept per slot
 by older saves becomes its differences (`material_instance::set_legacy_copy`). PBR Blend becomes the Surface
-Output's Translucent setting; an opaque base color below alpha 1 dithers at Opacity Mask Clip 0.25. The cull type
+Output's default see-through Blend Mode; an opaque base color below alpha 1 dithers at Opacity Mask Clip 0.25. The cull type
 is read only (Two Sided and Cull Front Faces settings); `for_each_material_property` skips read-only data.
 
 Specular workflow: the Surface Output's Workflow setting (`MATERIAL_WORKFLOW_SETTING`). Specular shows Diffuse

@@ -1656,6 +1656,10 @@ public:
         for(uint32_t b = 0; b < batch_count; ++b)
         {
             const render_batch& batch = batches[b];
+            if(params.before_batch)
+            {
+                params.before_batch(batch);
+            }
             const bool is_gpu = is_gpu_batch_[b] != 0u;
             const bool is_unsupported = params.is_transmittance_target && batch.blend_mode == blend_mode::multiply;
             if(is_unsupported || (is_gpu ? gpu_batches[b].capacity == 0 : cpu_counts_[b] == 0))

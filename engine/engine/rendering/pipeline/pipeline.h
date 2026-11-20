@@ -12,6 +12,8 @@
 #include <graphics/render_view.h>
 
 #include <cstdint>
+#include <functional>
+#include <vector>
 
 
 #include "passes/assao_pass.h"
@@ -129,6 +131,9 @@ struct pipeline_stats
     uint32_t decal_buffer_runs = 0;
     /// Full-screen passes of post-process materials.
     uint32_t post_process_material_passes = 0;
+    /// Models the translucency pass drew surfaces of, and the submesh draws it took (two for a two-sided one).
+    uint32_t drawn_translucent_models = 0;
+    uint32_t drawn_translucent_submeshes = 0;
 
     // Static mesh batching statistics
     batch_stats batching_stats;
@@ -154,6 +159,66 @@ struct pipeline_stats
  */
 /// What lit particles read from the scene for one view (pipeline.cpp).
 struct particle_scene_lighting;
+
+/**
+ * @brief The meshes of the translucency pass (graph_material::is_forward) a view draws among its particle batches: one
+ * entry per draw, sorted as particles sort (sort priority, then far to near), and what draws one.
+ */
+struct translucent_mesh_list
+{
+    struct key
+    {
+        int32_t sort_priority = 0;
+        /// Squared distance from the camera, as particle batches measure theirs.
+        float distance = 0.0f;
+    };
+    std::vector<key> keys;
+    /// Draws entry @p index into @p view, binding its light with pipeline::bind_forward_lighting.
+    std::function<void(bgfx::ViewId view, size_t index)> draw;
+    /// Some surface of the entries is Order Independent: draw_order_independent draws every such surface, in any
+    /// order, into the order-independent targets. Their composite sorts among the entries and the particles as one
+    /// object: at order_independent_key, the lowest Sort Priority of their models and the distance to the middle of
+    /// the box around them all.
+    bool has_order_independent = false;
+    std::function<void(bgfx::ViewId view)> draw_order_independent;
+    key order_independent_key;
+    /// Draws the motion of the entries' surfaces that Write Velocity into the velocity buffer's @p view; empty when none
+    /// does.
+    std::function<void(bgfx::ViewId view)> draw_velocity;
+    /// A sorted surface of the entries writes its depth (Depth Prepass): the pass keeps the opaque depth first.
+    bool has_depth_prepass = false;
+    /// What the entries' surfaces read of the scene behind them (material_scene_texture_bits: the colour and the depth):
+    /// the pass copies the lit scene and the depth for them.
+    uint32_t scene_textures = 0;
+
+    /// Nothing to draw: no sorted entry and no Order Independent surface.
+    auto is_empty() const -> bool
+    {
+        return keys.empty() && !has_order_independent;
+    }
+};
+
+/// The reflection probe a surface of the translucency pass reflects (mg_forward.sh u_fwd_probe): none, a sphere or a
+/// box, with its prefiltered cubemap.
+struct forward_probe
+{
+    enum class kind : uint8_t
+    {
+        none,
+        sphere,
+        box,
+    };
+    kind type = kind::none;
+    bgfx::TextureHandle cubemap = BGFX_INVALID_HANDLE;
+    /// (position, influence radius), (mips, intensity x the CPU's pre-exposure, 1 when prefiltered, 0), (a box's half
+    /// extents, transition distance).
+    std::array<math::vec4, 3> data{};
+    /// A box's world to its -1..1 space.
+    math::mat4 inv_world{1.0f};
+};
+
+/// Whether translucent draw @p a draws before @p b: the lower sort priority first, then the farther.
+auto is_drawn_before(const translucent_mesh_list::key& a, const translucent_mesh_list::key& b) -> bool;
 
 class pipeline
 {
@@ -412,7 +477,48 @@ public:
                                    delta_t dt,
                                    const fog_pass::shader_params& fog,
                                    const feature_limits& limits,
-                                   layer_mask render_mask) -> gfx::texture::ptr;
+                                   layer_mask render_mask,
+                                   const translucent_mesh_list* meshes = nullptr,
+                                   bool include_particles = true) -> gfx::texture::ptr;
+
+    /**
+     * @brief Binds what a surface of the translucency pass reads besides its graph (mg_forward.sh) for a draw within
+     * @p bounds: the sky's SH, the fog, and for a lit one the sun with its cascades, the brightest nearby lights with
+     * their shadows and the reflection @p probe, and the scene's colour and depth where the surface reads them
+     * (@p scene_textures, material_scene_texture_bits). Only inside run_particle_pass's draws of its meshes.
+     */
+    void bind_forward_lighting(const math::bbox& bounds, bool is_lit, const forward_probe& probe, uint32_t scene_textures);
+    /// Packs into forward_light_pick_ the shadow records of the first @p light_count lights of @p lighting that
+    /// @p picked names, in that order.
+    void pack_forward_light_shadows(const particle_scene_lighting* lighting, const size_t* picked, uint32_t light_count);
+    /// Binds the shadow atlas forward_light_pick_'s shadow records read (a stand-in when none has a map).
+    void bind_forward_light_shadow_atlas();
+
+    /// Halves @p source into the view's texture @p name (the blurred copy's steps); returns the half, or null when the
+    /// program cannot draw it.
+    auto downsample_scene_copy(gfx::render_view& rview, const gfx::texture::ptr& source, const std::string& name)
+        -> gfx::texture::ptr;
+
+    /// Takes what @p meshes read of the scene behind them: the depth (Hi-Z or a copy), a copy of the lit scene while
+    /// @p limits allow it, and its blurred copy for rough refraction; invalid handles otherwise.
+    void prepare_forward_scene_reads(gfx::render_view& rview,
+                                     const gfx::frame_buffer::ptr& lbuffer_depth,
+                                     const gfx::texture::ptr& hiz_depth,
+                                     const translucent_mesh_list& meshes,
+                                     const feature_limits& limits);
+
+    /**
+     * @brief Draws the order-independent translucent surfaces of @p meshes into OIT_ACCUM and OIT_WEIGHT, tested
+     * against the scene depth of @p lbuffer_depth, for submit_order_independent_composite.
+     * @return Whether the targets hold them.
+     */
+    auto run_order_independent_pass(gfx::render_view& rview,
+                                    const camera& camera,
+                                    const gfx::frame_buffer::ptr& lbuffer_depth,
+                                    const translucent_mesh_list& meshes) -> bool;
+    /// Composites what run_order_independent_pass drew over the translucency pass's targets in @p view, at its place
+    /// among the sorted draws; the reactive mask too when @p has_reactive_target.
+    void submit_order_independent_composite(gfx::render_view& rview, bgfx::ViewId view, bool has_reactive_target);
 
     /// Whether @p entity is on a layer @p render_mask draws (an entity without layers is drawn).
     static auto is_on_rendered_layer(const entt::registry& registry, entt::entity entity, const layer_mask& render_mask)
@@ -484,6 +590,63 @@ protected:
     std::array<gfx::program::uniform_ptr, 4> particle_shadow_samplers_{};
     std::shared_ptr<gfx::texture> particle_no_sky_{};
     std::shared_ptr<gfx::texture> particle_no_shadow_{};
+    /// What the translucency pass's surfaces read (mg_forward.sh), and the light, fog and pre-exposure gathered for
+    /// the view while run_particle_pass draws them.
+    gfx::program::uniform_ptr forward_sun_direction_uniform_{};
+    gfx::program::uniform_ptr forward_sun_color_uniform_{};
+    gfx::program::uniform_ptr forward_lighting_uniform_{};
+    gfx::program::uniform_ptr forward_lights_uniform_{};
+    gfx::program::uniform_ptr forward_probe_uniform_{};
+    gfx::program::uniform_ptr forward_probe_inv_world_uniform_{};
+    gfx::program::uniform_ptr forward_irradiance_sampler_{};
+    gfx::program::uniform_ptr forward_probe_sampler_{};
+    gfx::program::uniform_ptr forward_fog_volume_sampler_{};
+    std::shared_ptr<gfx::texture> forward_no_probe_{};
+    /// The composite of the order-independent translucent surfaces (translucency/fs_oit_composite.eshader).
+    std::unique_ptr<gpu_program> oit_composite_program_{};
+    gfx::program::uniform_ptr oit_accum_sampler_{};
+    gfx::program::uniform_ptr oit_weight_sampler_{};
+    gfx::program::uniform_ptr oit_params_uniform_{};
+    std::shared_ptr<particle_scene_lighting> forward_lighting_{};
+    const fog_pass::shader_params* forward_fog_{nullptr};
+    math::vec4 forward_pre_exposure_{1.0f};
+    bgfx::TextureHandle forward_environment_ = BGFX_INVALID_HANDLE;
+    /// The copy of the lit scene and the scene's depth the view's translucent surfaces read, while they draw (invalid
+    /// when not taken), and the nearby lights each is lit by (feature_limits::translucent_lights).
+    bgfx::TextureHandle forward_scene_color_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle forward_scene_depth_ = BGFX_INVALID_HANDLE;
+    /// The copy at a quarter of the view's size, blurred, that rough refracting surfaces read (invalid when not taken).
+    bgfx::TextureHandle forward_scene_blurred_ = BGFX_INVALID_HANDLE;
+    uint32_t forward_light_limit_{4};
+    /// The translucency pass draws its coverage into TAA's reactive mask too (its second target): the mesh draws blend
+    /// it as the particles do.
+    bool forward_has_reactive_target_{false};
+    /// The opaque scene's depth from before Depth Prepass surfaces wrote theirs, taken only when one draws in the
+    /// frame; the history (PREV_DEPTH) copies it instead of the depth the prepass changed. Null otherwise.
+    gfx::texture::ptr opaque_depth_before_translucency_{};
+    /// The lights picked for the last bounds a translucent draw bound, with their shadow records: a model's submeshes
+    /// share its bounds and pick once. Reset with the view's lighting.
+    struct forward_light_pick
+    {
+        const particle_scene_lighting* lighting = nullptr;
+        math::bbox bounds;
+        std::array<math::vec4, 12> lights{};
+        uint32_t count = 0;
+        std::array<math::vec4, 72> shadows{};
+        bool has_shadow = false;
+    };
+    forward_light_pick forward_light_pick_{};
+    gfx::program::uniform_ptr forward_scene_color_sampler_{};
+    gfx::program::uniform_ptr forward_scene_depth_sampler_{};
+    gfx::program::uniform_ptr forward_scene_blurred_sampler_{};
+    /// The point and spot lights' shadow records of a lit draw (mg_forward.sh u_fwd_light_shadows) and their atlas.
+    gfx::program::uniform_ptr forward_light_shadow_atlas_sampler_{};
+    gfx::program::uniform_ptr forward_light_shadows_uniform_{};
+    /// Halves the scene's copy for the blurred one (translucency/fs_scene_downsample.eshader).
+    std::unique_ptr<gpu_program> scene_downsample_program_{};
+    gfx::program::uniform_ptr scene_downsample_sampler_{};
+    gfx::program::uniform_ptr scene_downsample_params_{};
+    gfx::program::uniform_ptr forward_scene_uniform_{};
     /// Motion vectors of the particles that write them; u_prev_view_proj is last frame's view-projection.
     std::unique_ptr<gpu_program> particle_velocity_program_{};
     gfx::program::uniform_ptr particle_prev_view_proj_uniform_{};

@@ -3,8 +3,10 @@
 
 /*
  * main() of the shadow caster variants of a material graph's shader (SHADOW_CASTER), which only a graph whose Opacity
- * Mask clips or whose World Position Offset moves its vertices has. The mask clips the shadow as it clips the surface,
- * with the hard test alone: a shadow map is not dithered.
+ * Mask clips or whose World Position Offset moves its vertices has, and a surface of the translucency pass whose Cast
+ * Shadow is Dithered. The mask clips the shadow as it clips the surface, with the hard test alone; the translucency
+ * pass's surface (MATERIAL_FORWARD_SHADOW) leaves out texels by a dither of its Opacity, which the shadow filter
+ * softens into a fainter shadow.
  *
  * The vertex shader is vs_deferred_geom.sh's main(), the graph's own where its offset moves the vertices, so the depth
  * comes from the world position through the shadow view's view-projection, as fs_shadowmaps_packdepth.eshader computes
@@ -17,7 +19,7 @@
 
 void main()
 {
-#if MATERIAL_OPACITY_MASK
+#if MATERIAL_OPACITY_MASK || MATERIAL_FORWARD_SHADOW
 	vec3 view_direction = u_camera_wpos.xyz - v_wpos;
 	vec3 vertex_normal = mg_facing_vertex_normal(v_wpos, v_wnormal, view_direction);
 
@@ -62,10 +64,17 @@ void main()
 
 	MaterialSurface s = mg_default_surface();
 	evaluate_material(i, s);
+#if MATERIAL_FORWARD_SHADOW
+	if(saturate(s.opacity_mask) <= ign16x16(gl_FragCoord.xy))
+	{
+		discard;
+	}
+#else
 	if(s.opacity_mask < s.opacity_mask_clip)
 	{
 		discard;
 	}
+#endif
 #endif
 
 	vec4 light_position = mul(u_viewProj, vec4(v_wpos, 1.0));

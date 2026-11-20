@@ -558,12 +558,52 @@ auto graph_material::get_max_world_position_offset() const -> float
 
 auto graph_material::draws_own_shadow() const -> bool
 {
-    return binding_.uses_opacity_mask || binding_.uses_world_position_offset;
+    return binding_.uses_opacity_mask || binding_.uses_world_position_offset || binding_.casts_forward_shadow;
 }
 
 auto graph_material::is_translucent() const -> bool
 {
-    return binding_.is_translucent;
+    return binding_.blend_mode != material_blend_mode::opaque;
+}
+
+auto graph_material::get_blend_mode() const -> material_blend_mode
+{
+    return binding_.blend_mode;
+}
+
+auto graph_material::is_forward() const -> bool
+{
+    return binding_.domain == material_domain::surface && is_material_blend_mode_forward(binding_.blend_mode);
+}
+
+auto graph_material::get_shading_model() const -> material_shading_model
+{
+    return binding_.shading_model;
+}
+
+auto graph_material::preserves_specular() const -> bool
+{
+    return binding_.preserve_specular;
+}
+
+auto graph_material::get_taa_response() const -> float
+{
+    return binding_.taa_response;
+}
+
+auto graph_material::is_order_independent() const -> bool
+{
+    return is_forward() && binding_.order_independent;
+}
+
+auto graph_material::has_depth_prepass() const -> bool
+{
+    return is_forward() && binding_.depth_prepass;
+}
+
+auto graph_material::writes_velocity() const -> bool
+{
+    return is_forward() && binding_.writes_velocity;
 }
 
 auto graph_material::get_domain() const -> material_domain
@@ -598,12 +638,15 @@ auto graph_material::get_scene_textures() const -> uint32_t
 
 auto graph_material::casts_shadow() const -> bool
 {
-    return !binding_.is_translucent && binding_.domain == material_domain::surface;
+    const bool is_cast = binding_.blend_mode == material_blend_mode::opaque || (is_forward() && binding_.casts_forward_shadow);
+    return is_cast && binding_.domain == material_domain::surface;
 }
 
 auto graph_material::is_shadow_animated() const -> bool
 {
-    return (binding_.uses_opacity_mask && binding_.is_opacity_mask_animated) || binding_.is_world_position_offset_animated;
+    const bool is_animated = ((binding_.uses_opacity_mask || binding_.casts_forward_shadow) && binding_.is_opacity_mask_animated) ||
+                             binding_.is_world_position_offset_animated;
+    return is_animated && casts_shadow();
 }
 
 auto graph_material::write_instance_constants(math::vec4* out) const -> uint32_t

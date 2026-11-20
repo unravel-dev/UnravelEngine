@@ -208,6 +208,26 @@ void check_features(rule_context& context, const document_scan& scan)
     }
 }
 
+void check_scene_color_reads(rule_context& context, const document_scan& scan)
+{
+    for(const auto& key : scan.scene_color_materials)
+    {
+        for(const auto& profile : context.get_input().profiles)
+        {
+            if(profile.resolved.graphics.limits.translucent_scene_color || !is_shipped_by(profile, key))
+            {
+                continue;
+            }
+            auto item = context.make(rules::SCENE_COLOR_OFF,
+                                     make_document_subject(key, {}, {}),
+                                     "The material reads the lit scene behind it, and Graphics > Allowed Features > "
+                                     "Translucency Scene Color is off: it refracts nothing and reads the scene as black.");
+            item.profiles.push_back(profile.name);
+            context.add(std::move(item));
+        }
+    }
+}
+
 /// Clips that scripts name, which a script may play in any way.
 auto find_script_named_assets(const input& in) -> std::unordered_set<std::string>
 {
@@ -270,6 +290,7 @@ void check_scenes(rule_context& context)
     check_controllers(context, scan);
     check_joints(context, scan);
     check_features(context, scan);
+    check_scene_color_reads(context, scan);
     check_stereo_spatial(context, scan);
 }
 

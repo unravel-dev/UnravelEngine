@@ -678,6 +678,25 @@ REFLECT_INLINE(feature_limits)
             entt::attribute{"tooltip", "Allow decals to change normals, metallic and roughness. When off, decals lay their "
                                        "colour and emissive alone, in one pass over the G-buffer, which suits phones."},
         })
+        .data<&feature_limits::translucent_scene_color>("translucent_scene_color"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "translucent_scene_color"},
+            entt::attribute{"pretty_name", "Translucency Scene Color"},
+            entt::attribute{"tooltip", "Allow the copy of the lit scene that see-through surfaces read to bend their view "
+                                       "(Refraction) or to read it (Scene Texture Scene Color). It is one copy of the view "
+                                       "in a frame that draws such a surface. When off, refraction bends nothing and Scene "
+                                       "Color reads black."},
+        })
+        .data<&feature_limits::translucent_lights>("translucent_lights"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "translucent_lights"},
+            entt::attribute{"pretty_name", "Translucency Lights"},
+            entt::attribute{"min", 0},
+            entt::attribute{"max", 4},
+            entt::attribute{"tooltip", "The nearby point and spot lights each see-through surface of the translucency pass "
+                                       "is lit by, the brightest that reach it, 0 to 4. The sun and the sky light it "
+                                       "whatever this is. Each light costs every pixel the surface covers."},
+        })
         .data<&feature_limits::post_process_materials>("post_process_materials"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "post_process_materials"},
@@ -750,6 +769,8 @@ SAVE_INLINE(feature_limits)
     try_save(ar, ser20::make_nvp("decals", obj.decals));
     try_save(ar, ser20::make_nvp("decal_surface_channels", obj.decal_surface_channels));
     try_save(ar, ser20::make_nvp("post_process_materials", obj.post_process_materials));
+    try_save(ar, ser20::make_nvp("translucent_scene_color", obj.translucent_scene_color));
+    try_save(ar, ser20::make_nvp("translucent_lights", obj.translucent_lights));
 }
 
 LOAD_INLINE(feature_limits)
@@ -775,6 +796,8 @@ LOAD_INLINE(feature_limits)
     try_load(ar, ser20::make_nvp("decals", obj.decals));
     try_load(ar, ser20::make_nvp("decal_surface_channels", obj.decal_surface_channels));
     try_load(ar, ser20::make_nvp("post_process_materials", obj.post_process_materials));
+    try_load(ar, ser20::make_nvp("translucent_scene_color", obj.translucent_scene_color));
+    try_load(ar, ser20::make_nvp("translucent_lights", obj.translucent_lights));
 }
 
 REFLECT_INLINE(settings::graphics_settings)

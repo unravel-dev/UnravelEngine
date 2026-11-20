@@ -684,6 +684,11 @@ void draw_pipeline_section(const rendering::pipeline_stats& pstats)
                    pstats.drawn_skinned_models,
                    pstats.drawn_skinned_submeshes,
                    "Visible skinned models, and their submeshes submitted for GPU skinning."});
+    draw_pair_row({"Translucent",
+                   pstats.drawn_translucent_models,
+                   pstats.drawn_translucent_submeshes,
+                   "Models drawn in the translucency pass after the lighting, and their see-through\n"
+                   "submeshes. Two-sided ones draw twice, back faces first."});
     draw_pair_row({"Shadow Casters",
                    pstats.drawn_models_for_shadows + pstats.drawn_skinned_models_for_shadows,
                    pstats.drawn_submeshes_for_shadows + pstats.drawn_skinned_submeshes_for_shadows,

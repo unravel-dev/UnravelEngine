@@ -63,15 +63,6 @@ auto material_has_pbr_brdf_shading(const aiMaterial* material) -> bool
     return get_shading_model(material, shading) && shading == aiShadingMode_PBR_BRDF;
 }
 
-/**
- * @brief glTF writes its unlit materials (KHR_materials_unlit) with metallic/roughness factors and an
- * Unlit shading model - and a shininess derived from roughness that would otherwise read as Phong.
- */
-auto material_has_unlit_shading(const aiMaterial* material) -> bool
-{
-    aiShadingMode shading = aiShadingMode_Flat;
-    return get_shading_model(material, shading) && shading == aiShadingMode_Unlit;
-}
 
 /// Assimp's glTF importer gives every material an alphaMode; no other importer writes the key.
 auto is_gltf_material(const aiMaterial* material) -> bool
@@ -224,7 +215,7 @@ auto has_native_mr_factor_evidence(const aiMaterial* material) -> bool
     {
         return false;
     }
-    if(!material_has_pbr_brdf_shading(material) && !material_has_unlit_shading(material))
+    if(!material_has_pbr_brdf_shading(material) && !is_material_unlit(material))
     {
         return false;
     }
@@ -367,6 +358,16 @@ auto detect_material_workflow(const aiMaterial* material) -> material_workflow
 
     APPLOG_TRACE("Mesh Importer: Workflow=Unknown (no KHR/MR/Phong signals)");
     return material_workflow::unknown;
+}
+
+/**
+ * @brief glTF writes its unlit materials (KHR_materials_unlit) with metallic/roughness factors and an
+ * Unlit shading model - and a shininess derived from roughness that would otherwise read as Phong.
+ */
+auto is_material_unlit(const aiMaterial* material) -> bool
+{
+    aiShadingMode shading = aiShadingMode_Flat;
+    return get_shading_model(material, shading) && shading == aiShadingMode_Unlit;
 }
 
 auto gather_spec_gloss_factors(const aiMaterial* material) -> spec_gloss_factors_t

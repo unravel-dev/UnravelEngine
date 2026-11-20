@@ -164,6 +164,48 @@ constexpr std::array<material_post_process_location_names, MATERIAL_POST_PROCESS
     {material_post_process_location::after_tonemapping, "after_tonemapping", "After Tonemapping"},
 }};
 
+struct material_blend_mode_names
+{
+    material_blend_mode mode;
+    const char* key;
+    const char* label;
+};
+
+constexpr std::array<material_blend_mode_names, MATERIAL_BLEND_MODE_COUNT> MATERIAL_BLEND_MODE_NAMES = {{
+    {material_blend_mode::opaque, "opaque", "Opaque"},
+    {material_blend_mode::dithered, "dithered", "Dithered"},
+    {material_blend_mode::translucent, "translucent", "Translucent"},
+    {material_blend_mode::premultiplied, "premultiplied", "Premultiplied"},
+    {material_blend_mode::additive, "additive", "Additive"},
+    {material_blend_mode::modulate, "modulate", "Modulate"},
+}};
+
+struct material_shading_model_names
+{
+    material_shading_model model;
+    const char* key;
+    const char* label;
+};
+
+constexpr std::array<material_shading_model_names, MATERIAL_SHADING_MODEL_COUNT> MATERIAL_SHADING_MODEL_NAMES = {{
+    {material_shading_model::default_lit, "default_lit", "Default Lit"},
+    {material_shading_model::unlit, "unlit", "Unlit"},
+}};
+
+/// Whether @p output blends without sorting (Order Independent on a blend that takes it).
+auto is_output_order_independent(const material_graph_node& output, material_blend_mode mode) -> bool
+{
+    const auto* value = find_material_graph_setting(output, MATERIAL_ORDER_INDEPENDENT_SETTING);
+    return is_material_blend_mode_order_dependent(mode) && value != nullptr && *value == MATERIAL_ORDER_INDEPENDENT_ON;
+}
+
+/// The Surface Output's pins an Unlit surface reads (the translucency pass's refraction reads Normal besides).
+auto is_unlit_surface_pin(hpp::string_view pin) -> bool
+{
+    return pin == "emissive" || pin == "opacity_mask" || pin == MATERIAL_OPACITY_MASK_CLIP_PIN || pin == "camera_fade_distance" ||
+           pin == "world_position_offset" || pin == "material_attributes";
+}
+
 auto get_material_domain_names(material_domain domain) -> const material_domain_names&
 {
     const auto index = size_t(domain);
@@ -309,6 +351,64 @@ auto find_material_post_process_location(hpp::string_view key) -> hpp::optional<
     return {};
 }
 
+auto get_material_blend_mode_key(material_blend_mode mode) -> const char*
+{
+    const auto index = size_t(mode);
+    return MATERIAL_BLEND_MODE_NAMES[index < MATERIAL_BLEND_MODE_NAMES.size() ? index : 0].key;
+}
+
+auto get_material_blend_mode_label(material_blend_mode mode) -> const char*
+{
+    const auto index = size_t(mode);
+    return MATERIAL_BLEND_MODE_NAMES[index < MATERIAL_BLEND_MODE_NAMES.size() ? index : 0].label;
+}
+
+auto find_material_blend_mode(hpp::string_view key) -> hpp::optional<material_blend_mode>
+{
+    for(const auto& names : MATERIAL_BLEND_MODE_NAMES)
+    {
+        if(key == names.key)
+        {
+            return names.mode;
+        }
+    }
+    return {};
+}
+
+auto is_material_blend_mode_order_dependent(material_blend_mode mode) -> bool
+{
+    return mode == material_blend_mode::translucent || mode == material_blend_mode::premultiplied;
+}
+
+auto is_material_blend_mode_forward(material_blend_mode mode) -> bool
+{
+    return mode != material_blend_mode::opaque && mode != material_blend_mode::dithered;
+}
+
+auto get_material_shading_model_key(material_shading_model model) -> const char*
+{
+    const auto index = size_t(model);
+    return MATERIAL_SHADING_MODEL_NAMES[index < MATERIAL_SHADING_MODEL_NAMES.size() ? index : 0].key;
+}
+
+auto get_material_shading_model_label(material_shading_model model) -> const char*
+{
+    const auto index = size_t(model);
+    return MATERIAL_SHADING_MODEL_NAMES[index < MATERIAL_SHADING_MODEL_NAMES.size() ? index : 0].label;
+}
+
+auto find_material_shading_model(hpp::string_view key) -> hpp::optional<material_shading_model>
+{
+    for(const auto& names : MATERIAL_SHADING_MODEL_NAMES)
+    {
+        if(key == names.key)
+        {
+            return names.model;
+        }
+    }
+    return {};
+}
+
 auto find_material_graph_input(const material_graph_node& node, hpp::string_view pin) -> const material_graph_input*
 {
     const auto it = std::find_if(node.inputs.begin(),
@@ -346,6 +446,21 @@ void upgrade_material_graph(material_graph& graph)
         return;
     }
     auto& output = graph.nodes[size_t(index)];
+    const auto translucent = std::find_if(output.settings.begin(),
+                                          output.settings.end(),
+                                          [](const material_graph_setting& entry)
+                                          {
+                                              return entry.name == MATERIAL_TRANSLUCENT_SETTING;
+                                          });
+    if(translucent != output.settings.end())
+    {
+        const bool is_on = translucent->value == MATERIAL_TRANSLUCENT_ON;
+        output.settings.erase(translucent);
+        if(is_on && find_material_graph_setting(output, MATERIAL_BLEND_MODE_SETTING) == nullptr)
+        {
+            set_material_graph_setting(output, MATERIAL_BLEND_MODE_SETTING, get_material_blend_mode_key(k_default_translucent_blend_mode));
+        }
+    }
     const auto setting = std::find_if(output.settings.begin(),
                                       output.settings.end(),
                                       [](const material_graph_setting& entry)
@@ -489,8 +604,74 @@ auto get_material_graph_workflow_label(const material_graph& graph) -> std::stri
     return workflow != nullptr ? get_material_setting_choice_label(*workflow, value) : value;
 }
 
-auto is_material_workflow_pin_used(const material_graph_node& output, hpp::string_view pin) -> bool
+auto get_material_blend_mode(const material_graph_node& output) -> material_blend_mode
 {
+    const auto* value = find_material_graph_setting(output, MATERIAL_BLEND_MODE_SETTING);
+    if(value == nullptr)
+    {
+        return material_blend_mode::opaque;
+    }
+    return find_material_blend_mode(*value).value_or(material_blend_mode::opaque);
+}
+
+auto get_material_graph_blend_mode(const material_graph& graph) -> material_blend_mode
+{
+    const int output = find_material_graph_output(graph);
+    return output >= 0 ? get_material_blend_mode(graph.nodes[size_t(output)]) : material_blend_mode::opaque;
+}
+
+auto set_material_graph_blend_mode(material_graph& graph, material_blend_mode mode) -> bool
+{
+    const int output = find_material_graph_output(graph);
+    if(output < 0 || get_material_blend_mode(graph.nodes[size_t(output)]) == mode)
+    {
+        return false;
+    }
+    set_material_graph_setting(graph.nodes[size_t(output)], MATERIAL_BLEND_MODE_SETTING, get_material_blend_mode_key(mode));
+    return true;
+}
+
+auto get_material_shading_model(const material_graph_node& output) -> material_shading_model
+{
+    if(get_material_blend_mode(output) == material_blend_mode::modulate)
+    {
+        return material_shading_model::unlit;
+    }
+    const auto* value = find_material_graph_setting(output, MATERIAL_SHADING_MODEL_SETTING);
+    if(value == nullptr)
+    {
+        return material_shading_model::default_lit;
+    }
+    return find_material_shading_model(*value).value_or(material_shading_model::default_lit);
+}
+
+auto get_material_graph_shading_model(const material_graph& graph) -> material_shading_model
+{
+    const int output = find_material_graph_output(graph);
+    return output >= 0 ? get_material_shading_model(graph.nodes[size_t(output)]) : material_shading_model::default_lit;
+}
+
+auto is_material_output_pin_used(const material_graph_node& output, hpp::string_view pin) -> bool
+{
+    const material_blend_mode mode = get_material_blend_mode(output);
+    const bool is_forward = is_material_blend_mode_forward(mode);
+    if(pin == MATERIAL_OPACITY_MASK_CLIP_PIN)
+    {
+        return mode == material_blend_mode::opaque;
+    }
+    if(pin == MATERIAL_REFRACTION_PIN)
+    {
+        // The order-independent blend draws no refraction.
+        return is_material_blend_mode_order_dependent(mode) && !is_output_order_independent(output, mode);
+    }
+    if(get_material_shading_model(output) == material_shading_model::unlit)
+    {
+        return is_unlit_surface_pin(pin) || (is_forward && pin == "normal");
+    }
+    if(is_forward && (pin == "subsurface_color" || pin == "subsurface_opacity"))
+    {
+        return false;
+    }
     const bool is_metallic_pin = pin == MATERIAL_METALLIC_PIN || pin == MATERIAL_ROUGHNESS_PIN;
     const bool is_specular_pin = pin == MATERIAL_SPECULAR_PIN || pin == MATERIAL_GLOSSINESS_PIN;
     if(!is_metallic_pin && !is_specular_pin)
@@ -498,6 +679,67 @@ auto is_material_workflow_pin_used(const material_graph_node& output, hpp::strin
         return true;
     }
     return is_specular_pin == is_material_specular_workflow(output);
+}
+
+namespace
+{
+/// Whether @p setting belongs to every surface of the translucency pass.
+auto is_translucency_pass_setting(hpp::string_view setting) -> bool
+{
+    return setting == MATERIAL_TAA_RESPONSE_SETTING || setting == MATERIAL_CAST_SHADOW_SETTING ||
+           setting == MATERIAL_WRITE_VELOCITY_SETTING;
+}
+
+/// Whether @p setting belongs to the order-dependent blends alone (Translucent, Premultiplied).
+auto is_order_dependent_blend_setting(hpp::string_view setting) -> bool
+{
+    return setting == MATERIAL_ORDER_INDEPENDENT_SETTING || setting == MATERIAL_DEPTH_PREPASS_SETTING;
+}
+
+} // namespace
+
+auto is_material_output_setting_shown(const material_graph_node& output, hpp::string_view setting) -> bool
+{
+    const material_blend_mode mode = get_material_blend_mode(output);
+    if(setting == MATERIAL_PRESERVE_SPECULAR_SETTING)
+    {
+        return mode == material_blend_mode::translucent && get_material_shading_model(output) == material_shading_model::default_lit;
+    }
+    if(setting == MATERIAL_TAA_RESPONSE_SETTING || setting == MATERIAL_DEPTH_PREPASS_SETTING)
+    {
+        // An Order Independent surface marks TAA's reactive mask in the composite, at the default response, and has
+        // no prepass.
+        if(is_output_order_independent(output, mode))
+        {
+            return false;
+        }
+    }
+    if(is_translucency_pass_setting(setting))
+    {
+        return is_material_blend_mode_forward(mode);
+    }
+    if(is_order_dependent_blend_setting(setting))
+    {
+        return is_material_blend_mode_order_dependent(mode);
+    }
+    if(setting == MATERIAL_SHADING_MODEL_SETTING)
+    {
+        return mode != material_blend_mode::modulate;
+    }
+    return true;
+}
+
+auto get_material_output_pin_label(const material_graph_node& output, hpp::string_view pin) -> const char*
+{
+    if(pin == "opacity_mask" && get_material_blend_mode(output) != material_blend_mode::opaque)
+    {
+        return "Opacity";
+    }
+    if(pin == "base_color" && is_material_specular_workflow(output))
+    {
+        return "Diffuse";
+    }
+    return nullptr;
 }
 
 auto sanitize_material_graph_identifier(hpp::string_view text) -> std::string

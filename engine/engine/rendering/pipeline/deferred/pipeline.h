@@ -458,6 +458,40 @@ private:
     auto render_particles(const run_context& run,
                           const gfx::frame_buffer::ptr& target,
                           const fog_pass::shader_params& fog) -> gfx::texture::ptr;
+    /// The translucency pass's mesh draws of the run: the models translucent_models_ holds, by their Sort Priority and
+    /// distance, and what draws one (draw_translucent_model).
+    auto collect_translucent_draws(const run_context& run) -> translucent_mesh_list;
+    /// Draws the surfaces of the translucency pass of translucent_models_[@p index] into @p view, lit with the light of
+    /// its bounds and the reflection probe covering it: its Order Independent ones when @p order_independent, its sorted
+    /// ones otherwise.
+    void draw_translucent_model(bgfx::ViewId view, size_t index, const run_context& run, bool order_independent);
+    /// Draws the motion of @p element's surfaces that Write Velocity into the velocity buffer's @p view, over the scene's
+    /// depth, with the velocity pass's programs.
+    void draw_translucent_velocity(bgfx::ViewId view, const visibility_data& element, const run_context& run);
+    /// What the translucency-pass surfaces of a model need besides their draws.
+    struct translucent_reads
+    {
+        /// A surface is Order Independent.
+        bool has_order_independent = false;
+        /// A surface draws sorted (not Order Independent).
+        bool has_sorted = false;
+        /// A surface writes its depth before its colour (Depth Prepass).
+        bool has_depth_prepass = false;
+        /// A surface writes its motion (writes_translucent_velocity).
+        bool writes_velocity = false;
+        /// The scene's colour and depth they read (material_scene_texture_bits).
+        uint32_t scene_textures = 0;
+    };
+    static auto get_translucent_reads(const visibility_data& element) -> translucent_reads;
+    /// Whether a surface of the translucency pass draws its motion: Write Velocity, or a Depth Prepass, whose depth
+    /// replaces the scene's.
+    static auto writes_translucent_velocity(const graph_material& graph) -> bool;
+    /// Where the composite of the run's Order Independent surfaces sorts, seen from @p eye: the lowest Sort Priority of
+    /// their models, and the distance to the middle of the box around them all.
+    auto get_order_independent_key(const math::vec3& eye) const -> translucent_mesh_list::key;
+    /// The reflection probe a translucent surface at @p position reflects: the smallest local probe holding it, else the
+    /// view's environment probe, else none. A probe capture's surfaces reflect none, so no probe reads itself.
+    auto find_forward_probe(const run_context& run, const math::vec3& position) const -> forward_probe;
     /// A camera run's lit scene into its output: post-processing, overlays, the upscale of a scaled run, and the depth
     /// next frame reads.
     void finish_camera_image(const run_context& run, const lit_scene& lit);
@@ -951,6 +985,10 @@ private:
      * cannot draw with the plain program, without the values.
      */
     auto draws_instance_values(geom_program& program, const material& mat) -> bool;
+    /// @p mat as a graph material the G-buffer draws with its own program; null for any other material and for a
+    /// surface of the translucency pass, which has no G-buffer program (an instanced source bringing one draws the
+    /// stand-in).
+    static auto get_g_buffer_graph(const material& mat) -> const graph_material*;
     /**
      * @brief The program drawing the velocity of @p mat's draws with @p vertex_variant when its World Position Offset
      * moves the vertices, begun with the graph's values and @p camera_position (the G-buffer's) bound; null for every
@@ -1083,6 +1121,19 @@ private:
     /// both. Cleared with batch_collector_.
     batch_collector decal_receiver_batches_;
     batch_collector decal_receiver_skinned_batches_;
+    /// The visible models the G-buffer left surfaces of the translucency pass out of (graph_material::is_forward): the
+    /// translucency pass draws those surfaces. Cleared with batch_collector_.
+    std::vector<visibility_data> translucent_models_;
+    /// The translucent_models_ with a sorted surface in draw order, and those with an Order Independent surface
+    /// (collect_translucent_draws).
+    std::vector<size_t> translucent_order_;
+    std::vector<size_t> translucent_order_independent_;
+    /// The indices into translucent_models_ of the models with a surface that writes its motion.
+    std::vector<size_t> translucent_velocity_;
+    /// The reflection probes with a capture the run's translucent surfaces may reflect, and the one each of
+    /// translucent_models_ reflects (collect_translucent_draws).
+    std::vector<entt::entity> translucent_probes_;
+    std::vector<forward_probe> translucent_model_probes_;
 
     /// Every shadow caster of the scene, split by how often it has to be refreshed. Both are
     /// rebuilt WHOLESALE (clear + refill) by refresh_shadow_casters, so a destroyed entity

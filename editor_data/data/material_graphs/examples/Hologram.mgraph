@@ -7,7 +7,7 @@
     {"pin": "roughness", "value": [0.4]},
     {"pin": "emissive", "link": "glow"},
     {"pin": "opacity_mask", "link": "alpha"}
-   ], "settings": [{"name": "translucent", "value": "on"}, {"name": "two_sided", "value": "on"}]},
+   ], "settings": [{"name": "blend_mode", "value": "additive"}, {"name": "shading_model", "value": "unlit"}, {"name": "two_sided", "value": "on"}]},
    {"id": "position", "type": "world_position"},
    {"id": "clock", "type": "time"},
    {"id": "scroll", "type": "multiply", "inputs": [{"pin": "a", "link": "clock"}, {"pin": "b", "value": [0.25]}]},

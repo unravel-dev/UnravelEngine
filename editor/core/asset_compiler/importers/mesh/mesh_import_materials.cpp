@@ -303,6 +303,7 @@ public:
         {
             surface_.workflow = is_specular_workflow() ? standard_workflow::specular : standard_workflow::metallic;
             surface_.cull = is_material_two_sided(material_) ? cull_type::none : surface_.cull;
+            surface_.unlit = is_material_unlit(material_);
         }
         import_base_color();
         if(is_binding())
@@ -856,10 +857,37 @@ private:
                 surface_.base_color.value.a = math::clamp(base_color_factor.a, 0.0f, 1.0f);
             }
         }
+        import_transmission();
+    }
+
+    /// glTF's KHR_materials_transmission: the light that passes through an opaque-declared surface (glass, water) makes
+    /// it see-through, as the default see-through Blend Mode draws it, covering what is behind by one minus the
+    /// transmission; KHR_materials_ior's index of refraction (1.5 when unnamed) bends its view where the Blend Mode
+    /// refracts.
+    void import_transmission()
+    {
+        ai_real transmission = 0.0f;
+        if(material_->Get(AI_MATKEY_TRANSMISSION_FACTOR, transmission) != AI_SUCCESS || transmission <= 0.0f)
+        {
+            return;
+        }
+        APPLOG_TRACE("Mesh Importer: transmission {}", transmission);
+        if(surface_.alpha == alpha_mode::opaque)
+        {
+            surface_.alpha = alpha_mode::blend;
+            // A fully transmissive glass keeps some coverage: the default see-through Blend Mode may be Dithered,
+            // which leaves out everything at Opacity 0, and the glass would vanish with its reflections.
+            surface_.base_color.value.a = math::clamp(1.0f - transmission, k_min_transmission_opacity, 1.0f);
+        }
+        ai_real ior = 1.5f;
+        material_->Get(AI_MATKEY_REFRACTI, ior);
+        surface_.refraction = math::clamp(ior, 1.0f, 3.0f);
     }
 
     static constexpr float k_max_emissive_intensity = 100.0f;
     static constexpr ai_real k_default_alpha_cutoff = 0.5f;
+    /// The least Opacity a transmissive surface imports with.
+    static constexpr float k_min_transmission_opacity = 0.25f;
 
     const material_import_context& ctx_;
     const aiMaterial* material_;

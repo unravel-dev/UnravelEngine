@@ -298,8 +298,8 @@ auto make_output_node() -> material_node_def
     material_node_def def = make_node(MATERIAL_GRAPH_OUTPUT_TYPE,
                                       "Surface Output",
                                       category::output,
-                                      "The material's channels, written to the G-buffer. An unlinked channel takes the "
-                                      "value shown on it.");
+                                      "The material's channels: the surface its meshes draw, as its Blend Mode and Shading "
+                                      "Model say. An unlinked channel takes the value shown on it.");
     def.code = material_node_code::surface_output;
     def.inputs = {
         with_tooltip(in(MATERIAL_ATTRIBUTES_PIN, "Material Attributes", vt::attributes),
@@ -320,8 +320,9 @@ auto make_output_node() -> material_node_def
                      "Light the surface gives off, in linear colour; values above 1 glow."),
         in_unit("ambient_occlusion", "Ambient Occlusion", vt::float1, math::vec4(1.0f)),
         with_tooltip(in_unit("opacity_mask", "Opacity Mask", vt::float1, math::vec4(1.0f)),
-                     "Pixels below Opacity Mask Clip are not drawn (dithered, like a masked material), in its shadow "
-                     "neither. Linked or set below 1, the material is masked."),
+                     "Opaque: pixels below Opacity Mask Clip are not drawn, in the surface or in its shadow, and a "
+                     "value linked here or set below 1 makes the material masked. Every other Blend Mode reads it as "
+                     "the Opacity: how much of what is behind the surface it covers."),
         with_tooltip(in_unit(MATERIAL_OPACITY_MASK_CLIP_PIN, "Opacity Mask Clip", vt::float1, math::vec4(DEFAULT_OPACITY_MASK_CLIP)),
                      "The Opacity Mask value below which a pixel is cut out. Used only while the material is masked; "
                      "a parameter linked here lets material instances change it."),
@@ -330,6 +331,11 @@ auto make_output_node() -> material_node_def
         with_tooltip(in("camera_fade_distance", "Camera Fade Distance", vt::float1),
                      "Within this distance of the camera, in world units, the surface dithers out as the camera comes "
                      "closer, so it never cuts through the view. 0: it does not fade."),
+        with_tooltip(in("refraction", "Refraction", vt::float1, math::vec4(1.0f)),
+                     "Translucent and Premultiplied surfaces: the index of refraction of what the surface bends its view "
+                     "through, 1 bending nothing, 1.33 water, 1.5 glass. Only the opaque scene shows bent, not the other "
+                     "see-through surfaces and particles behind. A rough lit surface blurs it by its Roughness. Where the "
+                     "Translucency Scene Color limit is off, nothing bends."),
         with_tooltip(in("world_position_offset", "World Position Offset", vt::float3),
                      "Moves each vertex by this, in world units: computed per vertex, for wind, waves or pulses. Its "
                      "shadow and motion follow. Set Max Offset to how far it goes, so the mesh is not culled while "
@@ -369,17 +375,105 @@ auto make_output_node() -> material_node_def
     workflow.tooltip = "Metallic: Base Color, Metallic and Roughness. Specular: Base Color is the diffuse color, with "
                        "Specular and Glossiness (KHR_materials_pbrSpecularGlossiness); the shader converts them per "
                        "pixel to what the metallic workflow writes.";
-    material_setting_def translucent;
-    translucent.name = MATERIAL_TRANSLUCENT_SETTING;
-    translucent.label = "Translucent";
-    translucent.kind = material_setting_kind::choice;
-    translucent.choices = {"off", MATERIAL_TRANSLUCENT_ON};
-    translucent.choice_labels = {"Off", "On"};
-    translucent.default_value = "off";
-    translucent.tooltip = "The surface is see-through: the G-buffer dithers it out by its Opacity Mask, read as an "
-                          "alpha (not clipped at Opacity Mask Clip). It casts no shadow, and the GI lets light through "
-                          "it.";
-    def.settings = {workflow, two_sided, cull_front_faces, translucent, max_offset};
+    material_setting_def blend_mode;
+    blend_mode.name = MATERIAL_BLEND_MODE_SETTING;
+    blend_mode.label = "Blend Mode";
+    blend_mode.kind = material_setting_kind::choice;
+    for(uint32_t i = 0; i < MATERIAL_BLEND_MODE_COUNT; ++i)
+    {
+        blend_mode.choices.emplace_back(get_material_blend_mode_key(material_blend_mode(i)));
+        blend_mode.choice_labels.emplace_back(get_material_blend_mode_label(material_blend_mode(i)));
+    }
+    blend_mode.default_value = get_material_blend_mode_key(material_blend_mode::opaque);
+    blend_mode.tooltip = "How the surface covers what is behind it. Opaque covers it, and an Opacity Mask cuts it out. "
+                         "Dithered leaves out pixels by its Opacity and is lit like an opaque surface. Translucent "
+                         "blends over the scene by its Opacity, Premultiplied adds its colour as it is while Opacity "
+                         "covers what is behind, Additive adds its light, and Modulate multiplies the scene by its "
+                         "colour. These four draw after the lighting, sorted from far to near, and cast a shadow only "
+                         "when Cast Shadow is Dithered. The GI lets its light through every see-through surface.";
+    material_setting_def shading_model;
+    shading_model.name = MATERIAL_SHADING_MODEL_SETTING;
+    shading_model.label = "Shading Model";
+    shading_model.kind = material_setting_kind::choice;
+    for(uint32_t i = 0; i < MATERIAL_SHADING_MODEL_COUNT; ++i)
+    {
+        shading_model.choices.emplace_back(get_material_shading_model_key(material_shading_model(i)));
+        shading_model.choice_labels.emplace_back(get_material_shading_model_label(material_shading_model(i)));
+    }
+    shading_model.default_value = get_material_shading_model_key(material_shading_model::default_lit);
+    shading_model.tooltip = "Default Lit takes the scene's light. Unlit shows its Emissive alone, with no light, shadow "
+                            "or reflection on it, and the GI still sees its Emissive as light.";
+    material_setting_def preserve_specular;
+    preserve_specular.name = MATERIAL_PRESERVE_SPECULAR_SETTING;
+    preserve_specular.label = "Preserve Specular";
+    preserve_specular.kind = material_setting_kind::choice;
+    preserve_specular.choices = {"off", MATERIAL_PRESERVE_SPECULAR_ON};
+    preserve_specular.choice_labels = {"Off", "On"};
+    preserve_specular.default_value = MATERIAL_PRESERVE_SPECULAR_ON;
+    preserve_specular.tooltip = "Highlights and reflections show at full strength however low the Opacity is, as on "
+                                "clear glass. Off: they fade with the Opacity like the rest of the surface.";
+    material_setting_def taa_response;
+    taa_response.name = MATERIAL_TAA_RESPONSE_SETTING;
+    taa_response.label = "TAA Response";
+    taa_response.kind = material_setting_kind::number;
+    taa_response.default_value = "0.5";
+    taa_response.tooltip = "How much less of its past frames TAA keeps where the surface covers the view, from 0 to 1: "
+                           "higher keeps moving glass and effects sharp, lower keeps them smoother.";
+    material_setting_def order_independent;
+    order_independent.name = MATERIAL_ORDER_INDEPENDENT_SETTING;
+    order_independent.label = "Order Independent";
+    order_independent.kind = material_setting_kind::choice;
+    order_independent.choices = {"off", MATERIAL_ORDER_INDEPENDENT_ON};
+    order_independent.choice_labels = {"Off", "On"};
+    order_independent.default_value = "off";
+    order_independent.tooltip = "Blends the surface without sorting: every such surface over a pixel is weighed by its "
+                                "Opacity and its distance, so intersecting and nested see-through surfaces draw without "
+                                "the errors of sorting by object. The blend is an approximation: strong layers of "
+                                "different colours mix more than they would in order. Together they sort among the "
+                                "other see-through surfaces and particles as one object, the box around them all.";
+    material_setting_def cast_shadow;
+    cast_shadow.name = MATERIAL_CAST_SHADOW_SETTING;
+    cast_shadow.label = "Cast Shadow";
+    cast_shadow.kind = material_setting_kind::choice;
+    cast_shadow.choices = {"off", MATERIAL_CAST_SHADOW_DITHERED};
+    cast_shadow.choice_labels = {"Off", "Dithered"};
+    cast_shadow.default_value = "off";
+    cast_shadow.tooltip = "Surfaces of the translucency pass cast no shadow. Dithered: the shadow leaves out texels by the "
+                          "Opacity, so a faint surface casts a faint, grainy shadow that the shadow filter softens.";
+    material_setting_def depth_prepass;
+    depth_prepass.name = MATERIAL_DEPTH_PREPASS_SETTING;
+    depth_prepass.label = "Depth Prepass";
+    depth_prepass.kind = material_setting_kind::choice;
+    depth_prepass.choices = {"off", MATERIAL_SETTING_ON};
+    depth_prepass.choice_labels = {"Off", "On"};
+    depth_prepass.default_value = "off";
+    depth_prepass.tooltip = "Draws the surface's depth before its colour, so where the mesh overlaps itself only its "
+                            "nearest layer shows: a see-through character or vehicle without its inner faces. Its depth "
+                            "and its motion then replace the scene's behind it, so the see-through surfaces and "
+                            "particles drawn after it hide behind it. It costs a second draw and a motion draw.";
+    material_setting_def write_velocity;
+    write_velocity.name = MATERIAL_WRITE_VELOCITY_SETTING;
+    write_velocity.label = "Write Velocity";
+    write_velocity.kind = material_setting_kind::choice;
+    write_velocity.choices = {"off", MATERIAL_SETTING_ON};
+    write_velocity.choice_labels = {"Off", "On"};
+    write_velocity.default_value = "off";
+    write_velocity.tooltip = "Draws the surface's motion over the motion of what is behind it, over the whole surface, so "
+                             "TAA follows the surface instead of the scene behind it: for moving, mostly covering "
+                             "surfaces such as a vehicle's windows. A faint surface is better left off, as what shows "
+                             "through it then smears.";
+    def.settings = {workflow,
+                    blend_mode,
+                    shading_model,
+                    preserve_specular,
+                    order_independent,
+                    depth_prepass,
+                    write_velocity,
+                    cast_shadow,
+                    taa_response,
+                    two_sided,
+                    cull_front_faces,
+                    max_offset};
     return def;
 }
 
@@ -517,7 +611,8 @@ void add_view_nodes(std::vector<material_node_def>& nodes)
     auto scene = make_fixed(MATERIAL_SCENE_TEXTURE_TYPE,
                             "Scene Texture",
                             category::input,
-                            "Reads the view: the scene's colour (post-process materials), its depth, and the G-buffer "
+                            "Reads the view: the scene's colour (post-process materials and surfaces of the translucency "
+                            "pass), its depth, and the G-buffer "
                             "channels of the opaque surfaces. UV picks the pixel, unlinked this one. Depth is in world units "
                             "along the camera's direction; scalar channels are in R. Custom Mask and Custom Depth hold the "
                             "renderers with a Post Process Mask, seen through whatever hides them: the mask value (0 where "
@@ -532,9 +627,26 @@ void add_view_nodes(std::vector<material_node_def>& nodes)
                                           labels,
                                           "base_color",
                                           "What the node reads. A decal reads the surface it lies on; Scene Color, Emissive, "
-                                          "Velocity, Custom Mask and Custom Depth are for post-process materials.")};
+                                          "Velocity, Custom Mask and Custom Depth are for post-process materials. A surface "
+                                          "of the translucency pass (Blend Mode Translucent, Premultiplied, Additive or "
+                                          "Modulate) reads Scene Color and Scene Depth: the opaque scene behind it.")};
+    scene.is_pixel_only = true;
     nodes.push_back(in_domains(with_keywords(scene, "scene color depth gbuffer buffer screen texture post process input"),
-                               {material_domain::decal, material_domain::post_process}));
+                               {material_domain::surface, material_domain::decal, material_domain::post_process}));
+    auto depth_fade = make_fixed(MATERIAL_DEPTH_FADE_TYPE,
+                                 "Depth Fade",
+                                 category::input,
+                                 "0 where the surface meets the opaque scene behind it, rising to 1 where that lies Distance "
+                                 "further away: soft edges of water and fog cards, the glow of a force field where it "
+                                 "touches. Surfaces of the translucency pass only.",
+                                 {in("distance", "Distance", vt::float1, math::vec4(1.0f))},
+                                 {out("fade", "Fade", vt::float1)},
+                                 vt::float1,
+                                 "saturate((mg_scene_texture_scene_depth(i.screen_uv).x - dot(i.world_position - i.camera_position, "
+                                 "i.camera_direction)) / max({distance}, 0.0001))");
+    depth_fade.is_pixel_only = true;
+    nodes.push_back(in_domains(with_keywords(depth_fade, "soft intersection depth fade water edge shore"), {material_domain::surface}));
+
     auto decal_data = make_fixed("decal_data",
                                  "Decal Data",
                                  category::input,
@@ -2443,9 +2555,11 @@ auto get_material_scene_texture_sources() -> const std::vector<material_scene_te
 {
     const uint8_t both = uint8_t(get_material_domain_bit(material_domain::decal) | get_material_domain_bit(material_domain::post_process));
     const uint8_t post = get_material_domain_bit(material_domain::post_process);
+    // A surface reads them only in the translucency pass (the compiler says so for the others).
+    const uint8_t surface = get_material_domain_bit(material_domain::surface);
     static const std::vector<material_scene_texture_source> sources = {
-        {"scene_color", "Scene Color", post, material_scene_texture_color},
-        {"scene_depth", "Scene Depth", both, material_scene_texture_depth},
+        {"scene_color", "Scene Color", uint8_t(post | surface), material_scene_texture_color},
+        {"scene_depth", "Scene Depth", uint8_t(both | surface), material_scene_texture_depth},
         {"world_normal", "World Normal", both, material_scene_texture_gbuffer1},
         {"base_color", "Base Color", both, material_scene_texture_gbuffer0},
         {"metallic", "Metallic", both, material_scene_texture_gbuffer1},

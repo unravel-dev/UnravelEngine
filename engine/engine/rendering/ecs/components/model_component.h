@@ -101,6 +101,11 @@ public:
     void set_post_process_mask(int value);
     auto get_post_process_mask() const -> int;
 
+    /// Where the model's surfaces of the translucency pass draw among the view's translucent draws: a lower value draws
+    /// first (further back), on the scale particle emitters use; equal values draw far to near.
+    void set_sort_priority(int value);
+    auto get_sort_priority() const -> int;
+
     /**
      * @brief Sets whether the model is static. Skinned models are never static: the armature build makes them dynamic
      * and a mesh without bones gives back what this call asked for.
@@ -481,6 +486,7 @@ private:
     bool casts_shadow_ = true;
     decal_receive decal_receive_ = decal_receive::automatic;
     uint8_t post_process_mask_ = 0;
+    int32_t sort_priority_ = 0;
 
     /**
      * @brief The model object.

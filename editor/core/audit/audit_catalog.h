@@ -17,6 +17,7 @@ constexpr const char* UNREADABLE_DOCUMENT = "document.unreadable";
 constexpr const char* INVALID_CONTROLLER = "animation.controller_invalid";
 constexpr const char* JOINT_PROBLEM = "physics.joint_problem";
 constexpr const char* FEATURE_OFF = "scene.feature_off";
+constexpr const char* SCENE_COLOR_OFF = "material.scene_color_off";
 constexpr const char* STEREO_SPATIAL = "audio.stereo_spatial";
 constexpr const char* DEPLOY_PROBLEM = "deploy.problem";
 constexpr const char* MISSING_SCENE = "content.missing_scene";

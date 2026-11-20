@@ -1487,7 +1487,11 @@ void material_graph_panel::draw_node_details(rtti::context& ctx, size_t index)
         ImGui::SeparatorText("Settings");
         for(const auto& setting : def->settings)
         {
-            draw_setting(graph_.nodes[index], setting);
+            // The Surface Output hides the settings its Blend Mode does not read.
+            if(def->code != material_node_code::surface_output || is_material_output_setting_shown(graph_.nodes[index], setting.name))
+            {
+                draw_setting(graph_.nodes[index], setting);
+            }
         }
     }
     if(!def->inputs.empty())

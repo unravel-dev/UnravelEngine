@@ -77,7 +77,7 @@ constexpr std::uint32_t CHANGED_LIGHTS_HALF_MASK = 0xFFFFu;
 /// A point light's cos outer half angle: below every dot product, so its cone mask is 1.
 constexpr float POINT_LIGHT_COS_OUTER = -2.0f;
 /// vec4s per light in b_fog_light_shadows: the atlas rect, the parameters, then one matrix per map.
-constexpr std::uint32_t LIGHT_SHADOW_VEC4S = 18;
+constexpr std::uint32_t LIGHT_SHADOW_VEC4S = fog_pass::light_shadow_vec4s;
 constexpr std::uint32_t LIGHT_SHADOW_MATRICES_OFFSET = 2;
 /// Maps of a spot light and of a point light (its tetrahedron faces).
 constexpr std::uint8_t SPOT_SHADOW_MAPS = 1;
@@ -263,9 +263,8 @@ auto pack_local_lights(const std::vector<fog_pass::local_light>& lights, const m
 }
 
 /**
- * b_fog_light_shadows for @p lights, LIGHT_SHADOW_VEC4S per light in their order: (the map's rect in the shadow atlas,
- * uv), (kind, 1 for a linear-depth map, half a texel of the map in its own uv, 0), then the world -> map matrix of each
- * map by columns (shadowmap_generator::get_world_to_map). World space: the same for every view of the frame.
+ * b_fog_light_shadows for @p lights, LIGHT_SHADOW_VEC4S per light in their order (fog_pass::pack_light_shadow). World
+ * space: the same for every view of the frame.
  */
 auto pack_light_shadows(const std::vector<fog_pass::local_light>& lights) -> std::vector<math::vec4>
 {
@@ -273,32 +272,37 @@ auto pack_light_shadows(const std::vector<fog_pass::local_light>& lights) -> std
     std::vector<math::vec4> packed(count * LIGHT_SHADOW_VEC4S, math::vec4(0.0f));
     for(size_t i = 0; i < count; ++i)
     {
-        const auto& light = lights[i];
-        const auto tile = light.shadow ? light.shadow->get_atlas_tile() : hpp::optional<shadow::shadow_atlas_tile>{};
-        if(!tile)
-        {
-            packed[i * LIGHT_SHADOW_VEC4S + 1].x = UNSHADOWED_LIGHT;
-            continue;
-        }
-        auto* record = packed.data() + i * LIGHT_SHADOW_VEC4S;
-        record[0] = light.shadow->get_map_uv_rect();
-        record[1] = math::vec4(light.is_spot ? SPOT_LIGHT_SHADOW : POINT_LIGHT_SHADOW,
-                               light.shadow->has_linear_depth() ? 1.0f : 0.0f,
-                               0.5f / float(tile->size),
-                               0.0f);
-        const std::uint8_t maps = light.is_spot ? SPOT_SHADOW_MAPS : POINT_SHADOW_MAPS;
-        for(std::uint8_t map = 0; map < maps; ++map)
-        {
-            const math::mat4 world_to_map = light.shadow->get_world_to_map(map);
-            for(int column = 0; column < 4; ++column)
-            {
-                record[LIGHT_SHADOW_MATRICES_OFFSET + map * 4 + column] = world_to_map[column];
-            }
-        }
+        fog_pass::pack_light_shadow(lights[i].shadow, lights[i].is_spot, packed.data() + i * LIGHT_SHADOW_VEC4S);
     }
     return packed;
 }
 } // namespace
+
+void fog_pass::pack_light_shadow(const shadow::shadowmap_generator* shadow, bool is_spot, math::vec4* record)
+{
+    const auto tile = shadow != nullptr ? shadow->get_atlas_tile() : hpp::optional<shadow::shadow_atlas_tile>{};
+    if(!tile)
+    {
+        record[1].x = UNSHADOWED_LIGHT;
+        return;
+    }
+    record[0] = shadow->get_map_uv_rect();
+    record[1] = math::vec4(is_spot ? SPOT_LIGHT_SHADOW : POINT_LIGHT_SHADOW, shadow->has_linear_depth() ? 1.0f : 0.0f, 0.5f / float(tile->size), 0.0f);
+    const std::uint8_t maps = is_spot ? SPOT_SHADOW_MAPS : POINT_SHADOW_MAPS;
+    for(std::uint8_t map = 0; map < maps; ++map)
+    {
+        const math::mat4 world_to_map = shadow->get_world_to_map(map);
+        for(int column = 0; column < 4; ++column)
+        {
+            record[LIGHT_SHADOW_MATRICES_OFFSET + map * 4 + column] = world_to_map[column];
+        }
+    }
+}
+
+auto fog_pass::find_light_shadow(const shadow::shadowmap_generator& generator) -> const shadow::shadowmap_generator*
+{
+    return generator.get_atlas_tile() && generator.already_resolved() ? &generator : nullptr;
+}
 
 void fog_pass::fog_uniforms::cache_uniforms()
 {
@@ -555,6 +559,12 @@ void fog_pass::bind_particle_volume(std::uint8_t stage, const shader_params& par
 {
     const auto& volume = params.is_volumetric() ? params.volume_texture : default_textures::get().white_texture_3d();
     gfx::set_texture(fog_uniforms_.s_particle_fog_volume, stage, volume);
+}
+
+void fog_pass::bind_volume(std::uint8_t stage, bgfx::UniformHandle sampler, const shader_params& params) const
+{
+    const auto& volume = params.is_volumetric() ? params.volume_texture : default_textures::get().white_texture_3d();
+    bgfx::setTexture(stage, sampler, volume->native_handle());
 }
 
 void fog_pass::release_volumetric(gfx::render_view& rview)

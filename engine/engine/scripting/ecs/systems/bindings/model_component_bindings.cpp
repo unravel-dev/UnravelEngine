@@ -70,6 +70,23 @@ void internal_m2n_model_set_post_process_mask(entt::entity id, int32_t value)
     }
 }
 
+auto internal_m2n_model_get_sort_priority(entt::entity id) -> int32_t
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        return comp->get_sort_priority();
+    }
+    return 0;
+}
+
+void internal_m2n_model_set_sort_priority(entt::entity id, int32_t value)
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        comp->set_sort_priority(value);
+    }
+}
+
 void internal_m2n_model_set_receive_decals(entt::entity id, int32_t mode)
 {
     if(auto comp = safe_get_component<model_component>(id))
@@ -601,6 +618,8 @@ void register_model_component_script_bindings()
                           script_internal_call(internal_m2n_model_set_receive_decals));
     reg.add_internal_call("internal_m2n_model_get_post_process_mask",
                           script_internal_call(internal_m2n_model_get_post_process_mask));
+    reg.add_internal_call("internal_m2n_model_get_sort_priority", script_internal_call(internal_m2n_model_get_sort_priority));
+    reg.add_internal_call("internal_m2n_model_set_sort_priority", script_internal_call(internal_m2n_model_set_sort_priority));
     reg.add_internal_call("internal_m2n_model_set_post_process_mask",
                           script_internal_call(internal_m2n_model_set_post_process_mask));
     reg.add_internal_call("internal_m2n_model_get_static", script_internal_call(internal_m2n_model_get_static));

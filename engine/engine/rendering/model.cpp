@@ -4,6 +4,7 @@
 #include "graphics/index_buffer.h"
 #include "graphics/vertex_buffer.h"
 #include "material.h"
+#include "material_graph/graph_material.h"
 #include "mesh.h"
 #include "camera.h"
 #include "batch_collector.h"
@@ -20,6 +21,21 @@
 
 namespace unravel
 {
+auto is_material_drawn_in(const material& mat, model_material_pass pass, bool* found_forward) -> bool
+{
+    if(pass == model_material_pass::all)
+    {
+        return true;
+    }
+    const auto* graph = mat.safe_cast<graph_material>();
+    const bool is_forward = graph != nullptr && graph->is_forward();
+    if(is_forward && pass == model_material_pass::deferred && found_forward != nullptr)
+    {
+        *found_forward = true;
+    }
+    return is_forward == (pass == model_material_pass::forward);
+}
+
 
 namespace
 {
@@ -874,7 +890,7 @@ void model::submit(const math::mat4& world_transform,
                                const submit_callbacks& callbacks)
         {
             auto group_mat = get_render_material(group_id);
-            if(!group_mat)
+            if(!group_mat || !is_material_drawn_in(*group_mat, extras.material_pass, extras.found_forward))
             {
                 return;
             }
@@ -1003,7 +1019,7 @@ void model::submit(const math::mat4& world_transform,
                                        const submit_callbacks& callbacks)
         {
             auto group_mat = get_render_material(group_id);
-            if(!group_mat)
+            if(!group_mat || !is_material_drawn_in(*group_mat, extras.material_pass, extras.found_forward))
             {
                 return;
             }
@@ -1368,9 +1384,9 @@ auto model::submit_for_batching(batch_collector& collector,
         // A material instance that overrides only per-instance values keys on its shared material and
         // carries its own values per instance.
         const auto [group_material, material_override] = get_slot_batch_material(data_group_id);
-        if(!group_material)
+        if(!group_material || !is_material_drawn_in(*group_material, extras.material_pass, extras.found_forward))
         {
-            continue; // Skip data groups without a valid material
+            continue; // Skip data groups without a valid material, or of another pass
         }
 
         // Get all non-skinned submeshes for this data group
@@ -1765,7 +1781,7 @@ auto model::submit_for_skinned_batching(batch_collector& collector,
         // A material instance that overrides only per-instance values keys on its shared material and carries its own
         // values per instance, as in submit_for_batching.
         const auto [group_material, material_override] = get_slot_batch_material(data_group_id);
-        if(!group_material)
+        if(!group_material || !is_material_drawn_in(*group_material, extras.material_pass, extras.found_forward))
         {
             continue;
         }

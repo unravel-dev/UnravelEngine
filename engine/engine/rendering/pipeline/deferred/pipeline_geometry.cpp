@@ -1,6 +1,10 @@
 #include "pipeline_internal.h"
 
 #include <engine/rendering/material_graph/graph_material.h>
+#include <engine/rendering/ecs/systems/reflection_probe_system.h>
+#include <engine/rendering/particles/ps/particle_system_soa.h>
+
+#include <limits>
 
 namespace unravel
 {
@@ -82,9 +86,15 @@ auto create_or_resize_v_buffer(gfx::render_view& rview, const usize32_t& render_
 }
 } // namespace
 
+auto deferred::get_g_buffer_graph(const material& mat) -> const graph_material*
+{
+    const auto* graph = mat.safe_cast<graph_material>();
+    return graph != nullptr && !graph->is_forward() ? graph : nullptr;
+}
+
 auto deferred::submit_geometry_material(geom_program& program, const material& mat) -> gfx::program::handle_type_t
 {
-    if(const auto* graph = mat.safe_cast<graph_material>())
+    if(const auto* graph = get_g_buffer_graph(mat))
     {
         if(auto* graph_program = graph_material_programs_.begin(*graph, program.vertex_variant, program.graph_fragment_variant))
         {
@@ -100,7 +110,7 @@ auto deferred::submit_geometry_material(geom_program& program, const material& m
 
 auto deferred::draws_instance_values(geom_program& program, const material& mat) -> bool
 {
-    const auto* graph = mat.safe_cast<graph_material>();
+    const auto* graph = get_g_buffer_graph(mat);
     return graph == nullptr || graph_material_programs_.begin(*graph, program.vertex_variant, program.graph_fragment_variant) != nullptr;
 }
 
@@ -204,6 +214,7 @@ void deferred::run_g_buffer_pass(hpp::span<const visibility_data> visibility_set
         source_runs_.clear();
         decal_receiver_batches_.clear();
         decal_receiver_skinned_batches_.clear();
+        translucent_models_.clear();
         // The limits alone decide it: checking every drawn material would cost a scene with many of them on the CPU.
         gbuffer_has_subsurface_ = limits.subsurface;
         skinned_batching_run_ = is_skinned_batching_active();
@@ -256,7 +267,11 @@ void deferred::run_g_buffer_pass(hpp::span<const visibility_data> visibility_set
 
         model_comp.set_last_render_frame(gfx::get_render_frame());
 
-        const auto extras = model_comp.get_submit_extras(false);
+        // Surfaces of the translucency pass leave the G-buffer; a model that has some is drawn again there.
+        bool has_forward = false;
+        auto extras = model_comp.get_submit_extras(false);
+        extras.material_pass = model_material_pass::deferred;
+        extras.found_forward = &has_forward;
 
         // Check if this model can be batched (static mesh, no skinning). Movers stay
         // batched: their instances carry the previous-frame transform alongside the
@@ -406,6 +421,10 @@ void deferred::run_g_buffer_pass(hpp::span<const visibility_data> visibility_set
                              &camera,
                              extras);
             }
+        }
+        if(has_forward)
+        {
+            translucent_models_.push_back(element);
         }
     }
 
@@ -847,6 +866,7 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
                 batch_skinned ? model::get_empty_skinning() : model_comp.get_skinning_transforms();
 
             auto extras = model_comp.get_submit_extras(false);
+            extras.material_pass = model_material_pass::deferred;
             extras.prev_world_transform = &model_comp.get_prev_world_transform();
             extras.prev_submesh_transforms = &model_comp.get_prev_submesh_transforms();
             extras.prev_skinning_transforms = &model_comp.get_prev_skinning_transforms();
@@ -1099,6 +1119,438 @@ void deferred::run_hiz_pass(gfx::render_view& rview, const run_params& params, c
     hp.output_hiz = rview.tex_get("HIZBUFFER");
 
     hiz_pass_.run(rview, hp);
+}
+
+auto deferred::collect_translucent_draws(const run_context& run) -> translucent_mesh_list
+{
+    translucent_mesh_list list;
+    translucent_order_.clear();
+    translucent_order_independent_.clear();
+    translucent_velocity_.clear();
+    translucent_probes_.clear();
+    if(translucent_models_.empty())
+    {
+        return list;
+    }
+    APP_SCOPE_PERF("Rendering/Translucency/Collect");
+    stats_.drawn_translucent_models += uint32_t(translucent_models_.size());
+    const math::vec3 eye = run.cam.get_position();
+    std::vector<translucent_mesh_list::key> keys;
+    keys.reserve(translucent_models_.size());
+    for(size_t i = 0; i < translucent_models_.size(); ++i)
+    {
+        const auto& model_comp = translucent_models_[i].entity.get<model_component>();
+        keys.push_back({model_comp.get_sort_priority(), math::distance2(eye, model_comp.get_world_bounds().get_center())});
+        const auto reads = get_translucent_reads(translucent_models_[i]);
+        if(reads.has_sorted)
+        {
+            translucent_order_.push_back(i);
+        }
+        if(reads.has_order_independent)
+        {
+            translucent_order_independent_.push_back(i);
+        }
+        if(reads.writes_velocity)
+        {
+            translucent_velocity_.push_back(i);
+        }
+        list.has_depth_prepass = list.has_depth_prepass || reads.has_depth_prepass;
+        list.scene_textures |= reads.scene_textures;
+    }
+    std::stable_sort(translucent_order_.begin(),
+                     translucent_order_.end(),
+                     [&keys](size_t a, size_t b)
+                     {
+                         return is_drawn_before(keys[a], keys[b]);
+                     });
+    list.keys.reserve(translucent_order_.size());
+    for(const size_t index : translucent_order_)
+    {
+        list.keys.push_back(keys[index]);
+    }
+    // A probe capture's surfaces reflect no probe: one would read the cube being written.
+    if(run.is_camera_run())
+    {
+        const bool gi_owns_reflections = gi_reflections_own_view(run.params);
+        run.scn.registry->view<transform_component, reflection_probe_component, active_component>().each(
+            [&](auto e, auto&& transform_comp, auto&& probe_comp, auto&& active)
+            {
+                if(probe_comp.has_capture() && probe_comp.get_cubemap_prefiltered() &&
+                   reflection_probe_system::is_used_in_view(probe_comp.get_probe(), gi_owns_reflections))
+                {
+                    translucent_probes_.push_back(e);
+                }
+            });
+    }
+    translucent_model_probes_.clear();
+    translucent_model_probes_.reserve(translucent_models_.size());
+    for(const auto& element : translucent_models_)
+    {
+        translucent_model_probes_.push_back(find_forward_probe(run, element.entity.get<model_component>().get_world_bounds().get_center()));
+    }
+    list.draw = [this, &run](bgfx::ViewId view, size_t index)
+    {
+        draw_translucent_model(view, translucent_order_[index], run, false);
+    };
+    list.has_order_independent = !translucent_order_independent_.empty();
+    if(list.has_order_independent)
+    {
+        list.order_independent_key = get_order_independent_key(eye);
+    }
+    list.draw_order_independent = [this, &run](bgfx::ViewId view)
+    {
+        for(const size_t index : translucent_order_independent_)
+        {
+            draw_translucent_model(view, index, run, true);
+        }
+    };
+    if(!translucent_velocity_.empty())
+    {
+        list.draw_velocity = [this, &run](bgfx::ViewId view)
+        {
+            for(const size_t index : translucent_velocity_)
+            {
+                draw_translucent_velocity(view, translucent_models_[index], run);
+            }
+        };
+    }
+    return list;
+}
+
+void deferred::draw_translucent_velocity(bgfx::ViewId view, const visibility_data& element, const run_context& run)
+{
+    const auto& entity = element.entity;
+    if(!entity.valid() || !entity.all_of<model_component, transform_component>() || !velocity_program_.program ||
+       !velocity_program_skinned_.program)
+    {
+        return;
+    }
+    auto& model_comp = entity.get<model_component>();
+    const auto& model = model_comp.get_model();
+    if(!model.is_valid())
+    {
+        return;
+    }
+    const auto& camera = run.cam;
+    const auto camera_position = camera.get_position();
+    const auto prev_vp = camera.get_prev_view_projection_unjittered();
+    auto extras = model_comp.get_submit_extras(false);
+    extras.material_pass = model_material_pass::forward;
+    extras.prev_world_transform = &model_comp.get_prev_world_transform();
+    extras.prev_submesh_transforms = &model_comp.get_prev_submesh_transforms();
+    extras.prev_skinning_transforms = &model_comp.get_prev_skinning_transforms();
+
+    model::submit_callbacks callbacks;
+    callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
+    {
+        velocity_geom_program& prog = submit_params.skinned ? velocity_program_skinned_ : velocity_program_;
+        prog.program->begin();
+        gfx::set_uniform(prog.u_prev_view_proj, prev_vp.get_matrix());
+    };
+    callbacks.setup_params_per_submesh = [&](const model::submit_callbacks::params& submit_params, const material& mat)
+    {
+        const uint8_t discard = submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL;
+        const auto* graph = mat.safe_cast<graph_material>();
+        if(graph == nullptr || !writes_translucent_velocity(*graph))
+        {
+            bgfx::discard(discard);
+            return;
+        }
+        velocity_geom_program& prog = submit_params.skinned ? velocity_program_skinned_ : velocity_program_;
+        // A World Position Offset moves the vertices in the material's own vertex shader, as in the velocity pass.
+        auto* offset_program =
+            begin_offset_velocity_program(mat, submit_params.skinned ? "skinned" : gfx::shader::DEFAULT_VARIANT, camera_position);
+        // The scene's depth decides what the surface covers; the surface writes none.
+        const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL | cull_state);
+        bgfx::submit(view, offset_program != nullptr ? offset_program->native_handle() : prog.program->native_handle(), 0, discard);
+    };
+    callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
+    {
+        velocity_geom_program& prog = submit_params.skinned ? velocity_program_skinned_ : velocity_program_;
+        prog.program->end();
+    };
+    const auto& view_frustum = camera.get_frustum();
+    model.submit(entity.get<transform_component>().get_transform_global(),
+                 model_comp.get_submesh_transforms(),
+                 model_comp.get_bone_transforms(),
+                 model_comp.get_skinning_transforms(),
+                 element.lod_data.current_lod_index,
+                 callbacks,
+                 &view_frustum,
+                 &camera,
+                 extras);
+}
+
+auto deferred::get_order_independent_key(const math::vec3& eye) const -> translucent_mesh_list::key
+{
+    // The composite sorts as one object: the box around every model with an Order Independent surface.
+    math::bbox bounds;
+    int32_t sort_priority = std::numeric_limits<int32_t>::max();
+    for(size_t i = 0; i < translucent_order_independent_.size(); ++i)
+    {
+        const auto& model_comp = translucent_models_[translucent_order_independent_[i]].entity.get<model_component>();
+        const math::bbox& model_bounds = model_comp.get_world_bounds();
+        if(i == 0)
+        {
+            bounds = model_bounds;
+        }
+        else
+        {
+            bounds.add_point(model_bounds.min);
+            bounds.add_point(model_bounds.max);
+        }
+        sort_priority = std::min(sort_priority, model_comp.get_sort_priority());
+    }
+    return {sort_priority, math::distance2(eye, bounds.get_center())};
+}
+
+auto deferred::writes_translucent_velocity(const graph_material& graph) -> bool
+{
+    // A prepass puts the surface's depth in the scene's: its motion goes with it, so TAA reprojects the two alike.
+    return graph.writes_velocity() || graph.has_depth_prepass();
+}
+
+auto deferred::get_translucent_reads(const visibility_data& element) -> translucent_reads
+{
+    translucent_reads reads;
+    const auto& model = element.entity.get<model_component>().get_model();
+    for(uint32_t slot = 0; slot < uint32_t(model.get_shared_materials().size()); ++slot)
+    {
+        const auto mat = model.get_render_material(slot);
+        const auto* graph = mat ? mat->safe_cast<graph_material>() : nullptr;
+        if(graph != nullptr && graph->is_forward())
+        {
+            reads.has_order_independent = reads.has_order_independent || graph->is_order_independent();
+            reads.has_sorted = reads.has_sorted || !graph->is_order_independent();
+            reads.has_depth_prepass = reads.has_depth_prepass || graph->has_depth_prepass();
+            reads.writes_velocity = reads.writes_velocity || writes_translucent_velocity(*graph);
+            reads.scene_textures |= graph->get_scene_textures();
+        }
+    }
+    return reads;
+}
+
+auto deferred::find_forward_probe(const run_context& run, const math::vec3& position) const -> forward_probe
+{
+    forward_probe result;
+    float best_radius = std::numeric_limits<float>::max();
+    entt::entity environment = entt::null;
+    entt::entity best = entt::null;
+    for(const auto e : translucent_probes_)
+    {
+        const auto& probe_comp = run.scn.registry->get<reflection_probe_component>(e);
+        const auto& probe = probe_comp.get_probe();
+        if(probe.method == reflect_method::environment)
+        {
+            environment = environment == entt::null ? e : environment;
+            continue;
+        }
+        const auto& world = run.scn.registry->get<transform_component>(e).get_transform_global();
+        float radius = 0.0f;
+        bool is_inside = false;
+        if(probe.type == probe_type::sphere)
+        {
+            const auto& scale = world.get_scale();
+            radius = math::max(scale.x, math::max(scale.y, scale.z)) * probe.sphere_data.range;
+            is_inside = math::distance(position, world.get_position()) < radius;
+        }
+        else
+        {
+            math::transform box = world;
+            box.scale(probe.box_data.extents);
+            const math::vec3 local = math::inverse(box).transform_coord(position);
+            radius = math::length(box.get_scale() + probe.box_data.transition_distance);
+            is_inside = math::abs(local.x) <= 1.0f && math::abs(local.y) <= 1.0f && math::abs(local.z) <= 1.0f;
+        }
+        if(is_inside && radius < best_radius)
+        {
+            best_radius = radius;
+            best = e;
+        }
+    }
+    const entt::entity chosen = best != entt::null ? best : environment;
+    if(chosen == entt::null)
+    {
+        return result;
+    }
+    auto& probe_comp = run.scn.registry->get<reflection_probe_component>(chosen);
+    const auto& probe = probe_comp.get_probe();
+    const auto& cubemap = probe_comp.get_cubemap_prefiltered();
+    const auto& world = run.scn.registry->get<transform_component>(chosen).get_transform_global();
+    const auto& scale = world.get_scale();
+    const float intensity = probe.intensity * get_pre_exposure(run.rview).value;
+    const float prefiltered = probe_comp.get_apply_prefilter() ? 1.0f : 0.0f;
+    result.cubemap = cubemap->native_handle();
+    result.data[1] = math::vec4(float(cubemap->info.numMips), intensity, prefiltered, 0.0f);
+    if(probe.type == probe_type::sphere)
+    {
+        result.type = forward_probe::kind::sphere;
+        result.data[0] = math::vec4(world.get_position(), math::max(scale.x, math::max(scale.y, scale.z)) * probe.sphere_data.range);
+        return result;
+    }
+    math::transform box = world;
+    box.scale(probe.box_data.extents);
+    result.type = forward_probe::kind::box;
+    result.data[0] = math::vec4(world.get_position(), math::length(box.get_scale() + probe.box_data.transition_distance));
+    result.data[2] = math::vec4(probe.box_data.extents, probe.box_data.transition_distance);
+    result.inv_world = math::inverse(box).get_matrix();
+    return result;
+}
+
+namespace
+{
+/// The blend state of a surface of the translucency pass (fs_material_graph_forward.sh), with the reactive target's MAX
+/// blend when @p has_reactive_target.
+auto get_translucent_blend_state(material_blend_mode mode, bool has_reactive_target) -> uint64_t
+{
+    uint64_t blend = BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
+    if(mode == material_blend_mode::additive)
+    {
+        blend = BGFX_STATE_BLEND_ADD;
+    }
+    else if(mode == material_blend_mode::modulate)
+    {
+        blend = BGFX_STATE_BLEND_MULTIPLY;
+    }
+    return blend | (has_reactive_target ? BGFX_STATE_BLEND_INDEPENDENT : 0);
+}
+} // namespace
+
+void deferred::draw_translucent_model(bgfx::ViewId view, size_t index, const run_context& run, bool order_independent)
+{
+    const auto& element = translucent_models_[index];
+    const auto& entity = element.entity;
+    if(!entity.valid() || !entity.all_of<model_component, transform_component>())
+    {
+        return;
+    }
+    auto& model_comp = entity.get<model_component>();
+    const auto& model = model_comp.get_model();
+    if(!model.is_valid())
+    {
+        return;
+    }
+    const auto& camera = run.cam;
+    const auto& lod_data = element.lod_data;
+    const auto& world_transform = entity.get<transform_component>().get_transform_global();
+    const float transition_progress = lod_data.transition_time > 0.0f ? lod_data.current_time / lod_data.transition_time : 1.0f;
+    const math::vec3 params{1.0f - transition_progress, 0.0f, 0.0f};
+    const math::vec3 params_inv{-transition_progress, 0.0f, 0.0f};
+    const math::bbox bounds = model_comp.get_world_bounds();
+    const forward_probe& probe = translucent_model_probes_[index];
+    const bool has_reactive_target = forward_has_reactive_target_;
+    const auto camera_pos = camera.get_position();
+    const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
+    auto extras = model_comp.get_submit_extras(false);
+    extras.material_pass = model_material_pass::forward;
+    math::vec3 lod_params = params;
+
+    model::submit_callbacks callbacks;
+    callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
+    {
+        geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
+        gfx::set_uniform(prog.u_camera_wpos, camera_pos);
+        gfx::set_uniform(prog.u_camera_clip_planes, clip_planes);
+    };
+    callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
+    {
+        geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
+        gfx::set_uniform(prog.u_lod_params, lod_params);
+    };
+    callbacks.setup_params_per_submesh = [&](const model::submit_callbacks::params& submit_params, const material& mat)
+    {
+        const uint8_t discard = submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL;
+        const auto* graph = mat.safe_cast<graph_material>();
+        geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
+        // The sorted draws and the order-independent ones each take their own surfaces.
+        const bool is_drawn = graph != nullptr && graph->is_forward() && graph->is_order_independent() == order_independent;
+        const char* variant = order_independent ? "oit" : gfx::shader::DEFAULT_VARIANT;
+        gpu_program* program = is_drawn ? graph_material_programs_.begin(*graph, prog.vertex_variant, variant) : nullptr;
+        if(program == nullptr)
+        {
+            // Not compiled yet: the surface draws once its shader is there.
+            bgfx::discard(discard);
+            return;
+        }
+        graph_material_programs_.submit_values(*graph);
+        bind_forward_lighting(bounds, graph->get_shading_model() == material_shading_model::default_lit, probe, graph->get_scene_textures());
+        if(order_independent)
+        {
+            // Weighed sums in any order (fs_material_graph_forward.sh FORWARD_OIT): one blend serves both targets.
+            const uint64_t sums = BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,
+                                                                 BGFX_STATE_BLEND_ONE,
+                                                                 BGFX_STATE_BLEND_ZERO,
+                                                                 BGFX_STATE_BLEND_INV_SRC_ALPHA);
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS | sums |
+                           (graph->get_render_states(true, false, false) & BGFX_STATE_CULL_MASK));
+            bgfx::submit(view, program->native_handle(), 0, discard);
+            stats_.drawn_translucent_submeshes++;
+            return;
+        }
+        const uint32_t blend_rgba = has_reactive_target ? ps_soa::reactive_blend_rgba : 0u;
+        if(graph->has_depth_prepass())
+        {
+            // The depth first, then the colour where it is the nearest layer: both faces of a two-sided surface at once.
+            const uint64_t cull = graph->get_cull_type() == cull_type::none
+                                      ? 0
+                                      : graph->get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
+            bgfx::setState(BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_MSAA | cull);
+            bgfx::submit(view, program->native_handle(), 0, BGFX_DISCARD_NONE);
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_MSAA | cull |
+                               get_translucent_blend_state(graph->get_blend_mode(), has_reactive_target),
+                           blend_rgba);
+            bgfx::submit(view, program->native_handle(), 0, discard);
+            stats_.drawn_translucent_submeshes++;
+            return;
+        }
+        const uint64_t base = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_MSAA |
+                              get_translucent_blend_state(graph->get_blend_mode(), has_reactive_target);
+        if(graph->get_cull_type() == cull_type::none)
+        {
+            // Two sided: the back faces first, then the front ones over them.
+            bgfx::setState(base | BGFX_STATE_CULL_CW, blend_rgba);
+            bgfx::submit(view, program->native_handle(), 0, BGFX_DISCARD_NONE);
+            stats_.drawn_translucent_submeshes++;
+            bgfx::setState(base | BGFX_STATE_CULL_CCW, blend_rgba);
+        }
+        else
+        {
+            bgfx::setState(base | (graph->get_render_states(true, false, false) & BGFX_STATE_CULL_MASK), blend_rgba);
+        }
+        bgfx::submit(view, program->native_handle(), 0, discard);
+        stats_.drawn_translucent_submeshes++;
+    };
+    callbacks.setup_end = [&](const model::submit_callbacks::params&)
+    {
+    };
+
+    const auto& submesh_transforms = model_comp.get_submesh_transforms();
+    const auto& bone_transforms = model_comp.get_bone_transforms();
+    const auto& skinning_matrices = model_comp.get_skinning_transforms();
+    const auto& view_frustum = camera.get_frustum();
+    model.submit(world_transform,
+                 submesh_transforms,
+                 bone_transforms,
+                 skinning_matrices,
+                 lod_data.current_lod_index,
+                 callbacks,
+                 &view_frustum,
+                 &camera,
+                 extras);
+    if(math::epsilonNotEqual(lod_data.current_time, 0.0f, math::epsilon<float>()))
+    {
+        lod_params = params_inv;
+        model.submit(world_transform,
+                     submesh_transforms,
+                     bone_transforms,
+                     skinning_matrices,
+                     lod_data.target_lod_index,
+                     callbacks,
+                     &view_frustum,
+                     &camera,
+                     extras);
+    }
 }
 
 } // namespace rendering

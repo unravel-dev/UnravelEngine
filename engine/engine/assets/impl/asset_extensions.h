@@ -316,7 +316,9 @@ inline auto get_format_version<unravel::material>() -> uint64_t
     // 9: compiled graph materials keep their binding (material_graph_binding): loading one compiles nothing.
     // 10: material domains: a binding keeps its domain (surface, decal, post-process) and the domain's traits.
     // 11: a decal writes the channels its output sets by value as well as by link.
-    return 11;
+    // 12: Blend Mode and Shading Model on the Surface Output, kept in the binding.
+    // 13: the translucency pass's options (Order Independent, Cast Shadow, Depth Prepass, Write Velocity) in the binding.
+    return 13;
 }
 
 template<>

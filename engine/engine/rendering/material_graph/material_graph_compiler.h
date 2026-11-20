@@ -27,8 +27,33 @@ constexpr uint32_t MATERIAL_GRAPH_MAX_DECAL_TEXTURES = 12;
 /// The most textures a post-process material reads: its main reads the scene's colour, depth, G-buffer, velocity, the
 /// custom mask and the pre-exposure on stages of its own (mg_post.sh).
 constexpr uint32_t MATERIAL_GRAPH_MAX_POST_PROCESS_TEXTURES = 7;
-/// The most textures a material of @p domain reads.
+/// The most textures a lit surface of the translucency pass reads: its main reads the sky's SH, the probe, the sun's
+/// four cascades, the point and spot lights' shadow atlas and the fog's froxel column on stages of its own
+/// (mg_forward.sh).
+constexpr uint32_t MATERIAL_GRAPH_MAX_FORWARD_LIT_TEXTURES = 7;
+/// The most textures an unlit surface of the translucency pass reads: its main reads the sky's SH (for the
+/// pre-exposure) and the fog's froxel column on stages of its own.
+constexpr uint32_t MATERIAL_GRAPH_MAX_FORWARD_UNLIT_TEXTURES = 13;
+/// The roughness from which a refracting surface blurs what it shows through itself (MATERIAL_ROUGH_REFRACTION): a
+/// smoother constant Roughness reads the sharp copy alone and takes no stage for the blurred one.
+constexpr float MATERIAL_ROUGH_REFRACTION_MIN = 0.03f;
+/// The most textures a material of @p domain reads (a surface of the G-buffer).
 auto get_material_graph_max_textures(material_domain domain) -> uint32_t;
+/// The most textures a surface of @p mode and @p model reads, less a stage for each of the scene's colour and depth
+/// a surface of the translucency pass reads (@p scene_textures: material_scene_texture_bits).
+auto get_material_graph_max_textures(material_blend_mode mode, material_shading_model model, uint32_t scene_textures = 0)
+    -> uint32_t;
+
+/// The stages a surface of the translucency pass reads the scene's colour and depth at (mg_forward.sh): the stage below
+/// the engine's for the first, the next free one for the second, and the one after for the blurred colour of a rough
+/// Refraction.
+struct forward_scene_texture_stages
+{
+    uint8_t color{};
+    uint8_t depth{};
+    uint8_t blurred_color{};
+};
+auto get_forward_scene_texture_stages(bool is_lit, uint32_t scene_textures) -> forward_scene_texture_stages;
 
 /// What a decal material writes (material_graph_compile_result::decal_writes): the channels its Decal Output links.
 enum material_decal_write_bits : uint32_t
@@ -242,8 +267,24 @@ struct material_graph_compile_result
     bool uses_opacity_mask{};
     /// What clips reads the time, the camera or the screen, so its shadow changes without an edit.
     bool is_opacity_mask_animated{};
-    /// The surface is see-through (MATERIAL_TRANSLUCENT_SETTING): dithered by its Opacity Mask, casting no shadow.
-    bool is_translucent{};
+    /// The Surface Output's Blend Mode: Opaque and Dithered draw in the G-buffer, the others in the translucency pass.
+    material_blend_mode blend_mode{material_blend_mode::opaque};
+    /// The Surface Output's Shading Model (Unlit for Modulate).
+    material_shading_model shading_model{material_shading_model::default_lit};
+    /// Translucent surfaces: highlights and reflections at full strength (MATERIAL_PRESERVE_SPECULAR_SETTING).
+    bool preserve_specular{true};
+    /// Surfaces of the translucency pass: how strongly they mark the TAA reactive mask (0 to 1).
+    float taa_response{MATERIAL_DEFAULT_TAA_RESPONSE};
+    /// Translucent and Premultiplied surfaces: blended without sorting (MATERIAL_ORDER_INDEPENDENT_SETTING); the shader
+    /// has the "oit" variant.
+    bool order_independent{};
+    /// Sorted Translucent and Premultiplied surfaces: the depth draws before the colour (MATERIAL_DEPTH_PREPASS_SETTING).
+    bool depth_prepass{};
+    /// Surfaces of the translucency pass that draw their motion into the velocity buffer (MATERIAL_WRITE_VELOCITY_SETTING).
+    bool writes_velocity{};
+    /// A surface of the translucency pass that casts a shadow dithered by its Opacity (MATERIAL_CAST_SHADOW_SETTING): the
+    /// shader has the shadow caster variants.
+    bool casts_forward_shadow{};
     /// World Position Offset moves the vertices: there is a vertex shader, and the shader has the shadow caster
     /// variants, as the shadow moves with the surface.
     bool uses_world_position_offset{};
@@ -279,6 +320,11 @@ struct material_graph_compile_result
     /// The vertex shader computes something from the graph: an offset or interpolators, which read the material's own
     /// parameter values (never an instance's).
     auto computes_vertex_values() const -> bool;
+
+    /// The surface is see-through: any Blend Mode but Opaque. It casts no shadow and places no distance field.
+    auto is_translucent() const -> bool;
+    /// The surface draws in the translucency pass (is_material_blend_mode_forward), not the G-buffer.
+    auto is_forward() const -> bool;
 
     auto has_errors() const -> bool;
     /// The diagnostics of one node, worst first.
@@ -319,7 +365,15 @@ struct material_graph_binding
     material_graph_emissive_estimate emissive;
     bool uses_opacity_mask{};
     bool is_opacity_mask_animated{};
-    bool is_translucent{};
+    /// material_graph_compile_result's of the same names.
+    material_blend_mode blend_mode{material_blend_mode::opaque};
+    material_shading_model shading_model{material_shading_model::default_lit};
+    bool preserve_specular{true};
+    float taa_response{MATERIAL_DEFAULT_TAA_RESPONSE};
+    bool order_independent{};
+    bool depth_prepass{};
+    bool writes_velocity{};
+    bool casts_forward_shadow{};
     bool uses_world_position_offset{};
     bool is_world_position_offset_animated{};
     float max_world_position_offset{};

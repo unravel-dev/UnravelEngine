@@ -154,7 +154,12 @@ void save_binding(Archive& ar, const material_graph_binding& binding)
     try_save(ar, ser20::make_nvp("emissive_parameters", binding.emissive.parameters));
     try_save(ar, ser20::make_nvp("uses_opacity_mask", binding.uses_opacity_mask));
     try_save(ar, ser20::make_nvp("is_opacity_mask_animated", binding.is_opacity_mask_animated));
-    try_save(ar, ser20::make_nvp("is_translucent", binding.is_translucent));
+    auto blend_mode = uint8_t(binding.blend_mode);
+    try_save(ar, ser20::make_nvp("blend_mode", blend_mode));
+    auto shading_model = uint8_t(binding.shading_model);
+    try_save(ar, ser20::make_nvp("shading_model", shading_model));
+    try_save(ar, ser20::make_nvp("preserve_specular", binding.preserve_specular));
+    try_save(ar, ser20::make_nvp("taa_response", binding.taa_response));
     try_save(ar, ser20::make_nvp("uses_world_position_offset", binding.uses_world_position_offset));
     try_save(ar, ser20::make_nvp("is_world_position_offset_animated", binding.is_world_position_offset_animated));
     try_save(ar, ser20::make_nvp("max_world_position_offset", binding.max_world_position_offset));
@@ -169,6 +174,10 @@ void save_binding(Archive& ar, const material_graph_binding& binding)
     try_save(ar, ser20::make_nvp("post_priority", binding.post_priority));
     try_save(ar, ser20::make_nvp("scene_textures", binding.scene_textures));
     try_save(ar, ser20::make_nvp("samples_scene_neighbours", binding.samples_scene_neighbours));
+    try_save(ar, ser20::make_nvp("order_independent", binding.order_independent));
+    try_save(ar, ser20::make_nvp("casts_forward_shadow", binding.casts_forward_shadow));
+    try_save(ar, ser20::make_nvp("depth_prepass", binding.depth_prepass));
+    try_save(ar, ser20::make_nvp("writes_velocity", binding.writes_velocity));
 }
 
 template<typename Archive>
@@ -183,7 +192,17 @@ void load_binding(Archive& ar, material_graph_binding& binding)
     try_load(ar, ser20::make_nvp("emissive_parameters", binding.emissive.parameters));
     try_load(ar, ser20::make_nvp("uses_opacity_mask", binding.uses_opacity_mask));
     try_load(ar, ser20::make_nvp("is_opacity_mask_animated", binding.is_opacity_mask_animated));
-    try_load(ar, ser20::make_nvp("is_translucent", binding.is_translucent));
+    // Fields are read in the order save_binding writes them: binary archives have no names. Files of older format
+    // versions recompile (get_format_version<material>), so none is read here.
+    uint8_t blend_mode = uint8_t(material_blend_mode::opaque);
+    try_load(ar, ser20::make_nvp("blend_mode", blend_mode));
+    binding.blend_mode = blend_mode < MATERIAL_BLEND_MODE_COUNT ? material_blend_mode(blend_mode) : material_blend_mode::opaque;
+    uint8_t shading_model = 0;
+    try_load(ar, ser20::make_nvp("shading_model", shading_model));
+    binding.shading_model =
+        shading_model < MATERIAL_SHADING_MODEL_COUNT ? material_shading_model(shading_model) : material_shading_model::default_lit;
+    try_load(ar, ser20::make_nvp("preserve_specular", binding.preserve_specular));
+    try_load(ar, ser20::make_nvp("taa_response", binding.taa_response));
     try_load(ar, ser20::make_nvp("uses_world_position_offset", binding.uses_world_position_offset));
     try_load(ar, ser20::make_nvp("is_world_position_offset_animated", binding.is_world_position_offset_animated));
     try_load(ar, ser20::make_nvp("max_world_position_offset", binding.max_world_position_offset));
@@ -201,6 +220,10 @@ void load_binding(Archive& ar, material_graph_binding& binding)
     try_load(ar, ser20::make_nvp("post_priority", binding.post_priority));
     try_load(ar, ser20::make_nvp("scene_textures", binding.scene_textures));
     try_load(ar, ser20::make_nvp("samples_scene_neighbours", binding.samples_scene_neighbours));
+    try_load(ar, ser20::make_nvp("order_independent", binding.order_independent));
+    try_load(ar, ser20::make_nvp("casts_forward_shadow", binding.casts_forward_shadow));
+    try_load(ar, ser20::make_nvp("depth_prepass", binding.depth_prepass));
+    try_load(ar, ser20::make_nvp("writes_velocity", binding.writes_velocity));
 }
 } // namespace
 

@@ -75,9 +75,60 @@ result to go back.
 - Setting workflow "specular": base_color is the diffuse color, and the specular
   (color) and glossiness pins replace metallic and roughness; the shader converts
   them per pixel. Links into the other workflow's pins are ignored.
-- Setting translucent "on": the surface is see-through, dithered out by
-  opacity_mask read as an alpha (not clipped); it casts no shadow and the GI
-  lets light through it.
+- Setting blend_mode: "opaque" (default; opacity_mask cuts out), "dithered"
+  (see-through by a dither of opacity_mask, read as the Opacity, in the
+  G-buffer: lit, shadowed and reflected like opaque surfaces), or one of the
+  translucency pass: "translucent" (blends by its Opacity: glass, water,
+  fades), "premultiplied" (adds its colour as it is while the Opacity covers
+  what is behind), "additive" (adds its light: glows, holograms) and
+  "modulate" (multiplies the scene by emissive, unlit: tints). Those four draw
+  after the lighting, sorted far to near among themselves and the particles,
+  lit by the sun with its shadow, up to 4 nearby lights with their shadow maps
+  (the translucent_lights feature limit, 2 on phones and the web), the sky and
+  the reflection probe covering them; they get no GI, SSR or screen-space AO
+  and take no decals (what they refract is the lit scene, GI included). Their
+  graphs read at most 7 textures (13 unlit), one fewer for each scene read.
+  Older files' translucent "on" loads as dithered. The GI lets light through
+  every see-through mode. Only Model components draw them: mesh particles and
+  scripted instanced draws (Graphics.DrawMeshInstanced) draw such a material as
+  the opaque stand-in.
+- depth_prepass "on" (sorted translucent, premultiplied): the depth draws
+  before the colour, so only the mesh's nearest layer shows where it overlaps
+  itself (a see-through character); its depth then hides what draws after it
+  behind it. write_velocity "on" (translucency pass): the surface's motion
+  replaces the scene's behind it in the velocity buffer, over the whole
+  surface, so TAA follows moving, mostly covering glass.
+- cast_shadow (translucency pass, default "off"): "dithered" casts a shadow
+  that leaves out texels by the Opacity, softened by the shadow filter into a
+  fainter shadow. Opaque and dithered surfaces cast theirs as always.
+- order_independent "on" (translucent, premultiplied): the surface blends with
+  the other order-independent ones by weight instead of by sort, so crossing or
+  nested surfaces (foliage cards, a glass inside a glass) do not pop as the
+  camera moves; one surface alone looks the same as sorted. It does not refract.
+  Together they sort among the sorted surfaces and particles as one object (the
+  box around them all, its lowest sort_priority): a sorted surface inside a
+  spread-out group of them sorts against the group's middle.
+- refraction pin (translucent, premultiplied; 1 bends nothing, glass 1.5,
+  water 1.33): the surface shows the lit scene behind it bent through its
+  normal; a lit one blurs it by its roughness (frosted glass, from 0.03 up; a
+  quarter-size blurred copy, one more texture stage). Translucency-pass surfaces may read the scene with scene_texture
+  (scene_color: what is behind, before any translucency; scene_depth) and
+  depth_fade (0 where the surface meets what is behind it, 1 at distance or
+  further: soft water edges, fog cards); opaque and dithered surfaces read
+  scene_texture's defaults. The colour copy follows the
+  translucent_scene_color feature limit: without it the scene reads black and
+  nothing refracts. Imported glTF transmission makes a surface translucent
+  with its index of refraction.
+- Setting shading_model "unlit": the surface shows its emissive alone, with no
+  light, shadow or reflection on it (the GI still sees the emissive as light);
+  only emissive, opacity_mask, normal (translucency pass), camera_fade_distance
+  and world_position_offset are read. preserve_specular (translucent, default
+  "on") keeps highlights and reflections at full strength under a low Opacity,
+  as clear glass shows them; taa_response (0-1, default 0.5) lowers TAA's
+  history under translucency-pass surfaces so moving ones do not smear.
+- Translucency-pass surfaces sort by object: where a large surface surrounds
+  smaller ones (water under a boat's windows), set the Model's sort_priority
+  (lower draws first, behind; the scale particle emitters use).
 - world_position_offset (vec3, world units) moves each vertex: wind, waves,
   pulses. It is computed per vertex in a vertex shader of its own; its shadow
   and motion vectors follow. Set max_world_position_offset (Max Offset) to how

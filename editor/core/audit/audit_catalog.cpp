@@ -68,6 +68,19 @@ auto make_rules() -> std::vector<rule>
                     "profile's Graphics > Allowed Features, or give that platform another way to show the effect.",
                     {},
                     true});
+    list.push_back({rules::SCENE_COLOR_OFF,
+                    "Scene Read Turned Off by Profile",
+                    severity::info,
+                    to_mask(area::quality),
+                    rule_source::scenes,
+                    "A see-through material reads the lit scene behind it, to bend its view (Refraction) or to show it "
+                    "(Scene Texture's Scene Color), and a profile's Graphics > Allowed Features > Translucency Scene Color "
+                    "is off. In that profile's builds the material refracts nothing and reads the scene as black.",
+                    "Keep it when the profile turns the copy off on purpose and the material still looks right. Otherwise "
+                    "allow Translucency Scene Color in the profile, or make the material look right without the scene "
+                    "behind it (a Quality Switch can leave the read out on Low).",
+                    {},
+                    true});
     list.push_back({rules::STEREO_SPATIAL,
                     "Stereo Clip on 3D Sources Only",
                     severity::info,

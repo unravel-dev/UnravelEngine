@@ -1329,11 +1329,78 @@ void draw_graph_workflow_row(rtti::context& ctx, const graph_material& mat)
     inspect_var(ctx, var, var_proxy, info);
 }
 
-/// A graph material's workflow, then its parameter, texture and switch rows, under their headers, as the inspector's
-/// filter shows them.
+constexpr const char* BLEND_MODE_ROW_LABEL = "Blend Mode";
+constexpr const char* BLEND_MODE_ROW_TOOLTIP = "How the surface covers what is behind it, the Surface Output's Blend Mode. "
+                                               "Opaque covers it, and Dithered leaves out pixels by the Opacity. "
+                                               "Translucent, Premultiplied, Additive and Modulate blend over the scene "
+                                               "after the lighting. A change compiles the material again.";
+constexpr const char* SHADING_MODEL_ROW_LABEL = "Shading Model";
+constexpr const char* SHADING_MODEL_ROW_TOOLTIP = "Which light the surface takes, set on its Surface Output in the Material "
+                                                  "Graph. Unlit shows its Emissive alone.";
+
+/// A surface material's Blend Mode: a choice; a change writes it into @p edited, and the material compiles again.
+void draw_graph_blend_mode_row(rtti::context& ctx,
+                               const graph_material& mat,
+                               hpp::optional<material_graph>& edited,
+                               graph_row_changes& changes)
+{
+    if(mat.get_domain() != material_domain::surface || !match_row_filter(ctx, BLEND_MODE_ROW_LABEL).is_shown)
+    {
+        return;
+    }
+    property_layout layout(BLEND_MODE_ROW_LABEL, BLEND_MODE_ROW_TOOLTIP);
+    const material_blend_mode current = get_material_graph_blend_mode(edited ? *edited : mat.get_graph());
+    hpp::optional<material_blend_mode> picked;
+    ImGui::SetNextItemWidth(-1.0f);
+    if(ImGui::BeginCombo("##blend_mode", get_material_blend_mode_label(current)))
+    {
+        for(uint32_t i = 0; i < MATERIAL_BLEND_MODE_COUNT; ++i)
+        {
+            const auto mode = material_blend_mode(i);
+            if(ImGui::Selectable(get_material_blend_mode_label(mode), mode == current) && mode != current)
+            {
+                picked = mode;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if(!picked)
+    {
+        return;
+    }
+    if(!edited)
+    {
+        edited = mat.get_graph();
+    }
+    const bool is_changed = set_material_graph_blend_mode(*edited, *picked);
+    changes.is_changed = is_changed || changes.is_changed;
+    changes.is_finished = is_changed || changes.is_finished;
+}
+
+/// A surface material's Shading Model, read only: the graph's Surface Output sets it, and the Material Graph edits it.
+void draw_graph_shading_model_row(rtti::context& ctx, const graph_material& mat)
+{
+    if(mat.get_domain() != material_domain::surface || !match_row_filter(ctx, SHADING_MODEL_ROW_LABEL).is_shown)
+    {
+        return;
+    }
+    std::string text = get_material_shading_model_label(get_material_graph_shading_model(mat.get_graph()));
+    entt::meta_any var = entt::forward_as_meta(text);
+    const auto var_proxy = make_proxy(var);
+    var_info info;
+    info.is_property = true;
+    info.read_only = true;
+    property_layout layout(SHADING_MODEL_ROW_LABEL, SHADING_MODEL_ROW_TOOLTIP);
+    inspect_var(ctx, var, var_proxy, info);
+}
+
+/// A graph material's workflow, Blend Mode and Shading Model, then its parameter, texture and switch rows, under their
+/// headers, as the inspector's filter shows them.
 void draw_graph_default_rows(rtti::context& ctx, const graph_material& mat, hpp::optional<material_graph>& edited, graph_row_changes& changes)
 {
     draw_graph_workflow_row(ctx, mat);
+    draw_graph_blend_mode_row(ctx, mat, edited, changes);
+    draw_graph_shading_model_row(ctx, mat);
     bool has_header = false;
     for(const auto& parameter : mat.get_parameters())
     {

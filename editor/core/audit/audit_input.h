@@ -192,6 +192,9 @@ struct document_scan
     std::vector<document_problem> unreadable;
     /// Each invalid controller's key and its problems.
     std::vector<std::pair<std::string, std::vector<std::string>>> controllers;
+    /// The keys of the materials whose surface reads the lit scene behind it (Refraction, or Scene Texture's Scene
+    /// Color), in document order.
+    std::vector<std::string> scene_color_materials;
 };
 
 /// A compiler message of the project's scripts.

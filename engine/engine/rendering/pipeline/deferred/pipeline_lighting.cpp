@@ -1493,13 +1493,6 @@ auto gather_fog_volumes(scene& scn, const camera& camera) -> std::vector<fog_pas
     return volumes;
 }
 
-/// The map the fog may read for @p generator's light: its atlas tile, once this frame's casters are in it (a tile the
-/// view did not resolve may hold another light's map since the atlas last moved).
-auto find_fog_light_shadow(const shadow::shadowmap_generator& generator) -> const shadow::shadowmap_generator*
-{
-    return generator.get_atlas_tile() && generator.already_resolved() ? &generator : nullptr;
-}
-
 /// The enabled point and spot lights that scatter in the fog (volumetric intensity above 0).
 auto gather_fog_local_lights(scene& scn, bool use_shadow_maps) -> std::vector<fog_pass::local_light>
 {
@@ -1528,7 +1521,7 @@ auto gather_fog_local_lights(scene& scn, bool use_shadow_maps) -> std::vector<fo
             local.intensity = light_comp.get_linear_color() * (light.intensity * light.volumetric_intensity);
             if(use_shadow_maps)
             {
-                local.shadow = find_fog_light_shadow(light_comp.get_shadowmap_generator());
+                local.shadow = fog_pass::find_light_shadow(light_comp.get_shadowmap_generator());
             }
             lights.push_back(local);
         });

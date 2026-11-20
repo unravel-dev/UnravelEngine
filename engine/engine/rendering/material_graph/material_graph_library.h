@@ -313,6 +313,8 @@ enum material_scene_texture_bits : uint32_t
     material_scene_texture_custom_mask = 1u << 6u,
     /// The depth of the nearest masked renderer, hidden or not (post).
     material_scene_texture_custom_depth = 1u << 7u,
+    /// A blurred copy of the lit scene, which a rough refracting surface reads (translucency pass).
+    material_scene_texture_blurred_color = 1u << 8u,
 };
 
 /// Every source a Scene Texture node offers, in the order its Source setting lists them.

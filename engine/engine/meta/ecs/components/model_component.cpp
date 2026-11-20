@@ -88,6 +88,15 @@ REFLECT(model_component)
                                        "walls. They read it with Scene Texture's Custom Mask and Custom Depth, or run only "
                                        "over it with Run Where Mask. 0 leaves the model out."},
         })
+        .data<&model_component::set_sort_priority, &model_component::get_sort_priority>("sort_priority"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sort_priority"},
+            entt::attribute{"pretty_name", "Sort Priority"},
+            entt::attribute{"tooltip", "Where the model's see-through surfaces of the translucency pass draw among the "
+                                       "other see-through surfaces and particles: a lower value draws first, behind the "
+                                       "others, and equal values draw from far to near. Set it where one large surface "
+                                       "around smaller ones sorts wrong, such as water under a boat's windows."},
+        })
         .data<nullptr, &model_component::get_world_bounds>("world_bounds"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "world_bounds"},
@@ -111,6 +120,7 @@ SAVE(model_component)
     try_save(ar, ser20::make_nvp("receive_decals", obj.get_decal_receive()));
     try_save(ar, ser20::make_nvp("post_process_mask", obj.get_post_process_mask()));
     try_save(ar, ser20::make_nvp("model", obj.get_model()));
+    try_save(ar, ser20::make_nvp("sort_priority", obj.get_sort_priority()));
 }
 SAVE_INSTANTIATE(model_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(model_component, ser20::oarchive_binary_t);
@@ -151,6 +161,12 @@ LOAD(model_component)
     if(try_load(ar, ser20::make_nvp("model", mod)))
     {
         obj.set_model(mod);
+    }
+
+    int sort_priority{};
+    if(try_load(ar, ser20::make_nvp("sort_priority", sort_priority)))
+    {
+        obj.set_sort_priority(sort_priority);
     }
 }
 LOAD_INSTANTIATE(model_component, ser20::iarchive_associative_t);

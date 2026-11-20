@@ -33,6 +33,9 @@
 #include <engine/engine.h>
 #include <RmlUi/Core/ElementDocument.h>
 
+#include <engine/rendering/material_graph/material_graph.h>
+#include <engine/rendering/material_graph/material_graph_compiler.h>
+#include <engine/rendering/material_graph/material_graph_library.h>
 #include <graphics/device_caps.h>
 #include <graphics/format.h>
 #include <graphics/graphics.h>
@@ -85,6 +88,20 @@ constexpr uint8_t k_particle_shadow_stage = 8;
 /// The volumetric fog's froxel column in the unlit programs (particle_fragment.sh); the lit ones hold the sun's
 /// cascades there.
 constexpr uint8_t k_particle_fog_volume_stage = 8;
+/// Stages of what the translucency pass's surfaces read (mg_forward.sh): the sky SH, the probe, the sun's cascades
+/// (4 from k_forward_shadow_stage), the fog's froxel column (lit, unlit) and the point and spot lights' shadow atlas.
+constexpr uint8_t k_forward_irradiance_stage = 15;
+constexpr uint8_t k_forward_probe_stage = 14;
+constexpr uint8_t k_forward_shadow_stage = 10;
+constexpr uint8_t k_forward_lit_fog_volume_stage = 9;
+constexpr uint8_t k_forward_unlit_fog_volume_stage = 14;
+constexpr uint8_t k_forward_light_shadow_stage = 8;
+/// vec4s of u_fwd_light_shadows: a shadow record per light of a lit draw.
+constexpr size_t k_forward_light_shadow_vec4s = k_particle_max_lights * fog_pass::light_shadow_vec4s;
+static_assert(k_forward_light_shadow_vec4s == 72, "mg_forward.sh declares u_fwd_light_shadows[72]");
+static_assert(k_particle_light_vec4s == 12, "pipeline::forward_light_pick holds 12 light vec4s");
+/// vec4s of u_fwd_probe.
+constexpr uint16_t k_forward_probe_vec4s = 3;
 /// Cosine a point light's cone mask passes everything at (LocalLightSpotMask).
 constexpr float k_point_light_cos_outer = -2.0f;
 
@@ -104,6 +121,9 @@ struct particle_scene_lighting
         float range = 0.0f;
         /// Candela, for picking the brightest lights of a draw.
         float candela = 0.0f;
+        /// The light's map in the shadow atlas (fog_pass::find_light_shadow); null: unshadowed.
+        const shadow::shadowmap_generator* shadow = nullptr;
+        bool is_spot = false;
     };
 
     bgfx::TextureHandle irradiance = BGFX_INVALID_HANDLE;
@@ -200,15 +220,22 @@ auto gather_particle_lighting(scene& scn,
                 local.intensity = math::vec4(color, 1.0f);
             }
             local.placement = math::vec4(world.get_position(), 1.0f / math::max(local.range, 1.0e-4f));
+            local.is_spot = light.type == light_type::spot;
+            if(use_shadow_maps && light.casts_shadows)
+            {
+                local.shadow = fog_pass::find_light_shadow(light_comp.get_shadowmap_generator());
+            }
             lighting.lights.push_back(local);
         });
     return lighting;
 }
 
-/// The (up to k_particle_max_lights) brightest local lights reaching @p bounds, packed for u_particle_lights.
+/// The (up to k_particle_max_lights) brightest local lights reaching @p bounds, packed for u_particle_lights; their
+/// indices into lighting.lights into @p picked when given.
 auto pick_particle_lights(const particle_scene_lighting& lighting,
                           const math::bbox& bounds,
-                          std::array<math::vec4, k_particle_light_vec4s>& out) -> uint32_t
+                          std::array<math::vec4, k_particle_light_vec4s>& out,
+                          std::array<size_t, k_particle_max_lights>* picked = nullptr) -> uint32_t
 {
     struct candidate
     {
@@ -238,6 +265,10 @@ auto pick_particle_lights(const particle_scene_lighting& lighting,
     for(uint32_t i = 0; i < count; ++i)
     {
         const auto& light = lighting.lights[candidates[i].index];
+        if(picked != nullptr)
+        {
+            (*picked)[i] = candidates[i].index;
+        }
         out[i * 3] = light.placement;
         out[i * 3 + 1] = light.cone;
         out[i * 3 + 2] = light.intensity;
@@ -538,6 +569,8 @@ auto make_particle_batch(const particle_draw_key& key,
     batch.blend_mode = key.blend_mode;
     batch.primitive = key.primitive;
     batch.lighting = is_velocity ? ps_soa::particle_lighting::unlit : key.lighting;
+    batch.sort_priority = key.sort_priority;
+    batch.distance = key.distance;
     if(batch.lighting == ps_soa::particle_lighting::surface && !key.normal_texture_uid.is_nil())
     {
         const auto normal_texture = key.component->get_normal_texture().get();
@@ -804,6 +837,38 @@ auto pipeline::init(rtti::context& ctx) -> bool
     particle_program_lit_ = load_particle_program("lit", "fs_particle", "lit");
     particle_program_lit_mask_ = load_particle_program("lit", "fs_particle", "mask_lit");
     create_particle_light_fallbacks(particle_no_sky_, particle_no_shadow_);
+    // The translucency pass's surfaces (mg_forward.sh): their programs are made at their first draw, after these.
+    forward_sun_direction_uniform_ = std::make_shared<gfx::uniform>("u_fwd_sun_direction", bgfx::UniformType::Vec4);
+    forward_sun_color_uniform_ = std::make_shared<gfx::uniform>("u_fwd_sun_color", bgfx::UniformType::Vec4);
+    forward_lighting_uniform_ = std::make_shared<gfx::uniform>("u_fwd_lighting", bgfx::UniformType::Vec4);
+    forward_lights_uniform_ =
+        std::make_shared<gfx::uniform>("u_fwd_lights", bgfx::UniformType::Vec4, uint16_t(k_particle_light_vec4s));
+    forward_probe_uniform_ = std::make_shared<gfx::uniform>("u_fwd_probe", bgfx::UniformType::Vec4, k_forward_probe_vec4s);
+    forward_probe_inv_world_uniform_ = std::make_shared<gfx::uniform>("u_fwd_probe_inv_world", bgfx::UniformType::Mat4);
+    forward_irradiance_sampler_ = std::make_shared<gfx::uniform>("s_fwd_irradiance", bgfx::UniformType::Sampler);
+    forward_probe_sampler_ = std::make_shared<gfx::uniform>("s_fwd_probe", bgfx::UniformType::Sampler);
+    forward_fog_volume_sampler_ = std::make_shared<gfx::uniform>("s_fwd_fog_volume", bgfx::UniformType::Sampler);
+    forward_scene_color_sampler_ = std::make_shared<gfx::uniform>("s_fwd_scene_color", bgfx::UniformType::Sampler);
+    forward_scene_depth_sampler_ = std::make_shared<gfx::uniform>("s_fwd_scene_depth", bgfx::UniformType::Sampler);
+    forward_scene_blurred_sampler_ = std::make_shared<gfx::uniform>("s_fwd_scene_blurred", bgfx::UniformType::Sampler);
+    forward_light_shadow_atlas_sampler_ = std::make_shared<gfx::uniform>("s_fwd_light_shadow_atlas", bgfx::UniformType::Sampler);
+    forward_light_shadows_uniform_ =
+        std::make_shared<gfx::uniform>("u_fwd_light_shadows", bgfx::UniformType::Vec4, uint16_t(k_forward_light_shadow_vec4s));
+    scene_downsample_sampler_ = std::make_shared<gfx::uniform>("s_scene", bgfx::UniformType::Sampler);
+    scene_downsample_params_ = std::make_shared<gfx::uniform>("u_downsample_params", bgfx::UniformType::Vec4);
+    forward_scene_uniform_ = std::make_shared<gfx::uniform>("u_fwd_scene", bgfx::UniformType::Vec4);
+    oit_accum_sampler_ = std::make_shared<gfx::uniform>("s_oit_accum", bgfx::UniformType::Sampler);
+    oit_weight_sampler_ = std::make_shared<gfx::uniform>("s_oit_weight", bgfx::UniformType::Sampler);
+    oit_params_uniform_ = std::make_shared<gfx::uniform>("u_oit_params", bgfx::UniformType::Vec4);
+    oit_composite_program_ = load_program("vs_clip_quad", "translucency/fs_oit_composite");
+    scene_downsample_program_ = load_program("vs_clip_quad", "translucency/fs_scene_downsample");
+    const std::array<uint8_t, 4 * 6> black_cube{};
+    forward_no_probe_ = std::make_shared<gfx::texture>(uint16_t(1),
+                                                       false,
+                                                       uint16_t(1),
+                                                       bgfx::TextureFormat::RGBA8,
+                                                       BGFX_SAMPLER_UVW_CLAMP,
+                                                       bgfx::copy(black_cube.data(), uint32_t(sizeof(black_cube))));
     particle_velocity_program_ = load_particle_program("velocity", "fs_particle_velocity", default_variant);
     particle_overdraw_program_ = load_particle_program(default_variant, "fs_particle_overdraw", default_variant);
     world_quad_program_ = load_program("rmlui_world/vs_world_quad", "rmlui_world/fs_world_quad");
@@ -1450,9 +1515,12 @@ auto pipeline::run_particle_pass(scene& scn,
                                  delta_t dt,
                                  const fog_pass::shader_params& fog,
                                  const feature_limits& limits,
-                                 layer_mask render_mask) -> gfx::texture::ptr
+                                 layer_mask render_mask,
+                                 const translucent_mesh_list* meshes,
+                                 bool include_particles) -> gfx::texture::ptr
 {
     APP_SCOPE_PERF("Rendering/Particle Pass");
+    const bool has_meshes = meshes != nullptr && !meshes->is_empty() && meshes->draw;
 
     auto lbuffer_depth = rview.fbo_get("LBUFFER_DEPTH");
     gfx::texture::ptr reactive;
@@ -1466,7 +1534,8 @@ auto pipeline::run_particle_pass(scene& scn,
     if(particle_program_ && particle_program_mask_ && particle_program_->begin() && particle_program_mask_->begin())
     {
         const auto cam_pos = camera.get_position();
-        particle_draw_keys particle_emitters = gather_particle_emitters(scn, camera, camera_speed, render_mask, stats_);
+        particle_draw_keys particle_emitters =
+            include_particles ? gather_particle_emitters(scn, camera, camera_speed, render_mask, stats_) : particle_draw_keys{};
         const bool wants_scene_depth = has_soft_particles(particle_emitters);
         {
             APP_SCOPE_PERF("Rendering/Particle Pass/Sort Emitters");
@@ -1479,7 +1548,7 @@ auto pipeline::run_particle_pass(scene& scn,
             const particle_batch_list& half_batches = batches.half;
             const particle_batch_list& velocity_batches = batches.velocity;
             const bool has_lit_batches = batches.has_lit;
-            if((!full_batches.empty() || !half_batches.empty()) && lbuffer_depth)
+            if((!full_batches.empty() || !half_batches.empty() || has_meshes) && lbuffer_depth)
             {
                 // The TAA lowers its history weight where particles cover the pixel (they have no motion
                 // vectors). The coverage needs independent blend, and without a TAA reading it the particles
@@ -1489,6 +1558,7 @@ auto pipeline::run_particle_pass(scene& scn,
                 const auto targets = has_reactive_target ? acquire_particle_targets(rview, lbuffer_depth) : lbuffer_depth;
                 ps_soa::render_view_params params;
                 params.has_reactive_target = has_reactive_target;
+                forward_has_reactive_target_ = has_reactive_target;
                 params.program = particle_program_->native_handle();
                 params.mask_program = particle_program_mask_->native_handle();
                 params.view_matrix = &camera.get_view()[0][0];
@@ -1518,16 +1588,36 @@ auto pipeline::run_particle_pass(scene& scn,
                         fog_pass_.bind_particle_volume(k_particle_fog_volume_stage, fog);
                     }
                 };
-                // Lit batches read the scene's light, gathered once per view and bound before each of their draws.
-                particle_scene_lighting lighting;
-                if(has_lit_batches && particle_program_lit_->begin() && particle_program_lit_mask_->begin())
+                // Lit batches and the translucent meshes read the scene's light, gathered once per view and bound before
+                // each of their draws.
+                const bool has_lit_particles = has_lit_batches && particle_program_lit_->begin() && particle_program_lit_mask_->begin();
+                if(has_lit_particles || has_meshes)
                 {
-                    lighting = gather_particle_lighting(scn, rview, pre_exposure_values[0], use_shadow_maps, limits);
+                    forward_lighting_ = std::make_shared<particle_scene_lighting>(
+                        gather_particle_lighting(scn, rview, pre_exposure_values[0], use_shadow_maps, limits));
+                    forward_fog_ = &fog;
+                    forward_pre_exposure_ = params.pre_exposure;
+                    forward_environment_ = pre_exposure.gpu_texture;
+                    forward_light_limit_ = uint32_t(std::clamp(limits.translucent_lights, 0, int(k_particle_max_lights)));
+                    if(has_meshes)
+                    {
+                        prepare_forward_scene_reads(rview, lbuffer_depth, hiz_depth, *meshes, limits);
+                    }
+                    if(has_meshes && meshes->has_depth_prepass)
+                    {
+                        opaque_depth_before_translucency_ = depth_copy_pass_.run(rview,
+                                                                                 {.name = "OPAQUE_DEPTH",
+                                                                                  .source = lbuffer_depth->get_texture(1),
+                                                                                  .pass_name = "Translucency/Opaque Depth Copy"});
+                    }
+                }
+                if(has_lit_particles)
+                {
                     params.lit_program = particle_program_lit_->native_handle();
                     params.lit_mask_program = particle_program_lit_mask_->native_handle();
                     params.bind_lighting = [&](const ps_soa::render_batch& batch)
                     {
-                        bind_particle_lighting(lighting, batch);
+                        bind_particle_lighting(*forward_lighting_, batch);
                     };
                 }
                 const auto draw_batches = [&](bgfx::ViewId view, const particle_batch_list& batches)
@@ -1541,15 +1631,67 @@ auto pipeline::run_particle_pass(scene& scn,
                     return view_stats.draws > 0;
                 };
                 bool has_drawn = false;
-                if(!full_batches.empty())
+                // The order-independent surfaces wait in their targets for their place among the sorted draws.
+                bool is_composite_pending = false;
+                if(has_meshes && meshes->has_order_independent)
                 {
-                    params.scene_depth = wants_scene_depth
-                                             ? resolve_particle_scene_depth(rview, hiz_depth, depth_copy_pass_)
-                                             : bgfx::TextureHandle(BGFX_INVALID_HANDLE);
-                    gfx::render_pass pass("Particles/Pass");
+                    is_composite_pending = run_order_independent_pass(rview, camera, lbuffer_depth, *meshes);
+                }
+                if(!full_batches.empty() || has_meshes)
+                {
+                    params.scene_depth = !wants_scene_depth             ? bgfx::TextureHandle(BGFX_INVALID_HANDLE)
+                                         : bgfx::isValid(forward_scene_depth_) ? forward_scene_depth_
+                                                                               : resolve_particle_scene_depth(rview, hiz_depth, depth_copy_pass_);
+                    gfx::render_pass pass("Translucency/Pass");
                     pass.bind(targets.get());
                     pass.set_view_proj(camera.get_view(), camera.get_projection());
-                    has_drawn = draw_batches(pass.id, full_batches);
+                    // The meshes and the order-independent composite draw among the particle batches in one order:
+                    // those that sort before a batch, before it.
+                    size_t next_mesh = 0;
+                    const auto draw_meshes_until = [&](const translucent_mesh_list::key* until)
+                    {
+                        while(true)
+                        {
+                            const bool has_mesh = has_meshes && next_mesh < meshes->keys.size();
+                            if(!has_mesh && !is_composite_pending)
+                            {
+                                return;
+                            }
+                            const bool is_composite_next =
+                                is_composite_pending &&
+                                (!has_mesh || !is_drawn_before(meshes->keys[next_mesh], meshes->order_independent_key));
+                            const auto& next = is_composite_next ? meshes->order_independent_key : meshes->keys[next_mesh];
+                            if(until != nullptr && is_drawn_before(*until, next))
+                            {
+                                return;
+                            }
+                            if(is_composite_next)
+                            {
+                                submit_order_independent_composite(rview, pass.id, has_reactive_target);
+                                is_composite_pending = false;
+                            }
+                            else
+                            {
+                                meshes->draw(pass.id, next_mesh);
+                                ++next_mesh;
+                            }
+                            has_drawn = true;
+                        }
+                    };
+                    if(has_meshes)
+                    {
+                        params.before_batch = [&](const ps_soa::render_batch& batch)
+                        {
+                            const translucent_mesh_list::key batch_key{batch.sort_priority, batch.distance};
+                            draw_meshes_until(&batch_key);
+                        };
+                    }
+                    if(!full_batches.empty())
+                    {
+                        has_drawn = draw_batches(pass.id, full_batches) || has_drawn;
+                    }
+                    draw_meshes_until(nullptr);
+                    params.before_batch = nullptr;
                 }
                 if(!half_batches.empty())
                 {
@@ -1578,7 +1720,21 @@ auto pipeline::run_particle_pass(scene& scn,
                     params.lit_program = BGFX_INVALID_HANDLE;
                     params.lit_mask_program = BGFX_INVALID_HANDLE;
                 }
+                forward_lighting_.reset();
+                forward_light_pick_ = {};
+                forward_fog_ = nullptr;
+                forward_scene_color_ = BGFX_INVALID_HANDLE;
+                forward_scene_depth_ = BGFX_INVALID_HANDLE;
+                forward_scene_blurred_ = BGFX_INVALID_HANDLE;
                 const auto& velocity_target = rview.fbo_find("VELOCITY_FBO");
+                if(has_meshes && meshes->draw_velocity && velocity_target)
+                {
+                    // Surfaces that Write Velocity replace the scene's motion behind them with their own.
+                    gfx::render_pass pass("Translucency/Velocity");
+                    pass.bind(velocity_target.get());
+                    pass.set_view_proj(camera.get_view(), camera.get_projection());
+                    meshes->draw_velocity(pass.id);
+                }
                 if(!velocity_batches.empty() && velocity_target && particle_velocity_program_->begin())
                 {
                     // Nearly opaque particles replace the scene's motion vectors with their own, so the TAA
@@ -1642,6 +1798,264 @@ auto pipeline::run_particle_pass(scene& scn,
         particle_program_mask_->end();
     }
     return reactive;
+}
+
+void pipeline::prepare_forward_scene_reads(gfx::render_view& rview,
+                                           const gfx::frame_buffer::ptr& lbuffer_depth,
+                                           const gfx::texture::ptr& hiz_depth,
+                                           const translucent_mesh_list& meshes,
+                                           const feature_limits& limits)
+{
+    forward_scene_color_ = BGFX_INVALID_HANDLE;
+    forward_scene_depth_ = BGFX_INVALID_HANDLE;
+    forward_scene_blurred_ = BGFX_INVALID_HANDLE;
+    if((meshes.scene_textures & material_scene_texture_depth) != 0)
+    {
+        forward_scene_depth_ = resolve_particle_scene_depth(rview, hiz_depth, depth_copy_pass_);
+    }
+    const auto& lbuffer = rview.fbo_find("LBUFFER");
+    if((meshes.scene_textures & material_scene_texture_color) == 0 || !limits.translucent_scene_color || !lbuffer)
+    {
+        return;
+    }
+    APP_SCOPE_PERF("Rendering/Translucency/Scene Color Copy");
+    const auto& source = lbuffer->get_texture(0);
+    const auto& copy = rview.tex_acquire("TRANSLUCENT_SCENE_COLOR",
+                                         {.size = lbuffer_depth->get_size(),
+                                          .format = source->info.format,
+                                          .flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_UVW_CLAMP});
+    auto& fbo = rview.fbo_acquire("TRANSLUCENT_SCENE_COLOR");
+    if(gfx::needs_recreate(fbo, {copy}))
+    {
+        fbo.reset();
+        fbo = std::make_shared<gfx::frame_buffer>();
+        fbo->populate({copy});
+    }
+    blit_pass_.run(rview, {.input = lbuffer, .output = fbo});
+    forward_scene_color_ = copy->native_handle();
+    if((meshes.scene_textures & material_scene_texture_blurred_color) != 0 && scene_downsample_program_)
+    {
+        APP_SCOPE_PERF("Rendering/Translucency/Scene Color Blur");
+        // Without the program there is no blurred copy: rough surfaces then read the sharp one (bind_forward_lighting).
+        const auto half = downsample_scene_copy(rview, copy, "TRANSLUCENT_SCENE_HALF");
+        const auto quarter = half ? downsample_scene_copy(rview, half, "TRANSLUCENT_SCENE_BLURRED") : nullptr;
+        forward_scene_blurred_ = quarter ? quarter->native_handle() : bgfx::TextureHandle(BGFX_INVALID_HANDLE);
+    }
+}
+
+auto pipeline::downsample_scene_copy(gfx::render_view& rview, const gfx::texture::ptr& source, const std::string& name)
+    -> gfx::texture::ptr
+{
+    const auto source_size = source->get_size();
+    const usize32_t size{std::max(source_size.width / 2u, 1u), std::max(source_size.height / 2u, 1u)};
+    const auto& half = rview.tex_acquire(name, {.size = size, .format = source->info.format, .flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_UVW_CLAMP});
+    auto& fbo = rview.fbo_acquire(name);
+    if(gfx::needs_recreate(fbo, {half}))
+    {
+        fbo.reset();
+        fbo = std::make_shared<gfx::frame_buffer>();
+        fbo->populate({half});
+    }
+    if(!scene_downsample_program_->begin())
+    {
+        return nullptr;
+    }
+    gfx::render_pass pass("Translucency/Scene Color Blur");
+    pass.bind(fbo.get());
+    pass.set_view_proj({}, {});
+    gfx::set_texture(scene_downsample_sampler_, 0, source);
+    gfx::set_uniform(scene_downsample_params_,
+                     math::vec4(1.0f / float(source_size.width), 1.0f / float(source_size.height), 0.0f, 0.0f));
+    bgfx::setState(gfx::clip_quad(1.0f) | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(pass.id, scene_downsample_program_->native_handle());
+    scene_downsample_program_->end();
+    return half;
+}
+
+auto pipeline::run_order_independent_pass(gfx::render_view& rview,
+                                          const camera& camera,
+                                          const gfx::frame_buffer::ptr& lbuffer_depth,
+                                          const translucent_mesh_list& meshes) -> bool
+{
+    if(!oit_composite_program_ || !oit_composite_program_->is_valid() || !meshes.draw_order_independent)
+    {
+        return false;
+    }
+    APP_SCOPE_PERF("Rendering/Translucency/Order Independent");
+    const auto size = lbuffer_depth->get_size();
+    const uint64_t target_flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP;
+    const auto& accum = rview.tex_acquire("OIT_ACCUM", {.size = size, .format = bgfx::TextureFormat::RGBA16F, .flags = target_flags});
+    const auto& weight = rview.tex_acquire("OIT_WEIGHT", {.size = size, .format = bgfx::TextureFormat::R16F, .flags = target_flags});
+    const auto& depth = lbuffer_depth->get_texture(1);
+    auto& fbo = rview.fbo_acquire("OIT");
+    if(gfx::needs_recreate(fbo, {accum, weight, depth}))
+    {
+        fbo.reset();
+        fbo = std::make_shared<gfx::frame_buffer>();
+        fbo->populate({accum, weight, depth});
+    }
+    {
+        // The light sums start at 0 and what the layers let through at 1; the weights' target clears to 0 with them.
+        gfx::render_pass pass("Translucency/Order Independent");
+        pass.clear(BGFX_CLEAR_COLOR, 0x000000ff, 1.0f, 0);
+        pass.bind(fbo.get());
+        pass.set_view_proj(camera.get_view(), camera.get_projection());
+        meshes.draw_order_independent(pass.id);
+    }
+    return true;
+}
+
+void pipeline::submit_order_independent_composite(gfx::render_view& rview, bgfx::ViewId view, bool has_reactive_target)
+{
+    const auto& accum = rview.tex_find("OIT_ACCUM");
+    const auto& weight = rview.tex_find("OIT_WEIGHT");
+    if(!accum || !weight || !oit_composite_program_->begin())
+    {
+        return;
+    }
+    gfx::set_texture(oit_accum_sampler_, 0, accum);
+    gfx::set_texture(oit_weight_sampler_, 1, weight);
+    gfx::set_uniform(oit_params_uniform_, math::vec4(MATERIAL_DEFAULT_TAA_RESPONSE, 0.0f, 0.0f, 0.0f));
+    // The scene's alpha stays: the composite covers its colour only.
+    const uint64_t blend = BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_SRC_ALPHA,
+                                                          BGFX_STATE_BLEND_INV_SRC_ALPHA,
+                                                          BGFX_STATE_BLEND_ZERO,
+                                                          BGFX_STATE_BLEND_ONE);
+    bgfx::setState(gfx::clip_quad(1.0f) | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | blend |
+                       (has_reactive_target ? BGFX_STATE_BLEND_INDEPENDENT : 0),
+                   has_reactive_target ? ps_soa::reactive_blend_rgba : 0u);
+    bgfx::submit(view, oit_composite_program_->native_handle());
+    oit_composite_program_->end();
+}
+
+auto is_drawn_before(const translucent_mesh_list::key& a, const translucent_mesh_list::key& b) -> bool
+{
+    if(a.sort_priority != b.sort_priority)
+    {
+        return a.sort_priority < b.sort_priority;
+    }
+    return a.distance > b.distance;
+}
+
+void pipeline::bind_forward_lighting(const math::bbox& bounds, bool is_lit, const forward_probe& probe, uint32_t scene_textures)
+{
+    if(scene_textures != 0)
+    {
+        // Without a copy the colour reads black (the zero SH stands in) and the shader leaves its refraction off.
+        const auto stages = get_forward_scene_texture_stages(is_lit, scene_textures);
+        const bool has_color = bgfx::isValid(forward_scene_color_);
+        if((scene_textures & material_scene_texture_color) != 0)
+        {
+            bgfx::setTexture(stages.color,
+                             forward_scene_color_sampler_->native_handle(),
+                             has_color ? forward_scene_color_ : particle_no_sky_->native_handle());
+        }
+        if((scene_textures & material_scene_texture_depth) != 0)
+        {
+            bgfx::setTexture(stages.depth,
+                             forward_scene_depth_sampler_->native_handle(),
+                             bgfx::isValid(forward_scene_depth_) ? forward_scene_depth_ : particle_no_shadow_->native_handle());
+        }
+        if((scene_textures & material_scene_texture_blurred_color) != 0)
+        {
+            // Without a blurred copy a rough surface reads the sharp one: it refracts unblurred, not black.
+            const bgfx::TextureHandle sharp = has_color ? forward_scene_color_ : particle_no_sky_->native_handle();
+            bgfx::setTexture(stages.blurred_color,
+                             forward_scene_blurred_sampler_->native_handle(),
+                             bgfx::isValid(forward_scene_blurred_) ? forward_scene_blurred_ : sharp);
+        }
+        gfx::set_uniform(forward_scene_uniform_, math::vec4(has_color ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f));
+    }
+    const particle_scene_lighting* lighting = forward_lighting_.get();
+    // The sky's SH, whose texel 9 holds the GPU's share of the pre-exposure; without a sky the pre-exposure's own
+    // texture, which holds the share at the same texel.
+    bgfx::TextureHandle sky = forward_environment_;
+    if(lighting != nullptr && bgfx::isValid(lighting->irradiance))
+    {
+        sky = lighting->irradiance;
+    }
+    if(!bgfx::isValid(sky))
+    {
+        sky = particle_no_sky_->native_handle();
+    }
+    bgfx::setTexture(k_forward_irradiance_stage, forward_irradiance_sampler_->native_handle(), sky);
+    gfx::set_uniform(particle_pre_exposure_uniform_, forward_pre_exposure_);
+    const uint8_t fog_stage = is_lit ? k_forward_lit_fog_volume_stage : k_forward_unlit_fog_volume_stage;
+    if(forward_fog_ != nullptr)
+    {
+        // Every draw sets the fog, also when it is off: uniform values outlive the draw that set them.
+        fog_pass_.bind_uniforms(*forward_fog_);
+        fog_pass_.bind_volume(fog_stage, forward_fog_volume_sampler_->native_handle(), *forward_fog_);
+    }
+    if(!is_lit)
+    {
+        return;
+    }
+    auto& pick = forward_light_pick_;
+    const bool is_picked = pick.lighting == lighting && pick.bounds.min == bounds.min && pick.bounds.max == bounds.max;
+    if(!is_picked)
+    {
+        pick.lighting = lighting;
+        pick.bounds = bounds;
+        std::array<size_t, k_particle_max_lights> picked{};
+        pick.count = lighting != nullptr ? std::min(pick_particle_lights(*lighting, bounds, pick.lights, &picked), forward_light_limit_) : 0u;
+        pack_forward_light_shadows(lighting, picked.data(), pick.count);
+        // Uniform values outlive the draws that set them: the model's other submeshes keep these.
+        gfx::set_uniform(forward_lights_uniform_, pick.lights.data(), uint16_t(k_particle_light_vec4s));
+        gfx::set_uniform(forward_light_shadows_uniform_, pick.shadows.data(), uint16_t(pick.shadows.size()));
+    }
+    const uint32_t light_count = pick.count;
+    bind_forward_light_shadow_atlas();
+    const bool has_probe = probe.type != forward_probe::kind::none && bgfx::isValid(probe.cubemap);
+    const math::vec4 lighting_params(float(light_count), has_probe ? float(probe.type) : 0.0f, 0.0f, 0.0f);
+    gfx::set_uniform(forward_sun_direction_uniform_, lighting != nullptr ? lighting->sun_direction : math::vec4(0.0f, -1.0f, 0.0f, 0.0f));
+    gfx::set_uniform(forward_sun_color_uniform_, lighting != nullptr ? lighting->sun_color : math::vec4(0.0f));
+    gfx::set_uniform(forward_lighting_uniform_, lighting_params);
+    bgfx::setTexture(k_forward_probe_stage,
+                     forward_probe_sampler_->native_handle(),
+                     has_probe ? probe.cubemap : forward_no_probe_->native_handle());
+    gfx::set_uniform(forward_probe_uniform_, probe.data.data(), k_forward_probe_vec4s);
+    gfx::set_uniform(forward_probe_inv_world_uniform_, probe.inv_world);
+    if(lighting != nullptr && lighting->shadow != nullptr)
+    {
+        lighting->shadow->submit_uniforms(k_forward_shadow_stage);
+        return;
+    }
+    for(size_t i = 0; i < particle_shadow_samplers_.size(); ++i)
+    {
+        bgfx::setTexture(uint8_t(k_forward_shadow_stage + i),
+                         particle_shadow_samplers_[i]->native_handle(),
+                         particle_no_shadow_->native_handle());
+    }
+}
+
+void pipeline::pack_forward_light_shadows(const particle_scene_lighting* lighting, const size_t* picked, uint32_t light_count)
+{
+    auto& pick = forward_light_pick_;
+    pick.shadows.fill(math::vec4(0.0f));
+    pick.has_shadow = false;
+    for(uint32_t i = 0; i < light_count; ++i)
+    {
+        const auto& light = lighting->lights[picked[i]];
+        fog_pass::pack_light_shadow(light.shadow, light.is_spot, pick.shadows.data() + i * fog_pass::light_shadow_vec4s);
+        pick.has_shadow = pick.has_shadow || light.shadow != nullptr;
+    }
+}
+
+void pipeline::bind_forward_light_shadow_atlas()
+{
+    const auto& pick = forward_light_pick_;
+    // A stand-in keeps the sampler bound while no light of the draw has a map: every record then says unshadowed.
+    const auto atlas = shadow::shadow_atlas::get().get_color_texture();
+    if(pick.has_shadow && bgfx::isValid(atlas))
+    {
+        bgfx::setTexture(k_forward_light_shadow_stage,
+                         forward_light_shadow_atlas_sampler_->native_handle(),
+                         atlas,
+                         BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
+        return;
+    }
+    bgfx::setTexture(k_forward_light_shadow_stage, forward_light_shadow_atlas_sampler_->native_handle(), particle_no_shadow_->native_handle());
 }
 
 void pipeline::bind_particle_lighting(const particle_scene_lighting& lighting, const ps_soa::render_batch& batch)
@@ -1742,6 +2156,8 @@ void pipeline_stats::add_stats(const pipeline_stats& stats)
     decal_draws += stats.decal_draws;
     decal_buffer_runs += stats.decal_buffer_runs;
     post_process_material_passes += stats.post_process_material_passes;
+    drawn_translucent_models += stats.drawn_translucent_models;
+    drawn_translucent_submeshes += stats.drawn_translucent_submeshes;
 
     add_batch_stats(stats.batching_stats);
 }

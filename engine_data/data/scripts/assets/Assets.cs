@@ -165,8 +165,38 @@ public enum MaterialAlphaMode
     Opaque,
     /// <summary>Hard cutoff at the alpha cutoff; casts cutout shadows.</summary>
     Mask,
-    /// <summary>Transparent; does not cast shadows.</summary>
+    /// <summary>See-through (any <see cref="MaterialBlendMode"/> but Opaque); does not cast shadows.</summary>
     Blend,
+}
+
+/// <summary>
+/// How a material's surface covers what is behind it: its graph's Blend Mode (C++ material_blend_mode).
+/// </summary>
+public enum MaterialBlendMode
+{
+    /// <summary>Covers what is behind it; an Opacity Mask cuts it out.</summary>
+    Opaque,
+    /// <summary>See-through by a dither of its Opacity, lit and shadowed like opaque surfaces.</summary>
+    Dithered,
+    /// <summary>Blended over the scene by its Opacity after the lighting: glass, water, fades.</summary>
+    Translucent,
+    /// <summary>Adds its colour as it is while its Opacity covers what is behind: light that also occludes.</summary>
+    Premultiplied,
+    /// <summary>Adds its light to the scene, scaled by its Opacity.</summary>
+    Additive,
+    /// <summary>Multiplies the scene behind it by its colour.</summary>
+    Modulate,
+}
+
+/// <summary>
+/// Which light a material's surface takes: its graph's Shading Model (C++ material_shading_model).
+/// </summary>
+public enum MaterialShadingModel
+{
+    /// <summary>Takes the scene's light.</summary>
+    DefaultLit,
+    /// <summary>Shows its Emissive alone.</summary>
+    Unlit,
 }
 
 /// <summary>
@@ -307,6 +337,14 @@ public class Material : Asset<Material>
         get => (MaterialAlphaMode)internal_m2n_material_get_mode(uid, (int)MaterialProperty.AlphaMode);
         set => internal_m2n_material_set_mode(uid, (int)MaterialProperty.AlphaMode, (int)value);
     }
+
+    /// <summary>How the material's surface covers what is behind it: its graph's Blend Mode. Read only: the Material
+    /// Graph sets it.</summary>
+    public MaterialBlendMode blendMode => (MaterialBlendMode)internal_m2n_material_get_blend_mode(uid);
+
+    /// <summary>Which light the material's surface takes: its graph's Shading Model. Read only: the Material Graph sets
+    /// it.</summary>
+    public MaterialShadingModel shadingModel => (MaterialShadingModel)internal_m2n_material_get_shading_model(uid);
 
     /// <summary>Which faces the material hides (None draws both sides): the graph's Two Sided and Cull Front Faces
     /// settings; setting it does nothing (a warning is logged).</summary>
@@ -532,6 +570,12 @@ public class Material : Asset<Material>
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private static extern int internal_m2n_material_get_mode(Guid uid, int property);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern int internal_m2n_material_get_blend_mode(Guid uid);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern int internal_m2n_material_get_shading_model(Guid uid);
 }
 
 /// <summary>

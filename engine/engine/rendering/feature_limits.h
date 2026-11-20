@@ -92,6 +92,12 @@ struct feature_limits
     bool decal_surface_channels{true};
     /// Post-process materials: off, the Post Process Materials of volumes and cameras run none.
     bool post_process_materials{true};
+    /// The copy of the lit scene surfaces of the translucency pass read (Refraction, Scene Texture Scene Color): off,
+    /// none is taken, refraction bends nothing and Scene Color reads black.
+    bool translucent_scene_color{true};
+    /// The nearby point and spot lights a surface of the translucency pass is lit by, 0 to 4 (the brightest that reach
+    /// it); the sun and the sky light it whatever this is.
+    int translucent_lights{4};
 
     friend auto operator==(const feature_limits& lhs, const feature_limits& rhs) -> bool = default;
 };

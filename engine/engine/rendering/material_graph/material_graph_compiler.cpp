@@ -4,6 +4,7 @@
 #include <engine/meta/rendering/material_graph.hpp>
 #include <engine/rendering/material.h>
 #include <engine/rendering/skinning_palette_buffer.h>
+#include <string_utils/utils.h>
 #include <logging/logging.h>
 
 #include <algorithm>
@@ -218,6 +219,18 @@ constexpr std::array<const char*, 3> SHADER_HEADER_INCLUDES = {"common.sh", "lig
 
 /// The file holding main(), included after the code.
 constexpr const char* SHADER_MAIN_INCLUDE = "material_graph/fs_material_graph_gbuffer.sh";
+
+/// The variants of a surface of the translucency pass (Blend Mode Translucent, Premultiplied, Additive or Modulate):
+/// one, the forward main. The G-buffer never draws such a material (deferred::get_g_buffer_graph).
+constexpr const char* FORWARD_SHADER_VARIANTS = "[variants]\n"
+                                                "// default: the translucency pass (fs_material_graph_forward.sh).\n"
+                                                "default";
+/// The variant of an Order Independent surface: its weighted sums into the order-independent targets.
+constexpr const char* FORWARD_OIT_VARIANT = "// oit: the order-independent targets (fs_material_graph_forward.sh).\n"
+                                            "oit                 FORWARD_OIT";
+/// The forward main and the header of what it reads besides the graph.
+constexpr const char* FORWARD_MAIN_INCLUDE = "material_graph/fs_material_graph_forward.sh";
+constexpr const char* FORWARD_HEADER_INCLUDE = "material_graph/mg_forward.sh";
 
 /// The file holding main() of the shadow caster variants.
 constexpr const char* SHADER_SHADOW_MAIN_INCLUDE = "material_graph/fs_material_graph_shadow.sh";
@@ -733,6 +746,10 @@ private:
                                    get_material_domain_label(result_.domain)));
                 continue;
             }
+            if(state.node->type == MATERIAL_DEPTH_FADE_TYPE && can_surface_read_scene(state.node->id, "Scene Depth"))
+            {
+                result_.scene_textures |= material_scene_texture_depth;
+            }
             if(state.node->type == MATERIAL_SCENE_TEXTURE_TYPE)
             {
                 collect_scene_texture(i);
@@ -758,12 +775,123 @@ private:
                    fmt::format("A {} material cannot read {}: it reads black.", get_material_domain_label(result_.domain), source->label));
             return;
         }
+        if(!can_surface_read_scene(state.node->id, source->label))
+        {
+            return;
+        }
         result_.scene_textures |= source->texture_bit;
         result_.samples_scene_neighbours = result_.samples_scene_neighbours || is_input_linked(state, 0);
         if(result_.domain == material_domain::decal)
         {
             result_.decal_reads_surface = true;
         }
+    }
+
+    /// Whether the surface graph may read the scene's colour or depth, which only the translucency pass has; reports
+    /// why not on node @p node_id otherwise. Decal and post-process graphs check their sources by domain.
+    auto can_surface_read_scene(const std::string& node_id, const std::string& what) -> bool
+    {
+        if(!is_surface_domain() || is_output_forward())
+        {
+            return true;
+        }
+        report(material_graph_severity::error,
+               node_id,
+               {},
+               fmt::format("Only a surface of the translucency pass (Blend Mode Translucent, Premultiplied, Additive or "
+                           "Modulate) reads {}: this one reads black.",
+                           what));
+        return false;
+    }
+
+    /// A surface's read of the scene its shader does not have (reported by check_domain_nodes): a Scene Texture or a
+    /// Depth Fade outside the translucency pass, or a Scene Texture of a source only decals and post-process materials
+    /// read. It reads its default value.
+    auto is_refused_scene_read(size_t index) const -> bool
+    {
+        const auto& state = states_[index];
+        if(!is_surface_domain() || state.node == nullptr)
+        {
+            return false;
+        }
+        const bool is_scene_texture = state.node->type == MATERIAL_SCENE_TEXTURE_TYPE;
+        if(!is_scene_texture && state.node->type != MATERIAL_DEPTH_FADE_TYPE)
+        {
+            return false;
+        }
+        if(!is_output_forward())
+        {
+            return true;
+        }
+        if(!is_scene_texture || state.def == nullptr)
+        {
+            return false;
+        }
+        const auto* setting = find_material_setting_def(*state.def, MATERIAL_SCENE_TEXTURE_SOURCE_SETTING);
+        const auto* source = setting != nullptr ? find_material_scene_texture_source(get_setting(state, setting->name)) : nullptr;
+        return source == nullptr || (source->domains & get_material_domain_bit(material_domain::surface)) == 0;
+    }
+
+    /// The Surface Output's Blend Mode draws in the translucency pass (read from its setting: the compile result
+    /// learns it later, when the output is emitted).
+    auto is_output_forward() const -> bool
+    {
+        return output_ >= 0 && states_[size_t(output_)].node != nullptr &&
+               is_material_blend_mode_forward(get_material_blend_mode(*states_[size_t(output_)].node));
+    }
+
+    /// The Surface Output bends the view (Refraction linked or set off 1) and its Blend Mode refracts.
+    auto is_output_refracting() const -> bool
+    {
+        if(output_ < 0 || states_[size_t(output_)].node == nullptr || states_[size_t(output_)].def == nullptr)
+        {
+            return false;
+        }
+        const auto& state = states_[size_t(output_)];
+        if(!is_material_output_pin_used(*state.node, MATERIAL_REFRACTION_PIN))
+        {
+            return false;
+        }
+        const size_t pin = find_input_pin(*state.def, MATERIAL_REFRACTION_PIN);
+        return pin < state.def->inputs.size() && (is_input_linked(state, pin) || state.is_composed[pin] || get_value(state, pin).x != 1.0f);
+    }
+
+    /// A refracting lit surface that may be rough (its Roughness, or Glossiness in the specular workflow, linked or
+    /// rougher than MATERIAL_ROUGH_REFRACTION_MIN): what it shows through itself blurs by its roughness.
+    auto is_output_rough_refracting() const -> bool
+    {
+        if(!is_output_refracting())
+        {
+            return false;
+        }
+        const auto& state = states_[size_t(output_)];
+        if(get_material_shading_model(*state.node) == material_shading_model::unlit)
+        {
+            return false;
+        }
+        const bool is_specular = is_material_specular_workflow(*state.node);
+        const size_t pin = find_input_pin(*state.def, is_specular ? MATERIAL_GLOSSINESS_PIN : MATERIAL_ROUGHNESS_PIN);
+        if(pin >= state.def->inputs.size())
+        {
+            return false;
+        }
+        if(is_input_linked(state, pin) || state.is_composed[pin])
+        {
+            return true;
+        }
+        const float value = get_value(state, pin).x;
+        return (is_specular ? 1.0f - value : value) >= MATERIAL_ROUGH_REFRACTION_MIN;
+    }
+
+    /// What the Surface Output's Refraction reads of the scene behind (material_scene_texture_bits).
+    auto get_output_refraction_reads() const -> uint32_t
+    {
+        if(!is_output_refracting())
+        {
+            return 0;
+        }
+        const uint32_t reads = material_scene_texture_color | material_scene_texture_depth;
+        return is_output_rough_refracting() ? reads | material_scene_texture_blurred_color : reads;
     }
 
     static auto make_variable_name(const std::string& id, std::set<std::string>& taken) -> std::string
@@ -1334,7 +1462,7 @@ private:
         {
             return true;
         }
-        return is_material_workflow_pin_used(*state.node, state.def->inputs[pin].name);
+        return is_material_output_pin_used(*state.node, state.def->inputs[pin].name);
     }
 
     auto is_used_kind(size_t index, material_node_code code) -> bool
@@ -1636,14 +1764,14 @@ private:
             }
             const bool is_normal = is_used_kind(i, material_node_code::normal_map);
             const auto& node = *states_[i].node;
-            if(result_.textures.size() >= get_material_graph_max_textures(result_.domain))
+            if(result_.textures.size() >= get_texture_limit())
             {
                 report(material_graph_severity::error,
                        node.id,
                        {},
                        fmt::format("A {} material reads at most {} textures; this one reads its default value.",
-                                   get_material_domain_label(result_.domain),
-                                   get_material_graph_max_textures(result_.domain)));
+                                   get_texture_limit_label(),
+                                   get_texture_limit()));
                 continue;
             }
             const auto texture_index = uint32_t(result_.textures.size());
@@ -2007,7 +2135,7 @@ private:
     {
         const auto& def = *states_[index].def;
         // Reported by check_domain_nodes: what it would read does not exist in this domain's shader.
-        if(!is_in_domain(index) && def.code != material_node_code::surface_output)
+        if((!is_in_domain(index) || is_refused_scene_read(index)) && def.code != material_node_code::surface_output)
         {
             const auto type = get_info(index).type;
             return is_material_value_numeric(type) ? format_literal(math::vec4(0.0f), get_material_value_width(type), true) : "0.0";
@@ -3225,21 +3353,18 @@ private:
                                      attributes_use_mask(state.sources[attributes_index], 0);
         const bool uses_mask = state.sources[mask_index].is_linked() || state.is_composed[mask_index] ||
                                get_value(state, mask_index).x < mask_pin->default_value.x || attributes_mask;
-        // A translucent surface is dithered by its mask, not clipped.
-        result_.is_translucent =
-            get_checked_setting(index, *find_material_setting_def(def, MATERIAL_TRANSLUCENT_SETTING)) == MATERIAL_TRANSLUCENT_ON;
-        if(result_.is_translucent)
-        {
-            defines_.push_back("#define MATERIAL_TRANSLUCENT 1");
-        }
-        const bool clips_by_mask = uses_mask && !result_.is_translucent;
+        collect_blend_defines(index);
+        // A see-through surface reads its mask as its opacity; only an opaque one clips by it.
+        const bool clips_by_mask = uses_mask && !result_.is_translucent();
         // A Discard node clips like the mask: the shader gets the shadow casters, which run it too.
         const auto [has_discard, is_discard_animated] = find_discards();
         if(clips_by_mask || has_discard)
         {
             defines_.push_back("#define MATERIAL_OPACITY_MASK 1");
             result_.uses_opacity_mask = true;
+            // The forward shadow's dither may have marked it animated already (collect_blend_defines).
             result_.is_opacity_mask_animated =
+                result_.is_opacity_mask_animated ||
                 (clips_by_mask && (is_input_changing(index, mask_index) || is_input_changing(index, clip_index) ||
                                    (attributes_mask && is_input_changing(index, attributes_index)))) ||
                 is_discard_animated;
@@ -3250,6 +3375,96 @@ private:
                                              offset_value.x != 0.0f || offset_value.y != 0.0f || offset_value.z != 0.0f;
         const auto& max_offset = *find_material_setting_def(def, MAX_WORLD_POSITION_OFFSET_SETTING);
         result_.max_world_position_offset = std::max(0.0f, parse_number(index, max_offset, get_setting(state, max_offset.name)));
+    }
+
+    /// The most textures the graph reads: its domain's, and for a surface its Blend Mode's and Shading Model's.
+    auto get_texture_limit() const -> uint32_t
+    {
+        if(!is_surface_domain() || output_ < 0 || states_[size_t(output_)].node == nullptr)
+        {
+            return get_material_graph_max_textures(result_.domain);
+        }
+        const auto& output = *states_[size_t(output_)].node;
+        const uint32_t scene_textures = result_.scene_textures | get_output_refraction_reads();
+        return get_material_graph_max_textures(get_material_blend_mode(output), get_material_shading_model(output), scene_textures);
+    }
+
+    /// What the texture limit's message names the material: its Blend Mode in the translucency pass, else its domain.
+    auto get_texture_limit_label() const -> const char*
+    {
+        if(is_surface_domain() && output_ >= 0 && states_[size_t(output_)].node != nullptr)
+        {
+            const auto mode = get_material_blend_mode(*states_[size_t(output_)].node);
+            if(is_material_blend_mode_forward(mode))
+            {
+                return get_material_blend_mode_label(mode);
+            }
+        }
+        return get_material_domain_label(result_.domain);
+    }
+
+    /// The Blend Mode, Shading Model and their settings: the result's traits and the defines the mains read.
+    void collect_blend_defines(size_t index)
+    {
+        const auto& state = states_[index];
+        const auto& def = *state.def;
+        result_.blend_mode = find_material_blend_mode(get_checked_setting(index, *find_material_setting_def(def, MATERIAL_BLEND_MODE_SETTING)))
+                                 .value_or(material_blend_mode::opaque);
+        result_.shading_model = get_material_shading_model(*state.node);
+        result_.preserve_specular =
+            get_checked_setting(index, *find_material_setting_def(def, MATERIAL_PRESERVE_SPECULAR_SETTING)) == MATERIAL_PRESERVE_SPECULAR_ON;
+        const bool can_be_order_independent = is_material_blend_mode_order_dependent(result_.blend_mode);
+        result_.order_independent =
+            can_be_order_independent &&
+            get_checked_setting(index, *find_material_setting_def(def, MATERIAL_ORDER_INDEPENDENT_SETTING)) == MATERIAL_ORDER_INDEPENDENT_ON;
+        result_.depth_prepass = can_be_order_independent && !result_.order_independent &&
+                                get_checked_setting(index, *find_material_setting_def(def, MATERIAL_DEPTH_PREPASS_SETTING)) ==
+                                    MATERIAL_SETTING_ON;
+        result_.writes_velocity = is_material_blend_mode_forward(result_.blend_mode) &&
+                                  get_checked_setting(index, *find_material_setting_def(def, MATERIAL_WRITE_VELOCITY_SETTING)) ==
+                                      MATERIAL_SETTING_ON;
+        const auto& taa_response = *find_material_setting_def(def, MATERIAL_TAA_RESPONSE_SETTING);
+        result_.taa_response = std::clamp(parse_number(index, taa_response, get_setting(state, taa_response.name)), 0.0f, 1.0f);
+        if(result_.blend_mode == material_blend_mode::dithered)
+        {
+            defines_.push_back("#define MATERIAL_DITHERED 1");
+        }
+        if(result_.is_forward())
+        {
+            defines_.push_back("#define MATERIAL_FORWARD 1");
+            defines_.push_back(fmt::format("#define MATERIAL_BLEND_{} 1", string_utils::to_upper(get_material_blend_mode_key(result_.blend_mode))));
+            if(result_.preserve_specular && result_.blend_mode == material_blend_mode::translucent)
+            {
+                defines_.push_back("#define MATERIAL_PRESERVE_SPECULAR 1");
+            }
+            defines_.push_back(fmt::format("#define MATERIAL_TAA_RESPONSE {}", format_float_literal(result_.taa_response)));
+            result_.casts_forward_shadow =
+                get_checked_setting(index, *find_material_setting_def(def, MATERIAL_CAST_SHADOW_SETTING)) == MATERIAL_CAST_SHADOW_DITHERED;
+            if(result_.casts_forward_shadow)
+            {
+                defines_.push_back("#define MATERIAL_FORWARD_SHADOW 1");
+                // A dithered shadow changes with its Opacity: animated where the Opacity is.
+                const size_t opacity_index = size_t(find_material_pin_def(def.inputs, OPACITY_MASK_PIN) - def.inputs.data());
+                result_.is_opacity_mask_animated = result_.is_opacity_mask_animated || is_input_changing(index, opacity_index);
+            }
+        }
+        if(result_.shading_model == material_shading_model::unlit)
+        {
+            defines_.push_back("#define MATERIAL_UNLIT 1");
+        }
+        if(result_.is_forward())
+        {
+            if(is_output_refracting())
+            {
+                defines_.push_back("#define MATERIAL_REFRACTION 1");
+                if(is_output_rough_refracting())
+                {
+                    defines_.push_back("#define MATERIAL_ROUGH_REFRACTION 1");
+                }
+                result_.scene_textures |= get_output_refraction_reads();
+            }
+            add_scene_texture_defines();
+        }
     }
 
     static auto get_offset_pin(const material_node_def& def) -> size_t
@@ -3654,7 +3869,7 @@ private:
         {
             lines.push_back(make_include_line(include));
         }
-        if(!is_surface_domain())
+        if(!is_surface_domain() || result_.scene_textures != 0)
         {
             lines.push_back(make_include_line(PREVIEW_VIEW_INCLUDE));
         }
@@ -3736,8 +3951,14 @@ private:
         std::vector<std::string> lines;
         const std::string source = options_.source_name.empty() ? std::string{} : fmt::format(" from {}", make_comment_text(options_.source_name));
         lines.push_back(fmt::format("// Generated by the material graph compiler{}. Edit the graph, not this file.", source));
-        add_lines(lines, SHADER_VARIANTS);
-        const bool has_shadow_casters = result_.uses_opacity_mask || result_.uses_world_position_offset;
+        const bool is_forward = result_.is_forward();
+        add_lines(lines, is_forward ? FORWARD_SHADER_VARIANTS : SHADER_VARIANTS);
+        if(is_forward && result_.order_independent)
+        {
+            add_lines(lines, FORWARD_OIT_VARIANT);
+        }
+        const bool has_shadow_casters =
+            is_forward ? result_.casts_forward_shadow : (result_.uses_opacity_mask || result_.uses_world_position_offset);
         if(has_shadow_casters)
         {
             add_lines(lines, SHADER_SHADOW_VARIANTS);
@@ -3752,6 +3973,10 @@ private:
         {
             lines.push_back(make_include_line(include));
         }
+        if(is_forward)
+        {
+            lines.push_back(make_include_line(FORWARD_HEADER_INCLUDE));
+        }
         lines.emplace_back();
         add_declarations(lines);
         lines.insert(lines.end(), functions_.begin(), functions_.end());
@@ -3761,7 +3986,19 @@ private:
         lines.insert(lines.end(), body_.begin(), body_.end());
         lines.push_back("}");
         lines.emplace_back();
-        if(has_shadow_casters)
+        if(is_forward && has_shadow_casters)
+        {
+            lines.push_back("#if SHADOW_CASTER");
+            lines.push_back(make_include_line(SHADER_SHADOW_MAIN_INCLUDE));
+            lines.push_back("#else");
+            lines.push_back(make_include_line(FORWARD_MAIN_INCLUDE));
+            lines.push_back("#endif");
+        }
+        else if(is_forward)
+        {
+            lines.push_back(make_include_line(FORWARD_MAIN_INCLUDE));
+        }
+        else if(has_shadow_casters)
         {
             lines.push_back("#if SHADOW_CASTER");
             lines.push_back(make_include_line(SHADER_SHADOW_MAIN_INCLUDE));
@@ -4150,6 +4387,16 @@ auto material_graph_compile_result::computes_vertex_values() const -> bool
     return uses_world_position_offset || interpolator_count > 0;
 }
 
+auto material_graph_compile_result::is_translucent() const -> bool
+{
+    return blend_mode != material_blend_mode::opaque;
+}
+
+auto material_graph_compile_result::is_forward() const -> bool
+{
+    return is_material_blend_mode_forward(blend_mode);
+}
+
 auto material_graph_compile_result::has_errors() const -> bool
 {
     return std::any_of(diagnostics.begin(),
@@ -4194,7 +4441,14 @@ auto make_material_graph_binding(const material_graph_compile_result& result) ->
     binding.emissive = result.emissive;
     binding.uses_opacity_mask = result.uses_opacity_mask;
     binding.is_opacity_mask_animated = result.is_opacity_mask_animated;
-    binding.is_translucent = result.is_translucent;
+    binding.blend_mode = result.blend_mode;
+    binding.shading_model = result.shading_model;
+    binding.preserve_specular = result.preserve_specular;
+    binding.taa_response = result.taa_response;
+    binding.order_independent = result.order_independent;
+    binding.depth_prepass = result.depth_prepass;
+    binding.writes_velocity = result.writes_velocity;
+    binding.casts_forward_shadow = result.casts_forward_shadow;
     binding.uses_world_position_offset = result.uses_world_position_offset;
     binding.is_world_position_offset_animated = result.is_world_position_offset_animated;
     binding.max_world_position_offset = result.max_world_position_offset;
@@ -4208,6 +4462,35 @@ auto make_material_graph_binding(const material_graph_compile_result& result) ->
     binding.scene_textures = result.scene_textures;
     binding.samples_scene_neighbours = result.samples_scene_neighbours;
     return binding;
+}
+
+auto get_material_graph_max_textures(material_blend_mode mode, material_shading_model model, uint32_t scene_textures) -> uint32_t
+{
+    if(!is_material_blend_mode_forward(mode))
+    {
+        return MATERIAL_GRAPH_MAX_TEXTURES;
+    }
+    const uint32_t limit = model == material_shading_model::unlit ? MATERIAL_GRAPH_MAX_FORWARD_UNLIT_TEXTURES : MATERIAL_GRAPH_MAX_FORWARD_LIT_TEXTURES;
+    const uint32_t reads = ((scene_textures & material_scene_texture_color) != 0 ? 1u : 0u) +
+                           ((scene_textures & material_scene_texture_depth) != 0 ? 1u : 0u) +
+                           ((scene_textures & material_scene_texture_blurred_color) != 0 ? 1u : 0u);
+    return limit - reads;
+}
+
+auto get_forward_scene_texture_stages(bool is_lit, uint32_t scene_textures) -> forward_scene_texture_stages
+{
+    const bool reads_color = (scene_textures & material_scene_texture_color) != 0;
+    const bool reads_depth = (scene_textures & material_scene_texture_depth) != 0;
+    // The stage just below the engine's, then the next free ones down (stage 7 is the skinning palette's, stage 8 a lit
+    // surface's shadow atlas). The blurred copy only comes with both reads (a rough Refraction).
+    const uint8_t first = is_lit ? 6 : 13;
+    const uint8_t second = is_lit ? 5 : 12;
+    const uint8_t third = is_lit ? 4 : 11;
+    forward_scene_texture_stages stages;
+    stages.color = first;
+    stages.depth = reads_color && reads_depth ? second : first;
+    stages.blurred_color = third;
+    return stages;
 }
 
 auto get_material_graph_max_textures(material_domain domain) -> uint32_t
@@ -4275,6 +4558,11 @@ auto get_material_graph_shader_includes() -> std::vector<std::string>
     includes.emplace_back(POST_PROCESS_HEADER_INCLUDE);
     includes.emplace_back(POST_PROCESS_MAIN_INCLUDE);
     includes.emplace_back("pre_exposure.sh");
+    includes.emplace_back(FORWARD_MAIN_INCLUDE);
+    includes.emplace_back(FORWARD_HEADER_INCLUDE);
+    includes.emplace_back("fog/fog.sh");
+    includes.emplace_back("reflection_probe/sphere_probe.sh");
+    includes.emplace_back("reflection_probe/box_probe.sh");
     return includes;
 }
 

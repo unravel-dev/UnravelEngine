@@ -1,0 +1,34 @@
+[inputs]
+vec2 v_texcoord0
+
+[code]
+/*
+ * Composites the order-independent translucent surfaces over the scene (weighted blended order-independent
+ * transparency, fs_material_graph_forward.sh FORWARD_OIT): their weighed light divided by their weights covers the
+ * scene by one minus the product of what each of them lets through. Blended SRC_ALPHA, INV_SRC_ALPHA over the scene;
+ * the coverage times the layer's TAA response goes into the reactive mask (MAX blend) when the view has one.
+ */
+
+#include "../common.sh"
+
+// rgb: the sum of the layers' light times their weights; a: the product of what they let through.
+SAMPLER2D(s_oit_accum, 0);
+// r: the sum of the layers' weights.
+SAMPLER2D(s_oit_weight, 1);
+/// x: the TAA response the layer marks the reactive mask with.
+uniform vec4 u_oit_params;
+
+void main()
+{
+	ivec2 texel = ivec2(gl_FragCoord.xy);
+	vec4 accum = texelFetch(s_oit_accum, texel, 0);
+	float coverage = 1.0 - accum.a;
+	if(coverage <= 1e-4)
+	{
+		discard;
+	}
+	float weight = texelFetch(s_oit_weight, texel, 0).x;
+	vec3 light = accum.rgb / max(weight, 1e-5);
+	gl_FragData[0] = vec4(light, coverage);
+	gl_FragData[1] = vec4(saturate(coverage * u_oit_params.x), 0.0, 0.0, 0.0);
+}

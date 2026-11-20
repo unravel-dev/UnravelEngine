@@ -653,7 +653,11 @@ auto deferred::render_particles(const run_context& run,
                                 const gfx::frame_buffer::ptr& target,
                                 const fog_pass::shader_params& fog) -> gfx::texture::ptr
 {
-    if(!run.runs_particle_step())
+    // The translucency pass draws the run's translucent meshes among the particles; a probe capture draws its static
+    // ones without particles.
+    const translucent_mesh_list meshes = collect_translucent_draws(run);
+    const bool has_meshes = !meshes.is_empty();
+    if(!run.runs_particle_step() && !has_meshes)
     {
         return {};
     }
@@ -670,7 +674,9 @@ auto deferred::render_particles(const run_context& run,
                              run.dt,
                              fog,
                              run.params.limits,
-                             run.render_mask);
+                             run.render_mask,
+                             has_meshes ? &meshes : nullptr,
+                             run.runs_particle_step());
 }
 
 void deferred::finish_camera_image(const run_context& run, const lit_scene& lit)
