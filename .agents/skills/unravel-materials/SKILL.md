@@ -80,6 +80,18 @@ draws them: skill `unravel-rendering`. Driving materials through the editor's MC
   (`deferred::collect_translucent_gi_points`). The SH pass (`cs_gi_rc_sh`) starts the first frame such surfaces mark
   points (a full pass) and then runs over the traced probes every frame until the cache is released; a scene without
   them never runs it.
+- GI Reflections (`gi_reflections`, opt in): a graph with the "gi" variant also compiles "gi_layer"
+  (FORWARD_GI_LAYER: octahedral normal, metallic, roughness in G-buffer target 1's layout, discarding behind the
+  opaque depth read at stage 6) and "gi_reflect" / "oit_gi_reflect" (FORWARD_GI_REFLECTIONS: the traced result on
+  the probe's stage 14 in place of the probe). `deferred::run_gi_reflection_layer` draws the layer after the opaque
+  GI reflections and `gi_reflection_pass::run_front_layer` traces it with the reflection shaders' "front" variants
+  over the layer's screen box plus a 32-pixel margin; a fragment uses the result only inside the region written this
+  frame (u_fwd_gi_region) where its camera distance matches the layer's (alpha) within 1%. Models whose screen box
+  is under 64 x 64 pixels skip the layer: a trace costs the latency of its longest rays however few pixels it has.
+  While the GI owns the view's reflections an opted-in surface always draws "gi_reflect" (never the sky-only probe):
+  untraced fragments, a switched-off project and small models take the radiance cache's lobe. No such model in
+  view: no draw, no trace, the targets released. The project switch is
+  `gi_project_settings::translucent_reflections`.
 - The binding (`material_graph_binding`, meta/rendering/graph_material.cpp) is binary in compiled materials: a new
   field goes at the end of SAVE and LOAD alike, with a material format bump (`asset_extensions.h`). A LOAD of a key
   SAVE does not write desyncs every later field and can allocate without bound.

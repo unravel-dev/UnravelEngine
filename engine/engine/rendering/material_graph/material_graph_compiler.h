@@ -293,6 +293,10 @@ struct material_graph_compile_result
     /// A lit surface of the translucency pass whose textures leave the GI's stages free: the shader has the "gi" variant
     /// (and "oit_gi" when Order Independent), lit by the GI's radiance cache where the view runs the GI.
     bool has_gi_variant{};
+    /// A surface with the "gi" variant whose GI Reflections is on (MATERIAL_GI_REFLECTIONS_SETTING), Translucent or
+    /// Premultiplied: the shader has the "gi_layer" variant, which draws the front layer the GI reflections trace from,
+    /// and "gi_reflect" (and "oit_gi_reflect"), which read what they traced.
+    bool has_gi_reflection_variant{};
     /// Sorted Translucent and Premultiplied surfaces: the depth draws before the colour (MATERIAL_DEPTH_PREPASS_SETTING).
     bool depth_prepass{};
     /// Surfaces of the translucency pass that draw their motion into the velocity buffer (MATERIAL_WRITE_VELOCITY_SETTING).
@@ -387,6 +391,7 @@ struct material_graph_binding
     float taa_response{MATERIAL_DEFAULT_TAA_RESPONSE};
     bool order_independent{};
     bool has_gi_variant{};
+    bool has_gi_reflection_variant{};
     bool depth_prepass{};
     bool writes_velocity{};
     bool casts_forward_shadow{};

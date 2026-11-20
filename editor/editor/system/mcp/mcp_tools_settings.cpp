@@ -69,6 +69,7 @@ auto reflected_rows() -> const std::vector<reflected_row>&
         {"global_illumination", "global_illumination_quality"},
         {"global_illumination", "reflection_quality"},
         {"global_illumination", "surface_cache_atlas_size"},
+        {"global_illumination", "translucent_reflections"},
         {"global_illumination", "hi_res_reflection_pages"},
         {"global_illumination", "card_captures_per_frame"},
         {"global_illumination", "card_capture_atlas_size"},

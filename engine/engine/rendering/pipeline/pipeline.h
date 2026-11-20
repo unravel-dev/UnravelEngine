@@ -486,13 +486,24 @@ public:
      * @brief Binds what a surface of the translucency pass reads besides its graph (mg_forward.sh) for a draw within
      * @p bounds: the sky's SH, the fog, and for a lit one the sun with its cascades, the brightest nearby lights with
      * their shadows and the reflection @p probe, and the scene's colour and depth where the surface reads them
-     * (@p scene_textures, material_scene_texture_bits). Only inside run_particle_pass's draws of its meshes.
+     * (@p scene_textures, material_scene_texture_bits). A draw that @p uses_gi reads the GI's radiance cache (the "gi"
+     * variants); one that @p uses_gi_reflections reads the front layer's traced reflections on the probe's stage
+     * instead of the probe (the "gi_reflect" variants), or a stand-in and the radiance cache's lobe where none was
+     * traced. Only inside run_particle_pass's draws of its meshes.
      */
     void bind_forward_lighting(const math::bbox& bounds,
                                bool is_lit,
                                const forward_probe& probe,
                                uint32_t scene_textures,
-                               bool uses_gi = false);
+                               bool uses_gi = false,
+                               bool uses_gi_reflections = false);
+    /**
+     * @brief Binds what a surface's "gi_layer" variant reads besides its graph (mg_forward.sh FORWARD_GI_LAYER): the
+     * opaque scene's @p opaque_depth it keeps in front of, for its scene reads (@p scene_textures) that depth and
+     * black for the colour, which the front layer does not use, and @p layer_target: xy = the view pixel of the layer
+     * target's first texel, zw = 1 / the view's size (u_fwd_gi_layer).
+     */
+    void bind_forward_gi_layer(uint32_t scene_textures, const gfx::texture::ptr& opaque_depth, const math::vec4& layer_target);
     /// The GI's radiance cache the translucency pass's lit surfaces read in their "gi" variant (mg_forward.sh
     /// FORWARD_GI) while this run draws them: the one its GI updated this frame, else null and they draw without it.
     auto get_forward_gi_cache() const -> const gi_radiance_cache*
@@ -637,6 +648,21 @@ protected:
     const gi_radiance_cache* forward_gi_cache_{nullptr};
     float forward_gi_intensity_{1.0f};
     gfx::program::uniform_ptr forward_gi_uniform_{};
+    /// The view's reflections are the GI's this run: surfaces with GI Reflections draw their "gi_reflect" variants, which
+    /// never read the reflection probe (only the sky's would be drawn).
+    bool forward_uses_gi_reflections_{false};
+    /// The front layer's traced reflections those variants read (gi_reflection_pass::run_front_layer), with the pixels
+    /// [min, max) it wrote this frame; null where none was traced, and they take the radiance cache's lobe. The roughness
+    /// the traces end at with 1 / the roughness they fade over (u_fwd_gi.y, .z).
+    gfx::texture::ptr forward_gi_reflection_{};
+    math::ivec2 forward_gi_reflection_min_{};
+    math::ivec2 forward_gi_reflection_max_{};
+    float forward_gi_max_roughness_{0.0f};
+    float forward_gi_roughness_fade_scale_{1.0f};
+    gfx::program::uniform_ptr forward_gi_region_uniform_{};
+    gfx::program::uniform_ptr forward_gi_layer_uniform_{};
+    gfx::program::uniform_ptr forward_gi_reflection_sampler_{};
+    gfx::program::uniform_ptr forward_gi_layer_depth_sampler_{};
     /// The opaque scene's depth from before Depth Prepass surfaces wrote theirs, taken only when one draws in the
     /// frame; the history (PREV_DEPTH) copies it instead of the depth the prepass changed. Null otherwise.
     gfx::texture::ptr opaque_depth_before_translucency_{};

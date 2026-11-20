@@ -1,3 +1,9 @@
+[variants]
+// default: the opaque scene's reflections, from the G-buffer.
+default
+// front: the front see-through layer's (gi_reflection_common.sh GI_REFLECTION_FRONT_LAYER).
+front               GI_REFLECTION_FRONT_LAYER
+
 [code]
 /*
  * GI reflections, temporal accumulation, full resolution.
@@ -48,8 +54,11 @@ SAMPLER2D(s_gi_depth, 12);
 /// G-buffer target 1: octahedral normal, metallic, roughness.
 SAMPLER2D(s_gi_normal, 13);
 
-/// This frame's velocity buffer (where moving surfaces were last frame).
+/// This frame's velocity buffer (where moving surfaces were last frame). The front layer reprojects by the camera: a
+/// moving see-through surface's history fails the depth test.
+#if !GI_REFLECTION_FRONT_LAYER
 #define GI_VELOCITY_STAGE 14
+#endif
 #include "gi/gi_motion.sh"
 
 #define GI_REFLECTION_TILE_BORDER 2
@@ -87,7 +96,12 @@ GiReflectionHistory GiReadReflectionHistory(vec3 world_point, bool depth_test, v
 	{
 		return history;
 	}
+	// In view pixels: the front layer's history holds last frame's region only (GiReflectionHistoryTexel).
+#if GI_REFLECTION_FRONT_LAYER
+	vec2 history_size = u_gi_view_size;
+#else
 	vec2 history_size = vec2(textureSize(s_gi_reflection_history, 0));
+#endif
 	// Inset by 0.51 texel: the bilinear footprint stays inside the view.
 	vec2 guard = vec2_splat(0.51) / history_size;
 	history_uv = clamp(history_uv, guard, vec2_splat(1.0) - guard);
@@ -104,7 +118,8 @@ GiReflectionHistory GiReadReflectionHistory(vec3 world_point, bool depth_test, v
 	float weight_sum = 0.0;
 	for(int tap = 0; tap < 4; ++tap)
 	{
-		ivec2 texel = clamp(origin + ivec2(tap & 1, tap >> 1), ivec2(0, 0), ivec2(history_size) - ivec2(1, 1));
+		ivec2 texel = GiReflectionHistoryTexel(
+			clamp(origin + ivec2(tap & 1, tap >> 1), ivec2(0, 0), ivec2(history_size) - ivec2(1, 1)));
 		float weight = tap == 0 ? weights.x : (tap == 1 ? weights.y : (tap == 2 ? weights.z : weights.w));
 		if(depth_test)
 		{
@@ -157,7 +172,7 @@ vec4 GiLoadTileEntry(ivec2 coord)
 NUM_THREADS(8, 8, 1)
 void main()
 {
-	ivec2 group_origin = ivec2(gl_WorkGroupID.xy) * 8;
+	ivec2 group_origin = ivec2(gl_WorkGroupID.xy) * 8 + GiReflectionPixelOrigin();
 	ivec2 local = ivec2(gl_LocalInvocationID.xy);
 	// A tile that traces nothing keeps no history (the whole group returns, before its barrier).
 	if(!GiReflectionTileTraces(group_origin))
@@ -187,8 +202,8 @@ void main()
 	vec4 center = s_gi_reflection_tile[tile_center.y * GI_REFLECTION_TILE_SIZE + tile_center.x];
 	if(center.w < 0.5)
 	{
-		imageStore(s_gi_reflection_history_out, pixel, vec4_splat(0.0));
-		imageStore(s_gi_reflection_frames_out, pixel, vec4(-1.0, 0.0, 0.0, 0.0));
+		imageStore(s_gi_reflection_history_out, GiReflectionTargetTexel(pixel), vec4_splat(0.0));
+		imageStore(s_gi_reflection_frames_out, GiReflectionTargetTexel(pixel), vec4(-1.0, 0.0, 0.0, 0.0));
 		return;
 	}
 	vec3 specular = GiYCoCgToRGB(center.xyz);
@@ -198,8 +213,8 @@ void main()
 	BRANCH
 	if(u_gi_reflection_has_history)
 	{
-		float depth01 = texelFetch(s_gi_depth, pixel, 0).x;
-		vec4 gbuffer1 = texelFetch(s_gi_normal, pixel, 0);
+		float depth01 = texelFetch(s_gi_depth, GiReflectionTargetTexel(pixel), 0).x;
+		vec4 gbuffer1 = texelFetch(s_gi_normal, GiReflectionTargetTexel(pixel), 0);
 		float roughness = gbuffer1.w;
 		vec3 normal = normalize(decodeNormalOctahedron(gbuffer1.xy));
 		vec3 position = GiWorldFromDepth(GiPixelUv(pixel), depth01);
@@ -277,8 +292,8 @@ void main()
 		}
 	}
 	specular = max(specular, vec3_splat(0.0));
-	imageStore(s_gi_reflection_history_out, pixel,
+	imageStore(s_gi_reflection_history_out, GiReflectionTargetTexel(pixel),
 	           vec4(GiToFloat16Range(GiReflectionFromDenoiserSpace(specular)),
 	                min(max(GiMakeFinite(second_moment), 0.0), GI_FLOAT16_MAX)));
-	imageStore(s_gi_reflection_frames_out, pixel, vec4(frames, 0.0, 0.0, 0.0));
+	imageStore(s_gi_reflection_frames_out, GiReflectionTargetTexel(pixel), vec4(frames, 0.0, 0.0, 0.0));
 }

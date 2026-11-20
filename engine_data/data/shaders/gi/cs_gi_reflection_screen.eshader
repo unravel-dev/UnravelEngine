@@ -1,3 +1,9 @@
+[variants]
+// default: the opaque scene's reflections, from the G-buffer.
+default
+// front: the front see-through layer's (gi_reflection_common.sh GI_REFLECTION_FRONT_LAYER).
+front               GI_REFLECTION_FRONT_LAYER
+
 [code]
 /*
  * Reflections, ray generation and screen trace, fused per trace texel. Every pixel traces, except at the lowest
@@ -86,7 +92,8 @@ void GiWriteReflectionTiles(ivec2 group, int index, bool group_traces)
 	ivec2 tile_count = (ivec2(u_gi_view_size) + ivec2(round_up, round_up)) / GI_REFLECTION_TILE_PIXELS;
 	if(index < span * span && all(lessThan(tile, tile_count)))
 	{
-		imageStore(s_gi_reflection_tiles_out, tile, vec4(group_traces ? 1.0 : 0.0, 0.0, 0.0, 0.0));
+		ivec2 texel = tile - GiReflectionPixelOrigin() / GI_REFLECTION_TILE_PIXELS;
+		imageStore(s_gi_reflection_tiles_out, texel, vec4(group_traces ? 1.0 : 0.0, 0.0, 0.0, 0.0));
 	}
 }
 
@@ -100,9 +107,10 @@ bool GiReflectionBlockResolves(ivec2 trace_coord)
 	for(int i = 0; i < span * span; ++i)
 	{
 		ivec2 p = trace_coord * span + ivec2(i - (i / span) * span, i / span);
-		if(all(lessThan(p, view_size)) && GiReflectionFadeAlpha(texelFetch(s_gi_normal, p, 0).w) > 0.0)
+		ivec2 texel = GiReflectionTargetTexel(p);
+		if(all(lessThan(p, view_size)) && GiReflectionFadeAlpha(texelFetch(s_gi_normal, texel, 0).w) > 0.0)
 		{
-			resolves = resolves || texelFetch(s_gi_depth, p, 0).x < 1.0;
+			resolves = resolves || texelFetch(s_gi_depth, texel, 0).x < 1.0;
 		}
 	}
 	return resolves;
@@ -111,10 +119,10 @@ bool GiReflectionBlockResolves(ivec2 trace_coord)
 NUM_THREADS(8, 8, 1)
 void main()
 {
-	ivec2 trace_coord = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 trace_coord = ivec2(gl_GlobalInvocationID.xy) + GiReflectionTraceOrigin();
 	bool is_inside = all(lessThan(trace_coord, GiReflectionTraceSize()));
 	ivec2 pixel = GiReflectionTracePixel(min(trace_coord, GiReflectionTraceSize() - ivec2(1, 1)));
-	vec4 gbuffer1 = texelFetch(s_gi_normal, pixel, 0);
+	vec4 gbuffer1 = texelFetch(s_gi_normal, GiReflectionTargetTexel(pixel), 0);
 	float roughness = gbuffer1.w;
 	bool traces = is_inside && GiReflectionFadeAlpha(roughness) > 0.0;
 	// Most pixels are too rough to trace: only the others read their depth.
@@ -122,7 +130,7 @@ void main()
 	BRANCH
 	if(traces)
 	{
-		depth01 = texelFetch(s_gi_depth, pixel, 0).x;
+		depth01 = texelFetch(s_gi_depth, GiReflectionTargetTexel(pixel), 0).x;
 		traces = depth01 < 1.0;
 	}
 	// At the downsample a tile resolves wherever a pixel of a traced block wants reflections, whether or not the
@@ -145,7 +153,7 @@ void main()
 	}
 	barrier();
 	bool group_traces = s_gi_group_traces != 0u;
-	GiWriteReflectionTiles(ivec2(gl_WorkGroupID.xy),
+	GiWriteReflectionTiles(ivec2(gl_WorkGroupID.xy) + GiReflectionTraceOrigin() / 8,
 	                          int(gl_LocalInvocationID.y) * 8 + int(gl_LocalInvocationID.x),
 	                          group_traces);
 	if(!is_inside || !group_traces)

@@ -167,6 +167,217 @@ auto deferred::run_gi_reflection_pass(gfx::render_view& rview, const gi_run_para
     return gi_reflection_pass_.run(rview, params);
 }
 
+auto deferred::wants_gi_reflection_layer(const run_params& rparams) -> bool
+{
+    const auto& ctx = engine::context();
+    const bool is_on = !ctx.has<settings>() || ctx.get<settings>().global_illumination.translucent_reflections;
+    return is_on && is_camera_run(rparams) && gi_reflection_pass_.has_front_programs();
+}
+
+void deferred::get_screen_rect(const camera& camera,
+                               const math::bbox& bounds,
+                               const usize32_t& size,
+                               math::ivec2& min,
+                               math::ivec2& max)
+{
+    const math::ivec2 view_size(int32_t(size.width), int32_t(size.height));
+    min = view_size;
+    max = math::ivec2(0);
+    const math::mat4 view_proj = camera.get_view_projection().get_matrix();
+    const bool is_origin_bottom_left = bgfx::getCaps()->originBottomLeft;
+    for(uint32_t corner = 0; corner < 8; ++corner)
+    {
+        const math::vec3 point((corner & 1u) != 0 ? bounds.max.x : bounds.min.x,
+                               (corner & 2u) != 0 ? bounds.max.y : bounds.min.y,
+                               (corner & 4u) != 0 ? bounds.max.z : bounds.min.z);
+        const math::vec4 clip = view_proj * math::vec4(point, 1.0f);
+        if(clip.w <= 1e-4f)
+        {
+            // Behind the camera: the box's projection is unbounded.
+            min = math::ivec2(0);
+            max = view_size;
+            return;
+        }
+        const math::vec2 ndc = math::vec2(clip) / clip.w;
+        const float u = ndc.x * 0.5f + 0.5f;
+        const float v = is_origin_bottom_left ? ndc.y * 0.5f + 0.5f : 0.5f - ndc.y * 0.5f;
+        const math::ivec2 pixel(int32_t(math::floor(u * float(size.width))), int32_t(math::floor(v * float(size.height))));
+        min = math::min(min, pixel);
+        max = math::max(max, pixel + 1);
+    }
+    min = math::clamp(min, math::ivec2(0), view_size);
+    max = math::clamp(max, math::ivec2(0), view_size);
+}
+
+void deferred::release_gi_reflection_layer(gfx::render_view& rview)
+{
+    if(!rview.tex_find("GI_FRONT_NORMAL"))
+    {
+        return;
+    }
+    for(const char* name : {"GI_FRONT_LAYER_A", "GI_FRONT_LAYER_B"})
+    {
+        rview.fbo_remove(name);
+    }
+    for(const char* name : {"GI_FRONT_NORMAL", "GI_FRONT_DEPTH_A", "GI_FRONT_DEPTH_B", "GI_FRONT_REFLECTION"})
+    {
+        rview.tex_remove(name);
+    }
+    rview.data().remove("GI_FRONT_LAYER_STATE");
+    rview.data().remove("GI_FRONT_LAYER_SIZE");
+    gi_reflection_pass::release_front_layer(rview);
+}
+
+auto deferred::collect_gi_reflection_layer(const camera& camera, const usize32_t& size, math::ivec2& region_min, math::ivec2& region_max)
+    -> bool
+{
+    region_min = math::ivec2(int32_t(size.width), int32_t(size.height));
+    region_max = math::ivec2(0);
+    auto& layer_models = gi_reflection_layer_models_;
+    layer_models.clear();
+    for(size_t i = 0; i < translucent_models_.size(); ++i)
+    {
+        // Only a model that draws its "gi" variants reads the traces (draws_with_gi): its radiance cache points were
+        // marked.
+        const bool is_marked = i < translucent_gi_marked_.size() && translucent_gi_marked_[i] != 0;
+        if(!translucent_reads_[i].has_gi_reflections || !is_marked)
+        {
+            continue;
+        }
+        math::ivec2 low;
+        math::ivec2 high;
+        get_screen_rect(camera, translucent_models_[i].entity.get<model_component>().get_world_bounds(), size, low, high);
+        const math::ivec2 extent = math::max(high - low, math::ivec2(0));
+        if(int64_t(extent.x) * int64_t(extent.y) < gi_reflection_layer_min_pixels)
+        {
+            continue;
+        }
+        region_min = math::min(region_min, low);
+        region_max = math::max(region_max, high);
+        layer_models.push_back(i);
+    }
+    return !layer_models.empty();
+}
+
+auto deferred::acquire_gi_reflection_layer(gfx::render_view& rview, const usize32_t& size) -> gi_reflection_layer_targets
+{
+    // The layer ping-pongs its depth: the temporal validates its history against last frame's.
+    auto& state = rview.data().get_or_emplace<gi_pass::ping_pong_state>("GI_FRONT_LAYER_STATE");
+    const auto step = state.advance(gfx::get_render_frame());
+    const char* write_set = step.writes_even ? "A" : "B";
+    const char* read_set = step.writes_even ? "B" : "A";
+    gi_reflection_layer_targets targets;
+    targets.normal = rview.tex_acquire("GI_FRONT_NORMAL", {.size = size, .format = bgfx::TextureFormat::RGBA16F, .flags = BGFX_TEXTURE_RT});
+    targets.depth = rview.tex_acquire(std::string("GI_FRONT_DEPTH_") + write_set,
+                                      {.size = size, .format = bgfx::TextureFormat::D32F, .flags = BGFX_TEXTURE_RT});
+    targets.prev_depth = step.is_continuous ? rview.tex_find(std::string("GI_FRONT_DEPTH_") + read_set) : nullptr;
+    auto& fbo = rview.fbo_acquire(std::string("GI_FRONT_LAYER_") + write_set);
+    if(gfx::needs_recreate(fbo, {targets.normal, targets.depth}))
+    {
+        fbo.reset();
+        fbo = std::make_shared<gfx::frame_buffer>();
+        fbo->populate({targets.normal, targets.depth});
+    }
+    targets.fbo = fbo;
+    return targets;
+}
+
+auto deferred::get_region_projection(const math::mat4& projection,
+                                     const usize32_t& view_size,
+                                     const gi_reflection_pass::dispatch_region& region) -> math::mat4
+{
+    // A view pixel p lands on texel p - origin of a viewport of the region's size: the clip space scales by view / region
+    // and shifts by the origin, measured from the bottom row where the origin is at the bottom left.
+    const math::vec2 view(float(view_size.width), float(view_size.height));
+    const math::vec2 size(float(region.pixel_size.x), float(region.pixel_size.y));
+    const math::vec2 origin(float(region.pixel_origin.x), float(region.pixel_origin.y));
+    const math::vec2 shift = (view - 2.0f * origin) / size;
+    math::mat4 to_region(1.0f);
+    to_region[0][0] = view.x / size.x;
+    to_region[1][1] = view.y / size.y;
+    to_region[3][0] = shift.x - 1.0f;
+    to_region[3][1] = bgfx::getCaps()->originBottomLeft ? shift.y - 1.0f : 1.0f - shift.y;
+    return to_region * projection;
+}
+
+auto deferred::draw_gi_reflection_layer(const camera& camera,
+                                        const gi_reflection_layer_targets& targets,
+                                        const gi_reflection_pass::dispatch_region& region,
+                                        const usize32_t& view_size,
+                                        const gfx::texture::ptr& opaque_depth) -> bool
+{
+    bool drew = false;
+    gfx::render_pass pass("Translucency/GI Reflection Layer");
+    pass.bind(targets.fbo.get());
+    // The targets cover the region from their first texel.
+    pass.set_view_rect(0, 0, uint16_t(region.pixel_size.x), uint16_t(region.pixel_size.y));
+    const math::mat4 projection = get_region_projection(camera.get_projection().get_matrix(), view_size, region);
+    pass.set_view_proj(camera.get_view(), &projection[0][0]);
+    // Roughness 1 traces nothing where no such surface is; depth 1 reads as the sky.
+    pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000ff, 1.0f, 0);
+    const math::vec4 layer_target(float(region.pixel_origin.x),
+                                  float(region.pixel_origin.y),
+                                  1.0f / float(view_size.width),
+                                  1.0f / float(view_size.height));
+    for(const size_t index : gi_reflection_layer_models_)
+    {
+        drew = draw_gi_reflection_layer_model(pass.id, index, *current_run_, opaque_depth, layer_target) || drew;
+    }
+    return drew;
+}
+
+void deferred::trace_gi_reflection_layer(gfx::render_view& rview,
+                                         const gi_run_params& gather_params,
+                                         const gi_reflection_layer_targets& targets,
+                                         const gi_reflection_pass::dispatch_region& region,
+                                         const usize32_t& target_size)
+{
+    gi_reflection_pass::front_layer_params params;
+    params.gather = &gather_params;
+    params.depth = targets.depth;
+    params.normal = targets.normal;
+    params.prev_depth = targets.prev_depth;
+    params.output = gi_pass::ensure_texture(rview, "GI_FRONT_REFLECTION", target_size, bgfx::TextureFormat::RGBA16F);
+    params.region = region;
+    params.target_size = target_size;
+    if(gi_reflection_pass_.run_front_layer(rview, params))
+    {
+        gi_front_reflection_ = params.output;
+        gi_front_max_roughness_ = gi_reflection_pass::get_max_roughness_to_trace(gather_params.settings.reflections);
+    }
+}
+
+auto deferred::run_gi_reflection_layer(const camera& camera, gfx::render_view& rview, const gi_run_params& gather_params) -> bool
+{
+    if(translucent_models_.empty() || current_run_ == nullptr || !gather_params.g_buffer)
+    {
+        return false;
+    }
+    const usize32_t size = gather_params.g_buffer->get_size();
+    math::ivec2 region_min;
+    math::ivec2 region_max;
+    if(!collect_gi_reflection_layer(camera, size, region_min, region_max))
+    {
+        return false;
+    }
+    APP_SCOPE_PERF("Rendering/GI/Front Layer");
+    // Every front target covers the region the passes run over, sized to follow it without a new texture every frame.
+    const auto region = gi_reflection_pass_.get_front_region(region_min, region_max);
+    if(region.pixel_size.x <= 0 || region.pixel_size.y <= 0)
+    {
+        return false;
+    }
+    auto& sizing = rview.data().get_or_emplace<gi_reflection_pass::front_target_size>("GI_FRONT_LAYER_SIZE");
+    const usize32_t target_size = gi_reflection_pass::update_front_target_size(sizing, region.pixel_size, size);
+    const auto targets = acquire_gi_reflection_layer(rview, target_size);
+    // A surface whose layer variant is still compiling draws nothing yet: the targets stay for the next frame.
+    if(draw_gi_reflection_layer(camera, targets, region, size, gather_params.g_buffer->get_texture(4)))
+    {
+        trace_gi_reflection_layer(rview, gather_params, targets, region, target_size);
+    }
+    return true;
+}
+
 auto deferred::get_gi_resolve_scale(gfx::render_view& rview) -> float
 {
     const auto* scale = rview.data().try_get<float>(gi_resolve_scale);
@@ -194,6 +405,7 @@ auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -
 
 auto deferred::run_gi_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool
 {
+    gi_front_reflection_ = nullptr;
     if(!is_camera_run(rparams))
     {
         return false;
@@ -218,6 +430,13 @@ auto deferred::run_gi_pass(const camera& camera, gfx::render_view& rview, const 
         {
             gi_reflections_written_ = run_gi_reflection_pass(rview, params);
         }
+        // Then the front layer of the see-through surfaces with GI Reflections, tracing the same scene; its targets go
+        // while no such surface is in view.
+        const bool has_layer = gi_reflections_written_ && wants_gi_reflection_layer(rparams) && run_gi_reflection_layer(camera, rview, params);
+        if(!has_layer)
+        {
+            release_gi_reflection_layer(rview);
+        }
         // SSR stepped aside for them, so RBUFFER falls back to the traced clear.
         if(params.has_traced_reflections && !gi_reflections_written_)
         {
@@ -231,6 +450,7 @@ auto deferred::run_gi_pass(const camera& camera, gfx::render_view& rview, const 
         gi_surface_cache_pass_.release_targets();
         gi_gather_pass_.release_resources();
         rview.data().remove(surface_cache_view::view_key);
+        release_gi_reflection_layer(rview);
     }
     if(result)
     {

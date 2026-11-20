@@ -10,7 +10,8 @@
  *   - the passes: the G-buffer draws Opaque and Dithered surfaces, the translucency pass the other Blend Modes, and a
  *     G-buffer submit reports a model whose surfaces it left out; a pass of every material draws them all;
  *   - the order: a lower Sort Priority draws first, then the farther, as particle batches sort;
- *   - a scene round trip keeps a model's Sort Priority, and a scene without it reads 0.
+ *   - a scene round trip keeps a model's Sort Priority, and a scene without it reads 0;
+ *   - the GI: the radiance cache points a model marks, and the region the front layer's reflections run over.
  */
 
 #include "../tests.h"
@@ -24,6 +25,7 @@
 #include <engine/rendering/model.h>
 #include <engine/rendering/pipeline/pipeline.h>
 #include <engine/rendering/pipeline/passes/gi_radiance_cache.h>
+#include <engine/rendering/pipeline/passes/gi_reflection_pass.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -149,6 +151,71 @@ void test_gi_surface_points()
     check(!gi_radiance_cache::make_surface_points(room, eye, 8, 1.0f, points), "a model past its budget is refused");
 }
 
+void test_front_reflection_region()
+{
+    std::printf("test_front_reflection_region\n");
+    using region = gi_reflection_pass::dispatch_region;
+    const usize32_t view{1920, 1080};
+    const int32_t margin = gi_reflection_pass::front_region_margin;
+    const auto covers = [&](const region& r, const math::ivec2& low, const math::ivec2& high, int32_t factor)
+    {
+        const bool aligned = r.trace_origin.x % 8 == 0 && r.trace_origin.y % 8 == 0 && r.trace_size.x % 8 == 0 && r.trace_size.y % 8 == 0;
+        const bool pixels_follow = r.pixel_origin == r.trace_origin * factor;
+        const math::ivec2 want_low = math::max(low - margin, math::ivec2(0));
+        const math::ivec2 want_high = math::min(high + margin, math::ivec2(1920, 1080));
+        const bool holds = r.pixel_origin.x <= want_low.x && r.pixel_origin.y <= want_low.y &&
+                           r.pixel_origin.x + r.pixel_size.x >= want_high.x && r.pixel_origin.y + r.pixel_size.y >= want_high.y;
+        const bool inside = r.pixel_origin.x + r.pixel_size.x <= 1920 && r.pixel_origin.y + r.pixel_size.y <= 1080;
+        return aligned && pixels_follow && holds && inside;
+    };
+    for(const uint32_t factor : {1u, 2u})
+    {
+        const math::ivec2 low(700, 300);
+        const math::ivec2 high(901, 517);
+        const auto r = gi_reflection_pass::get_front_dispatch_region(low, high, view, factor);
+        check(covers(r, low, high, int32_t(factor)),
+              "the region holds the surfaces and their margin, on whole trace groups, inside the view (downsample " +
+                  std::to_string(factor) + ")");
+        check(r.pixel_size.x < 400 && r.pixel_size.y < 400, "and stays near them, not the whole view");
+        const auto corner = gi_reflection_pass::get_front_dispatch_region(math::ivec2(1900, 1070), math::ivec2(1920, 1080), view, factor);
+        check(covers(corner, math::ivec2(1900, 1070), math::ivec2(1920, 1080), int32_t(factor)), "a corner region ends at the view's edge");
+        const auto whole = gi_reflection_pass::get_front_dispatch_region(math::ivec2(0), math::ivec2(1920, 1080), view, factor);
+        check(whole.pixel_origin == math::ivec2(0) && whole.pixel_size == math::ivec2(1920, 1080), "the whole view is the whole view");
+    }
+    const auto empty = gi_reflection_pass::get_front_dispatch_region(math::ivec2(500), math::ivec2(500), view, 1);
+    check(empty.pixel_size.x > 0, "an empty box still runs its margin");
+}
+
+void test_front_reflection_target_size()
+{
+    std::printf("test_front_reflection_target_size\n");
+    using pass = gi_reflection_pass;
+    const usize32_t view{1920, 1080};
+    pass::front_target_size state;
+    const auto size_for = [&](const math::ivec2& region)
+    {
+        const auto size = pass::update_front_target_size(state, region, view);
+        return math::ivec2(int32_t(size.width), int32_t(size.height));
+    };
+    check(size_for({300, 200}) == math::ivec2(512, 256), "the targets start at the region rounded up to whole steps");
+    check(size_for({500, 250}) == math::ivec2(512, 256), "a region that still fits keeps them");
+    check(size_for({520, 250}) == math::ivec2(768, 256), "a larger region grows them at once");
+    check(size_for({1900, 1070}) == math::ivec2(1920, 1080), "they never pass the view's size");
+    bool kept = true;
+    for(uint32_t frame = 1; frame < pass::front_target_shrink_frames; ++frame)
+    {
+        kept = kept && size_for({300, 200}) == math::ivec2(1920, 1080);
+    }
+    check(kept, "a smaller region keeps them while it has not lasted");
+    check(size_for({300, 200}) == math::ivec2(512, 256), "and shrinks them once it has");
+    for(uint32_t frame = 1; frame < pass::front_target_shrink_frames; ++frame)
+    {
+        size_for(frame % 2 == 0 ? math::ivec2(200, 100) : math::ivec2(300, 200));
+    }
+    check(size_for({600, 200}) == math::ivec2(768, 256), "growing restarts the wait");
+    check(size_for({200, 100}) == math::ivec2(768, 256), "so one smaller frame after it does not shrink them");
+}
+
 void test_sort_priority_round_trip()
 {
     std::printf("test_sort_priority_round_trip\n");
@@ -175,6 +242,8 @@ void run_translucency_suite(rtti::context& /*ctx*/)
     RUN_CASE(test_draw_order());
     RUN_CASE(test_sort_priority_round_trip());
     RUN_CASE(test_gi_surface_points());
+    RUN_CASE(test_front_reflection_region());
+    RUN_CASE(test_front_reflection_target_size());
 }
 
 } // namespace

@@ -49,6 +49,10 @@ struct gi_project_settings
     ///< there. Off by default: the report reaches the CPU through a readback that waits for the GPU once every 16
     ///< frames.
     bool hi_res_reflection_pages = false;
+    ///< See-through surfaces whose material turns GI Reflections on trace the GI's reflections from the nearest of them
+    ///< in each pixel, where the view runs the GI's reflections. Off: they reflect the GI's blurred light, and no view
+    ///< draws their front layer or traces it.
+    bool translucent_reflections = true;
     ///< The most card pages captured per frame.
     uint32_t card_captures_per_frame = 300;
     ///< The texels captured per frame at most. The default, 512, is an eighth of the default surface cache atlas edge

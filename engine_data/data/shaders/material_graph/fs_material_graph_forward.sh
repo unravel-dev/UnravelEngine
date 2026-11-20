@@ -14,6 +14,8 @@
  * The second target is the TAA reactive mask (MAX blend): Opacity x the surface's TAA Response. A refracting surface
  * (MATERIAL_REFRACTION) adds the opaque scene behind it, bent, for the share its Opacity leaves, and covers the pixel.
  * The order-independent variant (FORWARD_OIT) writes weighed sums instead, composited by translucency/fs_oit_composite.
+ * The front layer variant (FORWARD_GI_LAYER) writes the surface's octahedral normal, facing and roughness for the GI
+ * reflections to trace from (mg_forward.sh), before any lighting read.
  * Camera Fade Distance fades the Opacity; LOD transitions keep the G-buffer's dither.
  */
 
@@ -44,7 +46,14 @@ void main()
 	i.view_direction = normalize(view_direction);
 	i.camera_position = u_camera_wpos.xyz;
 	i.camera_direction = mg_camera_direction();
+#if FORWARD_GI_LAYER
+	// The layer's target covers a region of the view: its pixel in the view.
+	vec2 view_pixel = gl_FragCoord.xy + u_fwd_gi_layer.xy;
+	i.screen_uv = view_pixel * u_fwd_gi_layer.zw;
+#else
+	vec2 view_pixel = gl_FragCoord.xy;
 	i.screen_uv = gl_FragCoord.xy * u_viewTexel.xy;
+#endif
 	i.time = u_material_time.x;
 	i.mip_bias = u_camera_clip_planes.z;
 	mg_set_domain_input_defaults(i);
@@ -83,7 +92,7 @@ void main()
 
 	// The LOD transition dithers as in the G-buffer (v_lod_params.x positive while the current LOD fades out, negative
 	// while the target LOD fades in): two blended LODs over each other would show both.
-	float dither = ign16x16(gl_FragCoord.xy);
+	float dither = ign16x16(view_pixel);
 	float lod_param = v_lod_params.x;
 	float abs_param = abs(lod_param);
 	float is_positive = step(0.0, lod_param);
@@ -98,6 +107,28 @@ void main()
 	float distance_factor = s.camera_fade_distance > 0.0 ? saturate(distance / s.camera_fade_distance) : step(0.0, distance);
 	float opacity = saturate(s.opacity_mask) * distance_factor;
 
+#if FORWARD_GI_LAYER
+	// The front layer the GI reflections trace from (deferred::run_gi_reflection_layer), in front of the opaque scene and
+	// within the Camera Fade Distance; the nearest such surface wins the depth test. A Translucent surface whose
+	// highlights fade with its Opacity shows nothing where that is 0. Written: the G-buffer's target 1 layout with the
+	// facing (1 front, 0 back) in place of the metallic (gi_reflection_common.sh).
+	bool is_invisible = distance_factor <= 0.0;
+#if MATERIAL_BLEND_TRANSLUCENT && !MATERIAL_PRESERVE_SPECULAR
+	is_invisible = is_invisible || opacity < 1.0 / 255.0;
+#endif
+	if(is_invisible || gl_FragCoord.z >= texelFetch(s_fwd_gi_layer_depth, ivec2(view_pixel), 0).x)
+	{
+		discard;
+	}
+	mat3 layer_tangent_to_world = constructTangentToWorldSpaceMatrix(normalize(v_wtangent), normalize(v_wbitangent), normalize(vertex_normal));
+	vec3 layer_normal = normalize(mul(layer_tangent_to_world, normalize(s.normal)).xyz);
+#if MATERIAL_SPECULAR_WORKFLOW
+	mg_specular_to_metallic(s.base_color, s.specular, s.glossiness, s.base_color, s.metallic, s.roughness);
+#endif
+	gl_FragData[0] = vec4(encodeNormalOctahedron(layer_normal),
+	                      i.two_sided_sign > 0.0 ? 1.0 : 0.0,
+	                      GeometricSpecularAA(layer_normal, saturate(s.roughness)));
+#else
 	vec4 gpu_pre_exposure = u_pre_exposure_gpu;
 	float pre_exposure = pre_exposure_from_gpu(gpu_pre_exposure);
 	vec3 emissive = max(s.emissive, vec3_splat(0.0)) * pre_exposure;
@@ -114,6 +145,8 @@ void main()
 	float metallic = saturate(s.metallic);
 	float roughness = GeometricSpecularAA(N, saturate(s.roughness));
 	ForwardLight light = forward_light(v_wpos,
+	                                   gl_FragCoord.xy,
+	                                   i.two_sided_sign,
 	                                   N,
 	                                   normalize(vertex_normal),
 	                                   i.view_direction,
@@ -171,6 +204,7 @@ void main()
 	gl_FragData[0] = color;
 	gl_FragData[1] = vec4(saturate(opacity * MATERIAL_TAA_RESPONSE), 0.0, 0.0, 0.0);
 #endif
+#endif // FORWARD_GI_LAYER
 }
 
 #endif // FS_MATERIAL_GRAPH_FORWARD_SH_HEADER_GUARD

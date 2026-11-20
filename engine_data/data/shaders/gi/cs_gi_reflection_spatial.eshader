@@ -1,3 +1,9 @@
+[variants]
+// default: the opaque scene's reflections, from the G-buffer.
+default
+// front: the front see-through layer's (gi_reflection_common.sh GI_REFLECTION_FRONT_LAYER).
+front               GI_REFLECTION_FRONT_LAYER
+
 [code]
 /*
  * Traced reflections, spatial filter and the specular half of the indirect composite.
@@ -15,6 +21,11 @@
  * untraced layer straight from the screen probe gather's rough specular history (its history times the GI intensity,
  * full coverage; fs_pbr_lighting.sh u_probe_layer_params): no reflection capture or sky specular is composited
  * under the GI's reflections.
+ *
+ * The front layer's composite (GI_REFLECTION_FRONT_LAYER) is what its see-through surfaces read (mg_forward.sh
+ * FORWARD_GI_REFLECTIONS): rgb = the reflections x F as above, a = the front surface's distance from the camera where
+ * it traced, negative for a back face (the layer's z, mg_forward.sh FORWARD_GI_LAYER), 0 elsewhere; the surface
+ * leaves 1 - F to the radiance cache. It covers the dispatch region only, from its first pixel.
  */
 
 #include "bgfx_compute.sh"
@@ -51,8 +62,8 @@ vec3 GiFilterReflection(ivec2 pixel, vec4 accumulated, float frames)
 	float disocclusion = 1.0 - saturate(frames / GI_REFLECTION_SPATIAL_MAX_DISOCCLUSION_FRAMES);
 	vec3 sum = GiSpatialTonemap(center, disocclusion);
 	float weight_sum = 1.0;
-	float depth01 = texelFetch(s_gi_depth, pixel, 0).x;
-	vec4 gbuffer1 = texelFetch(s_gi_normal, pixel, 0);
+	float depth01 = texelFetch(s_gi_depth, GiReflectionTargetTexel(pixel), 0).x;
+	vec4 gbuffer1 = texelFetch(s_gi_normal, GiReflectionTargetTexel(pixel), 0);
 	float roughness = gbuffer1.w;
 	float radius = GI_REFLECTION_SPATIAL_KERNEL_RADIUS * saturate(roughness * 8.0);
 	bool noisy = deviation / max(center_luminance, 0.1) > 0.5 || disocclusion > 0.01;
@@ -78,17 +89,18 @@ vec3 GiFilterReflection(ivec2 pixel, vec4 accumulated, float frames)
 			{
 				continue;
 			}
-			if(!GiReflectionTileTraces(q) || texelFetch(s_gi_reflection_frames, q, 0).x < 0.0)
+			ivec2 q_texel = GiReflectionTargetTexel(q);
+			if(!GiReflectionTileTraces(q) || texelFetch(s_gi_reflection_frames, q_texel, 0).x < 0.0)
 			{
 				continue;
 			}
-			vec4 q_gbuffer1 = texelFetch(s_gi_normal, q, 0);
+			vec4 q_gbuffer1 = texelFetch(s_gi_normal, q_texel, 0);
 			vec3 q_normal = normalize(decodeNormalOctahedron(q_gbuffer1.xy));
-			vec3 q_position = GiWorldFromDepth(GiPixelUv(q), texelFetch(s_gi_depth, q, 0).x);
+			vec3 q_position = GiWorldFromDepth(GiPixelUv(q), texelFetch(s_gi_depth, q_texel, 0).x);
 			float relative = abs(dot(q_position - position, normal)) / max(scene_depth, 1e-5);
 			float depth_weight = exp2(-GI_REFLECTION_SPATIAL_DEPTH_WEIGHT_SCALE * relative * relative);
 			float normal_weight = 1.0 - saturate(acos(saturate(dot(normal, q_normal))) / lobe);
-			vec3 q_specular = GiReflectionToDenoiserSpace(texelFetch(s_gi_reflection_specular, q, 0).xyz);
+			vec3 q_specular = GiReflectionToDenoiserSpace(texelFetch(s_gi_reflection_specular, q_texel, 0).xyz);
 			float luminance_delta = abs(center_luminance - GiReflectionLuminance(q_specular));
 			float luminance_weight = mix(exp2(-luminance_delta / max(deviation, 0.001)), 1.0, disocclusion);
 			float weight = depth_weight * normal_weight * luminance_weight;
@@ -102,27 +114,42 @@ vec3 GiFilterReflection(ivec2 pixel, vec4 accumulated, float frames)
 NUM_THREADS(8, 8, 1)
 void main()
 {
-	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy) + GiReflectionPixelOrigin();
 	if(pixel.x >= int(u_gi_view_size.x) || pixel.y >= int(u_gi_view_size.y))
 	{
 		return;
 	}
-	float depth01 = texelFetch(s_gi_depth, pixel, 0).x;
+	ivec2 texel = GiReflectionTargetTexel(pixel);
+	float depth01 = texelFetch(s_gi_depth, texel, 0).x;
 	if(depth01 >= 1.0)
 	{
-		// Sky: no traced layer and no probe coverage.
-		imageStore(s_gi_reflection_traced_out, pixel, vec4(0.0, 0.0, 0.0, 1.0));
+		// Sky: no traced layer and no probe coverage (no front surface).
+#if GI_REFLECTION_FRONT_LAYER
+		imageStore(s_gi_reflection_traced_out, texel, vec4_splat(0.0));
+#else
+		imageStore(s_gi_reflection_traced_out, texel, vec4(0.0, 0.0, 0.0, 1.0));
+#endif
 		return;
 	}
-	float roughness = texelFetch(s_gi_normal, pixel, 0).w;
+	float roughness = texelFetch(s_gi_normal, texel, 0).w;
 	float traced_weight = GiReflectionFadeAlpha(roughness);
-	float frames = GiReflectionTileTraces(pixel) ? texelFetch(s_gi_reflection_frames, pixel, 0).x : -1.0;
+	float frames = GiReflectionTileTraces(pixel) ? texelFetch(s_gi_reflection_frames, texel, 0).x : -1.0;
 	vec4 traced = vec4(0.0, 0.0, 0.0, 1.0);
 	BRANCH
 	if(traced_weight > 0.0 && frames >= 0.0)
 	{
-		vec4 accumulated = texelFetch(s_gi_reflection_specular, pixel, 0);
+		vec4 accumulated = texelFetch(s_gi_reflection_specular, texel, 0);
 		traced = vec4(GiFilterReflection(pixel, accumulated, frames) * traced_weight, 1.0 - traced_weight);
+#if GI_REFLECTION_FRONT_LAYER
+		float facing = texelFetch(s_gi_normal, texel, 0).z > 0.5 ? 1.0 : -1.0;
+		traced.w = facing * length(GiWorldFromDepth(GiPixelUv(pixel), depth01) - GiReflectionCamera());
+#endif
 	}
-	imageStore(s_gi_reflection_traced_out, pixel, traced);
+#if GI_REFLECTION_FRONT_LAYER
+	else
+	{
+		traced.w = 0.0;
+	}
+#endif
+	imageStore(s_gi_reflection_traced_out, texel, traced);
 }

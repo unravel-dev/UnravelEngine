@@ -11,7 +11,10 @@
  *
  * Lighting follows the deferred pass's: the same BRDF (StandardShadingDirect, EnvBRDFApprox), lights pre-exposed by the
  * CPU's share on the CPU and by the GPU's share here, the SH absolute. The "gi" variants (FORWARD_GI) take the GI's
- * radiance cache in place of the sky's SH for their diffuse light and rough reflections. What only exists for the
+ * radiance cache in place of the sky's SH for their diffuse light and rough reflections. A surface that opted into GI
+ * Reflections first draws its normal, facing and roughness into the front layer where it is the nearest such surface
+ * (FORWARD_GI_LAYER), the GI reflections trace from that layer, and its "gi_reflect" variants (FORWARD_GI_REFLECTIONS)
+ * take the traced reflection on the probe's stage where the fragment is that layer. What only exists for the
  * opaque surface behind the pixel (the screen-space GI, SSR, screen-space AO, contact shadows) does not light them.
  */
 
@@ -31,6 +34,11 @@
 // (MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES).
 #define FORWARD_GI_INDIRECTION_STAGE 6
 #define FORWARD_GI_SH_STAGE 5
+#endif
+#if FORWARD_GI_LAYER
+// The front layer's draw (FORWARD_GI_LAYER): the opaque depth it keeps in front of, on the stage the "gi" variant's
+// indirection takes.
+#define FORWARD_GI_LAYER_DEPTH_STAGE 6
 #endif
 #endif
 
@@ -61,7 +69,7 @@ vec4 mg_scene_texture_scene_depth(vec2 uv)
 #if MATERIAL_UNLIT
 #define FORWARD_SCENE_FIRST_STAGE 13
 #define FORWARD_SCENE_SECOND_STAGE 12
-#elif FORWARD_GI
+#elif FORWARD_GI || FORWARD_GI_LAYER
 #define FORWARD_SCENE_FIRST_STAGE 4
 #define FORWARD_SCENE_SECOND_STAGE 3
 #define FORWARD_SCENE_BLURRED_STAGE 2
@@ -182,7 +190,21 @@ vec3 forward_refracted_scene(vec3 position, vec3 N, vec3 V, float ior, vec2 uv, 
 #include "../reflection_probe/sphere_probe.sh"
 #include "../reflection_probe/box_probe.sh"
 
+#if FORWARD_GI_REFLECTIONS
+/// The front layer's traced reflections on the probe's stage (cs_gi_reflection_spatial.eshader GI_REFLECTION_FRONT_LAYER):
+/// rgb = the reflection x its traced weight, pre-exposed; a = the front surface's distance from the camera, 0 where
+/// nothing traced.
+SAMPLER2D(s_fwd_gi_reflection, FORWARD_PROBE_STAGE);
+#else
 SAMPLERCUBE(s_fwd_probe, FORWARD_PROBE_STAGE);
+#endif
+#if FORWARD_GI_LAYER
+/// The opaque scene's device depth: the front layer keeps what is in front of it.
+SAMPLER2D(s_fwd_gi_layer_depth, FORWARD_GI_LAYER_DEPTH_STAGE);
+/// The front layer's target covers the GI reflections' region of the view (deferred::draw_gi_reflection_layer): xy = the
+/// view pixel of its first texel, zw = 1 / the view's size.
+uniform vec4 u_fwd_gi_layer;
+#endif
 // The sun's shadow cascades and their world-to-shadow matrices (shadowmap_generator::submit_uniforms).
 SAMPLER2D(s_shadowMap0, FORWARD_SHADOW_STAGE0);
 SAMPLER2D(s_shadowMap1, FORWARD_SHADOW_STAGE1);
@@ -273,8 +295,14 @@ float forward_sun_visibility(vec3 position)
 /// green and blue coefficients (Y00, Y1-1, Y10, Y11), absolute (GI_CACHED_LIGHTING_PRE_EXPOSURE is 1), and its cell.
 SHADER_BUFFER_UINT(b_gi_rc_indirection, FORWARD_GI_INDIRECTION_STAGE);
 SHADER_BUFFER_FLOAT4(b_fwd_gi_sh, FORWARD_GI_SH_STAGE);
-/// x: the GI's diffuse intensity, which scales its light as it scales the opaque surfaces'.
+/// x: the GI's diffuse intensity, which scales its light as it scales the opaque surfaces'; y: the roughness the traced
+/// reflections end at, z: 1 / the roughness over which they fade out, w: 1 when s_fwd_gi_reflection holds this frame's
+/// traces (FORWARD_GI_REFLECTIONS).
 uniform vec4 u_fwd_gi;
+#if FORWARD_GI_REFLECTIONS
+/// The pixels [xy, zw) the front layer's traces wrote this frame: s_fwd_gi_reflection covers them from xy.
+uniform vec4 u_fwd_gi_region;
+#endif
 #include "../gi/gi_radiance_cache_lattice.sh"
 
 /// The GI's light at a point: its L1 SH per colour, and how much of the lattice around the point has probes.
@@ -346,6 +374,31 @@ vec3 forward_gi_eval(ForwardGiSh sh, vec3 direction, vec2 band_scale)
 	                 (2.0 * PI / 3.0) * band_scale.y * 0.488603 * direction.x);
 	return max(vec3(dot(sh.red, lobe), dot(sh.green, lobe), dot(sh.blue, lobe)), vec3_splat(0.0));
 }
+
+#if FORWARD_GI_REFLECTIONS
+/// How far a fragment's distance from the camera may be from the front layer's, as a share of it, and still be that
+/// layer: the distance is stored as a half float and the layer's depth is reconstructed through the unjittered
+/// projection. The layer's facing tells the far wall of a closed two-sided surface from its near one.
+#define FORWARD_GI_REFLECTION_DISTANCE_TOLERANCE 0.01
+
+/// The traced reflection of the fragment at @p position in @p pixel with @p roughness, facing the camera when
+/// @p facing is positive: rgb = the reflection x the traced weight, pre-exposed, a = the traced weight; zero where the
+/// fragment is not the front layer (glass behind glass, a model too small to trace) or nothing traced there this frame.
+vec4 forward_gi_reflection(vec3 position, ivec2 pixel, float roughness, float facing)
+{
+	bool is_traced = u_fwd_gi.w > 0.5 && all(greaterThanEqual(pixel, ivec2(u_fwd_gi_region.xy))) &&
+	                 all(lessThan(pixel, ivec2(u_fwd_gi_region.zw)));
+	if(!is_traced)
+	{
+		return vec4_splat(0.0);
+	}
+	vec4 texel = texelFetch(s_fwd_gi_reflection, pixel - ivec2(u_fwd_gi_region.xy), 0);
+	float distance = length(position - u_camera_wpos.xyz);
+	bool is_front = texel.w * facing > 0.0 && abs(abs(texel.w) - distance) <= FORWARD_GI_REFLECTION_DISTANCE_TOLERANCE * distance;
+	float traced_weight = saturate((u_fwd_gi.y - roughness) * u_fwd_gi.z);
+	return is_front ? vec4(texel.rgb, traced_weight) : vec4_splat(0.0);
+}
+#endif
 #endif // FORWARD_GI
 
 /// The face of a point light's tetrahedron map that the light-relative @p offset falls in: 0 green, 1 yellow, 2 blue,
@@ -413,6 +466,10 @@ float forward_light_visibility(int light, vec3 position, vec3 light_offset)
 /// coverage in alpha; zero without a probe or beyond it.
 vec4 forward_probe_sample(vec3 position, vec3 R, float roughness)
 {
+#if FORWARD_GI_REFLECTIONS
+	// The probe's stage holds the traced reflections (forward_gi_reflection).
+	return vec4_splat(0.0);
+#else
 	if(u_fwd_lighting.y < 0.5)
 	{
 		return vec4_splat(0.0);
@@ -431,6 +488,7 @@ vec4 forward_probe_sample(vec3 position, vec3 R, float roughness)
 	                      u_fwd_probe[1].x,
 	                      u_fwd_probe[1].y,
 	                      u_fwd_probe[1].z);
+#endif
 }
 
 /// The light a lit surface reflects, in two parts: what its diffuse color reflects and what its specular color does.
@@ -441,11 +499,14 @@ struct ForwardLight
 };
 
 /**
- * The direct and indirect light a default-lit surface reflects toward the viewer at @p position, pre-exposed. @p N is
+ * The direct and indirect light a default-lit surface reflects toward the viewer at @p position, in the view's @p pixel
+ * (gl_FragCoord.xy), on a face that @p facing says faces the camera when positive, pre-exposed. @p N is
  * the shading normal and @p vertex_normal the geometric one (the shadow test moves along it); @p gpu_pre_exposure is
  * the GPU's share of the pre-exposure.
  */
 ForwardLight forward_light(vec3 position,
+                           vec2 pixel,
+                           float facing,
                            vec3 N,
                            vec3 vertex_normal,
                            vec3 V,
@@ -518,8 +579,15 @@ ForwardLight forward_light(vec3 position,
 #endif
 	vec3 indirect_diffuse = irradiance * (RECIP_PI * pre_exposure * ao);
 	environment *= pre_exposure;
+#if FORWARD_GI_REFLECTIONS
+	// The front layer's traced reflection, the radiance cache's lobe for the share it leaves (as the opaque surfaces
+	// take the gather's rough specular there) and for the fragments behind the front layer.
+	vec4 traced = forward_gi_reflection(position, ivec2(pixel), roughness, facing);
+	vec3 indirect_specular = traced.rgb + environment * (1.0 - traced.w);
+#else
 	// The probe's rgb is not weighted by its coverage: premultiplied, as the probe layer holds it.
 	vec3 indirect_specular = probe.rgb * (probe.w * gpu_pre_exposure) + environment * (1.0 - probe.w);
+#endif
 	float specular_occlusion = GetSpecularOcclusion(NoV, roughness * roughness, ao);
 	result.diffuse += diffuse_color * indirect_diffuse;
 	result.specular += indirect_specular * EnvBRDFApprox(specular_color, roughness, NoV) * specular_occlusion;

@@ -1,3 +1,9 @@
+[variants]
+// default: the opaque scene's reflections, from the G-buffer.
+default
+// front: the front see-through layer's (gi_reflection_common.sh GI_REFLECTION_FRONT_LAYER).
+front               GI_REFLECTION_FRONT_LAYER
+
 [code]
 /*
  * Reflections, resolve with spatial reconstruction, per pixel. A pixel starts from its own ray at full
@@ -56,7 +62,7 @@ GiResolveSum GiResolveNeighbour(GiResolveSum sum, ivec2 trace, vec3 position, ve
 		return sum;
 	}
 	ivec2 q = GiReflectionTracePixel(trace);
-	vec3 q_position = GiWorldFromDepth(GiPixelUv(q), texelFetch(s_gi_depth, q, 0).x);
+	vec3 q_position = GiWorldFromDepth(GiPixelUv(q), texelFetch(s_gi_depth, GiReflectionTargetTexel(q), 0).x);
 	float q_hit = min(abs(texelFetch(s_gi_reflection_hit, trace, 0).x), center_hit);
 	vec3 to_hit = q_position + ray.xyz * q_hit - position;
 	float distance = length(to_hit);
@@ -133,15 +139,15 @@ uniform vec4 u_gi_reflection_resolve;
 NUM_THREADS(8, 8, 1)
 void main()
 {
-	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy) + GiReflectionPixelOrigin();
 	ivec2 view_size = ivec2(u_gi_view_size);
 	// A tile that traces nothing resolves nothing (the group is the tile at full resolution).
 	if(pixel.x >= view_size.x || pixel.y >= view_size.y || !GiReflectionTileTraces(pixel))
 	{
 		return;
 	}
-	float depth01 = texelFetch(s_gi_depth, pixel, 0).x;
-	vec4 gbuffer1 = texelFetch(s_gi_normal, pixel, 0);
+	float depth01 = texelFetch(s_gi_depth, GiReflectionTargetTexel(pixel), 0).x;
+	vec4 gbuffer1 = texelFetch(s_gi_normal, GiReflectionTargetTexel(pixel), 0);
 	float roughness = gbuffer1.w;
 	// The pixels that trace (cs_gi_reflection_screen.eshader), or at the downsample read the traces around them.
 	if(depth01 >= 1.0 || GiReflectionFadeAlpha(roughness) <= 0.0)

@@ -226,6 +226,9 @@ public:
     /// A lit surface of the translucency pass whose shader has the "gi" variant (and "oit_gi"): lit by the GI's radiance
     /// cache where the view runs the GI.
     auto has_gi_variant() const -> bool;
+    /// A surface with the "gi" variant whose GI Reflections is on: its shader draws the front layer the GI reflections
+    /// trace from ("gi_layer") and reads what they traced ("gi_reflect", "oit_gi_reflect").
+    auto has_gi_reflection_variant() const -> bool;
     /// A sorted Translucent or Premultiplied surface whose depth draws before its colour: only its nearest layer shows.
     auto has_depth_prepass() const -> bool;
     /// A surface of the translucency pass that draws its motion into the velocity buffer, over the whole surface.

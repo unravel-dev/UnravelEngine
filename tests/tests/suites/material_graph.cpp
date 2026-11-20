@@ -1052,18 +1052,22 @@ struct forward_stage_defines
     std::map<std::string, std::set<int>> unlit;
     /// A lit surface's "gi" variant (FORWARD_GI).
     std::map<std::string, std::set<int>> gi;
+    /// A lit surface's front layer variant (FORWARD_GI_LAYER).
+    std::map<std::string, std::set<int>> layer;
 };
 
 auto read_forward_stage_defines() -> forward_stage_defines
 {
     forward_stage_defines defines;
     std::ifstream file(fs::resolve_protocol("engine:/data/shaders/material_graph/mg_forward.sh"));
-    // Each open #if chain: what its first branch tests (0 other, 1 MATERIAL_UNLIT, 2 FORWARD_GI), whether an #elif
-    // FORWARD_GI follows that, and which branch the lines are in (0 the first).
+    // Each open #if chain: what its first branch tests (0 other, 1 MATERIAL_UNLIT, 2 FORWARD_GI, 3 FORWARD_GI_LAYER),
+    // whether an #elif FORWARD_GI follows that and whether the front layer takes it too, and which branch the lines are
+    // in (0 the first).
     struct block
     {
         int test = 0;
         bool has_gi_branch = false;
+        bool gi_branch_has_layer = false;
         int branch = 0;
     };
     std::vector<block> blocks;
@@ -1076,12 +1080,17 @@ auto read_forward_stage_defines() -> forward_stage_defines
         }
         if(line.rfind("#if", 0) == 0)
         {
-            blocks.push_back({line == "#if MATERIAL_UNLIT" ? 1 : line == "#if FORWARD_GI" ? 2 : 0, false, 0});
+            const int test = line == "#if MATERIAL_UNLIT" ? 1 : line == "#if FORWARD_GI" ? 2 : line == "#if FORWARD_GI_LAYER" ? 3 : 0;
+            blocks.push_back({test, false, false, 0});
             continue;
         }
         if(line.rfind("#el", 0) == 0 && !blocks.empty())
         {
-            blocks.back().has_gi_branch = blocks.back().has_gi_branch || line == "#elif FORWARD_GI";
+            if(line.rfind("#elif FORWARD_GI", 0) == 0 && !blocks.back().has_gi_branch)
+            {
+                blocks.back().has_gi_branch = true;
+                blocks.back().gi_branch_has_layer = line == "#elif FORWARD_GI || FORWARD_GI_LAYER";
+            }
             blocks.back().branch++;
             continue;
         }
@@ -1101,28 +1110,40 @@ auto read_forward_stage_defines() -> forward_stage_defines
         bool for_lit = true;
         bool for_unlit = true;
         bool for_gi = true;
+        bool for_layer = true;
         for(const auto& chain : blocks)
         {
             // Which kinds of main the branch the line is in compiles into.
             bool in_lit = true;
             bool in_gi = true;
             bool in_unlit = true;
+            bool in_layer = true;
             if(chain.test == 1)
             {
                 // #if MATERIAL_UNLIT, then #elif FORWARD_GI when the chain has it, then the lit branch.
                 in_unlit = chain.branch == 0;
                 in_lit = chain.branch == (chain.has_gi_branch ? 2 : 1);
                 in_gi = chain.has_gi_branch ? chain.branch == 1 : in_lit;
+                in_layer = chain.gi_branch_has_layer ? chain.branch == 1 : in_lit;
             }
             else if(chain.test == 2)
             {
                 in_gi = chain.branch == 0;
                 in_lit = chain.branch != 0;
                 in_unlit = chain.branch != 0;
+                in_layer = chain.branch != 0;
+            }
+            else if(chain.test == 3)
+            {
+                in_layer = chain.branch == 0;
+                in_lit = chain.branch != 0;
+                in_unlit = chain.branch != 0;
+                in_gi = chain.branch != 0;
             }
             for_lit = for_lit && in_lit;
             for_gi = for_gi && in_gi;
             for_unlit = for_unlit && in_unlit;
+            for_layer = for_layer && in_layer;
         }
         if(for_lit)
         {
@@ -1136,6 +1157,10 @@ auto read_forward_stage_defines() -> forward_stage_defines
         {
             defines.gi[name].insert(value);
         }
+        if(for_layer)
+        {
+            defines.layer[name].insert(value);
+        }
     }
     return defines;
 }
@@ -1146,11 +1171,13 @@ void test_forward_stages()
     const auto defines = read_forward_stage_defines();
     require(!defines.lit.empty() && !defines.unlit.empty(), "mg_forward.sh declares its stages");
     const uint32_t reads = material_scene_texture_color | material_scene_texture_depth | material_scene_texture_blurred_color;
-    for(const int kind : {0, 1, 2})
+    // Lit, unlit, the "gi" variant and the front layer ("gi_layer"), which reads the scene where the "gi" variant does.
+    for(const int kind : {0, 1, 2, 3})
     {
         const bool is_lit = kind != 1;
-        const bool is_gi = kind == 2;
-        const auto& declared = is_gi ? defines.gi : is_lit ? defines.lit : defines.unlit;
+        const bool is_layer = kind == 3;
+        const bool is_gi = kind == 2 || is_layer;
+        const auto& declared = is_layer ? defines.layer : is_gi ? defines.gi : is_lit ? defines.lit : defines.unlit;
         const uint32_t limit = is_gi    ? MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES
                                : is_lit ? MATERIAL_GRAPH_MAX_FORWARD_LIT_TEXTURES
                                         : MATERIAL_GRAPH_MAX_FORWARD_UNLIT_TEXTURES;
@@ -1160,7 +1187,7 @@ void test_forward_stages()
             graph_stages.insert(get_material_graph_texture_stage(i));
         }
         const auto stages = get_forward_scene_texture_stages(is_lit, reads, is_gi);
-        const std::string model = is_gi ? "lit gi" : is_lit ? "lit" : "unlit";
+        const std::string model = is_layer ? "front layer" : is_gi ? "lit gi" : is_lit ? "lit" : "unlit";
         // The scene reads take the graph's top stages, the ones its limit gives up for them.
         check(stages.color == get_material_graph_texture_stage(limit - 1) && stages.depth == get_material_graph_texture_stage(limit - 2) &&
                   stages.blurred_color == get_material_graph_texture_stage(limit - 3),
@@ -1176,11 +1203,18 @@ void test_forward_stages()
         {
             check(declares("FORWARD_SCENE_BLURRED_STAGE", stages.blurred_color), "and the blurred copy of a rough Refraction");
         }
-        if(is_gi)
+        if(is_gi && !is_layer)
         {
             check(declares("FORWARD_GI_INDIRECTION_STAGE", MATERIAL_FORWARD_GI_INDIRECTION_STAGE) &&
                       declares("FORWARD_GI_SH_STAGE", MATERIAL_FORWARD_GI_SH_STAGE),
                   "mg_forward.sh reads the radiance cache where the pipeline binds it");
+        }
+        if(is_layer)
+        {
+            // pipeline::bind_forward_gi_layer binds the opaque depth at the radiance cache's indirection stage.
+            check(declares("FORWARD_GI_LAYER_DEPTH_STAGE", MATERIAL_FORWARD_GI_INDIRECTION_STAGE) &&
+                      declared.count("FORWARD_GI_INDIRECTION_STAGE") == 0,
+                  "the front layer reads the opaque depth where the pipeline binds it");
         }
         // Every stage of the engine's own reads lies above the graph's.
         for(const auto& [name, values] : declared)
@@ -1245,6 +1279,43 @@ void test_gi_variant()
     check(fits.textures.size() == MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES && fits.has_gi_variant && full.textures.size() > MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES &&
               !full.has_gi_variant,
           "a surface whose textures take the GI's stages draws without the GI" + describe(full));
+}
+
+void test_gi_reflection_variants()
+{
+    std::printf("test_gi_reflection_variants\n");
+    // GI Reflections is an opt in: a surface without it compiles nothing more.
+    const auto make = [](material_blend_mode mode, bool reflections, bool order_independent)
+    {
+        auto graph = make_graph_with_output();
+        set_material_graph_blend_mode(graph, mode);
+        auto& output = graph.nodes[size_t(find_material_graph_output(graph))];
+        if(reflections)
+        {
+            set_material_graph_setting(output, MATERIAL_GI_REFLECTIONS_SETTING, MATERIAL_SETTING_ON);
+        }
+        if(order_independent)
+        {
+            set_material_graph_setting(output, MATERIAL_ORDER_INDEPENDENT_SETTING, MATERIAL_ORDER_INDEPENDENT_ON);
+        }
+        return compile_material_graph(graph);
+    };
+    const auto plain = make(material_blend_mode::translucent, false, false);
+    check(plain.has_gi_variant && !plain.has_gi_reflection_variant && !contains(plain.shader, "gi_layer") &&
+              !contains(plain.shader, "gi_reflect"),
+          "a see-through surface without GI Reflections has no front layer or traced reflection variant" + describe(plain));
+    const auto glass = make(material_blend_mode::translucent, true, false);
+    check(!glass.has_errors() && glass.has_gi_reflection_variant && contains(glass.shader, "FORWARD_GI_LAYER") &&
+              contains(glass.shader, "FORWARD_GI_REFLECTIONS") && !contains(glass.shader, "oit_gi_reflect"),
+          "with it a Translucent surface draws its front layer and reads the traced reflection" + describe(glass));
+    const auto weighed = make(material_blend_mode::translucent, true, true);
+    check(weighed.has_gi_reflection_variant && contains(weighed.shader, "oit_gi_reflect"),
+          "an Order Independent one reads it in its order-independent variant too" + describe(weighed));
+    check(make(material_blend_mode::premultiplied, true, false).has_gi_reflection_variant, "so does a Premultiplied one");
+    check(!make(material_blend_mode::additive, true, false).has_gi_reflection_variant &&
+              !make(material_blend_mode::opaque, true, false).has_gi_reflection_variant,
+          "an Additive surface reflects nothing over the scene, and an opaque one traces from the G-buffer");
+    check(make_material_graph_binding(glass).has_gi_reflection_variant, "the binding keeps it");
 }
 
 void test_blend_modes_and_shading_models()
@@ -1849,7 +1920,7 @@ auto is_storage_buffer_variant(const std::string& name) -> bool
 {
     const bool is_skinned_buffer = name.find("skinned") != std::string::npos && !name.ends_with("_textures");
     // The GI variants of the translucency pass read the radiance cache's buffers: never drawn where the GI does not run.
-    const bool is_gi = name == "gi" || name == "oit_gi";
+    const bool is_gi = name == "gi" || name == "oit_gi" || name == "gi_reflect" || name == "oit_gi_reflect";
     return is_skinned_buffer || is_gi;
 }
 
@@ -1887,6 +1958,7 @@ public:
         const size_t surface_variant_count =
             result.is_forward() ? FORWARD_VARIANT_COUNT + (result.order_independent ? 1 : 0) +
                                       (result.has_gi_variant ? (result.order_independent ? 2 : 1) : 0) +
+                                      (result.has_gi_reflection_variant ? (result.order_independent ? 3 : 2) : 0) +
                                       (result.casts_forward_shadow ? MASKED_VARIANT_COUNT - PLAIN_VARIANT_COUNT : 0)
                                 : (has_casters ? MASKED_VARIANT_COUNT : PLAIN_VARIANT_COUNT);
         const size_t variant_count = is_preview ? PREVIEW_VARIANT_COUNT
@@ -3235,6 +3307,7 @@ void run_material_graph_suite(rtti::context& ctx)
     RUN_CASE(test_blend_modes_and_shading_models());
     RUN_CASE(test_forward_stages());
     RUN_CASE(test_gi_variant());
+    RUN_CASE(test_gi_reflection_variants());
     RUN_CASE(test_binding_limits());
     RUN_CASE(test_opacity_mask_shadows());
     RUN_CASE(test_world_position_offset());

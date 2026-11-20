@@ -364,6 +364,58 @@ public:
     /// The GI reflections into RBUFFER and PBUFFER after the screen probe gather of @p gather_params; true when they
     /// wrote both, every pixel.
     auto run_gi_reflection_pass(gfx::render_view& rview, const gi_run_params& gather_params) -> bool;
+    /// Whether a camera run whose GI reflections own the view traces the front layer of its see-through surfaces with
+    /// GI Reflections: the project's Translucent GI Reflections is on and the front programs are loaded.
+    auto wants_gi_reflection_layer(const run_params& rparams) -> bool;
+    /**
+     * @brief Draws the front layer of the run's surfaces with GI Reflections in view and traces their reflections after
+     * the opaque scene's (gi_reflection_pass::run_front_layer), for the translucency pass (gi_front_reflection_).
+     * @return Whether such a surface is large enough in view; without one nothing draws or traces.
+     */
+    auto run_gi_reflection_layer(const camera& camera, gfx::render_view& rview, const gi_run_params& gather_params) -> bool;
+    /// The front layer's targets: its framebuffer of the normal and this frame's depth, and last frame's depth when the
+    /// layer was drawn then.
+    struct gi_reflection_layer_targets
+    {
+        gfx::frame_buffer::ptr fbo;
+        gfx::texture::ptr normal;
+        gfx::texture::ptr depth;
+        gfx::texture::ptr prev_depth;
+    };
+    /// Collects into gi_reflection_layer_models_ the models whose surfaces draw in the front layer of a @p size view of
+    /// @p camera: with GI Reflections, marked in the radiance cache, and at least gi_reflection_layer_min_pixels on
+    /// screen; [@p region_min, @p region_max) is the box they cover. False when there is none.
+    auto collect_gi_reflection_layer(const camera& camera, const usize32_t& size, math::ivec2& region_min, math::ivec2& region_max)
+        -> bool;
+    /// The front layer's targets at @p size, advancing its depth ping-pong.
+    static auto acquire_gi_reflection_layer(gfx::render_view& rview, const usize32_t& size) -> gi_reflection_layer_targets;
+    /// Draws gi_reflection_layer_models_ into @p targets, which cover @p region of a @p view_size view from their first
+    /// texel, in front of @p opaque_depth: true when a surface drew.
+    auto draw_gi_reflection_layer(const camera& camera,
+                                  const gi_reflection_layer_targets& targets,
+                                  const gi_reflection_pass::dispatch_region& region,
+                                  const usize32_t& view_size,
+                                  const gfx::texture::ptr& opaque_depth) -> bool;
+    /// Traces the drawn layer over @p region with targets of @p target_size and publishes the result
+    /// (gi_front_reflection_).
+    void trace_gi_reflection_layer(gfx::render_view& rview,
+                                   const gi_run_params& gather_params,
+                                   const gi_reflection_layer_targets& targets,
+                                   const gi_reflection_pass::dispatch_region& region,
+                                   const usize32_t& target_size);
+    /// @p projection drawing a @p view_size view's @p region into a viewport of the region's size at the origin.
+    static auto get_region_projection(const math::mat4& projection,
+                                      const usize32_t& view_size,
+                                      const gi_reflection_pass::dispatch_region& region) -> math::mat4;
+    /// Releases the front layer's targets and the reflection pass's front targets, when @p rview holds them.
+    static void release_gi_reflection_layer(gfx::render_view& rview);
+    /// The pixels [@p min, @p max) of @p bounds in a @p size view of @p camera: the whole view when the box reaches
+    /// behind the camera.
+    static void get_screen_rect(const camera& camera,
+                                const math::bbox& bounds,
+                                const usize32_t& size,
+                                math::ivec2& min,
+                                math::ivec2& max);
 
     /// GI for a camera run that asks for it: the surface cache, the screen probe gather (published as
     /// GI_RESOLVE, its rough specular as GI_ROUGH_SPECULAR) and the reflections, which clear RBUFFER
@@ -479,6 +531,8 @@ private:
         bool has_depth_prepass = false;
         /// A surface has the "gi" variant: lit by the GI's radiance cache.
         bool has_gi_variant = false;
+        /// A surface has the GI Reflections variants: it draws in the front layer the GI reflections trace from.
+        bool has_gi_reflections = false;
         /// A surface writes its motion (writes_translucent_velocity).
         bool writes_velocity = false;
         /// The scene's colour and depth they read (material_scene_texture_bits).
@@ -491,6 +545,21 @@ private:
     /// Whether a surface of @p graph on translucent_models_[@p index] draws its "gi" variant this run: it has one, the
     /// run's GI updated the radiance cache with its probes' SH, and the model's points were marked.
     auto draws_with_gi(const graph_material& graph, size_t index) const -> bool;
+    /// Whether a surface of @p graph on translucent_models_[@p index] draws its "gi_reflect" variant this run: it draws
+    /// its "gi" variant, has GI Reflections, and the view's reflections are the GI's. It reads the front layer's traces
+    /// where it is that layer, and the radiance cache's lobe elsewhere, never the probe.
+    auto draws_with_gi_reflections(const graph_material& graph, size_t index) const -> bool;
+    /// The fewest pixels a model's screen box covers to draw in the front layer: a smaller one takes the radiance
+    /// cache's lobe. A trace costs the latency of its longest rays however few pixels it covers.
+    static constexpr int64_t gi_reflection_layer_min_pixels = 64 * 64;
+    /// Draws the "gi_layer" variants of translucent_models_[@p index]'s surfaces with GI Reflections into @p view, in
+    /// front of the opaque @p opaque_depth, into a target placed as @p layer_target says (bind_forward_gi_layer): true
+    /// when one drew.
+    auto draw_gi_reflection_layer_model(bgfx::ViewId view,
+                                        size_t index,
+                                        const run_context& run,
+                                        const gfx::texture::ptr& opaque_depth,
+                                        const math::vec4& layer_target) -> bool;
     /// Adds the points of a model with @p bounds to translucent_gi_points_, coarser when it is too large for its share:
     /// false, adding none, when they do not fit.
     auto add_translucent_gi_points(const math::bbox& bounds, const math::vec3& eye) -> bool;
@@ -1156,6 +1225,12 @@ private:
     std::vector<char> translucent_gi_marked_;
     std::vector<std::pair<float, size_t>> translucent_gi_order_;
     std::vector<math::vec4> translucent_gi_model_points_;
+    /// The front layer's traced reflections this run (run_gi_reflection_layer), with the roughness they end at; null
+    /// when none ran.
+    gfx::texture::ptr gi_front_reflection_;
+    float gi_front_max_roughness_{0.0f};
+    /// The translucent_models_ run_gi_reflection_layer draws, large enough in view (scratch).
+    std::vector<size_t> gi_reflection_layer_models_;
 
     /// Every shadow caster of the scene, split by how often it has to be refreshed. Both are
     /// rebuilt WHOLESALE (clear + refill) by refresh_shadow_casters, so a destroyed entity

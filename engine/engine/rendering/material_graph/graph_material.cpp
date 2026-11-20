@@ -601,6 +601,11 @@ auto graph_material::has_gi_variant() const -> bool
     return is_forward() && binding_.has_gi_variant;
 }
 
+auto graph_material::has_gi_reflection_variant() const -> bool
+{
+    return is_forward() && binding_.has_gi_reflection_variant;
+}
+
 auto graph_material::has_depth_prepass() const -> bool
 {
     return is_forward() && binding_.depth_prepass;

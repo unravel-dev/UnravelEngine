@@ -41,6 +41,68 @@ uniform vec4 u_gi_reflection_quality;
 #define u_gi_reflection_rough_specular_scale      u_gi_reflection_quality.z
 #define u_gi_reflection_has_rough_specular        (u_gi_reflection_quality.w > 0.0)
 
+/*
+ * The front layer's run (the "front" variants, GI_REFLECTION_FRONT_LAYER): the passes trace from the nearest surface
+ * of the translucency pass that opted into GI reflections, whose depth and normal take the G-buffer's place, and
+ * dispatch over the screen box of those surfaces only (gi_reflection_pass::run_front_layer). The layer's target 1
+ * holds 1 in z for a front face, 0 for a back face, where the G-buffer holds the metallic, which no pass reads. The
+ * default variants dispatch over the whole view from the origin.
+ *
+ * The targets the run owns - its layer, history, frame counts, tiles and output - cover the run's region only: a view
+ * pixel's texel there is GiReflectionTargetTexel, last frame's GiReflectionHistoryTexel. The trace targets and the
+ * resolve are the view's.
+ */
+#if GI_REFLECTION_FRONT_LAYER
+/// The dispatch region: xy = its first pixel, on a trace group's corner; zw = its size in pixels.
+uniform vec4 u_gi_reflection_region;
+/// Last frame's dispatch region, as u_gi_reflection_region: where the history targets hold last frame.
+uniform vec4 u_gi_reflection_history_region;
+
+ivec2 GiReflectionPixelOrigin()
+{
+	return ivec2(u_gi_reflection_region.xy);
+}
+
+ivec2 GiReflectionTraceOrigin()
+{
+	return GiReflectionPixelOrigin() / u_gi_reflection_downsample;
+}
+
+/// The texel of view pixel @p pixel in the targets the run owns, clamped to the region: its border holds no surface.
+ivec2 GiReflectionTargetTexel(ivec2 pixel)
+{
+	return clamp(pixel - GiReflectionPixelOrigin(), ivec2(0, 0), ivec2(u_gi_reflection_region.zw) - ivec2(1, 1));
+}
+
+/// The texel of view pixel @p pixel in the history targets, which hold last frame's region.
+ivec2 GiReflectionHistoryTexel(ivec2 pixel)
+{
+	return clamp(pixel - ivec2(u_gi_reflection_history_region.xy),
+	             ivec2(0, 0),
+	             ivec2(u_gi_reflection_history_region.zw) - ivec2(1, 1));
+}
+#else
+ivec2 GiReflectionPixelOrigin()
+{
+	return ivec2(0, 0);
+}
+
+ivec2 GiReflectionTraceOrigin()
+{
+	return ivec2(0, 0);
+}
+
+ivec2 GiReflectionTargetTexel(ivec2 pixel)
+{
+	return pixel;
+}
+
+ivec2 GiReflectionHistoryTexel(ivec2 pixel)
+{
+	return pixel;
+}
+#endif
+
 /// The trace buffers' size: the view over the downsample factor, rounded up.
 ivec2 GiReflectionTraceSize()
 {
@@ -87,7 +149,7 @@ SAMPLER2D(s_gi_reflection_tiles, GI_REFLECTION_TILES_STAGE);
 /// Whether the tile of @p pixel traces this frame.
 bool GiReflectionTileTraces(ivec2 pixel)
 {
-	return texelFetch(s_gi_reflection_tiles, pixel / GI_REFLECTION_TILE_PIXELS, 0).x > 0.5;
+	return texelFetch(s_gi_reflection_tiles, GiReflectionTargetTexel(pixel) / GI_REFLECTION_TILE_PIXELS, 0).x > 0.5;
 }
 
 /// The ray of trace texel @p trace_coord (xyz = direction, w = cone angle, 0 = no ray), no ray in a skipped tile.

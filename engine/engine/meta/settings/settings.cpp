@@ -1055,6 +1055,17 @@ REFLECT_INLINE(gi_project_settings)
                             "A scene that wants more texels than this keeps its farthest cards at lower\n"
                             "resolution or none. Changing it recaptures the whole surface cache."},
         })
+        .data<&gi_project_settings::translucent_reflections>("translucent_reflections"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "translucent_reflections"},
+            entt::attribute{"pretty_name", "Translucent GI Reflections"},
+            entt::attribute{"group", "Scalability"},
+            entt::attribute{"tooltip",
+                            "See-through surfaces whose material turns GI Reflections on reflect the scene as sharply\n"
+                            "as opaque surfaces do, traced from the nearest of them in each pixel. It costs a draw of\n"
+                            "those surfaces and the reflection passes again over their part of the view, and nothing\n"
+                            "where none is in view. When it is off, they reflect the GI's blurred light."},
+        })
         .data<&gi_project_settings::hi_res_reflection_pages>("hi_res_reflection_pages"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "hi_res_reflection_pages"},
@@ -1166,6 +1177,7 @@ SAVE_INLINE(gi_project_settings)
     try_save(ar, ser20::make_nvp("card_max_resolution", obj.card_max_resolution));
     try_save(ar, ser20::make_nvp("card_min_resolution", obj.card_min_resolution));
     try_save(ar, ser20::make_nvp("mesh_cards_min_size", obj.mesh_cards_min_size));
+    try_save(ar, ser20::make_nvp("translucent_reflections", obj.translucent_reflections));
 }
 
 LOAD_INLINE(gi_project_settings)
@@ -1182,6 +1194,7 @@ LOAD_INLINE(gi_project_settings)
     try_load(ar, ser20::make_nvp("card_max_resolution", obj.card_max_resolution));
     try_load(ar, ser20::make_nvp("card_min_resolution", obj.card_min_resolution));
     try_load(ar, ser20::make_nvp("mesh_cards_min_size", obj.mesh_cards_min_size));
+    try_load(ar, ser20::make_nvp("translucent_reflections", obj.translucent_reflections));
 }
 
 REFLECT_INLINE(settings::splash_logo_entry)

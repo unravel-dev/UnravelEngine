@@ -853,6 +853,10 @@ auto pipeline::init(rtti::context& ctx) -> bool
     forward_scene_depth_sampler_ = std::make_shared<gfx::uniform>("s_fwd_scene_depth", bgfx::UniformType::Sampler);
     forward_scene_blurred_sampler_ = std::make_shared<gfx::uniform>("s_fwd_scene_blurred", bgfx::UniformType::Sampler);
     forward_gi_uniform_ = std::make_shared<gfx::uniform>("u_fwd_gi", bgfx::UniformType::Vec4);
+    forward_gi_reflection_sampler_ = std::make_shared<gfx::uniform>("s_fwd_gi_reflection", bgfx::UniformType::Sampler);
+    forward_gi_region_uniform_ = std::make_shared<gfx::uniform>("u_fwd_gi_region", bgfx::UniformType::Vec4);
+    forward_gi_layer_uniform_ = std::make_shared<gfx::uniform>("u_fwd_gi_layer", bgfx::UniformType::Vec4);
+    forward_gi_layer_depth_sampler_ = std::make_shared<gfx::uniform>("s_fwd_gi_layer_depth", bgfx::UniformType::Sampler);
     forward_light_shadow_atlas_sampler_ = std::make_shared<gfx::uniform>("s_fwd_light_shadow_atlas", bgfx::UniformType::Sampler);
     forward_light_shadows_uniform_ =
         std::make_shared<gfx::uniform>("u_fwd_light_shadows", bgfx::UniformType::Vec4, uint16_t(k_forward_light_shadow_vec4s));
@@ -1943,12 +1947,20 @@ void pipeline::bind_forward_lighting(const math::bbox& bounds,
                                      bool is_lit,
                                      const forward_probe& probe,
                                      uint32_t scene_textures,
-                                     bool uses_gi)
+                                     bool uses_gi,
+                                     bool uses_gi_reflections)
 {
     if(uses_gi && forward_gi_cache_ != nullptr)
     {
         forward_gi_cache_->bind_for_surfaces(MATERIAL_FORWARD_GI_INDIRECTION_STAGE, MATERIAL_FORWARD_GI_SH_STAGE);
-        gfx::set_uniform(forward_gi_uniform_, math::vec4(forward_gi_intensity_, 0.0f, 0.0f, 0.0f));
+        const bool has_traced = uses_gi_reflections && forward_gi_reflection_ != nullptr;
+        gfx::set_uniform(forward_gi_uniform_,
+                         math::vec4(forward_gi_intensity_, forward_gi_max_roughness_, forward_gi_roughness_fade_scale_, has_traced ? 1.0f : 0.0f));
+        gfx::set_uniform(forward_gi_region_uniform_,
+                         math::vec4(float(forward_gi_reflection_min_.x),
+                                    float(forward_gi_reflection_min_.y),
+                                    float(forward_gi_reflection_max_.x),
+                                    float(forward_gi_reflection_max_.y)));
     }
     if(scene_textures != 0)
     {
@@ -2022,9 +2034,18 @@ void pipeline::bind_forward_lighting(const math::bbox& bounds,
     gfx::set_uniform(forward_sun_direction_uniform_, lighting != nullptr ? lighting->sun_direction : math::vec4(0.0f, -1.0f, 0.0f, 0.0f));
     gfx::set_uniform(forward_sun_color_uniform_, lighting != nullptr ? lighting->sun_color : math::vec4(0.0f));
     gfx::set_uniform(forward_lighting_uniform_, lighting_params);
-    bgfx::setTexture(k_forward_probe_stage,
-                     forward_probe_sampler_->native_handle(),
-                     has_probe ? probe.cubemap : forward_no_probe_->native_handle());
+    if(uses_gi_reflections)
+    {
+        // Without a trace this frame the stand-in keeps the sampler bound; u_fwd_gi.w says it holds nothing.
+        const bgfx::TextureHandle traced = forward_gi_reflection_ ? forward_gi_reflection_->native_handle() : particle_no_shadow_->native_handle();
+        bgfx::setTexture(k_forward_probe_stage, forward_gi_reflection_sampler_->native_handle(), traced, BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
+    }
+    else
+    {
+        bgfx::setTexture(k_forward_probe_stage,
+                         forward_probe_sampler_->native_handle(),
+                         has_probe ? probe.cubemap : forward_no_probe_->native_handle());
+    }
     gfx::set_uniform(forward_probe_uniform_, probe.data.data(), k_forward_probe_vec4s);
     gfx::set_uniform(forward_probe_inv_world_uniform_, probe.inv_world);
     if(lighting != nullptr && lighting->shadow != nullptr)
@@ -2038,6 +2059,35 @@ void pipeline::bind_forward_lighting(const math::bbox& bounds,
                          particle_shadow_samplers_[i]->native_handle(),
                          particle_no_shadow_->native_handle());
     }
+}
+
+void pipeline::bind_forward_gi_layer(uint32_t scene_textures, const gfx::texture::ptr& opaque_depth, const math::vec4& layer_target)
+{
+    gfx::set_texture(forward_gi_layer_depth_sampler_,
+                     MATERIAL_FORWARD_GI_INDIRECTION_STAGE,
+                     opaque_depth,
+                     BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
+    gfx::set_uniform(forward_gi_layer_uniform_, layer_target);
+    if(scene_textures == 0)
+    {
+        return;
+    }
+    // The layer is drawn before the lighting: no scene colour exists yet, and only the normal, metallic and roughness
+    // the graph computes are kept.
+    const auto stages = get_forward_scene_texture_stages(true, scene_textures, true);
+    if((scene_textures & material_scene_texture_color) != 0)
+    {
+        bgfx::setTexture(stages.color, forward_scene_color_sampler_->native_handle(), particle_no_sky_->native_handle());
+    }
+    if((scene_textures & material_scene_texture_depth) != 0)
+    {
+        gfx::set_texture(forward_scene_depth_sampler_, stages.depth, opaque_depth);
+    }
+    if((scene_textures & material_scene_texture_blurred_color) != 0)
+    {
+        bgfx::setTexture(stages.blurred_color, forward_scene_blurred_sampler_->native_handle(), particle_no_sky_->native_handle());
+    }
+    gfx::set_uniform(forward_scene_uniform_, math::vec4(0.0f));
 }
 
 void pipeline::pack_forward_light_shadows(const particle_scene_lighting* lighting, const size_t* picked, uint32_t light_count)

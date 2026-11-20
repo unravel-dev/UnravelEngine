@@ -666,6 +666,14 @@ auto deferred::render_particles(const run_context& run,
     // A camera run's lit see-through surfaces read the radiance cache its GI updated this frame.
     forward_gi_cache_ = run.is_camera_run() ? gi_gather_pass_.get_radiance_cache() : nullptr;
     forward_gi_intensity_ = get_gi_resolve_scale(run.rview);
+    // And with GI Reflections, the front layer's traced reflections (run_gi_reflection_layer) where the GI's reflections
+    // own the view.
+    forward_uses_gi_reflections_ = run.is_camera_run() && gi_reflections_written_;
+    forward_gi_reflection_ = run.is_camera_run() ? gi_front_reflection_ : nullptr;
+    forward_gi_reflection_min_ = gi_reflection_pass_.get_front_written_min();
+    forward_gi_reflection_max_ = gi_reflection_pass_.get_front_written_max();
+    forward_gi_max_roughness_ = gi_front_max_roughness_;
+    forward_gi_roughness_fade_scale_ = 1.0f / gi::GI_ROUGHNESS_FADE_LENGTH;
     auto reactive = run_particle_pass(run.scn,
                              run.cam,
                              run.rview,
@@ -681,6 +689,8 @@ auto deferred::render_particles(const run_context& run,
                              has_meshes ? &meshes : nullptr,
                              run.runs_particle_step());
     forward_gi_cache_ = nullptr;
+    forward_gi_reflection_ = nullptr;
+    forward_uses_gi_reflections_ = false;
     return reactive;
 }
 

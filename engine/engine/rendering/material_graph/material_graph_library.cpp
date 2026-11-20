@@ -462,6 +462,20 @@ auto make_output_node() -> material_node_def
                              "TAA follows the surface instead of the scene behind it: for moving, mostly covering "
                              "surfaces such as a vehicle's windows. A faint surface is better left off, as what shows "
                              "through it then smears.";
+    material_setting_def gi_reflections;
+    gi_reflections.name = MATERIAL_GI_REFLECTIONS_SETTING;
+    gi_reflections.label = "GI Reflections";
+    gi_reflections.kind = material_setting_kind::choice;
+    gi_reflections.choices = {"off", MATERIAL_SETTING_ON};
+    gi_reflections.choice_labels = {"Off", "On"};
+    gi_reflections.default_value = "off";
+    gi_reflections.tooltip = "Where the view runs the GI's reflections, the surface reflects the scene as sharply as an "
+                             "opaque surface does, instead of the reflection probe. Use it for clear glass, water and "
+                             "polished see-through surfaces. Only the nearest such surface of a pixel is traced, and a "
+                             "surface behind it or a small one far away reflects the GI's blurred light. It costs a draw "
+                             "of the surface and the reflection passes again over its part of the view. It takes effect "
+                             "on a lit Translucent or Premultiplied surface with at most five textures and scene reads. "
+                             "The project's Translucent GI Reflections setting turns it off everywhere.";
     def.settings = {workflow,
                     blend_mode,
                     shading_model,
@@ -469,6 +483,7 @@ auto make_output_node() -> material_node_def
                     order_independent,
                     depth_prepass,
                     write_velocity,
+                    gi_reflections,
                     cast_shadow,
                     taa_response,
                     two_sided,

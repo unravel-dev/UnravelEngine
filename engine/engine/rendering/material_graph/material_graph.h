@@ -300,6 +300,9 @@ inline constexpr const char* MATERIAL_DEPTH_PREPASS_SETTING = "depth_prepass";
 /// The Surface Output's setting that draws a surface of the translucency pass's motion into the velocity buffer over
 /// the scene behind it ("on" / "off", the default).
 inline constexpr const char* MATERIAL_WRITE_VELOCITY_SETTING = "write_velocity";
+/// The Surface Output's setting that gives a lit Translucent or Premultiplied surface the GI's traced reflections where
+/// it is the nearest such surface of a pixel ("on" / "off", the default).
+inline constexpr const char* MATERIAL_GI_REFLECTIONS_SETTING = "gi_reflections";
 /// The value of the on / off settings that turns them on.
 inline constexpr const char* MATERIAL_SETTING_ON = "on";
 /// The Surface Output's setting picking how the surface is described: base color, metallic and roughness

@@ -89,7 +89,8 @@ result to go back.
   whose graph reads at most 5 textures (scene reads included) takes the GI's
   light for its diffuse and rough reflections, from the GI's radiance cache
   (the room's bounce light instead of the sky's); sharp reflections stay the
-  probe's. They get no SSR or screen-space AO and take no decals (what they
+  probe's unless gi_reflections is on (below). They get no SSR or screen-space
+  AO and take no decals (what they
   refract is the lit scene, GI included). Their graphs read at most 7 textures
   (13 unlit), one fewer for each scene read.
   Older files' translucent "on" loads as dithered. The GI lets light through
@@ -102,6 +103,19 @@ result to go back.
   behind it. write_velocity "on" (translucency pass): the surface's motion
   replaces the scene's behind it in the velocity buffer, over the whole
   surface, so TAA follows moving, mostly covering glass.
+- gi_reflections "on" (lit translucent, premultiplied, order independent
+  included, at most 5 textures with the scene reads): where the view runs the
+  GI's reflections, the surface reflects the scene as sharply as an opaque
+  surface does, traced from it instead of read from the reflection probe
+  (where the GI owns the reflections only the sky's environment probe is
+  drawn, so without it clear glass mirrors the sky). Use it for clear glass,
+  water and polished see-through surfaces. Only the nearest such surface of a
+  pixel traces; one behind it, and a model under about 64 x 64 pixels on
+  screen, reflect the GI's blurred light instead. It costs a draw
+  of those surfaces and the reflection passes again over their part of the
+  view; nothing while none is in view. The project setting
+  global_illumination translucent_reflections ("Translucent GI Reflections")
+  turns it off everywhere.
 - cast_shadow (translucency pass, default "off"): "dithered" casts a shadow
   that leaves out texels by the Opacity, softened by the shadow filter into a
   fainter shadow. Opaque and dithered surfaces cast theirs as always.

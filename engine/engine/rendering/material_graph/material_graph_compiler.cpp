@@ -232,6 +232,13 @@ constexpr const char* FORWARD_OIT_VARIANT = "// oit: the order-independent targe
 constexpr const char* FORWARD_GI_VARIANT = "// gi: lit by the GI's radiance cache (mg_forward.sh FORWARD_GI).\n"
                                            "gi                  FORWARD_GI";
 constexpr const char* FORWARD_OIT_GI_VARIANT = "oit_gi              FORWARD_OIT FORWARD_GI";
+/// The variants of a surface with GI Reflections (mg_forward.sh FORWARD_GI_LAYER, FORWARD_GI_REFLECTIONS): the front
+/// layer the reflections trace from, and the "gi" variants reading what they traced.
+constexpr const char* FORWARD_GI_REFLECTION_VARIANTS =
+    "// gi_layer: the front layer the GI reflections trace from; gi_reflect: lit as gi, with the traced reflection.\n"
+    "gi_layer            FORWARD_GI_LAYER\n"
+    "gi_reflect          FORWARD_GI FORWARD_GI_REFLECTIONS";
+constexpr const char* FORWARD_OIT_GI_REFLECTION_VARIANT = "oit_gi_reflect      FORWARD_OIT FORWARD_GI FORWARD_GI_REFLECTIONS";
 /// The forward main and the header of what it reads besides the graph.
 constexpr const char* FORWARD_MAIN_INCLUDE = "material_graph/fs_material_graph_forward.sh";
 constexpr const char* FORWARD_HEADER_INCLUDE = "material_graph/mg_forward.sh";
@@ -3434,6 +3441,9 @@ private:
         result_.writes_velocity = is_material_blend_mode_forward(result_.blend_mode) &&
                                   get_checked_setting(index, *find_material_setting_def(def, MATERIAL_WRITE_VELOCITY_SETTING)) ==
                                       MATERIAL_SETTING_ON;
+        wants_gi_reflections_ = can_be_order_independent &&
+                                get_checked_setting(index, *find_material_setting_def(def, MATERIAL_GI_REFLECTIONS_SETTING)) ==
+                                    MATERIAL_SETTING_ON;
         const auto& taa_response = *find_material_setting_def(def, MATERIAL_TAA_RESPONSE_SETTING);
         result_.taa_response = std::clamp(parse_number(index, taa_response, get_setting(state, taa_response.name)), 0.0f, 1.0f);
         if(result_.blend_mode == material_blend_mode::dithered)
@@ -3977,6 +3987,15 @@ private:
                 add_lines(lines, FORWARD_OIT_GI_VARIANT);
             }
         }
+        result_.has_gi_reflection_variant = result_.has_gi_variant && wants_gi_reflections_;
+        if(result_.has_gi_reflection_variant)
+        {
+            add_lines(lines, FORWARD_GI_REFLECTION_VARIANTS);
+            if(result_.order_independent)
+            {
+                add_lines(lines, FORWARD_OIT_GI_REFLECTION_VARIANT);
+            }
+        }
         const bool has_shadow_casters =
             is_forward ? result_.casts_forward_shadow : (result_.uses_opacity_mask || result_.uses_world_position_offset);
         if(has_shadow_casters)
@@ -4338,6 +4357,9 @@ private:
     bool is_emitting_vertex_{};
     /// A decal texture's UV function is being emitted (emit_decal_uv_function): its reads use the screen's gradients.
     bool is_emitting_decal_uv_{};
+    /// A Translucent or Premultiplied Surface Output turns GI Reflections on (collect_blend_defines); the shader takes
+    /// its variants when it also has the "gi" variant (assemble_shader).
+    bool wants_gi_reflections_{};
 };
 
 /// Identifies a problem across two compiles of a graph.
@@ -4467,6 +4489,7 @@ auto make_material_graph_binding(const material_graph_compile_result& result) ->
     binding.taa_response = result.taa_response;
     binding.order_independent = result.order_independent;
     binding.has_gi_variant = result.has_gi_variant;
+    binding.has_gi_reflection_variant = result.has_gi_reflection_variant;
     binding.depth_prepass = result.depth_prepass;
     binding.writes_velocity = result.writes_velocity;
     binding.casts_forward_shadow = result.casts_forward_shadow;

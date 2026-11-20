@@ -1,3 +1,9 @@
+[variants]
+// default: the opaque scene's reflections, from the G-buffer.
+default
+// front: the front see-through layer's (gi_reflection_common.sh GI_REFLECTION_FRONT_LAYER).
+front               GI_REFLECTION_FRONT_LAYER
+
 [code]
 /*
  * Reflections, the global distance-field stage. Runs for every trace texel the screen trace did not answer, from the
@@ -57,8 +63,15 @@ SAMPLER3D(s_gi_object_grid, 15);
 
 /// x > 0.5 when the surface cache holds lighting.
 uniform vec4 u_gi_hit_lighting;
+#if GI_REFLECTION_FRONT_LAYER
+/// The opaque scene's device depth, which the on-screen reads of hits test against: s_gi_depth is the front layer's,
+/// where the rays start. Its stage is the velocity buffer's of the default variant: a hit reprojects by the camera.
+SAMPLER2D(s_gi_scene_depth, 11);
+#else
+#define s_gi_scene_depth s_gi_depth
 /// This frame's velocity buffer (where a moving hit surface was last frame).
 #define GI_VELOCITY_STAGE 11
+#endif
 #include "gi/gi_motion.sh"
 
 /// Last frame's colour at a distance-field hit (rgb, a = 1) when the hit projects on screen within
@@ -79,7 +92,7 @@ vec4 GiReflectionSceneColorAtHit(ivec2 pixel, vec3 hit_world, vec3 hit_normal)
 	vec2 uv = clipToUv(ndc * 0.5 + 0.5);
 	ivec2 size = ivec2(u_gi_view_size);
 	ivec2 texel = clamp(ivec2(uv * u_gi_view_size), ivec2(0, 0), size - ivec2(1, 1));
-	float scene_depth01 = texelFetch(s_gi_depth, texel, 0).x;
+	float scene_depth01 = texelFetch(s_gi_scene_depth, texel, 0).x;
 	float scene_depth = GiLinearDepth(scene_depth01);
 	vec3 to_camera = normalize(GiReflectionCamera() - hit_world);
 	if(abs(clip.w - scene_depth) >= GI_REFLECTION_SCENE_COLOR_RELATIVE_DEPTH * max(scene_depth, 1e-5) ||
@@ -176,7 +189,7 @@ vec4 GiReflectionDistantScreenTrace(ivec2 pixel, vec3 origin, vec3 direction)
 	{
 		vec3 sample_uvz = ray_uvz + step_uvz * float(i);
 		ivec2 texel = clamp(ivec2(sample_uvz.xy * u_gi_view_size), ivec2(0, 0), size - ivec2(1, 1));
-		float scene_depth = texelFetch(s_gi_depth, texel, 0).x;
+		float scene_depth = texelFetch(s_gi_scene_depth, texel, 0).x;
 		// In front of the depth buffer > 0; a hit lies behind it by less than twice the tolerance, not on the far plane.
 		float difference = scene_depth - sample_uvz.z;
 		BRANCH
@@ -202,9 +215,13 @@ vec4 GiReflectionDistantScreenTrace(ivec2 pixel, vec3 origin, vec3 direction)
 
 /// What a ray that misses everything sees, pre-exposed: this pixel's reflection-probe layer - the environment's and
 /// the authored probes' prefiltered cubemaps in its reflection - with the environment SH along @p direction filling
-/// the share no probe covers.
+/// the share no probe covers. The probe layer reflects the opaque surface of the pixel: the front layer's misses take
+/// the environment SH alone.
 vec3 GiReflectionSkyRadiance(ivec2 pixel, vec3 direction)
 {
+#if GI_REFLECTION_FRONT_LAYER
+	return eval_radiance_sh(s_gi_env_sh, direction) * u_pre_exposure_value;
+#else
 	vec4 probe_layer = texelFetch(s_gi_probe_layer, pixel, 0);
 	float coverage = saturate(probe_layer.w);
 	// A branch, not a select: full coverage skips the SH's nine fetches.
@@ -214,12 +231,13 @@ vec3 GiReflectionSkyRadiance(ivec2 pixel, vec3 direction)
 		return probe_layer.xyz;
 	}
 	return probe_layer.xyz + eval_radiance_sh(s_gi_env_sh, direction) * u_pre_exposure_value * (1.0 - coverage);
+#endif
 }
 
 NUM_THREADS(8, 8, 1)
 void main()
 {
-	ivec2 trace_coord = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 trace_coord = ivec2(gl_GlobalInvocationID.xy) + GiReflectionTraceOrigin();
 	if(any(greaterThanEqual(trace_coord, GiReflectionTraceSize())))
 	{
 		return;
@@ -236,7 +254,7 @@ void main()
 	}
 	ivec2 pixel = GiReflectionTracePixel(trace_coord);
 	vec3 direction = normalize(ray.xyz);
-	float depth01 = texelFetch(s_gi_depth, pixel, 0).x;
+	float depth01 = texelFetch(s_gi_depth, GiReflectionTargetTexel(pixel), 0).x;
 	vec3 position = GiWorldFromDepth(GiPixelUv(pixel), depth01);
 	vec3 origin = position + GI_SURFACE_BIAS * direction;
 	float resume_voxel = SdfSampleClipmapLevels(position + screen * direction).voxel_size;

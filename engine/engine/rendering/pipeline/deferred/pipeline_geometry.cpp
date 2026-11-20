@@ -1358,6 +1358,110 @@ auto deferred::draws_with_gi(const graph_material& graph, size_t index) const ->
     return graph.has_gi_variant() && is_marked && cache != nullptr && cache->has_surface_sh();
 }
 
+auto deferred::draws_with_gi_reflections(const graph_material& graph, size_t index) const -> bool
+{
+    return graph.has_gi_reflection_variant() && forward_uses_gi_reflections_ && draws_with_gi(graph, index);
+}
+
+auto deferred::draw_gi_reflection_layer_model(bgfx::ViewId view,
+                                              size_t index,
+                                              const run_context& run,
+                                              const gfx::texture::ptr& opaque_depth,
+                                              const math::vec4& layer_target) -> bool
+{
+    const auto& element = translucent_models_[index];
+    const auto& entity = element.entity;
+    if(!entity.valid() || !entity.all_of<model_component, transform_component>())
+    {
+        return false;
+    }
+    auto& model_comp = entity.get<model_component>();
+    const auto& model = model_comp.get_model();
+    if(!model.is_valid())
+    {
+        return false;
+    }
+    const auto& camera = run.cam;
+    const auto& lod_data = element.lod_data;
+    const auto& world_transform = entity.get<transform_component>().get_transform_global();
+    const float transition_progress = lod_data.transition_time > 0.0f ? lod_data.current_time / lod_data.transition_time : 1.0f;
+    const math::vec3 params{1.0f - transition_progress, 0.0f, 0.0f};
+    const math::vec3 params_inv{-transition_progress, 0.0f, 0.0f};
+    const auto camera_pos = camera.get_position();
+    const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
+    auto extras = model_comp.get_submit_extras(false);
+    extras.material_pass = model_material_pass::forward;
+    math::vec3 lod_params = params;
+    bool drew = false;
+
+    model::submit_callbacks callbacks;
+    callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
+    {
+        geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
+        gfx::set_uniform(prog.u_camera_wpos, camera_pos);
+        gfx::set_uniform(prog.u_camera_clip_planes, clip_planes);
+    };
+    callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
+    {
+        geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
+        gfx::set_uniform(prog.u_lod_params, lod_params);
+    };
+    callbacks.setup_params_per_submesh = [&](const model::submit_callbacks::params& submit_params, const material& mat)
+    {
+        const uint8_t discard = submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL;
+        const auto* graph = mat.safe_cast<graph_material>();
+        geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
+        const bool is_drawn = graph != nullptr && graph->has_gi_reflection_variant();
+        gpu_program* program = is_drawn ? graph_material_programs_.begin(*graph, prog.vertex_variant, "gi_layer") : nullptr;
+        if(program == nullptr)
+        {
+            // Not such a surface, or its layer variant is not compiled yet: it reads no traced reflection either.
+            bgfx::discard(discard);
+            return;
+        }
+        graph_material_programs_.submit_values(*graph);
+        bind_forward_gi_layer(graph->get_scene_textures(), opaque_depth, layer_target);
+        // The nearest such surface wins; both faces of a two-sided one take part.
+        const uint64_t cull = graph->get_cull_type() == cull_type::none
+                                  ? 0
+                                  : graph->get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | cull);
+        bgfx::submit(view, program->native_handle(), 0, discard);
+        drew = true;
+    };
+    callbacks.setup_end = [&](const model::submit_callbacks::params&)
+    {
+    };
+
+    const auto& submesh_transforms = model_comp.get_submesh_transforms();
+    const auto& bone_transforms = model_comp.get_bone_transforms();
+    const auto& skinning_matrices = model_comp.get_skinning_transforms();
+    const auto& view_frustum = camera.get_frustum();
+    model.submit(world_transform,
+                 submesh_transforms,
+                 bone_transforms,
+                 skinning_matrices,
+                 lod_data.current_lod_index,
+                 callbacks,
+                 &view_frustum,
+                 &camera,
+                 extras);
+    if(math::epsilonNotEqual(lod_data.current_time, 0.0f, math::epsilon<float>()))
+    {
+        lod_params = params_inv;
+        model.submit(world_transform,
+                     submesh_transforms,
+                     bone_transforms,
+                     skinning_matrices,
+                     lod_data.target_lod_index,
+                     callbacks,
+                     &view_frustum,
+                     &camera,
+                     extras);
+    }
+    return drew;
+}
+
 auto deferred::writes_translucent_velocity(const graph_material& graph) -> bool
 {
     // A prepass puts the surface's depth in the scene's: its motion goes with it, so TAA reprojects the two alike.
@@ -1378,6 +1482,7 @@ auto deferred::get_translucent_reads(const visibility_data& element) -> transluc
             reads.has_sorted = reads.has_sorted || !graph->is_order_independent();
             reads.has_depth_prepass = reads.has_depth_prepass || graph->has_depth_prepass();
             reads.has_gi_variant = reads.has_gi_variant || graph->has_gi_variant();
+            reads.has_gi_reflections = reads.has_gi_reflections || graph->has_gi_reflection_variant();
             reads.writes_velocity = reads.writes_velocity || writes_translucent_velocity(*graph);
             reads.scene_textures |= graph->get_scene_textures();
         }
@@ -1519,12 +1624,22 @@ void deferred::draw_translucent_model(bgfx::ViewId view, size_t index, const run
         geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
         // The sorted draws and the order-independent ones each take their own surfaces.
         const bool is_drawn = graph != nullptr && graph->is_forward() && graph->is_order_independent() == order_independent;
-        // Lit surfaces take the GI's light in their "gi" variants where the run's GI updated its radiance cache; until
-        // that variant is compiled they draw without it.
+        // Lit surfaces take the GI's light in their "gi" variants where the run's GI updated its radiance cache, and with
+        // GI Reflections the traced reflections of their front layer in their "gi_reflect" variants; until a variant is
+        // compiled they draw the next one down.
+        bool uses_gi_reflections = is_drawn && draws_with_gi_reflections(*graph, index);
         bool uses_gi = is_drawn && draws_with_gi(*graph, index);
         const char* plain_variant = order_independent ? "oit" : gfx::shader::DEFAULT_VARIANT;
-        gpu_program* program = uses_gi ? graph_material_programs_.begin(*graph, prog.vertex_variant, order_independent ? "oit_gi" : "gi")
-                                       : nullptr;
+        gpu_program* program =
+            uses_gi_reflections
+                ? graph_material_programs_.begin(*graph, prog.vertex_variant, order_independent ? "oit_gi_reflect" : "gi_reflect")
+                : nullptr;
+        if(program == nullptr)
+        {
+            uses_gi_reflections = false;
+            program = uses_gi ? graph_material_programs_.begin(*graph, prog.vertex_variant, order_independent ? "oit_gi" : "gi")
+                              : nullptr;
+        }
         if(program == nullptr)
         {
             uses_gi = false;
@@ -1541,7 +1656,8 @@ void deferred::draw_translucent_model(bgfx::ViewId view, size_t index, const run
                               graph->get_shading_model() == material_shading_model::default_lit,
                               probe,
                               graph->get_scene_textures(),
-                              uses_gi);
+                              uses_gi,
+                              uses_gi_reflections);
         if(order_independent)
         {
             // Weighed sums in any order (fs_material_graph_forward.sh FORWARD_OIT): one blend serves both targets.
