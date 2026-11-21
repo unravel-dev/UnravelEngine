@@ -23,6 +23,9 @@
 
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <serialization/document_convert.h>
+#include <filesystem/file_istream.h>
+#include <filesystem/file_ostream.h>
 
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/engine.h>
@@ -1446,42 +1449,48 @@ auto compile_eshader_to_file(const fs::path& source_path, const fs::path& output
     return true;
 }
 
-auto write_minified_file(const fs::path& input_path, const fs::path& output_path) -> bool
+/**
+ * @brief Compiles a scene or prefab source - a JSON document people edit - into the binary document the
+ *        runtime loads: smaller, and read without parsing text. It loads exactly as the JSON would.
+ */
+auto write_binary_document_file(const fs::path& input_path, const fs::path& output_path) -> bool
 {
-    
-#if SER20_ASSOCIATIVE_ARCHIVE == SER20_ASSOCIATIVE_ARCHIVE_SIMDJSON
-    
-    std::string str_input = input_path.string();
-    simdjson::dom::parser parser;
-    auto doc = parser.load(str_input);
-    if(doc.error())
+    fs::file_istream input(input_path);
+    if(!input.is_open())
     {
-        APPLOG_ERROR("Failed to parse {0}: {1}", input_path.string(), simdjson::error_message(doc.error()));
+        APPLOG_ERROR("The source {0} could not be opened.", input_path.string());
+        return false;
+    }
+    const auto json = fs::read_stream_str(input);
+
+    std::string error;
+    const auto document = serialization::json_to_binary_document(json, error);
+    if(document.empty())
+    {
+        APPLOG_ERROR("The source {0} is not a JSON document that compiles ({1}).", input_path.string(), error);
         return false;
     }
 
-    auto minified = simdjson::minify(doc);
-
-
     fs::error_code err;
-    bool success = true;
-    asset_writer::atomic_write_file(output_path, [&](const fs::path& temp_manifest_path) 
-    {
-        std::ofstream file(temp_manifest_path);
-        if(file.is_open())
-        {
-            file << minified;
-            file.close();
-        }
-    }, err);
+    // A write that fails throws, so the file in place is kept rather than replaced by part of the document.
+    asset_writer::atomic_write_file(output_path,
+                                    [&](const fs::path& temp_path)
+                                    {
+                                        fs::file_ostream file(temp_path);
+                                        if(!file.is_open())
+                                        {
+                                            throw std::runtime_error("The file could not be opened.");
+                                        }
+                                        file.write(reinterpret_cast<const char*>(document.data()),
+                                                   static_cast<std::streamsize>(document.size()));
+                                        file.flush();
+                                        if(!file.good())
+                                        {
+                                            throw std::runtime_error("The document could not be written in full.");
+                                        }
+                                    },
+                                    err);
     return !err;
-#else
-
-    copy_compiled_file(input_path, output_path);
-
-    return true;
-#endif
-
 }
 
 /**
@@ -2904,9 +2913,9 @@ auto compile<prefab>(asset_manager& am, const fs::path& key, const fs::path& out
     APP_SCOPE_PERF("Compile Prefab");
     auto absolute_path = resolve_input_file(key);
 
-    if(!write_minified_file(absolute_path, output))
+    if(!write_binary_document_file(absolute_path, output))
     {
-        APPLOG_ERROR("Failed to write minified file for compiled prefab: {0}", output.string());
+        APPLOG_ERROR("The compiled prefab {0} could not be written.", output.string());
         return false;
     }
 
@@ -2925,9 +2934,9 @@ auto compile<scene_prefab>(asset_manager& am, const fs::path& key, const fs::pat
     APP_SCOPE_PERF("Compile Scene Prefab");
     auto absolute_path = resolve_input_file(key);
    
-    if(!write_minified_file(absolute_path, output))
+    if(!write_binary_document_file(absolute_path, output))
     {
-        APPLOG_ERROR("Failed to write minified file for compiled scene: {0}", output.string());
+        APPLOG_ERROR("The compiled scene {0} could not be written.", output.string());
         return false;
     }
 

@@ -4,6 +4,8 @@
 #include <serialization/archives/yaml.hpp>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <serialization/document_archive.h>
+#include <serialization/name_index.h>
 #include <filesystem/file_istream.h>
 #include <serialization/serialization.h>
 #include "components/all_components.h"
@@ -25,6 +27,8 @@
 #include <version/version.h>
 
 #include <algorithm>
+#include <array>
+#include <bitset>
 #include <charconv>
 #include <functional>
 #include <limits>
@@ -1571,11 +1575,68 @@ struct component_keys
 
     std::string name;
     std::string has_name;
+    /// The two names with their hashes, computed once: what an archive that compares hashes reads.
+    ser20::literal_name name_key{nullptr, 0};
+    ser20::literal_name has_name_key{nullptr, 0};
 
 private:
     component_keys() : name(entt::get_name(entt::resolve<Component>())), has_name("has_" + name)
     {
+        name_key = {name.c_str(), ser20::name_hash(name.data(), name.size())};
+        has_name_key = {has_name.c_str(), ser20::name_hash(has_name.data(), has_name.size())};
     }
+};
+
+/**
+ * @brief The serializable component types by the hash of their has_<component> key, so the components an
+ *        entity's document states are read in one pass over its keys instead of asked for one type at a time.
+ *
+ * Most of the types are absent from any one entity, and asking an archive for an absent name searches the
+ * object; the pass reads each key once.
+ */
+class stated_component_table
+{
+public:
+    static constexpr size_t type_count = std::tuple_size_v<all_serializeable_components>;
+    using type_set = std::bitset<type_count>;
+
+    static auto get() -> const stated_component_table&
+    {
+        static const stated_component_table instance{};
+        return instance;
+    }
+
+    /// The types whose has_<component> key the object at the archive's read position holds.
+    template<typename Archive>
+    auto read(const Archive& ar) const -> type_set
+    {
+        type_set stated;
+        ar.forEachMemberKey(
+            [&](uint64_t hash)
+            {
+                const auto index = index_.find(hash);
+                if(index != serialization::name_index::none)
+                {
+                    stated.set(index);
+                }
+            });
+        return stated;
+    }
+
+private:
+    stated_component_table()
+    {
+        index_.reserve(type_count);
+        hpp::for_each_tuple_type<all_serializeable_components>(
+            [&](auto index)
+            {
+                using ctype = std::tuple_element_t<decltype(index)::value, all_serializeable_components>;
+                index_.insert(component_keys<ctype>::get().has_name_key.hash, uint32_t(decltype(index)::value));
+            });
+    }
+
+    /// Each type's index by the hash of its has_<component> key.
+    serialization::name_index index_;
 };
 
 /// Whether the document being replayed removed a component it does not have: it states the
@@ -1739,8 +1800,8 @@ SAVE(entity_components<entt::const_handle>)
 
             const auto& keys = component_keys<ctype>::get();
 
-            try_save(ar, ser20::make_nvp(keys.has_name, true));
-            try_save(ar, ser20::make_nvp(keys.name, *component));
+            try_save(ar, ser20::make_nvp(keys.has_name_key, true));
+            try_save(ar, ser20::make_nvp(keys.name_key, *component));
         });
 }
 SAVE_INSTANTIATE(entity_components<entt::const_handle>, ser20::oarchive_associative_t);
@@ -1748,6 +1809,17 @@ SAVE_INSTANTIATE(entity_components<entt::const_handle>, ser20::oarchive_binary_t
 
 LOAD(entity_components<entt::handle>)
 {
+    // The components the document states, from its keys in one pass: a type it does not state is not asked for.
+    stated_component_table::type_set stated;
+    if constexpr(can_list_member_keys<Archive>)
+    {
+        stated = stated_component_table::get().read(ar);
+    }
+    else
+    {
+        stated.set();
+    }
+
     hpp::for_each_tuple_type<unravel::all_serializeable_components>(
         [&](auto index)
         {
@@ -1758,15 +1830,18 @@ LOAD(entity_components<entt::handle>)
                 return;
             }
 
-
             const auto& keys = component_keys<ctype>::get();
 
             bool has_component = false;
-            serialize_check(keys.has_name,
-                            [&]() -> bool
-                            {
-                                return try_serialize_direct(ar, ser20::make_nvp(keys.has_name, has_component));
-                            });
+            if(stated.test(decltype(index)::value))
+            {
+                serialize_check(keys.has_name,
+                                [&]() -> bool
+                                {
+                                    return try_serialize_direct(ar,
+                                                                ser20::make_nvp(keys.has_name_key, has_component));
+                                });
+            }
 
             if(has_component)
             {
@@ -1775,7 +1850,7 @@ LOAD(entity_components<entt::handle>)
                 serialize_check(keys.name,
                                 [&]() -> bool
                                 {
-                                    return try_serialize_direct(ar, ser20::make_nvp(keys.name, component));
+                                    return try_serialize_direct(ar, ser20::make_nvp(keys.name_key, component));
                                 });
 
                 emit_on_load<ctype>(*obj.entity.registry(), obj.entity.entity());
@@ -1933,12 +2008,10 @@ void write_record_list(Archive& ar, const std::vector<entity_data<entt::const_ha
 }
 
 /// Whether a single-root save writes a record list: a copy - a clone, an undo snapshot, the clipboard - and not a
-/// prefab file, whose references out of the file are dropped when it is written. Associative documents only: a binary
-/// one is read by position.
-template<typename Archive>
-auto lists_records(bool is_single_root) -> bool
+/// prefab file, whose references out of the file are dropped when it is written.
+inline auto lists_records(bool is_single_root) -> bool
 {
-    return is_single_root && !is_binary_archive<Archive>() && !get_save_context().is_saving_to_prefab();
+    return is_single_root && !get_save_context().is_saving_to_prefab();
 }
 
 /// One root's entities, and what its document states about the content it nests: the content of a
@@ -1971,7 +2044,7 @@ void save_root_content(Archive& ar, entt::const_handle obj, bool is_single_root)
         try_save(ar, ser20::make_nvp("statements", statements));
     }
 
-    if(lists_records<Archive>(is_single_root))
+    if(lists_records(is_single_root))
     {
         write_record_list(ar, entities);
     }
@@ -2080,7 +2153,7 @@ auto read_record_list_entries(Archive& ar) -> load_context::record_list
 template<typename Archive>
 auto read_record_list(Archive& ar, bool is_single_root) -> load_context::record_list
 {
-    if(!is_single_root || is_binary_archive<Archive>() || !get_load_context().document_uid.is_nil())
+    if(!is_single_root || !get_load_context().document_uid.is_nil())
     {
         return {};
     }
@@ -2116,15 +2189,28 @@ auto load_first_layout_root(Archive& ar) -> entt::handle
     return adopt_root_entities(std::move(entities));
 }
 
-/// A member name no document holds. The archive answers every name as present at a level that is not an object
+/// A member name no document holds. The JSON archive answers every name as present at a level that is not an object
 /// with members, so asking for this one tells such a level apart wherever the read position is.
 constexpr const char* NO_MEMBER_NAME = "";
 
-/// Whether a document's top level is a JSON object with members, which every scene and prefab document is.
+/// Whether a document's top level is an object with members, which every scene and prefab document is.
 template<typename Archive>
 auto has_members(const Archive& ar) -> bool
 {
-    return !ar.hasNextName(NO_MEMBER_NAME);
+    if constexpr(can_list_member_keys<Archive>)
+    {
+        bool has_member = false;
+        ar.forEachMemberKey(
+            [&](uint64_t)
+            {
+                has_member = true;
+            });
+        return has_member;
+    }
+    else
+    {
+        return !ar.hasNextName(NO_MEMBER_NAME);
+    }
 }
 
 /// Whether a document is a scene file, which holds many roots, rather than a single-root document.
@@ -2577,8 +2663,7 @@ void save_to_stream(std::ostream& stream, entt::const_handle obj)
 
         try
         {
-            auto ar = ser20::create_oarchive_associative(stream);
-            save_to_archive(ar, obj);
+            serialization::write_document(stream, [&](auto& ar) { save_to_archive(ar, obj); });
         }
         catch(const std::exception& e)
         {
@@ -2656,8 +2741,7 @@ void load_from_view(hpp::string_view view, entt::registry& obj)
 
         try
         {
-            auto ar = ser20::create_iarchive_associative(view.data(), view.size());
-            load_from_archive_start(ar, obj);
+            serialization::read_document(view, [&](auto& ar) { load_from_archive_start(ar, obj); });
         }
         catch(const std::exception& e)
         {
@@ -2673,8 +2757,7 @@ void load_from_stream(std::istream& stream, entt::registry& obj)
         // APPLOG_INFO_PERF(std::chrono::microseconds);
         try
         {
-            auto ar = ser20::create_iarchive_associative(stream);
-            load_from_archive_start(ar, obj);
+            serialization::read_document(stream, [&](auto& ar) { load_from_archive_start(ar, obj); });
         }
         catch(const std::exception& e)
         {
@@ -2691,8 +2774,7 @@ void load_from_view(hpp::string_view view, entt::handle& obj)
 
         try
         {
-            auto ar = ser20::create_iarchive_associative(view.data(), view.size());
-            load_from_archive(ar, obj);
+            serialization::read_document(view, [&](auto& ar) { load_from_archive(ar, obj); });
         }
         catch(const std::exception& e)
         {
@@ -2708,8 +2790,7 @@ void load_from_stream(std::istream& stream, entt::handle& obj)
         // APPLOG_INFO_PERF(std::chrono::microseconds);
         try
         {
-            auto ar = ser20::create_iarchive_associative(stream);
-            load_from_archive(ar, obj);
+            serialization::read_document(stream, [&](auto& ar) { load_from_archive(ar, obj); });
         }
         catch(const std::exception& e)
         {
@@ -3569,20 +3650,29 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
     bool result = false;
     try
     {
-        auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
-        if(refuses_prefab_document(ar, pfb))
+        bool refused = false;
+        bool pushed = false;
+        serialization::read_document(buffer.data(),
+                                     buffer.size(),
+                                     [&](auto& ar)
+                                     {
+                                         if(refuses_prefab_document(ar, pfb))
+                                         {
+                                             refused = true;
+                                             return;
+                                         }
+                                         pushed = push_load_context(registry);
+                                         get_load_context().document_uid = pfb.uid();
+                                         // Scopes the prefab-uid mapping to this instance. Records inside the
+                                         // frame resolve against the subtree recorded below and nothing else.
+                                         scoped_instance_frame frame;
+                                         add_to_uid_mapping(obj);
+                                         result = load_from_archive_start(ar, registry, obj);
+                                         cleanup_uid_mapping();
+                                     });
+        if(refused)
         {
             return false;
-        }
-        bool pushed = push_load_context(registry);
-        get_load_context().document_uid = pfb.uid();
-        {
-            // Scopes the prefab-uid mapping to this instance. Records inside the frame
-            // resolve against the subtree recorded below and nothing else.
-            scoped_instance_frame frame;
-            add_to_uid_mapping(obj);
-            result = load_from_archive_start(ar, registry, obj);
-            cleanup_uid_mapping();
         }
         if(get_load_context().saw_unqualified_ids)
         {
@@ -3654,16 +3744,28 @@ auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry)
     }
     try
     {
-        auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
-        if(refuses_prefab_document(ar, pfb))
+        bool refused = false;
+        bool pushed = false;
+        serialization::read_document(buffer.data(),
+                                     buffer.size(),
+                                     [&](auto& ar)
+                                     {
+                                         if(refuses_prefab_document(ar, pfb))
+                                         {
+                                             refused = true;
+                                             return;
+                                         }
+                                         // Pushed here rather than inside load_from_archive_start so the
+                                         // document's nesting_resolved flag can be read before the context
+                                         // is destroyed.
+                                         pushed = push_load_context(registry);
+                                         get_load_context().document_uid = pfb.uid();
+                                         obj = load_from_archive_impl(ar, registry, true);
+                                     });
+        if(refused)
         {
             return obj;
         }
-        // Pushed here rather than inside load_from_archive_start so the document's
-        // nesting_resolved flag can be read before the context is destroyed.
-        const bool pushed = push_load_context(registry);
-        get_load_context().document_uid = pfb.uid();
-        obj = load_from_archive_impl(ar, registry, true);
         if(get_load_context().saw_unqualified_ids)
         {
             qualify_legacy_prefab_ids(obj, pfb.uid(), true);
@@ -3937,8 +4039,7 @@ void save_clone_to_stream(std::ostream& stream, const std::vector<entt::const_ha
     }
     try
     {
-        auto ar = ser20::create_oarchive_associative(stream);
-        save_clone_to_archive(ar, roots);
+        serialization::write_document(stream, [&](auto& ar) { save_clone_to_archive(ar, roots); });
     }
     catch(const std::exception& e)
     {
@@ -3958,8 +4059,7 @@ auto load_clone_from_view(hpp::string_view view, entt::registry& registry) -> st
     }
     try
     {
-        auto ar = ser20::create_iarchive_associative(view.data(), view.size());
-        return load_clone_from_archive(ar, registry);
+        return serialization::read_document(view, [&](auto& ar) { return load_clone_from_archive(ar, registry); });
     }
     catch(const std::exception& e)
     {
@@ -3972,9 +4072,9 @@ void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj)
 {
     std::stringstream stream;
     {
-        // This buffer is written and read back a few lines below and then discarded, so
-        // there is nobody to indent it for.
-        serialization::scoped_output_format compact(serialization::output_format::compact);
+        // This buffer is written and read back a few lines below and then discarded: only the
+        // engine reads it, so it is a binary document.
+        serialization::scoped_output_format binary(serialization::output_format::binary);
         save_clone_to_stream(stream, {src_obj}, clone_identity::entity_ids);
     }
     const auto roots = load_clone_from_view(stream.str(), *dst_obj.registry());
@@ -3989,8 +4089,7 @@ void save_to_stream(std::ostream& stream, const scene& scn)
 
         try
         {
-            auto ar = ser20::create_oarchive_associative(stream);
-            save_to_archive(ar, *scn.registry);
+            serialization::write_document(stream, [&](auto& ar) { save_to_archive(ar, *scn.registry); });
         }
         catch(const std::exception& e)
         {
@@ -4013,8 +4112,7 @@ auto load_from_view(hpp::string_view view, scene& scn) -> bool
     }
     try
     {
-        auto ar = ser20::create_iarchive_associative(view.data(), view.size());
-        return load_from_archive(ar, *scn.registry, {});
+        return serialization::read_document(view, [&](auto& ar) { return load_from_archive(ar, *scn.registry, {}); });
     }
     catch(const std::exception& e)
     {
@@ -4032,8 +4130,8 @@ auto load_from_stream(std::istream& stream, scene& scn) -> bool
     stream.seekg(0);
     try
     {
-        auto ar = ser20::create_iarchive_associative(stream);
-        return load_from_archive(ar, *scn.registry, {});
+        return serialization::read_document(stream,
+                                            [&](auto& ar) { return load_from_archive(ar, *scn.registry, {}); });
     }
     catch(const std::exception& e)
     {
@@ -4080,8 +4178,9 @@ auto read_scene_file(const asset_handle<scene_prefab>& pfb, entt::registry& regi
     }
     try
     {
-        auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
-        return load_from_archive(ar, registry, pfb.id(), clear);
+        return serialization::read_document(buffer.data(),
+                                            buffer.size(),
+                                            [&](auto& ar) { return load_from_archive(ar, registry, pfb.id(), clear); });
     }
     catch(const std::exception& e)
     {
@@ -4154,8 +4253,9 @@ private:
         }
         try
         {
-            auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
-            return check_prefab_document(ar, key);
+            return serialization::read_document(buffer.data(),
+                                                buffer.size(),
+                                                [&](auto& ar) { return check_prefab_document(ar, key); });
         }
         catch(const std::exception& e)
         {
@@ -4197,8 +4297,7 @@ auto read_document_version(hpp::string_view text) -> uint32_t
 {
     try
     {
-        auto ar = ser20::create_iarchive_associative(text.data(), text.size());
-        return read_archive_version(ar);
+        return serialization::read_document(text, [&](auto& ar) { return read_archive_version(ar); });
     }
     catch(const std::exception&)
     {
@@ -4228,8 +4327,9 @@ auto find_document_problem(const asset_handle<scene_prefab>& pfb) -> std::string
     }
     try
     {
-        auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
-        return check_scene_document(ar, pfb.id()).problem;
+        return serialization::read_document(buffer.data(),
+                                            buffer.size(),
+                                            [&](auto& ar) { return check_scene_document(ar, pfb.id()).problem; });
     }
     catch(const std::exception& e)
     {
@@ -4267,9 +4367,9 @@ void clone_scene_from_stream(const scene& src_scene, scene& dst_scene)
 
     // APPLOG_INFO_PERF(std::chrono::microseconds);
 
-    // Every root goes through a throwaway buffer on its way across. Indenting those is
-    // pure cost: this is the edit-scene -> play-scene path, so it runs on every play press.
-    serialization::scoped_output_format compact(serialization::output_format::compact);
+    // Every root goes through a throwaway buffer on its way across, read only by the engine:
+    // a binary document. This is the edit-scene -> play-scene path, so it runs on every play press.
+    serialization::scoped_output_format binary(serialization::output_format::binary);
 
     // One load context for the whole scene, not one per root.
     //

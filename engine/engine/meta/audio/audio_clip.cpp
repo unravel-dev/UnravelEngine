@@ -4,6 +4,7 @@
 #include <filesystem/pack.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <engine/meta/core/compiled_file.hpp>
 #include <serialization/types/string.hpp>
 #include <serialization/types/vector.hpp>
 
@@ -106,23 +107,11 @@ LOAD_INSTANTIATE(encoded_sound, ser20::iarchive_binary_t);
 
 auto save_to_file_bin(const std::string& absolute_path, const encoded_sound& obj) -> bool
 {
-    std::ofstream stream(absolute_path, std::ios::binary);
-    if(!stream.good())
-    {
-        return false;
-    }
-    ser20::oarchive_binary_t ar(stream);
-    return try_save(ar, ser20::make_nvp("encoded_sound", obj)) && stream.good();
+    return save_compiled_file(absolute_path, "encoded_sound", obj);
 }
 
 auto load_from_file_bin(const std::string& absolute_path, encoded_sound& obj) -> bool
 {
-    auto input = fs::open_readable_stream(absolute_path);
-    if(!input)
-    {
-        return false;
-    }
-    ser20::iarchive_binary_t ar(*input);
-    return try_load(ar, ser20::make_nvp("encoded_sound", obj));
+    return load_compiled_file(absolute_path, "encoded_sound", obj);
 }
 } // namespace unravel

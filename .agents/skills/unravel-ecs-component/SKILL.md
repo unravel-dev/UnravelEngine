@@ -31,16 +31,20 @@ inspectors and undo to `unravel-editor-panel`.
   field is reflected with (`entt::attribute{"name", ...}`): prefab overrides point at fields by
   that name. An empty body saves nothing; nothing is serialized from reflection on its own.
 - A load under a path filter (prefab replay, editing several entities) leaves out the list
-  elements it does not list: the engine's vector load for `iarchive_associative_t`
-  (`associative_archive.h`) steps the reader over them. ser20's own load leaves them unread,
-  which shifts every later element onto the skipped one's data; keep that header included where
-  vectors load from associative documents.
+  elements it does not list: the engine's vector loads for `iarchive_associative_t`
+  (`associative_archive.h`) and `iarchive_binary_t` (`binary_archive.h`) step the reader over
+  them. ser20's own load leaves them unread, which shifts every later element onto the skipped
+  one's data; keep those headers included where vectors load from documents.
 - A `LOAD` that reads a list into a local and hands it to a setter starts the local from the
   component (`auto shapes = obj.get_shapes();`): from an empty one, every element a filtered
   load leaves out comes back as a default.
-- Instantiate all four archives: `SAVE_INSTANTIATE` for `ser20::oarchive_associative_t` and
+- Instantiate both archives: `SAVE_INSTANTIATE` for `ser20::oarchive_associative_t` and
   `ser20::oarchive_binary_t`, `LOAD_INSTANTIATE` for `ser20::iarchive_associative_t` and
-  `ser20::iarchive_binary_t`.
+  `ser20::iarchive_binary_t`. The binary archive (`serialization/binary_archive.h`) writes the
+  binary documents of compiled assets, scenes and prefabs and of copies; it reads by name like
+  JSON, so one `SAVE` / `LOAD` serves both, and code does not branch on the archive. A field
+  goes anywhere in the body; an absent one keeps its value. Vectors, quaternions and colors are
+  one packed value in binary copies; override paths still name their components (`position/x`).
 - The type's `"name"` attribute is the key a scene stores the component under (`<name>` and
   `has_<name>`, `component_keys` in `engine/engine/meta/ecs/entity.cpp`). Renaming it orphans
   the component in every saved scene and prefab. `"pretty_name"` is what the Add Component menu

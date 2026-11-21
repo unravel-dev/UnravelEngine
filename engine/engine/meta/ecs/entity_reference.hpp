@@ -13,7 +13,7 @@ namespace unravel
 template<typename Archive>
 void save_entity_reference(Archive& ar, const char* name, const entt::handle& handle)
 {
-    // Always written, empty when the save names no registry: binary archives are positional.
+    // Always written: empty when the save names no registry.
     ser20::const_entity_handle_link link;
     if(const auto* registry = get_save_context().get_registry())
     {

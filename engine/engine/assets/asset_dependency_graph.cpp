@@ -7,7 +7,7 @@
 #include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/mesh.h>
 
-#include <ser20/external/simdjson/simdjson.h>
+#include <serialization/document_convert.h>
 
 #include <algorithm>
 #include <deque>
@@ -53,10 +53,10 @@ auto get_referenced_uids(const material& m) -> std::vector<hpp::uuid>
 }
 
 //------------------------------------------------------------------------------
-// mesh → the materials it was imported with.
+// mesh -> the materials it was imported with.
 //
 // We read the raw UUIDs (not `get_imported_materials()`), which would force a
-// load via `asset_manager::get_asset<material>(uid)` — we just want
+// load via `asset_manager::get_asset<material>(uid)` - we just want
 // references, not loaded objects.
 //------------------------------------------------------------------------------
 auto get_referenced_uids(const mesh& m) -> std::vector<hpp::uuid>
@@ -78,48 +78,46 @@ namespace
 {
 
 //------------------------------------------------------------------------------
-// Depth-first walk of a parsed prefab buffer, collecting `prefab_component`'s
-// `source.uid` wherever one appears.
+// Depth-first walk of a prefab buffer, collecting `prefab_component`'s
+// `source.uid` wherever one appears: a `uid` text directly inside a `source`
+// object directly inside a `prefab_component` object.
 //
 // Matches on the component's serialized name rather than on the shape of the
 // value, because several components serialize a `source`/`uid` pair and only
-// this one denotes a nested prefab instance.
+// this one denotes a nested prefab instance. Instances nest, so the whole
+// document is walked.
 //------------------------------------------------------------------------------
-void collect_prefab_sources(const simdjson::dom::element& value, std::vector<hpp::uuid>& out)
+/// Whether the value at path[depth] is a nested instance's source uid: `prefab_component/source/uid`.
+auto is_prefab_source_uid(const std::vector<hpp::string_view>& path,
+                          size_t depth,
+                          const serialization::tagged::reader::entry& value) -> bool
 {
-    if(value.is_array())
-    {
-        for(auto element : value.get_array())
-        {
-            collect_prefab_sources(element, out);
-        }
-        return;
-    }
+    return depth >= 2 && value.type == serialization::tagged::value_type::string && path[depth] == "uid" &&
+           path[depth - 1] == "source" && path[depth - 2] == "prefab_component";
+}
 
-    if(!value.is_object())
-    {
-        return;
-    }
-
-    for(auto field : value.get_object())
-    {
-        if(field.key == "prefab_component")
-        {
-            hpp::string_view uid_str;
-            if(!field.value["source"]["uid"].get_string().get(uid_str))
-            {
-                const auto uid = hpp::uuid::from_string(uid_str);
-                if(uid.has_value() && !uid->is_nil())
-                {
-                    out.push_back(*uid);
-                }
-            }
-        }
-
-        // Descended into regardless: a prefab_component's own subtree holds nothing
-        // further, but instances nest, so the rest of the document still has to be walked.
-        collect_prefab_sources(field.value, out);
-    }
+void collect_prefab_sources(const std::vector<uint8_t>& buffer, std::vector<hpp::uuid>& out)
+{
+    std::vector<hpp::string_view> path;
+    // A buffer that will not read cannot be loaded either; whatever surfaces that is the right place
+    // to report it, not a dependency query. What was found before the break stands.
+    serialization::walk_document(buffer.data(),
+                                 buffer.size(),
+                                 [&](const char* name, const auto& value, size_t depth)
+                                 {
+                                     path.resize(depth);
+                                     path.emplace_back(name != nullptr ? name : "");
+                                     if(is_prefab_source_uid(path, depth, value))
+                                     {
+                                         const auto text = serialization::tagged::reader::bytes_of(value);
+                                         const auto uid = hpp::uuid::from_string(text);
+                                         if(uid.has_value() && !uid->is_nil())
+                                         {
+                                             out.push_back(*uid);
+                                         }
+                                     }
+                                     return true;
+                                 });
 }
 
 } // namespace
@@ -138,17 +136,7 @@ auto get_referenced_uids(const prefab& p) -> std::vector<hpp::uuid>
         return result;
     }
 
-    simdjson::dom::parser parser;
-    simdjson::dom::element document;
-    const auto error = parser.parse(buffer.data(), buffer.size()).get(document);
-    if(error)
-    {
-        // A buffer that will not parse cannot be loaded either; whatever surfaces that
-        // is the right place to report it, not a dependency query.
-        return result;
-    }
-
-    collect_prefab_sources(document, result);
+    collect_prefab_sources(buffer, result);
 
     // Document order, first occurrence wins. One prefab may be instanced many times.
     std::vector<hpp::uuid> unique;
@@ -166,7 +154,7 @@ auto get_referenced_uids(const prefab& p) -> std::vector<hpp::uuid>
 //------------------------------------------------------------------------------
 // Walks the loaded set of `T` and appends the UUID of every asset whose
 // reference list contains `target`. Skips assets that aren't currently
-// resident (`peek()` returns nullptr) — they have no in-memory thumbnail to
+// resident (`peek()` returns nullptr) - they have no in-memory thumbnail to
 // invalidate, and will be re-rendered fresh on the next request.
 //
 // Lives at file scope (not as a lambda) so we can inline-template it cleanly

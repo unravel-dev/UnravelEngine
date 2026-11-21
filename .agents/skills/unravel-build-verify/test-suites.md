@@ -146,7 +146,7 @@ editor, and never under a hard timeout. Times are a full parallel run, RelWithDe
 | `audio clip encoding` | compiled clips keep the source codec; the deploy's asset index filter |
 | `mesh import heuristics` | the importer's deductions on synthetic Assimp data |
 | `mesh import corpus digest` | imports a model corpus (opt-in) |
-| `fs protocols` | `fs::add_path_protocol`, `resolve_protocol`, `convert_to_protocol`, long paths |
+| `fs protocols` | `fs::add_path_protocol`, `resolve_protocol`, `convert_to_protocol`, long paths, `fs::file_ostream` writing every byte |
 | `fs mirror` | `fs::mirror_directory`, `copy_file_if_changed`, shared reads during a replace |
 | `fs syncer` | `fs::syncer` mapping of the meta and compiled trees |
 | `fs watcher` | created / modified / removed / renamed reporting, pause, filters (`--bench` about 50 s) |
@@ -173,7 +173,9 @@ editor, and never under a hard timeout. Times are a full parallel run, RelWithDe
 
 | Suite | Covers |
 |-------|--------|
-| `ecs serialization / prefabs / cloning` | save and load, prefabs, overrides, cloning (`--bench` adds timings) |
+| `ecs serialization / prefabs / cloning` | save and load, prefabs, overrides, cloning, binary documents (`--bench` adds timings for JSON and binary documents) |
+| `ecs serialization / binary documents` | the same cases with every prefab and scene asset compiled to a binary document, as a shipped game loads them |
+| `binary archive` | packed lists in compiled meshes and clips, packed vectors (JSON unchanged, per-component overrides), converted documents, refused rows (either way, the list kept), rows of nothing refused at save, names ending with the rows, broken compiled files, the zero preamble, reading a document's start alone, forward-only streams, member key listing |
 | `scene groups` | additive loads, group unloads, persistent roots |
 | `transform math` | `math::transform_t` and the rotation helpers |
 | `curve` | `math::curve` and `math::gradient` |

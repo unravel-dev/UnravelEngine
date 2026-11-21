@@ -29,14 +29,15 @@ auto is_ancestor_of(entt::handle potential_parent, entt::handle child) -> bool
     {
         return false;
     }
-    // If there is no parent, we've reached the root without a match.
-    auto& tc = child.get<transform_component>();
-    entt::handle current = tc.get_parent();
+    // Walks up until an entity without a parent (or without a transform) ends the chain.
+    const auto* tc = child.try_get<transform_component>();
+    entt::handle current = tc != nullptr ? tc->get_parent() : entt::handle{};
     while(current)
     {
         if(current == potential_parent)
             return true;
-        current = current.get<transform_component>().get_parent();
+        const auto* current_tc = current.try_get<transform_component>();
+        current = current_tc != nullptr ? current_tc->get_parent() : entt::handle{};
     }
     return false;
 }
@@ -741,6 +742,14 @@ auto transform_component::set_parent(const entt::handle& p, bool global_stays) -
     // Skip if this is a no-op.
     if(old_parent == new_parent)
     {
+        return false;
+    }
+
+    // Children hang off a parent's transform. A document loads a parent's record before its
+    // children's, so a parent without one comes only from a broken document.
+    if(new_parent && !new_parent.all_of<transform_component>())
+    {
+        APPLOG_ERROR("Cannot set a parent that has no transform.");
         return false;
     }
 

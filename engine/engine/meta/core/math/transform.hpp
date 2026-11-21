@@ -94,14 +94,10 @@ inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::transform_t<T, P>& obj)
         bool has_rotation_euler = false;
         bool has_rotation = false;
 
-        if constexpr(is_binary_archive<Archive>())
+        // The authored Euler angles; a document saved before them holds the rotation as a quaternion.
+        has_rotation_euler = try_serialize(ar, ser20::make_nvp("rotation_euler", rotation_euler));
+        if(!has_rotation_euler)
         {
-            has_rotation_euler = try_serialize(ar, ser20::make_nvp("rotation_euler", rotation_euler));
-        }
-        else
-        {
-            // Associative: prefer authored Euler, fall back to legacy quat / euler_hint.
-            has_rotation_euler = try_serialize(ar, ser20::make_nvp("rotation_euler", rotation_euler));
             has_rotation = try_serialize(ar, ser20::make_nvp("rotation", rotation));
         }
 

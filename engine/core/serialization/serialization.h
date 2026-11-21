@@ -5,6 +5,7 @@
 #include "ser20/types/vector.hpp"
 #include <hpp/source_location.hpp>
 #include <hpp/concepts.hpp>
+#include <hpp/string_view.hpp>
 
 #include <concepts>
 #include <cstdint>
@@ -48,7 +49,7 @@ struct path_context
     bool recording_enabled = false;
     bool ignore_next_push = false;
 
-    auto push_segment(const std::string& segment) -> bool;
+    auto push_segment(hpp::string_view segment) -> bool;
     void pop_segment();
 
     /**
@@ -117,6 +118,12 @@ enum class output_format
     /// snapshots, editor checkpoints - written and read back within one session, often
     /// many times a second.
     compact,
+
+    /// A binary document (serialization/binary_archive.h): the JSON archive's structure and
+    /// reading rules in binary. For documents nothing but the engine reads - copies made inside
+    /// the process and compiled assets, scenes and prefabs. Loaders tell it from JSON by its
+    /// first bytes.
+    binary,
 };
 
 /// Defaults to readable, so a site that has not opted in keeps writing files people can
@@ -144,6 +151,24 @@ private:
 };
 
 auto get_path_context() -> path_context*;
+
+/**
+ * @brief While alive, the path filter in force is off: what is read or written reads whole, and the filter is back
+ *        when the scope ends. For a load that keeps the listed parts itself, and for a packed list, whose rows are
+ *        read in order, so none may be held back.
+ */
+class path_context_pause
+{
+public:
+    path_context_pause();
+    ~path_context_pause();
+
+    path_context_pause(const path_context_pause&) = delete;
+    auto operator=(const path_context_pause&) -> path_context_pause& = delete;
+
+private:
+    path_context* paused_{};
+};
 void set_path_context(path_context* ctx);
 
 /**
@@ -178,10 +203,10 @@ auto get_current_deserialization_path() -> std::string;
 struct path_segment_guard
 {
     path_segment_guard() = default;
-    path_segment_guard(const std::string& segment);
+    path_segment_guard(hpp::string_view segment);
     ~path_segment_guard();
 
-    void push_segment(const std::string& segment);
+    void push_segment(hpp::string_view segment);
     void pop_segment();
     // Non-copyable and non-movable to avoid double-popping
     path_segment_guard(const path_segment_guard&) = delete;
@@ -261,12 +286,6 @@ public:                                                                         
 
 #define LOAD_INSTANTIATE(cls, Archive) template void LOAD_FUNCTION_NAME(Archive& archive, cls& obj)
 
-template<typename Archive>
-constexpr inline auto is_binary_archive() -> bool
-{
-    return false;
-}
-
 // Check if Archive is loading (deserializing)
 template<typename Archive>
 constexpr inline auto is_loading_archive() -> bool
@@ -297,12 +316,33 @@ concept can_probe_names = requires(const Archive& ar, const char* name) {
 };
 
 /**
- * @brief Input archives that can return to a node after a load inside it threw.
+ * @brief Archives that find a name by the hash ser20 pairs with it (NameValuePair::hash), never
+ *        comparing text.
+ */
+template<typename Archive>
+concept can_probe_keys = requires(const Archive& ar, const char* name, std::uint64_t hash) {
+    {
+        ar.hasNextKey(name, hash)
+    } -> std::same_as<bool>;
+};
+
+/**
+ * @brief Input archives that list the member keys of the current object in one pass, as the hashes
+ *        NameValuePair::hash holds, without moving the read position.
+ *
+ * A loader that would ask for many names one by one - loading an entity asks for every serializable
+ * component type - reads which ones the object has instead, and asks only for those.
+ */
+template<typename Archive>
+concept can_list_member_keys = requires(const Archive& ar) { ar.forEachMemberKey([](std::uint64_t) {}); };
+
+/**
+ * @brief Archives that can return to a node after a load or save inside it threw.
  *
  * A throw between entering a node and finishing it leaves the archive inside that node, so
- * whoever catches it and carries on reads its next names from the wrong level, where every
- * one of them looks absent. Archives that report their depth are put back where the failed
- * load started instead.
+ * whoever catches it and carries on reads - or writes - its next names at the wrong level,
+ * where a load finds every one of them absent. Archives that report their depth are put back
+ * where the failed load or save started instead.
  */
 template<typename Archive>
 concept can_restore_nodes = requires(Archive& ar, std::size_t depth) {
@@ -312,15 +352,53 @@ concept can_restore_nodes = requires(Archive& ar, std::size_t depth) {
     ar.restoreNodeDepth(depth);
 };
 
+/**
+ * @brief Archives that read or write values in step, with no names, inside a packed list's rows
+ *        (serialization/types/packed.hpp).
+ *
+ * There a value that fails leaves every later value in the wrong bytes, so the failure is passed on and
+ * the whole list fails, instead of loading or saving askew.
+ */
+template<typename Archive>
+concept can_hold_rows = requires(const Archive& ar) {
+    {
+        ar.isInRows()
+    } -> std::same_as<bool>;
+};
+
+/**
+ * @brief Input archives that say, per document, whether a load that throws is logged.
+ *
+ * A compiled file only the engine writes, read by the types that wrote it, reports one: the data and the
+ * code disagree, and nothing else would say so. A JSON source can hold what another build wrote, and is
+ * read quietly, as are the documents made from it.
+ */
+template<typename Archive>
+concept can_report_failed_loads = requires(const Archive& ar) {
+    {
+        ar.reportsFailedLoads()
+    } -> std::same_as<bool>;
+};
+
 template<typename Archive, typename T>
 inline auto try_serialize_direct(Archive& ar,
                           ser20::NameValuePair<T>&& t,
                           const hpp::source_location& loc = hpp::source_location::current()) -> bool
 {
-    if constexpr(is_loading_archive<Archive>() && can_probe_names<Archive>)
+    if constexpr(is_loading_archive<Archive>() && can_probe_keys<Archive>)
     {
+        // A name made at run time is hashed once, for the probe and the load.
+        t.hash = ser20::hash_of_name(t.name, t.hash);
         // Absent is ordinary, not exceptional. Answering it here keeps the throw for
         // what it is meant for: a name that is present but whose contents will not load.
+        if(!ar.hasNextKey(t.name, t.hash))
+        {
+            serialization::note_failed_lookup();
+            return false;
+        }
+    }
+    else if constexpr(is_loading_archive<Archive>() && can_probe_names<Archive>)
+    {
         if(!ar.hasNextName(t.name))
         {
             serialization::note_failed_lookup();
@@ -329,7 +407,7 @@ inline auto try_serialize_direct(Archive& ar,
     }
 
     [[maybe_unused]] std::size_t depth{};
-    if constexpr(is_loading_archive<Archive>() && can_restore_nodes<Archive>)
+    if constexpr(can_restore_nodes<Archive>)
     {
         depth = ar.getNodeDepth();
     }
@@ -340,19 +418,33 @@ inline auto try_serialize_direct(Archive& ar,
     }
     catch(const std::exception& e)
     {
-        if constexpr(is_loading_archive<Archive>() && can_restore_nodes<Archive>)
+        if constexpr(can_restore_nodes<Archive>)
         {
-            // The caller carries on with its next name, which must be looked up at the
-            // node this load started in, not inside the child it failed in.
+            // The caller carries on with its next name, which must be looked up - or written -
+            // at the node this load or save started in, not inside the child it failed in.
             ar.restoreNodeDepth(depth);
+        }
+        if constexpr(can_hold_rows<Archive>)
+        {
+            if(ar.isInRows())
+            {
+                throw;
+            }
         }
         serialization::note_failed_lookup();
         serialization::note_thrown_lookup();
         // A save that throws stops partway through what it was writing and nothing repairs that,
-        // so it is always reported.
-        if constexpr(is_binary_archive<Archive>() || !is_loading_archive<Archive>())
+        // so it is always reported, as is a load of a compiled file the engine wrote itself.
+        if constexpr(!is_loading_archive<Archive>())
         {
             serialization::log_warning(e.what(), loc);
+        }
+        else if constexpr(can_report_failed_loads<Archive>)
+        {
+            if(ar.reportsFailedLoads())
+            {
+                serialization::log_warning(e.what(), loc);
+            }
         }
         return false;
     }
@@ -410,8 +502,89 @@ inline auto try_serialize_direct(Archive& ar,
 //     }
 // }
 
+namespace serialization
+{
+/**
+ * @brief Loads the count elements of a vector from its document, stepping over each element the path filter in force
+ *        leaves out (Archive::skipValue). Elements the vector does not hold yet are added as they are read.
+ *
+ * Elements are read in order: one left unread would put the next in its place, so a reload that keeps one material
+ * slot of a model as it is would give the slot after it the kept slot's instance. The engine's vector loads of both
+ * document archives (associative_archive.h, binary_archive.h) read their elements here.
+ */
+template<typename Archive, typename T, typename A>
+void load_vector_elements(Archive& ar, std::vector<T, A>& vector, std::size_t count)
+{
+    auto& context = ser20::get_vector_serialization_context();
+    for(std::size_t index = 0; index < count; ++index)
+    {
+        if(index == vector.size())
+        {
+            vector.emplace_back();
+        }
+        context.begin_element_serialization(index);
+        if(context.should_serialize_element_at(index))
+        {
+            ar(vector[index]);
+        }
+        else
+        {
+            ar.skipValue();
+        }
+        context.end_element_serialization(index);
+    }
+}
+} // namespace serialization
+
+namespace serialization
+{
+/// Where the read position of ar is: what tells whether a load read past the member it was at. An archive that
+/// keeps member names in a dictionary gives its position; for one whose names live in each member, the name is it.
+template<typename Archive>
+auto read_position(const Archive& ar) -> const void*
+{
+    if constexpr(requires { ar.getReadPosition(); })
+    {
+        return ar.getReadPosition();
+    }
+    else
+    {
+        return ar.getNodeName();
+    }
+}
+
+/**
+ * @brief Loads the object named key whose members are named at run time - a list keyed by name - calling
+ *        load_member(name) for each member in document order, which loads it with try_load under that name.
+ *
+ * A member that does not load is left out and the rest still load: one the load did not read past is stepped
+ * over (Archive::skipValue). False when the document has no such object.
+ */
+template<typename Archive, typename F>
+auto load_named_members(Archive& ar, const char* key, F&& load_member) -> bool
+{
+    if(!ar.hasNextName(key))
+    {
+        return false;
+    }
+    ar.setNextName(key);
+    ar.startNode();
+    while(const char* name = ar.getNodeName())
+    {
+        const auto* position = read_position(ar);
+        const std::string member = name;
+        if(!load_member(member) && read_position(ar) == position)
+        {
+            ar.skipValue();
+        }
+    }
+    ar.finishNode();
+    return true;
+}
+} // namespace serialization
+
 template<typename F>
-inline auto serialize_check(const std::string& name, F&& serialize_callback) -> bool
+inline auto serialize_check(hpp::string_view name, F&& serialize_callback) -> bool
 {
     auto path_ctx = serialization::get_path_context();
     if(path_ctx)
@@ -467,10 +640,7 @@ inline auto try_serialize(Archive& ar,
                      F&& serialize_callback,
                      const hpp::source_location& loc = hpp::source_location::current()) -> bool
 {
-    if constexpr(!is_binary_archive<Archive>())
-    {
-        ar.setNextName(name);
-    }
+    ar.setNextName(name);
     return serialize_callback();
 }
 

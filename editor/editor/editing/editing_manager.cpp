@@ -26,6 +26,7 @@
 #include <engine/meta/ecs/entity.hpp>
 
 #include <engine/assets/asset_dependency_graph.h>
+#include <serialization/document_convert.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_writer.h>
 #include <editor/editing/editor_actions.h>
@@ -385,8 +386,8 @@ void editing_manager::save_checkpoint(rtti::context& ctx, scene_cache& cache)
     // APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "save_to_stream");
 
     // An in-memory snapshot that load_checkpoint reads back and then drops. Nobody sees
-    // it, and it is written on play start, play stop and every script recompile.
-    serialization::scoped_output_format compact(serialization::output_format::compact);
+    // it, and it is written on play start, play stop and every script recompile: a binary document.
+    serialization::scoped_output_format binary(serialization::output_format::binary);
     save_to_stream(cache.cache, *cache.scn);
 }
 
@@ -492,25 +493,26 @@ void editing_manager::on_prefab_updated(const asset_handle<prefab>& pfb)
 namespace
 {
 /// Whether a prefab document holds a statement about a whole component - the only kind that goes
-/// stale. A scan of the buffer's text, much cheaper than loading the document to find out.
+/// stale: a component_path text without a '/'. A walk over the buffer, much cheaper than loading the
+/// document to find out.
 auto has_whole_component_statement(const prefab& document) -> bool
 {
-    constexpr hpp::string_view key = "\"component_path\"";
-    const hpp::string_view text(reinterpret_cast<const char*>(document.buffer.data.data()), document.buffer.data.size());
-    for(auto at = text.find(key); at != hpp::string_view::npos; at = text.find(key, at + key.size()))
-    {
-        const auto open = text.find('"', at + key.size() + 1);
-        const auto close = open == hpp::string_view::npos ? open : text.find('"', open + 1);
-        if(close == hpp::string_view::npos)
-        {
-            return false;
-        }
-        if(text.substr(open + 1, close - open - 1).find('/') == hpp::string_view::npos)
-        {
-            return true;
-        }
-    }
-    return false;
+    bool found = false;
+    const auto& buffer = document.buffer.data;
+    serialization::walk_document(buffer.data(),
+                                 buffer.size(),
+                                 [&](const char* name, const auto& value, size_t)
+                                 {
+                                     if(name == nullptr || hpp::string_view(name) != "component_path" ||
+                                        value.type != serialization::tagged::value_type::string)
+                                     {
+                                         return true;
+                                     }
+                                     found = serialization::tagged::reader::bytes_of(value).find('/') ==
+                                             hpp::string_view::npos;
+                                     return !found;
+                                 });
+    return found;
 }
 } // namespace
 

@@ -2,42 +2,56 @@
 
 #include <math/math.h>
 #include <ser20/types/array.hpp>
+#include <serialization/packed_value.h>
 #include <serialization/serialization.h>
 #include <serialization/types/vector.hpp>
 
 namespace ser20
 {
+// Vectors and colors are one packed value in a binary document; JSON keeps their named members.
+template<typename T, math::qualifier P>
+struct is_packed_value<math::tvec2<T, P>> : std::true_type
+{
+};
+template<typename T, math::qualifier P>
+struct is_packed_value<math::tvec3<T, P>> : std::true_type
+{
+};
+template<typename T, math::qualifier P>
+struct is_packed_value<math::tvec4<T, P>> : std::true_type
+{
+};
+template<>
+struct is_packed_value<math::color> : std::true_type
+{
+};
+
 template<typename Archive, typename T, math::qualifier P>
 inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::tvec2<T, P>& obj)
 {
-    try_serialize(ar, ser20::make_nvp("x", obj.x));
-    try_serialize(ar, ser20::make_nvp("y", obj.y));
+    serialization::serialize_components(ar, std::array<T*, 2>{&obj.x, &obj.y}, serialization::xy_names);
 }
 
 template<typename Archive, typename T, math::qualifier P>
 inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::tvec3<T, P>& obj)
 {
-    try_serialize(ar, ser20::make_nvp("x", obj.x));
-    try_serialize(ar, ser20::make_nvp("y", obj.y));
-    try_serialize(ar, ser20::make_nvp("z", obj.z));
+    serialization::serialize_components(ar, std::array<T*, 3>{&obj.x, &obj.y, &obj.z}, serialization::xyz_names);
 }
 
 template<typename Archive, typename T, math::qualifier P>
 inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::tvec4<T, P>& obj)
 {
-    try_serialize(ar, ser20::make_nvp("x", obj.x));
-    try_serialize(ar, ser20::make_nvp("y", obj.y));
-    try_serialize(ar, ser20::make_nvp("z", obj.z));
-    try_serialize(ar, ser20::make_nvp("w", obj.w));
+    serialization::serialize_components(ar,
+                                        std::array<T*, 4>{&obj.x, &obj.y, &obj.z, &obj.w},
+                                        serialization::xyzw_names);
 }
 
 template<typename Archive>
 inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::color& obj)
 {
-    try_serialize(ar, ser20::make_nvp("r", obj.value.r));
-    try_serialize(ar, ser20::make_nvp("g", obj.value.g));
-    try_serialize(ar, ser20::make_nvp("b", obj.value.b));
-    try_serialize(ar, ser20::make_nvp("a", obj.value.a));
+    serialization::serialize_components(ar,
+                                        std::array<float*, 4>{&obj.value.r, &obj.value.g, &obj.value.b, &obj.value.a},
+                                        serialization::rgba_names);
 }
 
 
@@ -87,7 +101,6 @@ inline void SAVE_FUNCTION_NAME(Archive& ar, const math::curve<T>& obj)
 template<typename Archive, typename T>
 inline void LOAD_FUNCTION_NAME(Archive& ar, math::curve<T>& obj)
 {
-    // Read in the order SAVE writes: binary archives are positional.
     bool linked = true;
     try_load(ar, ser20::make_nvp("linked", linked));
     typename math::curve<T>::channels_t channels;
@@ -104,8 +117,7 @@ inline void LOAD_FUNCTION_NAME(Archive& ar, math::curve<T>& obj)
     }
 
     // The shape curves were saved in before channels existed: one key of every channel at the
-    // same position, always interpolating linearly. Only associative (JSON) archives can hold it:
-    // a binary archive is positional, and one without channels is not readable past them.
+    // same position, always interpolating linearly.
     std::vector<typename math::curve<T>::point_t> points;
     if(try_load(ar, ser20::make_nvp("points", points)))
     {

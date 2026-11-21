@@ -73,8 +73,7 @@ void save_to_file_bin(const std::string& absolute_path, const asset_database& ob
     std::ofstream stream(absolute_path, std::ios::binary);
     if(stream.good())
     {
-        ser20::oarchive_binary_t ar(stream);
-        try_save(ar, ser20::make_nvp("db", obj));
+        serialization::write_binary(stream, [&](auto& ar) { return try_save(ar, ser20::make_nvp("db", obj)); });
     }
 }
 auto load_from_file(const std::string& absolute_path, asset_database& obj) -> bool
@@ -100,8 +99,7 @@ auto load_from_file_bin(const std::string& absolute_path, asset_database& obj) -
     std::ifstream stream(absolute_path, std::ios::binary);
     if(stream.good())
     {
-        ser20::iarchive_binary_t ar(stream);
-        return try_load(ar, ser20::make_nvp("db", obj));
+        return serialization::read_binary(stream, [&](auto& ar) { return try_load(ar, ser20::make_nvp("db", obj)); });
     }
     return false;
 }
@@ -132,7 +130,7 @@ SAVE(asset_meta)
     try_save(ar, ser20::make_nvp("header", obj.header));
     // Only generated assets carry the record, so every other .meta keeps its bytes - and with them its
     // asset's source fingerprint, which a changed .meta would invalidate.
-    if(is_binary_archive<Archive>() || obj.generated.is_generated())
+    if(obj.generated.is_generated())
     {
         try_save(ar, ser20::make_nvp("generated", obj.generated));
     }
@@ -174,8 +172,7 @@ void save_to_file_bin(const std::string& absolute_path, const asset_meta& obj)
     {
         try
         {
-            ser20::oarchive_binary_t ar(stream);
-            try_save(ar, ser20::make_nvp("meta", obj));
+            serialization::write_binary(stream, [&](auto& ar) { return try_save(ar, ser20::make_nvp("meta", obj)); });
         }
         catch(const std::exception& e)
         {
@@ -207,8 +204,7 @@ auto load_from_file_bin(const std::string& absolute_path, asset_meta& obj) -> bo
     {
         try
         {
-            ser20::iarchive_binary_t ar(stream);
-            return try_load(ar, ser20::make_nvp("meta", obj));
+            return serialization::read_binary(stream, [&](auto& ar) { return try_load(ar, ser20::make_nvp("meta", obj)); });
         }
         catch(const std::exception& e)
         {

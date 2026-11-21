@@ -61,8 +61,8 @@ Solvers: `engine/engine/rendering/ecs/systems/ik_solvers.h`. Editor:
   pose save, no solve, no ground probes), so switching rigs off by weight costs nothing.
 - Springs step at a fixed 60 Hz (`SPRING_STEP`) and show their joints interpolated between
   steps.
-- Goal, weight and spring state are runtime state, not serialized. New serialized fields go
-  last in SAVE and LOAD (binary archives are positional).
+- Goal, weight and spring state are runtime state, not serialized. A serialized field has the
+  same name in SAVE and LOAD.
 
 ## Verify
 

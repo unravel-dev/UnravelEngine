@@ -299,11 +299,13 @@ inline auto get_format_version<unravel::mesh>() -> uint64_t
     //     bones past the palette size were encoded as an invalid palette index and skinned wrong on every draw path.
     // 27: each skinned vertex keeps its four strongest bone weights, scaled to sum to one. A sum off one moved the
     //     position the shaders shade away from where the vertex is drawn (double-sided normals flipped).
+    // 29: a binary document (serialization/binary_archive.h) starting with 32 zero bytes: triangles, bone weights and
+    //     the GI source geometry are packed lists, vectors, quaternions and colors single values.
     //
     // NOTE: the compiled asset is a function of the BAKE ALGORITHM, not only of the source
     // mesh. Any change to mesh_sdf_baker that alters its output needs a bump here, or existing
     // projects silently keep the field produced by the previous code. The same holds for the card builder.
-    return 27;
+    return 29;
 }
 
 template<>
@@ -320,7 +322,10 @@ inline auto get_format_version<unravel::material>() -> uint64_t
     // 13: the translucency pass's options (Order Independent, Cast Shadow, Depth Prepass, Write Velocity) in the binding.
     // 14: lit surfaces of the translucency pass keep whether their shader has the "gi" variant.
     // 15: and whether it has the GI Reflections variants.
-    return 15;
+    // 18: a binary document starting with 32 zero bytes: the binding's parameters, textures and static switches are
+    //     lists, the material function copies one object keyed by function, vectors, quaternions and colors single
+    //     values.
+    return 18;
 }
 
 template<>
@@ -329,20 +334,24 @@ inline auto get_format_version<unravel::animation_clip>() -> uint64_t
     // 2: clips carry authored events and curves.
     // 3: channels carry the source rest pose (rest-aligned retargeting).
     // 4: node_index size_t -> uint32_t
-    return 4;
+    // 6: a binary document starting with 32 zero bytes: the keys are packed lists, vectors, quaternions and colors
+    //    single values.
+    return 6;
 }
 
 template<>
 inline auto get_format_version<unravel::animation_controller>() -> uint64_t
 {
-    return 1;
+    // 3: a binary document starting with 32 zero bytes: vectors, quaternions and colors are single values.
+    return 3;
 }
 
 template<>
 inline auto get_format_version<unravel::physics_material>() -> uint64_t
 {
     // 2: rolling resistance.
-    return 2;
+    // 4: a binary document starting with 32 zero bytes: vectors, quaternions and colors are single values.
+    return 4;
 }
 
 template<>
@@ -350,7 +359,8 @@ inline auto get_format_version<unravel::audio_clip>() -> uint64_t
 {
     // 2: the compiled clip keeps the source codec's bytes (encoded_sound) and decodes at load.
     // 3: a lossless source (WAV, FLAC) is stored as Vorbis by its import settings, Vorbis by default.
-    return 3;
+    // 5: a binary document starting with 32 zero bytes.
+    return 5;
 }
 
 template<>
@@ -367,7 +377,22 @@ inline auto get_format_version<gfx::shader>() -> uint64_t
     //    its old binary unless this bumps.
     // 2: bgfx shader binary version 13.
     // 3: bgfx shader binary version 14 (16-bit uniform array sizes).
-    return 3;
+    // 5: the variants are a binary document (serialization/binary_archive.h) starting with 32 zero bytes.
+    return 5;
+}
+
+template<>
+inline auto get_format_version<unravel::prefab>() -> uint64_t
+{
+    // 2: compiled as a binary document (serialization/binary_archive.h) starting with 32 zero bytes.
+    return 2;
+}
+
+template<>
+inline auto get_format_version<unravel::scene_prefab>() -> uint64_t
+{
+    // 2: compiled as a binary document (serialization/binary_archive.h) starting with 32 zero bytes.
+    return 2;
 }
 
 inline auto get_format_version(const std::string& extension) -> uint64_t
@@ -411,7 +436,17 @@ inline auto get_format_version(const std::string& extension) -> uint64_t
     {
         return get_format_version<unravel::audio_clip>();
     }
-    
+
+    if(is_format<unravel::prefab>(extension))
+    {
+        return get_format_version<unravel::prefab>();
+    }
+
+    if(is_format<unravel::scene_prefab>(extension))
+    {
+        return get_format_version<unravel::scene_prefab>();
+    }
+
     return 0;
 }
 

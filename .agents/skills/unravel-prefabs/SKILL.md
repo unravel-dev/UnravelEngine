@@ -95,7 +95,13 @@ Saving a document: an entity without a prefab id, and an instance without a slot
 gets one issued by the saving document. Nested assets name their own content at their own save.
 
 Documents are JSON with a numeric `"version"` first: `SCENE_DOCUMENT_VERSION` (2, a `"roots"` array)
-and `PREFAB_DOCUMENT_VERSION` (1), both in `entity.hpp`. Older layouts load: ids without a document are
+and `PREFAB_DOCUMENT_VERSION` (1), both in `entity.hpp`. The JSON is the source people edit. Compiled
+scenes and prefabs (the compiled cache, deploys, baked copies) and copies made inside the process
+(clones, Instantiate, undo snapshots, play checkpoints) are binary documents with the same structure
+(`serialization/binary_archive.h`, converted from JSON by `serialization/document_convert.h`); every
+loader tells the two apart by their first bytes (`serialization/document_archive.h`). Code that looks
+through a compiled buffer without loading it handles both formats (`serialization::tagged::walk_values`,
+as `asset_deps::get_referenced_uids` does). Older layouts load: ids without a document are
 attributed to the instance they sit in, and flat override sets on an instance root load into `local`.
 
 Deploy: `bake_prefab_nesting` (`editor/editor/editing/prefab_bake.h`) loads every prefab and scene

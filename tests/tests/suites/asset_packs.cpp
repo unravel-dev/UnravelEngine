@@ -9,7 +9,8 @@
  * root. This pins:
  *   - compression round trips, and a decode to the wrong size fails;
  *   - packs round-trip empty, small and multi-block files, compressed and stored, by absolute and by
- *     protocol path (and by any letter case on Windows), through find_packed_file and streams;
+ *     protocol path (and by any letter case on Windows), through find_packed_file, streams and
+ *     read_readable_file, which hands a stored entry's bytes over in place;
  *   - incompressible entries are stored whole, compressible ones shrink;
  *   - a file a pack does not hold falls back to disk; a later mount wins;
  *   - a truncated, damaged or foreign file is refused at mount;
@@ -143,6 +144,12 @@ auto read_through_stream(const fs::path& file) -> fs::byte_array_t
     return stream ? fs::read_stream(*stream) : fs::byte_array_t{};
 }
 
+auto read_whole_file(const fs::path& file) -> fs::byte_array_t
+{
+    const auto whole = fs::read_readable_file(file);
+    return whole.is_found() ? fs::byte_array_t(whole.data, whole.data + whole.size) : fs::byte_array_t{};
+}
+
 struct test_input
 {
     std::string name;
@@ -220,6 +227,12 @@ void test_round_trip(bool compress)
         check(read_packed_bytes(absolute) == file.bytes, file.name + " reads back by absolute path");
         check(read_through_stream(get_protocol_path(file.name)) == file.bytes,
               file.name + " reads back through a stream by protocol path");
+        check(read_whole_file(get_protocol_path(file.name)) == file.bytes, file.name + " reads back whole");
+        if(!compress && !file.bytes.empty())
+        {
+            check(fs::read_readable_file(absolute).data == fs::find_packed_file(absolute).data,
+                  file.name + " is read whole in place, not copied");
+        }
         check(fs::is_readable_file(absolute), file.name + " is readable");
     }
 #ifdef _WIN32
@@ -250,8 +263,10 @@ void test_disk_fallback_and_later_mount()
           "the later mount wins for a name both hold");
     check(!fs::find_packed_file(loose_file).is_found() && read_through_stream(loose_file) == loose_bytes,
           "a file no pack holds is read from disk");
+    check(read_whole_file(loose_file) == loose_bytes, "and read whole from disk");
     check(!fs::is_readable_file(get_protocol_root() / "compiled/nowhere.asset") &&
-              fs::open_readable_stream(get_protocol_root() / "compiled/nowhere.asset") == nullptr,
+              fs::open_readable_stream(get_protocol_root() / "compiled/nowhere.asset") == nullptr &&
+              !fs::read_readable_file(get_protocol_root() / "compiled/nowhere.asset").is_found(),
           "a file neither a pack nor the disk holds is not readable");
     fs::unmount_packs();
     check(!fs::has_mounted_packs(), "unmount_packs leaves no pack mounted");
@@ -425,6 +440,7 @@ void test_patch_over_base()
     check(!fs::is_readable_file(get_protocol_root() / "compiled/removed.asset"),
           "a deleted entry hides the loose file on disk");
     check(fs::open_readable_stream(removed_path) == nullptr, "a deleted entry opens no stream");
+    check(!fs::read_readable_file(removed_path).is_found(), "and reads as no file");
     fs::unmount_packs();
 
     check(fs::mount_pack(TEST_PROTOCOL, get_temp_folder() / "fresh.pak", error), "an unrelated pack mounts");

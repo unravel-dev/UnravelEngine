@@ -203,7 +203,7 @@ void create_entities_action_t::do_action()
             std::stringstream ss;
             {
                 // Undo snapshot: replayed by this process and never shown to anyone.
-                serialization::scoped_output_format compact(serialization::output_format::compact);
+                serialization::scoped_output_format binary(serialization::output_format::binary);
                 save_to_stream(ss, static_cast<entt::const_handle>(root));
             }
             serialized_roots.emplace_back(ss.str());
@@ -319,7 +319,7 @@ void create_entities_action_t::undo_action()
         {
             std::stringstream ss;
             {
-                serialization::scoped_output_format compact(serialization::output_format::compact);
+                serialization::scoped_output_format binary(serialization::output_format::binary);
                 save_to_stream(ss, static_cast<entt::const_handle>(target));
             }
             serialized_roots[i] = ss.str();
@@ -420,7 +420,7 @@ delete_entities_action_t::delete_entities_action_t(std::vector<entt::handle> ent
         }
         std::stringstream ss;
         {
-            serialization::scoped_output_format compact(serialization::output_format::compact);
+            serialization::scoped_output_format binary(serialization::output_format::binary);
             save_to_stream(ss, static_cast<entt::const_handle>(root));
         }
         serialized_roots.emplace_back(ss.str());
@@ -1508,7 +1508,7 @@ auto entity_subtree_snapshot::capture(entt::handle root_entity) -> entity_subtre
     }
     std::stringstream stream;
     {
-        serialization::scoped_output_format compact(serialization::output_format::compact);
+        serialization::scoped_output_format binary(serialization::output_format::binary);
         save_to_stream(stream, static_cast<entt::const_handle>(root_entity));
     }
     snapshot.serialized = stream.str();

@@ -11,6 +11,7 @@
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/play_mode.h>
 #include <logging/logging.h>
+#include <serialization/binary_archive.h>
 #include <serialization/serialization.h>
 #include <string_utils/utils.h>
 
@@ -73,14 +74,15 @@ auto load_for_bake(asset_manager& am, scene& scratch, const std::string& id, boo
     return true;
 }
 
-/// Serializes the loaded asset: compact and marked for a baked copy, the source's own format otherwise.
+/// Serializes the loaded asset: a binary document marked as baked for a baked copy, as every compiled scene
+/// and prefab is; the source's own format otherwise.
 auto save_for_bake(scene& scratch, entt::handle root, const hpp::uuid& uid, bool is_prefab, bool in_place) -> std::string
 {
     std::stringstream buffer;
-    std::unique_ptr<serialization::scoped_output_format> compact;
+    std::unique_ptr<serialization::scoped_output_format> binary;
     if(!in_place)
     {
-        compact = std::make_unique<serialization::scoped_output_format>(serialization::output_format::compact);
+        binary = std::make_unique<serialization::scoped_output_format>(serialization::output_format::binary);
     }
     const bool pushed = push_save_context();
     get_save_context().nesting_resolved = !in_place;
@@ -143,6 +145,12 @@ auto clear_marker_in_file(const fs::path& file) -> bool
     static const std::string marker_false_pretty = "\"nesting_resolved\": false";
     std::string contents;
     if(!read_whole_file(file, contents))
+    {
+        return false;
+    }
+    // A binary document was compiled from its source, which never carries the marker: only a cooked copy in a
+    // deploy's staging folder does. A text replace would break its lengths besides.
+    if(serialization::is_binary_document(contents.data(), contents.size()))
     {
         return false;
     }
@@ -274,7 +282,10 @@ auto bake_prefab_asset(rtti::context& ctx, scene& scratch, const hpp::uuid& uid,
     asset_writer::atomic_write_file(path,
                                     [&](const fs::path& temp)
                                     {
-                                        std::ofstream out(temp);
+                                        // A source rewritten in place stays text, with the line ends every
+                                        // source save writes; a baked copy is a binary document.
+                                        const auto mode = in_place ? std::ios::out : std::ios::out | std::ios::binary;
+                                        std::ofstream out(temp, mode);
                                         out << text;
                                     },
                                     ec);

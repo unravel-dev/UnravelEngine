@@ -14,6 +14,8 @@
 #include <filesystem/pack.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <engine/meta/core/compiled_file.hpp>
+#include <serialization/types/packed.hpp>
 
 #include <serialization/types/array.hpp>
 #include <serialization/types/vector.hpp>
@@ -308,7 +310,7 @@ SAVE(skin_bind_data::bone_influence)
 {
     try_save(ar, ser20::make_nvp("bone_id", obj.bone_id));
     try_save(ar, ser20::make_nvp("bind_pose_transform", obj.bind_pose_transform));
-    try_save(ar, ser20::make_nvp("influences", obj.influences));
+    try_save(ar, ser20::make_nvp("influences", serialization::packed(obj.influences)));
     try_save(ar, ser20::make_nvp("bounds", obj.bounds));
 }
 SAVE_INSTANTIATE(skin_bind_data::bone_influence, ser20::oarchive_binary_t);
@@ -318,7 +320,7 @@ LOAD(skin_bind_data::bone_influence)
 {
     try_load(ar, ser20::make_nvp("bone_id", obj.bone_id));
     try_load(ar, ser20::make_nvp("bind_pose_transform", obj.bind_pose_transform));
-    try_load(ar, ser20::make_nvp("influences", obj.influences));
+    try_load(ar, ser20::make_nvp("influences", serialization::packed(obj.influences)));
     try_load(ar, ser20::make_nvp("bounds", obj.bounds));
 }
 LOAD_INSTANTIATE(skin_bind_data::bone_influence, ser20::iarchive_binary_t);
@@ -386,7 +388,7 @@ SAVE(mesh::load_data)
     try_save(ar, ser20::make_nvp("vertex_count", obj.vertex_count));
     try_save(ar, ser20::make_nvp("vertex_data", obj.vertex_data));
     try_save(ar, ser20::make_nvp("triangle_count", obj.triangle_count));
-    try_save(ar, ser20::make_nvp("triangle_data", obj.triangle_data));
+    try_save(ar, ser20::make_nvp("triangle_data", serialization::packed(obj.triangle_data)));
     try_save(ar, ser20::make_nvp("material_count", obj.material_count));
     try_save(ar, ser20::make_nvp("submeshes", obj.submeshes));
     try_save(ar, ser20::make_nvp("skin_data", obj.skin_data));
@@ -401,9 +403,8 @@ SAVE(mesh::load_data)
     try_save(ar, ser20::make_nvp("submesh_cards", obj.submesh_cards));
     try_save(ar, ser20::make_nvp("are_cards_disabled", obj.are_cards_disabled));
     try_save(ar, ser20::make_nvp("cards_lod_index", obj.cards_lod_index));
-    // Fields added later go last: binary archives read by position.
     try_save(ar, ser20::make_nvp("humanoid_overrides", obj.humanoid_overrides));
-    try_save(ar, ser20::make_nvp("gi_source_positions", obj.gi_source_geometry.positions));
+    try_save(ar, ser20::make_nvp("gi_source_positions", serialization::packed(obj.gi_source_geometry.positions)));
     try_save(ar, ser20::make_nvp("gi_source_indices", obj.gi_source_geometry.indices));
 
     // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
@@ -417,7 +418,7 @@ LOAD(mesh::load_data)
     try_load(ar, ser20::make_nvp("vertex_count", obj.vertex_count));
     try_load(ar, ser20::make_nvp("vertex_data", obj.vertex_data));
     try_load(ar, ser20::make_nvp("triangle_count", obj.triangle_count));
-    try_load(ar, ser20::make_nvp("triangle_data", obj.triangle_data));
+    try_load(ar, ser20::make_nvp("triangle_data", serialization::packed(obj.triangle_data)));
     try_load(ar, ser20::make_nvp("material_count", obj.material_count));
     try_load(ar, ser20::make_nvp("submeshes", obj.submeshes));
     try_load(ar, ser20::make_nvp("skin_data", obj.skin_data));
@@ -433,7 +434,7 @@ LOAD(mesh::load_data)
     try_load(ar, ser20::make_nvp("are_cards_disabled", obj.are_cards_disabled));
     try_load(ar, ser20::make_nvp("cards_lod_index", obj.cards_lod_index));
     try_load(ar, ser20::make_nvp("humanoid_overrides", obj.humanoid_overrides));
-    try_load(ar, ser20::make_nvp("gi_source_positions", obj.gi_source_geometry.positions));
+    try_load(ar, ser20::make_nvp("gi_source_positions", serialization::packed(obj.gi_source_geometry.positions)));
     try_load(ar, ser20::make_nvp("gi_source_indices", obj.gi_source_geometry.indices));
     for(const auto& position : obj.gi_source_geometry.positions)
     {
@@ -457,12 +458,7 @@ void save_to_file(const std::string& absolute_path, const mesh::load_data& obj)
 
 void save_to_file_bin(const std::string& absolute_path, const mesh::load_data& obj)
 {
-    std::ofstream stream(absolute_path, std::ios::binary);
-    if(stream.good())
-    {
-        ser20::oarchive_binary_t ar(stream);
-        try_save(ar, ser20::make_nvp("mesh", obj));
-    }
+    write_compiled_file(absolute_path, "mesh", obj);
 }
 
 void load_from_file(const std::string& absolute_path, mesh::load_data& obj)
@@ -480,13 +476,7 @@ void load_from_file(const std::string& absolute_path, mesh::load_data& obj)
 
 void load_from_file_bin(const std::string& absolute_path, mesh::load_data& obj)
 {
-    auto input = fs::open_readable_stream(absolute_path);
-    if(!input)
-    {
-        return;
-    }
-    ser20::iarchive_binary_t ar(*input);
-    try_load(ar, ser20::make_nvp("mesh", obj));
+    load_compiled_file(absolute_path, "mesh", obj);
 }
 
 } // namespace unravel

@@ -300,10 +300,14 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     serialization::init_data data{
         .warning_logger = [](const std::string& log, const hpp::source_location& loc)
         {
-            APPLOG_WARNING_LOC(loc.file_name(), int(loc.line()), loc.function_name(), "Serialization {}", log);
+            // Documents are read before the log is made and after it is gone, at start and at shutdown.
+            if(spdlog::get(APPLOG) != nullptr)
+            {
+                APPLOG_WARNING_LOC(loc.file_name(), int(loc.line()), loc.function_name(), "[Serialization] {}", log);
+            }
         }
     };
-    serialization::init();
+    serialization::init(data);
 
     // In memory until the host names the log's folder (open_log).
     ctx.add<logging>();

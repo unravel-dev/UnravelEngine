@@ -5,6 +5,7 @@
 
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <serialization/types/packed.hpp>
 #include <serialization/types/vector.hpp>
 
 namespace unravel
@@ -37,7 +38,7 @@ LOAD_INSTANTIATE(gi_card, ser20::iarchive_associative_t);
 SAVE(gi_mesh_cards)
 {
     try_save(ar, ser20::make_nvp("bounds", obj.bounds));
-    try_save(ar, ser20::make_nvp("cards", obj.cards));
+    try_save(ar, ser20::make_nvp("cards", serialization::packed(obj.cards)));
     try_save(ar, ser20::make_nvp("is_mostly_two_sided", obj.is_mostly_two_sided));
 }
 SAVE_INSTANTIATE(gi_mesh_cards, ser20::oarchive_binary_t);
@@ -46,7 +47,7 @@ SAVE_INSTANTIATE(gi_mesh_cards, ser20::oarchive_associative_t);
 LOAD(gi_mesh_cards)
 {
     try_load(ar, ser20::make_nvp("bounds", obj.bounds));
-    try_load(ar, ser20::make_nvp("cards", obj.cards));
+    try_load(ar, ser20::make_nvp("cards", serialization::packed(obj.cards)));
     try_load(ar, ser20::make_nvp("is_mostly_two_sided", obj.is_mostly_two_sided));
 }
 LOAD_INSTANTIATE(gi_mesh_cards, ser20::iarchive_binary_t);

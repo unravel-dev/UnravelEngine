@@ -183,7 +183,6 @@ SAVE(animation_component)
     try_save(ar, ser20::make_nvp("speed", obj.get_speed()));
     try_save(ar, ser20::make_nvp("retargeting_mode", obj.get_retargeting_mode()));
     try_save(ar, ser20::make_nvp("pose_retargeting", obj.get_pose_retargeting()));
-    // Fields added later go last: binary archives read by position.
     try_save(ar, ser20::make_nvp("controller", obj.get_controller()));
     try_save(ar, ser20::make_nvp("retarget_pose", obj.get_retarget_pose()));
     try_save(ar, ser20::make_nvp("retarget_pose_offsets", obj.get_retarget_pose_offsets()));

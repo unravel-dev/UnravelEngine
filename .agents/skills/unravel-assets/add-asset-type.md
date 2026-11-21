@@ -35,8 +35,8 @@ of the same kind (`style_sheet` for a text asset, `physics_material` for an engi
 ## A new import setting
 
 - Field with its default in the `*_importer_meta` (`engine/engine/assets/asset_storage.h`).
-- SAVE and LOAD in `engine/engine/meta/assets/<type>_importer_meta.cpp`, appended last in both
-  (binary archives read by position), plus its reflection entry for the inspector.
+- SAVE and LOAD in `engine/engine/meta/assets/<type>_importer_meta.cpp`, under the same name in
+  both, plus its reflection entry for the inspector.
 - A `.meta` that sets the field is fingerprinted, so editing it recompiles. A new or changed
   default that alters output is not: `.meta` files that never wrote the field do not change. Bump
   `ex::get_format_version<T>()` for that.

@@ -43,16 +43,6 @@ void save_to_file(const std::string& absolute_path, const script::sptr& obj)
     }
 }
 
-void save_to_file_bin(const std::string& absolute_path, const script::sptr& obj)
-{
-    std::ofstream stream(absolute_path, std::ios::binary);
-    if(stream.good())
-    {
-        ser20::oarchive_binary_t ar(stream);
-        try_save(ar, ser20::make_nvp("script", *obj));
-    }
-}
-
 void load_from_file(const std::string& absolute_path, script::sptr& obj)
 {
     fs::file_istream input(absolute_path);
@@ -64,14 +54,4 @@ void load_from_file(const std::string& absolute_path, script::sptr& obj)
     try_load(ar, ser20::make_nvp("script", *obj));
 }
 
-void load_from_file_bin(const std::string& absolute_path, script::sptr& obj)
-{
-    auto input = fs::open_readable_stream(absolute_path);
-    if(!input)
-    {
-        return;
-    }
-    ser20::iarchive_binary_t ar(*input);
-    try_load(ar, ser20::make_nvp("script", *obj));
-}
 } // namespace unravel

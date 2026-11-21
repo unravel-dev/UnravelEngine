@@ -5,6 +5,7 @@
 #include <filesystem/pack.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <engine/meta/core/compiled_file.hpp>
 
 namespace unravel
 {
@@ -142,12 +143,7 @@ void save_to_file(const std::string& absolute_path, const physics_material::sptr
 
 void save_to_file_bin(const std::string& absolute_path, const physics_material::sptr& obj)
 {
-    std::ofstream stream(absolute_path, std::ios::binary);
-    if(stream.good())
-    {
-        ser20::oarchive_binary_t ar(stream);
-        try_save(ar, ser20::make_nvp("physics_material", *obj));
-    }
+    write_compiled_file(absolute_path, "physics_material", *obj);
 }
 
 void load_from_file(const std::string& absolute_path, physics_material::sptr& obj)
@@ -163,12 +159,6 @@ void load_from_file(const std::string& absolute_path, physics_material::sptr& ob
 
 void load_from_file_bin(const std::string& absolute_path, physics_material::sptr& obj)
 {
-    auto input = fs::open_readable_stream(absolute_path);
-    if(!input)
-    {
-        return;
-    }
-    ser20::iarchive_binary_t ar(*input);
-    try_load(ar, ser20::make_nvp("physics_material", *obj));
+    load_compiled_file(absolute_path, "physics_material", *obj);
 }
 } // namespace unravel

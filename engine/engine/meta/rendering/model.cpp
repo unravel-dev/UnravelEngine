@@ -26,28 +26,21 @@ constexpr const char* MATERIAL_INSTANCES_NAME = "material_instances";
 template<typename Archive>
 auto try_load_legacy_copies(Archive& ar, std::vector<material_instance>& instances) -> bool
 {
-    if constexpr(is_binary_archive<Archive>())
+    std::vector<material::sptr> copies;
+    if(!try_load(ar, ser20::make_nvp(MATERIAL_INSTANCES_NAME, copies)))
     {
         return false;
     }
-    else
+    instances.clear();
+    instances.resize(copies.size());
+    for(size_t i = 0; i < copies.size(); ++i)
     {
-        std::vector<material::sptr> copies;
-        if(!try_load(ar, ser20::make_nvp(MATERIAL_INSTANCES_NAME, copies)))
+        if(copies[i])
         {
-            return false;
+            instances[i].set_legacy_copy(copies[i]);
         }
-        instances.clear();
-        instances.resize(copies.size());
-        for(size_t i = 0; i < copies.size(); ++i)
-        {
-            if(copies[i])
-            {
-                instances[i].set_legacy_copy(copies[i]);
-            }
-        }
-        return true;
     }
+    return true;
 }
 
 /// Whether the load leaves the slot's instance as it is: a prefab instance's override of that slot, or a load

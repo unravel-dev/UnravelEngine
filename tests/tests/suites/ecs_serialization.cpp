@@ -49,6 +49,8 @@
 
 #include <logging/logging.h>
 #include <serialization/associative_archive.h>
+#include <serialization/document_archive.h>
+#include <serialization/document_convert.h>
 #include <serialization/document_paths.h>
 #include <serialization/serialization.h>
 #include <threadpp/thread_pool.h>
@@ -301,13 +303,53 @@ auto serialize_as_prefab(entt::const_handle root, const std::string& id = {}) ->
     return std::vector<uint8_t>(str.begin(), str.end());
 }
 
-/**
- * @brief Wraps a ready prefab in an asset_handle without an asset_manager.
- *
- * asset_handle only ever reads its payload through a tpp future, so a future that is
- * already satisfied is enough. job_future_storage defaults to submitted_ == true, so
- * get() never tries to reach a thread pool that is not there.
- */
+/// Set while the cases run as "ecs serialization / binary documents": every prefab and scene asset they
+/// build is a binary document, as the asset compiler writes them.
+bool g_binary_compiled_documents = false;
+
+/// Builds the assets of its scope as binary documents (g_binary_compiled_documents), and puts the mode
+/// back as it was when the scope ends, also when a case throws.
+struct binary_compiled_documents_scope
+{
+    bool previous = g_binary_compiled_documents;
+
+    binary_compiled_documents_scope()
+    {
+        g_binary_compiled_documents = true;
+    }
+
+    ~binary_compiled_documents_scope()
+    {
+        g_binary_compiled_documents = previous;
+    }
+
+    binary_compiled_documents_scope(const binary_compiled_documents_scope&) = delete;
+    auto operator=(const binary_compiled_documents_scope&) -> binary_compiled_documents_scope& = delete;
+};
+
+/// An asset's bytes as the asset compiler would leave them: converted to a binary document in that
+/// mode. Bytes that are not a JSON object stay as they are, for the cases about such documents; a JSON
+/// object that does not convert fails the case, which would otherwise run on JSON.
+auto compiled_document_bytes(std::vector<uint8_t> bytes) -> std::vector<uint8_t>
+{
+    if(!g_binary_compiled_documents || bytes.empty() || serialization::is_binary_document(bytes.data(), bytes.size()))
+    {
+        return bytes;
+    }
+    const hpp::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    std::string error;
+    auto binary = serialization::json_to_binary_document(text, error);
+    if(!binary.empty())
+    {
+        return binary;
+    }
+    simdjson::dom::parser parser;
+    simdjson::dom::element root;
+    const bool is_json_object = parser.parse(text.data(), text.size()).get(root) == simdjson::SUCCESS && root.is_object();
+    check(!is_json_object, "a JSON document converts to a binary document: " + error);
+    return bytes;
+}
+
 /**
  * @brief Registers a prefab with the real asset manager, so handles to it resolve.
  *
@@ -323,7 +365,7 @@ auto serialize_as_prefab(entt::const_handle root, const std::string& id = {}) ->
 auto make_prefab_asset(std::vector<uint8_t> bytes, const std::string& id) -> asset_handle<prefab>
 {
     auto data = std::make_shared<prefab>();
-    data->buffer.data = std::move(bytes);
+    data->buffer.data = compiled_document_bytes(std::move(bytes));
 
     auto& am = engine::context().get_cached<asset_manager>();
 
@@ -338,11 +380,8 @@ auto make_prefab_asset(std::vector<uint8_t> bytes, const std::string& id) -> ass
 auto minify_json(const std::string& text) -> std::string;
 
 /**
- * @brief Builds the prefab asset the way the pipeline does.
- *
- * asset_compiler's compile<prefab> minifies the source before it ever becomes a loadable
- * asset, so an asset built here has to be minified too or every prefab measurement is
- * taken against a document the runtime never sees.
+ * @brief Builds the prefab asset from a prefab's saved source: minified JSON, which the binary run
+ *        converts to the binary document asset_compiler's compile<prefab> writes (compiled_document_bytes).
  */
 
 auto make_prefab_from(entt::const_handle root, const std::string& id) -> asset_handle<prefab>
@@ -398,7 +437,7 @@ void republish_in_place(const asset_handle<prefab>& pfb, entt::const_handle root
 {
     const auto bytes = serialize_as_prefab(root, pfb.id());
     const auto compiled = minify_json(std::string(bytes.begin(), bytes.end()));
-    pfb.get()->buffer.data = std::vector<uint8_t>(compiled.begin(), compiled.end());
+    pfb.get()->buffer.data = compiled_document_bytes(std::vector<uint8_t>(compiled.begin(), compiled.end()));
 }
 
 auto count_entities_named(entt::registry& registry, const std::string& name) -> size_t
@@ -2356,7 +2395,7 @@ void build_three_root_scene(scene& scn)
 auto make_scene_asset(const std::string& text, const std::string& id) -> asset_handle<scene_prefab>
 {
     auto data = std::make_shared<scene_prefab>();
-    data->buffer.data.assign(text.begin(), text.end());
+    data->buffer.data = compiled_document_bytes(std::vector<uint8_t>(text.begin(), text.end()));
     auto& am = engine::context().get_cached<asset_manager>();
     am.unload_asset<scene_prefab>(id);
     return am.get_asset_from_instance<scene_prefab>(id, data);
@@ -6739,15 +6778,129 @@ void test_clone_scene_preserves_structure_and_uids()
 }
 
 // ---------------------------------------------------------------------------------
+// Binary documents
+// ---------------------------------------------------------------------------------
+
+/// The sample tree, with a test component holding a value of every kind a document stores.
+void build_binary_document_scene(scene& scn)
+{
+    auto root = build_sample_tree(scn);
+    auto& values = find_child_by_name(root, "child_a").emplace<test_component>();
+    values.str = "text with \"quotes\", a tab\tand a new line\n";
+    values.u8 = 250;
+    values.u16 = 65000;
+    values.u32 = 4000000000u;
+    values.u64 = 18000000000000000000ull;
+    values.i8 = -120;
+    values.i16 = -32000;
+    values.i32 = -2000000000;
+    values.i64 = -9000000000000000000ll;
+    values.f = 0.1f;
+    values.d = 0.12345678901234568;
+    values.color = math::color{0.25f, 0.5f, 0.75f, 1.0f};
+    values.sequential = {"first", "", "third"};
+    values.associative = {{-3, "minus three"}, {7, "seven"}};
+}
+
+/// A scene saved as minified JSON: what two loads of one scene are compared by.
+auto save_scene_json(const scene& scn) -> std::string
+{
+    std::stringstream ss;
+    save_to_stream(ss, scn);
+    return minify_json(ss.str());
+}
+
+auto save_scene_binary(const scene& scn) -> std::string
+{
+    std::stringstream ss;
+    serialization::scoped_output_format format(serialization::output_format::binary);
+    save_to_stream(ss, scn);
+    return ss.str();
+}
+
+void test_binary_document_round_trip()
+{
+    begin_test("a scene written as a binary document loads back to the same scene");
+
+    scene src("src");
+    build_binary_document_scene(src);
+    const auto json = save_scene_json(src);
+    const auto binary = save_scene_binary(src);
+
+    check(serialization::is_binary_document(binary.data(), binary.size()), "the binary output format writes a binary document");
+    check(binary.size() < json.size(), "the binary document is smaller than the minified JSON");
+
+    scene dst("dst");
+    check(load_from_view(binary, dst), "the binary document loads");
+    check_eq(save_scene_json(dst), json, "the scene loaded from it saves to the same JSON");
+}
+
+void test_converted_document_loads_the_same()
+{
+    begin_test("a JSON document converted to a binary document loads to the same scene");
+
+    scene src("src");
+    build_binary_document_scene(src);
+    const auto json = save_scene_json(src);
+
+    std::string error;
+    const auto converted = serialization::json_to_binary_document(json, error);
+    check(!converted.empty(), "the scene document converts" + (error.empty() ? std::string{} : ": " + error));
+
+    scene dst("dst");
+    check(load_from_view(hpp::string_view(reinterpret_cast<const char*>(converted.data()), converted.size()), dst),
+          "the converted document loads");
+    check_eq(save_scene_json(dst), json, "the scene loaded from it saves to the same JSON");
+}
+
+void test_broken_binary_documents_are_refused()
+{
+    begin_test("a broken binary document fails its load without reading past its end");
+
+    scene src("src");
+    build_binary_document_scene(src);
+    const auto binary = save_scene_binary(src);
+
+    // Cut short at many lengths: every one is refused.
+    size_t cuts = 0;
+    size_t refused_cuts = 0;
+    const size_t cut_step = std::max<size_t>(1, binary.size() / 97);
+    for(size_t size = 0; size < binary.size(); size += cut_step)
+    {
+        scene dst("dst");
+        if(!load_from_view(hpp::string_view(binary.data(), size), dst))
+        {
+            ++refused_cuts;
+        }
+        ++cuts;
+    }
+    check(cuts > 50 && refused_cuts == cuts, "every document cut short is refused");
+
+    // With single bytes changed: a changed byte of a name or a number may still read, so what is checked is that
+    // every load returns without reading past the document.
+    size_t flips = 0;
+    const size_t flip_step = std::max<size_t>(1, binary.size() / 61);
+    for(size_t at = 0; at < binary.size(); at += flip_step)
+    {
+        auto corrupt = binary;
+        corrupt[at] = static_cast<char>(corrupt[at] ^ 0x5A);
+        scene dst("dst");
+        load_from_view(corrupt, dst);
+        ++flips;
+    }
+    check(flips > 50, "every load of a document with a byte changed returns");
+}
+
+// ---------------------------------------------------------------------------------
 // Benchmarks
 //
 // Baselines for the save/load rework. Every number is a best-of-N so that scheduler
 // noise cannot make a regression look like an improvement; the interesting figure is
 // us/entity, which should stay flat as the scene grows.
 //
-// "lookups" counts NVP probes that missed and threw. Loading an entity probes every type
-// in all_serializeable_components by name, so an entity with 4 components produces one
-// throw per absent type. That number is the size of the prize.
+// "misses" counts name lookups that found nothing and "thrown" those that cost an exception.
+// Loading an entity reads which component types its document states from its keys, so an
+// absent type costs neither.
 // ---------------------------------------------------------------------------------
 
 using clock_t_ = std::chrono::steady_clock;
@@ -6784,8 +6937,7 @@ void record(const std::string& name,
  *
  * Roots with a few children and a grandchild each, so the hierarchy has depth rather than
  * being one flat list. Entities carry what scene::create_entity gives them - id, tag,
- * layer, transform - which is also the density that makes the component probe loop hurt
- * most: four present types out of the full serializable set.
+ * layer, transform: four present types out of the full serializable set.
  */
 void build_bench_scene(scene& scn, size_t target)
 {
@@ -6826,10 +6978,14 @@ void bench_scene_save_load(size_t target, int reps)
     save_to_stream(blob, src);
     const auto text = blob.str();
 
-    // What the runtime actually parses: asset_compiler minifies prefabs and scenes on
-    // compile (write_minified_file -> simdjson::minify), so the indentation the editor
-    // writes never reaches a released load.
-    const auto compiled = minify_json(text);
+    // What the runtime reads: asset_compiler converts a scene's JSON into a binary document on
+    // compile, so neither the editor's indentation nor JSON parsing reaches a released load. A
+    // minified JSON scene is measured beside it.
+    std::string error;
+    const auto converted = serialization::json_to_binary_document(text, error);
+    check(!converted.empty(), "the bench scene converts to a binary document: " + error);
+    const std::string compiled(converted.begin(), converted.end());
+    const auto minified = minify_json(text);
 
     const auto time_load = [&](const std::string& blob_text, const char* label, size_t bytes)
     {
@@ -6851,7 +7007,19 @@ void bench_scene_save_load(size_t target, int reps)
     };
 
     time_load(compiled, "scene load (compiled)", compiled.size());
+    time_load(minified, "scene load (minified JSON)", minified.size());
     time_load(text, "scene load (editor src)", text.size());
+
+    double best_binary_save = 1e30;
+    std::string binary;
+    for(int i = 0; i < reps; ++i)
+    {
+        const auto t0 = clock_t_::now();
+        binary = save_scene_binary(src);
+        best_binary_save = std::min(best_binary_save, ms_since(t0));
+    }
+    record("scene save (binary)", n, best_binary_save, binary.size());
+    time_load(binary, "scene load (binary)", binary.size());
 }
 
 void bench_clone_scene(size_t target, int reps)
@@ -6898,6 +7066,38 @@ void bench_prefab(size_t target, int reps)
 
     auto asset = make_prefab_from(prefab_root, "bench:/tree.pfb");
     const size_t n = count_real_entities(*authoring.registry);
+
+    // The same prefab as the asset compiler writes it for a shipped game: a binary document.
+    auto binary_asset = [&]
+    {
+        const binary_compiled_documents_scope binary;
+        return make_prefab_from(prefab_root, "bench:/tree_binary.pfb");
+    }();
+    {
+        double best = 1e30;
+        uint64_t binary_lookups = 0;
+        for(int i = 0; i < reps; ++i)
+        {
+            scene world("bench_world");
+            serialization::reset_failed_lookup_count();
+            const auto t0 = clock_t_::now();
+            world.instantiate(binary_asset, false);
+            best = std::min(best, ms_since(t0));
+            binary_lookups = serialization::failed_lookup_count();
+        }
+        record("prefab instantiate (binary)", n, best, binary_asset.get()->buffer.data.size(), binary_lookups);
+
+        double best_sync = 1e30;
+        for(int i = 0; i < reps; ++i)
+        {
+            scene world("bench_world");
+            auto instance = world.instantiate(binary_asset, false);
+            const auto t0 = clock_t_::now();
+            sync_prefab_instance_with(instance, binary_asset);
+            best_sync = std::min(best_sync, ms_since(t0));
+        }
+        record("prefab resync (binary)", n, best_sync);
+    }
 
     double best_inst = 1e30;
     uint64_t lookups = 0;
@@ -6980,6 +7180,27 @@ void bench_prefab(size_t target, int reps)
         }
     }
     record("portable copy + load", n, best_portable, portable_bytes);
+
+    double best_binary_copy = 1e30;
+    size_t binary_copy_bytes = 0;
+    for(int i = 0; i < reps; ++i)
+    {
+        const auto t0 = clock_t_::now();
+        std::stringstream ss;
+        {
+            serialization::scoped_output_format format(serialization::output_format::binary);
+            save_clone_to_stream(ss, {prefab_root}, clone_identity::uuids);
+        }
+        const auto text = ss.str();
+        const auto roots = load_clone_from_view(text, *authoring.registry);
+        best_binary_copy = std::min(best_binary_copy, ms_since(t0));
+        binary_copy_bytes = text.size();
+        for(auto root : roots)
+        {
+            scene::destroy_entity(root);
+        }
+    }
+    record("portable copy + load (binary)", n, best_binary_copy, binary_copy_bytes);
 }
 
 /**
@@ -7035,11 +7256,11 @@ void bench_exception_cost()
 }
 
 /**
- * @brief Confirms the failed lookups really are the absent-component probes.
+ * @brief Checks that a component type an entity lacks costs no lookup.
  *
- * Adds one more component type to every entity and re-measures. If the probe loop is the
- * source, the rate must fall by exactly 1.0 per entity: one type flips from miss to hit.
- * Anything else means the model is wrong and the attribution needs redoing.
+ * Adds one more component type to every entity and re-measures. Loading reads which components
+ * a document states from its keys, so the miss rate must not change (a delta of 0). A delta of
+ * 1.0 per entity would mean every absent type is asked for by name again.
  */
 void bench_lookup_attribution()
 {
@@ -7073,16 +7294,12 @@ void bench_lookup_attribution()
                 base,
                 with_extra,
                 base - with_extra);
-    std::printf("  a delta of 1.00 confirms the absent-component probe loop is the source\n");
+    std::printf("  0.00: absent component types are not looked up; 1.00 would mean each one is asked for\n");
 }
 
 /**
- * @brief Minifies a document the way the asset pipeline does.
- *
- * Deliberately the same two calls as asset_compiler's write_minified_file - parse, then
- * simdjson::minify - rather than a whitespace stripper written for the tests. Anything
- * measured against a document the compiler would not have produced is measuring the wrong
- * document, which is the mistake these benchmarks were already making once.
+ * @brief Minifies a JSON document: parse, then simdjson::minify, rather than a whitespace
+ *        stripper written for the tests.
  *
  * Returns the input unchanged if it does not parse. That cannot pass silently: the callers
  * either compare two minified documents for equality, or feed the result to a loader.
@@ -7233,6 +7450,8 @@ void run_benchmarks()
 
 // ---------------------------------------------------------------------------------
 
+void run_ecs_serialization_cases();
+
 void run_ecs_serialization_suite(rtti::context& ctx)
 {
     // The context comes from the test runner, which boots the engine the way the editor and
@@ -7245,6 +7464,35 @@ void run_ecs_serialization_suite(rtti::context& ctx)
 
     if(!bench_only)
     {
+        run_ecs_serialization_cases();
+    }
+
+    if(bench)
+    {
+        run_benchmarks();
+    }
+}
+
+/**
+ * @brief The same cases with every prefab and scene asset they build compiled to a binary document, as the
+ *        asset compiler writes them for a shipped game.
+ */
+void run_ecs_serialization_binary_suite(rtti::context& ctx)
+{
+    if(tests::wants("bench-only"))
+    {
+        return;
+    }
+    const binary_compiled_documents_scope binary;
+    run_ecs_serialization_cases();
+}
+
+void run_ecs_serialization_cases()
+{
+    {
+        RUN_CASE(test_binary_document_round_trip());
+        RUN_CASE(test_converted_document_loads_the_same());
+        RUN_CASE(test_broken_binary_documents_are_refused());
         RUN_CASE(test_scene_roundtrip_preserves_hierarchy());
         RUN_CASE(test_scene_roundtrip_preserves_uids());
         RUN_CASE(test_scene_load_leaves_no_orphans());
@@ -7368,11 +7616,7 @@ void run_ecs_serialization_suite(rtti::context& ctx)
         RUN_CASE(test_clone_scene_uses_one_load_context());
         RUN_CASE(test_clone_scene_preserves_structure_and_uids());
     }
-
-    if(bench)
-    {
-        run_benchmarks();
-    }
 }
 
 REGISTER_TEST_SUITE("ecs serialization / prefabs / cloning", run_ecs_serialization_suite)
+REGISTER_TEST_SUITE("ecs serialization / binary documents", run_ecs_serialization_binary_suite)

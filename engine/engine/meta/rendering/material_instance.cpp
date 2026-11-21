@@ -46,34 +46,21 @@ inline auto get_named_value(const graph_texture_value& entry) -> const asset_han
     return entry.texture;
 }
 
-/// Saves named overrides: a count and the entries in binary, an object keyed by name otherwise. Nothing for none.
+/// Saves named overrides as an object keyed by name. Nothing for none.
 template<typename Archive, typename Value>
 void save_named_values(Archive& ar, const char* key, const std::vector<Value>& values)
 {
-    if constexpr(is_binary_archive<Archive>())
+    if(values.empty())
     {
-        auto count = static_cast<uint32_t>(values.size());
-        try_save(ar, ser20::make_nvp("count", count));
-        for(const auto& entry : values)
-        {
-            try_save(ar, ser20::make_nvp("name", entry.name));
-            try_save(ar, ser20::make_nvp("value", get_named_value(entry)));
-        }
+        return;
     }
-    else
+    ar.setNextName(key);
+    ar.startNode();
+    for(const auto& entry : values)
     {
-        if(values.empty())
-        {
-            return;
-        }
-        ar.setNextName(key);
-        ar.startNode();
-        for(const auto& entry : values)
-        {
-            try_save(ar, ser20::make_nvp(entry.name.c_str(), get_named_value(entry)));
-        }
-        ar.finishNode();
+        try_save(ar, ser20::make_nvp(entry.name.c_str(), get_named_value(entry)));
     }
+    ar.finishNode();
 }
 
 /// Loads what save_named_values saved; none when the key is not there.
@@ -81,38 +68,19 @@ template<typename Archive, typename Value>
 auto load_named_values(Archive& ar, const char* key) -> std::vector<Value>
 {
     std::vector<Value> values;
-    if constexpr(is_binary_archive<Archive>())
-    {
-        uint32_t count = 0;
-        try_load(ar, ser20::make_nvp("count", count));
-        values.resize(count);
-        for(auto& entry : values)
-        {
-            try_load(ar, ser20::make_nvp("name", entry.name));
-            try_load(ar, ser20::make_nvp("value", get_named_value(entry)));
-        }
-    }
-    else
-    {
-        if(!ar.hasNextName(key))
-        {
-            return values;
-        }
-        ar.setNextName(key);
-        ar.startNode();
-        // Every member is read, so each step moves on: a value that does not load ends the list.
-        while(const char* name = ar.getNodeName())
-        {
-            Value entry{};
-            entry.name = name;
-            if(!try_load(ar, ser20::make_nvp(entry.name.c_str(), get_named_value(entry))))
-            {
-                break;
-            }
-            values.push_back(std::move(entry));
-        }
-        ar.finishNode();
-    }
+    serialization::load_named_members(ar,
+                                      key,
+                                      [&](const std::string& name)
+                                      {
+                                          Value entry{};
+                                          entry.name = name;
+                                          if(!try_load(ar, ser20::make_nvp(entry.name.c_str(), get_named_value(entry))))
+                                          {
+                                              return false;
+                                          }
+                                          values.push_back(std::move(entry));
+                                          return true;
+                                      });
     return values;
 }
 
@@ -275,40 +243,21 @@ void take_legacy_pbr_override(legacy_pbr_overrides& overrides, const std::string
     }
 }
 
-/// Loads the overrides a PBR material's instance saved: by name in text, as (name, value) pairs in binary.
+/// Loads the overrides a PBR material's instance saved, by name.
 template<typename Archive>
 auto load_legacy_pbr_overrides(Archive& ar) -> legacy_pbr_overrides
 {
     legacy_pbr_overrides overrides;
-    if constexpr(is_binary_archive<Archive>())
+    const auto take = [&](const std::string& name)
     {
-        uint32_t count = 0;
-        try_load(ar, ser20::make_nvp("count", count));
-        for(uint32_t i = 0; i < count; ++i)
-        {
-            std::string name;
-            try_load(ar, ser20::make_nvp("property", name));
-            const auto type = get_legacy_pbr_value_type(name);
-            if(!type)
-            {
-                throw std::runtime_error("A material instance overrides the unknown property " + name + ".");
-            }
-            take_legacy_pbr_override(overrides, name, load_value(ar, name.c_str(), type));
-        }
-    }
-    else
+        take_legacy_pbr_override(overrides, name, load_value(ar, name.c_str(), get_legacy_pbr_value_type(name)));
+    };
+    take(LEGACY_CULL_TYPE_KEY);
+    for(const auto& property : get_standard_properties())
     {
-        const auto take = [&](const std::string& name)
-        {
-            take_legacy_pbr_override(overrides, name, load_value(ar, name.c_str(), get_legacy_pbr_value_type(name)));
-        };
-        take(LEGACY_CULL_TYPE_KEY);
-        for(const auto& property : get_standard_properties())
-        {
-            take(get_legacy_pbr_key(property));
-        }
-        take(LEGACY_ALPHA_MODE_KEY);
+        take(get_legacy_pbr_key(property));
     }
+    take(LEGACY_ALPHA_MODE_KEY);
     return overrides;
 }
 
@@ -334,27 +283,13 @@ SAVE(material_instance)
     {
         return;
     }
-    if constexpr(is_binary_archive<Archive>())
+    // By property name, so a prefab override points at one property of one slot.
+    for(const auto& entry : overrides)
     {
-        auto count = static_cast<uint32_t>(overrides.size());
-        try_save(ar, ser20::make_nvp("count", count));
-        for(const auto& entry : overrides)
+        const auto name = get_property_name(type, entry.property);
+        if(!name.empty())
         {
-            auto name = get_property_name(type, entry.property);
-            try_save(ar, ser20::make_nvp("property", name));
             save_value(ar, name.c_str(), entry.value);
-        }
-    }
-    else
-    {
-        // By property name, so a prefab override points at one property of one slot.
-        for(const auto& entry : overrides)
-        {
-            const auto name = get_property_name(type, entry.property);
-            if(!name.empty())
-            {
-                save_value(ar, name.c_str(), entry.value);
-            }
         }
     }
     std::vector<graph_parameter_value> graph_parameters;
@@ -368,31 +303,6 @@ SAVE_INSTANTIATE(material_instance, ser20::oarchive_binary_t);
 
 namespace
 {
-
-/**
- * @brief While alive, reads ignore the path filter in force: a partial load reads what it needs whole (the material
- *        type, the named overrides) and keeps the listed parts itself.
- */
-class unfiltered_read_scope
-{
-public:
-    unfiltered_read_scope()
-        : previous_(serialization::get_path_context())
-    {
-        serialization::set_path_context(nullptr);
-    }
-
-    ~unfiltered_read_scope()
-    {
-        serialization::set_path_context(previous_);
-    }
-
-    unfiltered_read_scope(const unfiltered_read_scope&) = delete;
-    auto operator=(const unfiltered_read_scope&) -> unfiltered_read_scope& = delete;
-
-private:
-    serialization::path_context* previous_{};
-};
 
 /// Whether the path filter in force reads the member @p name of the value being loaded; always without a filter.
 auto is_member_listed(const std::string& name) -> bool
@@ -416,7 +326,7 @@ auto merge_listed_named_values(Archive& ar, const char* key, std::vector<Value>&
 {
     std::vector<Value> saved;
     {
-        const unfiltered_read_scope unfiltered;
+        const serialization::path_context_pause unfiltered;
         saved = load_named_values<Archive, Value>(ar, key);
     }
     const serialization::path_segment_guard list(key);
@@ -529,73 +439,70 @@ void revert_listed_overrides(material_instance& instance)
 
 LOAD(material_instance)
 {
-    if constexpr(!is_binary_archive<Archive>())
+    if(is_instance_listed_in_part())
     {
-        if(is_instance_listed_in_part())
+        // The listed overrides merge into the instance as it is: one the document has is set, one it lacks is
+        // reverted, every other one stays.
+        std::string partial_type_name;
         {
-            // The listed overrides merge into the instance as it is: one the document has is set, one it lacks is
-            // reverted, every other one stays.
-            std::string partial_type_name;
-            {
-                const unfiltered_read_scope unfiltered;
-                try_load(ar, ser20::make_nvp(MATERIAL_TYPE_KEY, partial_type_name));
-            }
-            const auto partial_type = partial_type_name.empty() || partial_type_name == LEGACY_PBR_TYPE_NAME
-                                          ? entt::meta_type{}
-                                          : entt::resolve(entt::hashed_string{partial_type_name.c_str()}.value());
-            // Overrides of another material type do not apply to this instance's material.
-            if(partial_type && obj.material_type_ != entt::id_type{} && obj.material_type_ != partial_type.id())
-            {
-                return;
-            }
-            if(partial_type)
-            {
-                if(obj.material_type_ == entt::id_type{})
-                {
-                    obj.material_type_ = partial_type.id();
-                }
-                for_each_material_property(
-                    partial_type,
-                    [&](entt::id_type property, const entt::meta_data& data)
-                    {
-                        const auto name = entt::get_attribute_as<std::string>(data, "name");
-                        if(!is_member_listed(name))
-                        {
-                            return;
-                        }
-                        auto value = load_value(ar, name.c_str(), data.type());
-                        auto found = std::find_if(obj.overrides_.begin(),
-                                                  obj.overrides_.end(),
-                                                  [property](const material_instance::property_override& entry)
-                                                  {
-                                                      return entry.property == property;
-                                                  });
-                        if(value && found != obj.overrides_.end())
-                        {
-                            found->value = std::move(value);
-                        }
-                        else if(value)
-                        {
-                            obj.overrides_.push_back({property, std::move(value)});
-                        }
-                        else if(found != obj.overrides_.end())
-                        {
-                            obj.overrides_.erase(found);
-                        }
-                        else
-                        {
-                            return;
-                        }
-                        obj.changed_properties_.push_back(property);
-                    });
-            }
-            const bool are_parameters_changed =
-                merge_listed_named_values<Archive, graph_parameter_value>(ar, GRAPH_PARAMETERS_KEY, obj.graph_parameters_);
-            const bool are_textures_changed =
-                merge_listed_named_values<Archive, graph_texture_value>(ar, GRAPH_TEXTURES_KEY, obj.graph_textures_);
-            obj.are_graph_overrides_changed_ = obj.are_graph_overrides_changed_ || are_parameters_changed || are_textures_changed;
+            const serialization::path_context_pause unfiltered;
+            try_load(ar, ser20::make_nvp(MATERIAL_TYPE_KEY, partial_type_name));
+        }
+        const auto partial_type = partial_type_name.empty() || partial_type_name == LEGACY_PBR_TYPE_NAME
+                                      ? entt::meta_type{}
+                                      : entt::resolve(entt::hashed_string{partial_type_name.c_str()}.value());
+        // Overrides of another material type do not apply to this instance's material.
+        if(partial_type && obj.material_type_ != entt::id_type{} && obj.material_type_ != partial_type.id())
+        {
             return;
         }
+        if(partial_type)
+        {
+            if(obj.material_type_ == entt::id_type{})
+            {
+                obj.material_type_ = partial_type.id();
+            }
+            for_each_material_property(
+                partial_type,
+                [&](entt::id_type property, const entt::meta_data& data)
+                {
+                    const auto name = entt::get_attribute_as<std::string>(data, "name");
+                    if(!is_member_listed(name))
+                    {
+                        return;
+                    }
+                    auto value = load_value(ar, name.c_str(), data.type());
+                    auto found = std::find_if(obj.overrides_.begin(),
+                                              obj.overrides_.end(),
+                                              [property](const material_instance::property_override& entry)
+                                              {
+                                                  return entry.property == property;
+                                              });
+                    if(value && found != obj.overrides_.end())
+                    {
+                        found->value = std::move(value);
+                    }
+                    else if(value)
+                    {
+                        obj.overrides_.push_back({property, std::move(value)});
+                    }
+                    else if(found != obj.overrides_.end())
+                    {
+                        obj.overrides_.erase(found);
+                    }
+                    else
+                    {
+                        return;
+                    }
+                    obj.changed_properties_.push_back(property);
+                });
+        }
+        const bool are_parameters_changed =
+            merge_listed_named_values<Archive, graph_parameter_value>(ar, GRAPH_PARAMETERS_KEY, obj.graph_parameters_);
+        const bool are_textures_changed =
+            merge_listed_named_values<Archive, graph_texture_value>(ar, GRAPH_TEXTURES_KEY, obj.graph_textures_);
+        obj.are_graph_overrides_changed_ = obj.are_graph_overrides_changed_ || are_parameters_changed || are_textures_changed;
+        return;
     }
     std::string type_name;
     if(!try_load(ar, ser20::make_nvp(MATERIAL_TYPE_KEY, type_name)))
@@ -630,43 +537,17 @@ LOAD(material_instance)
         throw std::runtime_error("A material instance names the unknown material type " + type_name + ".");
     }
     obj.material_type_ = type.id();
-    if constexpr(is_binary_archive<Archive>())
-    {
-        uint32_t count = 0;
-        try_load(ar, ser20::make_nvp("count", count));
-        for(uint32_t i = 0; i < count; ++i)
-        {
-            std::string name;
-            try_load(ar, ser20::make_nvp("property", name));
-            const auto property = entt::hashed_string{name.c_str()}.value();
-            const auto data = type.data(property);
-            if(!data)
-            {
-                throw std::runtime_error("A material instance overrides the unknown property " + name + ".");
-            }
-            auto value = load_value(ar, name.c_str(), data.type());
-            // A read-only property (the cull type) is the graph's: its saved override is read past.
-            if(value && !data.is_const())
-            {
-                obj.overrides_.push_back({property, std::move(value)});
-                obj.changed_properties_.push_back(property);
-            }
-        }
-    }
-    else
-    {
-        for_each_material_property(type,
-                                   [&](entt::id_type property, const entt::meta_data& data)
+    for_each_material_property(type,
+                               [&](entt::id_type property, const entt::meta_data& data)
+                               {
+                                   const auto name = entt::get_attribute_as<std::string>(data, "name");
+                                   auto value = load_value(ar, name.c_str(), data.type());
+                                   if(value)
                                    {
-                                       const auto name = entt::get_attribute_as<std::string>(data, "name");
-                                       auto value = load_value(ar, name.c_str(), data.type());
-                                       if(value)
-                                       {
-                                           obj.overrides_.push_back({property, std::move(value)});
-                                           obj.changed_properties_.push_back(property);
-                                       }
-                                   });
-    }
+                                       obj.overrides_.push_back({property, std::move(value)});
+                                       obj.changed_properties_.push_back(property);
+                                   }
+                               });
     obj.graph_parameters_ = load_named_values<Archive, graph_parameter_value>(ar, GRAPH_PARAMETERS_KEY);
     obj.graph_textures_ = load_named_values<Archive, graph_texture_value>(ar, GRAPH_TEXTURES_KEY);
     obj.are_graph_overrides_changed_ = obj.are_graph_overrides_changed_ || obj.has_graph_overrides();

@@ -24,6 +24,8 @@ public:
 
     ~file_ostreambuf() override
     {
+        // What is still buffered is written before the file closes.
+        sync_put_area();
         close_file();
     }
 
@@ -178,11 +180,16 @@ protected:
         std::streamsize written = 0;
         while(written < count)
         {
-            if(pptr() == epptr() && overflow(traits_type::to_int_type(src[written])) == traits_type::eof())
+            // A full buffer is written out and the copy carries on into the emptied one.
+            if(pptr() == epptr() && !sync_put_area())
             {
                 break;
             }
             const std::streamsize available = epptr() - pptr();
+            if(available <= 0)
+            {
+                break;
+            }
             const std::streamsize chunk = std::min(count - written, available);
             traits_type::copy(pptr(), src + written, static_cast<std::size_t>(chunk));
             pbump(static_cast<int>(chunk));

@@ -4,11 +4,11 @@ shaderc writes GLSL without validating it, so OpenGL drivers reject keywords use
 rsqrt, expressions in layout ids and similar only at run time, and the pass draws nothing.
 This finds them offline, for every variant of every compiled .eshader and graph material.
 
-A compiled `.gl` file is a ser20 binary list of variants (engine/engine/meta/rendering/
-shader_variants.hpp): uint64 count, then per variant a name, the shaderc bytes and a varyings
-map (sizes as uint64); a graph material's file wraps two such lists (read_variants). The
-bytes are a bgfx shader binary, version 12 or newer: magic, hash in,
-hash out, raw SRV and UAV masks, uint16 uniform count, the uniforms, uint32 code size, the code.
+A compiled `.gl` file is a binary document (engine/core/serialization/archives/tagged_binary.hpp)
+holding a list of variants (engine/engine/meta/rendering/shader_variants.hpp), each with a name,
+the shaderc bytes and its varyings; a graph material's file holds two such lists (read_variants).
+The bytes are a bgfx shader binary, version 12 or newer: magic, hash in, hash out, raw SRV and UAV
+masks, uint16 uniform count, the uniforms, uint32 code size, the code.
 
 Usage (from the repository root):
     python .agents/skills/unravel-rendering/scripts/validate_gl.py [folder] [--filter TEXT] [--show N]
@@ -65,17 +65,82 @@ class reader:
         return self.read_bytes(self.read("Q")).decode("utf-8", "replace")
 
 
-def read_variant_list(cursor: reader, prefix: str) -> list:
-    """(name, bgfx shader bytes) of one serialized list of compiled_shader_variant."""
-    variants = []
-    for _ in range(cursor.read("Q")):
-        name = cursor.read_string()
-        code = cursor.read_bytes(cursor.read("Q"))
-        for _ in range(cursor.read("Q")):
-            cursor.read_string()
-            cursor.read_string()
-        variants.append((prefix + name, code))
-    return variants
+DOCUMENT_MAGIC = 0x31425455
+DOCUMENT_PREAMBLE = 32
+NUMBER_LAYOUTS = {3: "b", 4: "B", 5: "h", 6: "H", 7: "i", 8: "I", 9: "q", 10: "Q", 11: "f", 12: "d"}
+OBJECT, ARRAY, PACKED, NUMBERS = 15, 16, 17, 18
+
+
+def read_varint(cursor: reader) -> int:
+    value = 0
+    shift = 0
+    while True:
+        byte = cursor.read("B")
+        value |= (byte & 0x7F) << shift
+        if byte < 0x80:
+            return value
+        shift += 7
+
+
+def read_value(cursor: reader, names: list):
+    """One value of a binary document: an object as a dict, an array or a value of numbers as a list, a blob
+    as bytes. A packed list holds rows only its C++ type reads, so it is returned as None."""
+    kind = cursor.read("B")
+    if kind <= 2:
+        return (None, False, True)[kind]
+    if kind in NUMBER_LAYOUTS:
+        return cursor.read(NUMBER_LAYOUTS[kind])
+    if kind in (13, 14):
+        payload = cursor.read_bytes(read_varint(cursor))
+        return payload.decode("utf-8", "replace") if kind == 13 else payload
+    if kind == NUMBERS:
+        layout = NUMBER_LAYOUTS[cursor.read("B")]
+        return [cursor.read(layout) for _ in range(read_varint(cursor))]
+    if kind not in (OBJECT, ARRAY, PACKED):
+        raise ValueError("unknown value type %d at byte %d" % (kind, cursor.offset - 1))
+    body = cursor.read("I")
+    cursor.read("I")
+    end = cursor.offset + body
+    if kind == PACKED:
+        cursor.offset = end
+        return None
+    members = {} if kind == OBJECT else []
+    while cursor.offset < end:
+        if kind == OBJECT:
+            key = read_varint(cursor)
+            members[names[key]] = read_value(cursor, names)
+        else:
+            members.append(read_value(cursor, names))
+    if cursor.offset != end:
+        raise ValueError("a node ends at byte %d, its values at %d" % (end, cursor.offset))
+    return members
+
+
+def read_document(data: bytes) -> dict:
+    """The root object of a binary document: 32 zero bytes, then the header."""
+    magic, _, dictionary, key_count = struct.unpack_from("<IIII", data, DOCUMENT_PREAMBLE)
+    if any(data[:DOCUMENT_PREAMBLE]) or magic != DOCUMENT_MAGIC:
+        raise ValueError("not a binary document")
+    cursor = reader(data)
+    cursor.offset = dictionary
+    names = []
+    for _ in range(key_count):
+        cursor.read_bytes(8)
+        names.append(cursor.read_bytes(read_varint(cursor)).decode("utf-8", "replace"))
+        cursor.read_bytes(1)
+    cursor = reader(data[:dictionary])
+    cursor.offset = DOCUMENT_PREAMBLE + 16
+    return read_value(cursor, names)
+
+
+def read_variant_list(variants: list, prefix: str) -> list:
+    """(name, bgfx shader bytes) of one saved list of compiled_shader_variant. A list of bytes is saved
+    as one blob inside its array."""
+    listed = []
+    for variant in variants:
+        code = variant["bytes"]
+        listed.append((prefix + variant["name"], code[0] if code else b""))
+    return listed
 
 
 def read_variants(path: Path) -> list:
@@ -85,16 +150,11 @@ def read_variants(path: Path) -> list:
     engine/engine/meta/rendering/graph_material.hpp) holds a code hash and compile parameters,
     then the fragment variants and the vertex variants.
     """
-    cursor = reader(path.read_bytes())
+    document = read_document(path.read_bytes())
     if ".mat.asset." in path.name:
-        cursor.read_string()
-        cursor.read_string()
-        variants = read_variant_list(cursor, "") + read_variant_list(cursor, "vertex ")
-    else:
-        variants = read_variant_list(cursor, "")
-    if cursor.offset != len(cursor.data):
-        raise ValueError("%d bytes left after the variants" % (len(cursor.data) - cursor.offset))
-    return variants
+        shader = document["graph_material_shader"]
+        return read_variant_list(shader["variants"], "") + read_variant_list(shader["vertex_variants"], "vertex ")
+    return read_variant_list(document["variants"], "")
 
 
 def read_glsl(shader: bytes) -> tuple:
@@ -169,7 +229,7 @@ def main() -> int:
             relative = path.relative_to(arguments.folder).as_posix()
             try:
                 variants = read_variants(path)
-            except (ValueError, struct.error) as error:
+            except (ValueError, KeyError, TypeError, IndexError, struct.error) as error:
                 print("UNREADABLE %s: %s" % (relative, error))
                 failing += 1
                 continue

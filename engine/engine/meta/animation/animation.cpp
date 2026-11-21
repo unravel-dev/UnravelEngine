@@ -8,6 +8,8 @@
 #include <filesystem/pack.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <engine/meta/core/compiled_file.hpp>
+#include <serialization/types/packed.hpp>
 #include <serialization/types/string.hpp>
 #include <serialization/types/vector.hpp>
 
@@ -460,9 +462,9 @@ SAVE(animation_channel)
 {
     try_save(ar, ser20::make_nvp("node_name", obj.node_name));
     try_save(ar, ser20::make_nvp("node_index", obj.node_index));
-    try_save(ar, ser20::make_nvp("position_keys", obj.position_keys));
-    try_save(ar, ser20::make_nvp("rotation_keys", obj.rotation_keys));
-    try_save(ar, ser20::make_nvp("scaling_keys", obj.scaling_keys));
+    try_save(ar, ser20::make_nvp("position_keys", serialization::packed(obj.position_keys)));
+    try_save(ar, ser20::make_nvp("rotation_keys", serialization::packed(obj.rotation_keys)));
+    try_save(ar, ser20::make_nvp("scaling_keys", serialization::packed(obj.scaling_keys)));
     try_save(ar, ser20::make_nvp("has_rest", obj.has_rest));
     if(obj.has_rest)
     {
@@ -478,9 +480,9 @@ LOAD(animation_channel)
 {
     try_load(ar, ser20::make_nvp("node_name", obj.node_name));
     try_load(ar, ser20::make_nvp("node_index", obj.node_index));
-    try_load(ar, ser20::make_nvp("position_keys", obj.position_keys));
-    try_load(ar, ser20::make_nvp("rotation_keys", obj.rotation_keys));
-    try_load(ar, ser20::make_nvp("scaling_keys", obj.scaling_keys));
+    try_load(ar, ser20::make_nvp("position_keys", serialization::packed(obj.position_keys)));
+    try_load(ar, ser20::make_nvp("rotation_keys", serialization::packed(obj.rotation_keys)));
+    try_load(ar, ser20::make_nvp("scaling_keys", serialization::packed(obj.scaling_keys)));
     obj.has_rest = false;
     try_load(ar, ser20::make_nvp("has_rest", obj.has_rest));
     if(obj.has_rest)
@@ -501,7 +503,6 @@ SAVE(animation_clip)
     try_save(ar, ser20::make_nvp("root_motion", obj.root_motion));
     try_save(ar, ser20::make_nvp("events", obj.events));
     try_save(ar, ser20::make_nvp("curves", obj.curves));
-    // Fields added later go last: binary archives read by position.
     try_save(ar, ser20::make_nvp("humanoid_overrides", obj.humanoid_overrides));
     
     // Changes here should be reflected in ex::get_format_version<animation_clip>() in asset_extensions.h
@@ -536,12 +537,7 @@ void save_to_file(const std::string& absolute_path, const animation_clip& obj)
 
 void save_to_file_bin(const std::string& absolute_path, const animation_clip& obj)
 {
-    std::ofstream stream(absolute_path, std::ios::binary);
-    if(stream.good())
-    {
-        ser20::oarchive_binary_t ar(stream);
-        try_save(ar, ser20::make_nvp("animation", obj));
-    }
+    write_compiled_file(absolute_path, "animation", obj);
 }
 
 void load_from_file(const std::string& absolute_path, animation_clip& obj)
@@ -557,12 +553,6 @@ void load_from_file(const std::string& absolute_path, animation_clip& obj)
 
 void load_from_file_bin(const std::string& absolute_path, animation_clip& obj)
 {
-    auto input = fs::open_readable_stream(absolute_path);
-    if(!input)
-    {
-        return;
-    }
-    ser20::iarchive_binary_t ar(*input);
-    try_load(ar, ser20::make_nvp("animation", obj));
+    load_compiled_file(absolute_path, "animation", obj);
 }
 } // namespace unravel

@@ -306,8 +306,7 @@ void save_to_file_bin(const std::string& absolute_path, const editor_settings& o
     {
         try
         {
-            ser20::oarchive_binary_t ar(stream);
-            try_save(ar, ser20::make_nvp("settings", obj));
+            serialization::write_binary(stream, [&](auto& ar) { return try_save(ar, ser20::make_nvp("settings", obj)); });
         }
         catch(const std::exception& e)
         {
@@ -342,8 +341,7 @@ auto load_from_file_bin(const std::string& absolute_path, editor_settings& obj) 
     {
         try
         {
-            ser20::iarchive_binary_t ar(stream);
-            return try_load(ar, ser20::make_nvp("settings", obj));
+            return serialization::read_binary(stream, [&](auto& ar) { return try_load(ar, ser20::make_nvp("settings", obj)); });
         }
         catch(const std::exception& e)
         {

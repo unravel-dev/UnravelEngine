@@ -25,9 +25,9 @@ animation and rig systems) and the Animation Controller editor in
 - Skinning reads bones in `model_system` during `on_frame_before_render`, after scripts; rig
   modifiers solve right before it (`rig_system::before_skinning`) and are non-destructive
   ([rig-modifiers.md](rig-modifiers.md)).
-- Compiled clips are binary, and binary archives are positional: LOAD reads in exactly the
-  SAVE order (`engine/engine/meta/animation/animation.cpp`), new fields go last, and a layout
-  change bumps `get_format_version<animation_clip>` in
+- Compiled clips are binary documents read by name (`engine/engine/meta/animation/animation.cpp`);
+  their keys are packed lists, whose rows the key's SERIALIZE reads in the order it wrote them. A
+  change to what a compiled clip holds bumps `get_format_version<animation_clip>` in
   `engine/engine/assets/impl/asset_extensions.h` (`test_clip_curves_survive_both_archives`).
 - The clip loader resolves every channel's lazy rest transforms (`resolve_rest_transforms`)
   before the clip is shared: players on pool threads only read clips. Anything lazy added to a

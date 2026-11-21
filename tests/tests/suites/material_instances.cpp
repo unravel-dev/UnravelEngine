@@ -431,21 +431,20 @@ void test_legacy_instance_overrides()
 /// What follows a saved instance in a binary stream: it must read back intact.
 constexpr uint32_t BINARY_SENTINEL = 0xC0FFEEu;
 
-/// An instance an older version saved in binary over a PBR material, followed by @p sentinel: its type, then its
-/// overrides as (name, value) pairs.
+/// An instance an older version saved over a PBR material, as a binary document, followed by @p sentinel: its type,
+/// then its overrides by property name.
 auto make_legacy_binary_instance(const math::color& base_color, uint32_t sentinel) -> std::string
 {
     std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
     {
         ser20::oarchive_binary_t ar(stream);
         std::string type_name = "pbr_material";
-        uint32_t count = 1;
-        std::string property = "base_color";
         math::color value = base_color;
+        ar.setNextName("instance");
+        ar.startNode();
         try_save(ar, ser20::make_nvp("material_type", type_name));
-        try_save(ar, ser20::make_nvp("count", count));
-        try_save(ar, ser20::make_nvp("property", property));
         try_save(ar, ser20::make_nvp("base_color", value));
+        ar.finishNode();
         try_save(ar, ser20::make_nvp("sentinel", sentinel));
     }
     return stream.str();

@@ -919,8 +919,7 @@ void test_curves_blend_with_the_pose()
 }
 
 /// A clip's curves and events in both archives clips are stored in: the import settings are
-/// associative, the compiled clip is binary, and binary archives read fields in the order they were
-/// written.
+/// associative, the compiled clip is a binary document.
 void test_clip_curves_survive_both_archives()
 {
     std::printf("test_clip_curves_survive_both_archives\n");
@@ -3691,7 +3690,7 @@ void test_controller_setters_respect_parameter_types()
 void test_controller_survives_binary_archives()
 {
     std::printf("test_controller_survives_binary_archives\n");
-    // Compiled controllers are binary, and binary archives read fields by position.
+    // Compiled controllers are binary documents.
     animation_controller source;
     source.parameters = {make_parameter("Speed", animation_parameter_type::float_value),
                          make_parameter("Attack", animation_parameter_type::trigger)};

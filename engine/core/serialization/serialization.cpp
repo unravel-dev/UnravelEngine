@@ -87,7 +87,17 @@ void set_path_context(path_context* ctx)
     current_path_context = ctx;
 }
 
-auto path_context::push_segment(const std::string& segment) -> bool
+path_context_pause::path_context_pause() : paused_(get_path_context())
+{
+    set_path_context(nullptr);
+}
+
+path_context_pause::~path_context_pause()
+{
+    set_path_context(paused_);
+}
+
+auto path_context::push_segment(hpp::string_view segment) -> bool
 {
 
     if(ignore_next_push)
@@ -106,7 +116,7 @@ auto path_context::push_segment(const std::string& segment) -> bool
         {
             path_ += '/';
         }
-        path_ += segment;
+        path_.append(segment.data(), segment.size());
         segment_ends_.push_back(path_.size());
         return true;
     }
@@ -151,7 +161,7 @@ void path_context::clear()
     recording_enabled = false;
 }
 
-path_segment_guard::path_segment_guard(const std::string& segment)
+path_segment_guard::path_segment_guard(hpp::string_view segment)
 {
     push_segment(segment);
 }
@@ -162,7 +172,7 @@ path_segment_guard::~path_segment_guard()
 }
 
 
-void path_segment_guard::push_segment(const std::string& segment)
+void path_segment_guard::push_segment(hpp::string_view segment)
 {
     auto* ctx = get_path_context();
     if (ctx && ctx->is_recording())
@@ -219,11 +229,11 @@ void init(const init_data& data)
     auto& context = ser20::get_vector_serialization_context();
     context.on_element_serialization_begin = [](size_t index)
     {
-        std::string index_segment = "[" + std::to_string(index) + "]";
-        // guard->push_segment(index_segment);
         auto* ctx = serialization::get_path_context();
         if (ctx && ctx->is_recording())
         {
+            // Built only when a path is being kept: every element of every list passes here.
+            const std::string index_segment = "[" + std::to_string(index) + "]";
             ctx->push_segment(index_segment);
         }
     };

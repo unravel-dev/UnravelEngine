@@ -95,22 +95,22 @@ SAVE(material_graph_node)
     try_save(ar, ser20::make_nvp("position", obj.position));
     try_save(ar, ser20::make_nvp("inputs", obj.inputs));
     try_save(ar, ser20::make_nvp("settings", obj.settings));
-    // The text form lists only what a node has, so a hand-written graph and a saved one read alike.
-    if(is_binary_archive<Archive>() || obj.texture)
+    // A node lists only what it has, so a hand-written graph and a saved one read alike.
+    if(obj.texture)
     {
         try_save(ar, ser20::make_nvp("texture", obj.texture));
         // The key besides the uid: readable, and what a graph written by hand names the texture by.
         try_save(ar, ser20::make_nvp("texture_key", obj.texture ? obj.texture.id() : std::string{}));
     }
-    if(is_binary_archive<Archive>() || !obj.split_outputs.empty())
+    if(!obj.split_outputs.empty())
     {
         try_save(ar, ser20::make_nvp("split_outputs", obj.split_outputs));
     }
-    if(is_binary_archive<Archive>() || !obj.split_inputs.empty())
+    if(!obj.split_inputs.empty())
     {
         try_save(ar, ser20::make_nvp("split_inputs", obj.split_inputs));
     }
-    if(is_binary_archive<Archive>() || obj.is_preview_hidden)
+    if(obj.is_preview_hidden)
     {
         try_save(ar, ser20::make_nvp("preview_hidden", obj.is_preview_hidden));
     }

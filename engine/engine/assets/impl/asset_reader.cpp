@@ -562,11 +562,11 @@ auto load_from_file<script>(tpp::thread_pool& pool, asset_handle<script>& output
                              const std::string& key, load_mode mode) -> bool
 {
     return detail::schedule_load<script>(pool, output, key, {}, source_fallback::none,
-        [](const std::string& path)
+        [](const std::string& /*path*/)
         {
-            auto scr = std::make_shared<script>();
-            load_from_file_bin(path, scr);
-            return scr;
+            // The compiled file is the script's source, copied: the script library compiles it, and the asset reads
+            // nothing from it.
+            return std::make_shared<script>();
         }, mode);
 }
 

@@ -126,19 +126,7 @@ LOAD(legacy_pbr_material)
     try_load(ar, ser20::make_nvp("subsurface_color", surface.subsurface_color));
     try_load(ar, ser20::make_nvp("emissive_color", surface.emissive_color));
     try_load(ar, ser20::make_nvp("emissive_intensity", surface.emissive_intensity));
-    if constexpr(is_binary_archive<Archive>())
-    {
-        // A binary file is read in the order it was written.
-        try_load(ar, ser20::make_nvp("roughness", surface.roughness));
-        try_load(ar, ser20::make_nvp("metalness", surface.metallic));
-        try_load(ar, ser20::make_nvp("bumpiness", surface.bumpiness));
-        try_load(ar, ser20::make_nvp("alpha_mode", surface.alpha));
-        try_load(ar, ser20::make_nvp("alpha_cutoff", surface.alpha_cutoff));
-    }
-    else
-    {
-        load_legacy_text_surface(ar, surface);
-    }
+    load_legacy_text_surface(ar, surface);
     math::vec2 dither_threshold(0.5f, surface.camera_fade_distance);
     try_load(ar, ser20::make_nvp("tiling", surface.tiling));
     try_load(ar, ser20::make_nvp("dither_threshold", dither_threshold));

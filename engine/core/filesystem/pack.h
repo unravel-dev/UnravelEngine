@@ -157,12 +157,13 @@ void unmount_packs();
 /// Whether any pack is mounted.
 auto has_mounted_packs() -> bool;
 
-/// A file's bytes as a mounted pack holds them.
+/// A file's bytes as a mounted pack holds them, or as read_readable_file read them from disk.
 struct packed_file
 {
     const std::uint8_t* data{};
     std::size_t size{};
-    /// Keeps the bytes alive: the pack's mapping, or the buffer a compressed entry decoded into.
+    /// Keeps the bytes alive: the pack's mapping, the buffer a compressed entry decoded into, or the buffer a
+    /// disk file was read into.
     std::shared_ptr<const void> storage;
 
     auto is_found() const -> bool
@@ -207,5 +208,12 @@ auto is_readable_file(const path& file) -> bool;
 /// A stream over `file` from a mounted pack, else from disk (binary); null when neither has it or a
 /// mounted pack deletes it.
 auto open_readable_stream(const path& file) -> std::unique_ptr<std::istream>;
+
+/**
+ * @brief The whole of `file` from a mounted pack, else from disk: a pack's bytes in place, a disk file read into a
+ *        buffer the result keeps. For a loader that reads a file whole, so a deployed game's packed files are not
+ *        copied before they are read. is_found is false when neither has it or a mounted pack deletes it.
+ */
+auto read_readable_file(const path& file) -> packed_file;
 
 } // namespace fs

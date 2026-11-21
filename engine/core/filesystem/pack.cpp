@@ -426,4 +426,29 @@ auto open_readable_stream(const path& file) -> std::unique_ptr<std::istream>
     return stream;
 }
 
+auto read_readable_file(const path& file) -> packed_file
+{
+    auto lookup = lookup_packed_file(file);
+    if(lookup.status == packed_status::found)
+    {
+        return std::move(lookup.file);
+    }
+    if(lookup.status != packed_status::absent)
+    {
+        // A deleted entry hides the disk as well as the packs under it; a damaged one was logged.
+        return {};
+    }
+    file_istream stream(pack_detail::get_disk_path(file), std::ios::binary);
+    if(!stream.is_open())
+    {
+        return {};
+    }
+    auto bytes = std::make_shared<byte_array_t>(read_stream(stream));
+    packed_file result;
+    result.data = bytes->data();
+    result.size = bytes->size();
+    result.storage = std::move(bytes);
+    return result;
+}
+
 } // namespace fs

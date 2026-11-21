@@ -8,6 +8,7 @@
 #include <filesystem/pack.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <engine/meta/core/compiled_file.hpp>
 #include <serialization/types/string.hpp>
 #include <serialization/types/vector.hpp>
 
@@ -731,12 +732,7 @@ void save_to_file(const std::string& absolute_path, const animation_controller::
 
 void save_to_file_bin(const std::string& absolute_path, const animation_controller::sptr& obj)
 {
-    std::ofstream stream(absolute_path, std::ios::binary);
-    if(stream.good())
-    {
-        ser20::oarchive_binary_t ar(stream);
-        try_save(ar, ser20::make_nvp("animation_controller", *obj));
-    }
+    write_compiled_file(absolute_path, "animation_controller", *obj);
 }
 
 void load_from_file(const std::string& absolute_path, animation_controller::sptr& obj)
@@ -752,13 +748,7 @@ void load_from_file(const std::string& absolute_path, animation_controller::sptr
 
 void load_from_file_bin(const std::string& absolute_path, animation_controller::sptr& obj)
 {
-    auto input = fs::open_readable_stream(absolute_path);
-    if(!input)
-    {
-        return;
-    }
-    ser20::iarchive_binary_t ar(*input);
-    try_load(ar, ser20::make_nvp("animation_controller", *obj));
+    load_compiled_file(absolute_path, "animation_controller", *obj);
 }
 
 auto save_to_string(const animation_controller& obj) -> std::string

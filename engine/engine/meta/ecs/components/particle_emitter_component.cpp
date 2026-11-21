@@ -1938,13 +1938,10 @@ void load_property(Archive& ar, const char* name, T value, Apply&& apply)
         apply(value);
         return;
     }
-    if constexpr(!is_binary_archive<Archive>())
+    const std::string former_name = get_former_particle_key(name);
+    if(!former_name.empty() && try_load(ar, ser20::make_nvp(former_name.c_str(), value)))
     {
-        const std::string former_name = get_former_particle_key(name);
-        if(!former_name.empty() && try_load(ar, ser20::make_nvp(former_name.c_str(), value)))
-        {
-            apply(value);
-        }
+        apply(value);
     }
 }
 
@@ -2148,40 +2145,36 @@ LOAD(particle_emitter_component)
     load_property(ar, "velocity_alpha_threshold", obj.get_velocity_alpha_threshold(), [&](const auto& v) { obj.set_velocity_alpha_threshold(v); });
     load_property(ar, "ribbon_facing", obj.get_ribbon_facing(), [&](const auto& v) { obj.set_ribbon_facing(v); });
 
-    if constexpr(!is_binary_archive<Archive>())
+    // Older scenes: keys that were replaced (a renamed key loads from its former name above).
+    if(!has_start_speed)
     {
-        // Older scenes: keys that were replaced (a renamed key loads from its former name above). A binary archive
-        // is always written by this build, so it holds none of them.
-        if(!has_start_speed)
+        load_legacy_motion(ar, obj);
+    }
+    if(!has_color_by_speed)
+    {
+        math::color color_by_speed_slow_color{0xffffffff};
+        math::color color_by_speed_fast_color{0xffffffff};
+        const bool has_slow = try_load(ar, ser20::make_nvp("color_by_speed_slow_color", color_by_speed_slow_color));
+        const bool has_fast = try_load(ar, ser20::make_nvp("color_by_speed_fast_color", color_by_speed_fast_color));
+        if(has_slow || has_fast)
         {
-            load_legacy_motion(ar, obj);
+            math::gradient<math::color> legacy_gradient;
+            legacy_gradient.add_point(color_by_speed_slow_color, 0.0f);
+            legacy_gradient.add_point(color_by_speed_fast_color, 1.0f);
+            obj.set_color_by_speed_gradient(legacy_gradient);
         }
-        if(!has_color_by_speed)
-        {
-            math::color color_by_speed_slow_color{0xffffffff};
-            math::color color_by_speed_fast_color{0xffffffff};
-            const bool has_slow = try_load(ar, ser20::make_nvp("color_by_speed_slow_color", color_by_speed_slow_color));
-            const bool has_fast = try_load(ar, ser20::make_nvp("color_by_speed_fast_color", color_by_speed_fast_color));
-            if(has_slow || has_fast)
-            {
-                math::gradient<math::color> legacy_gradient;
-                legacy_gradient.add_point(color_by_speed_slow_color, 0.0f);
-                legacy_gradient.add_point(color_by_speed_fast_color, 1.0f);
-                obj.set_color_by_speed_gradient(legacy_gradient);
-            }
-        }
-        if(!has_size_axes)
-        {
-            load_property(ar, "particle_scale_3d", obj.get_size_axes(), [&](const math::vec3& v) { obj.set_size_axes(v); });
-        }
-        if(!has_size_axes_over_life)
-        {
-            load_legacy_size_axes_curves(ar, obj);
-        }
-        if(!has_render_mode)
-        {
-            load_property(ar, "billboard_mode", obj.get_render_mode(), [&](auto v) { obj.set_render_mode(v); });
-        }
+    }
+    if(!has_size_axes)
+    {
+        load_property(ar, "particle_scale_3d", obj.get_size_axes(), [&](const math::vec3& v) { obj.set_size_axes(v); });
+    }
+    if(!has_size_axes_over_life)
+    {
+        load_legacy_size_axes_curves(ar, obj);
+    }
+    if(!has_render_mode)
+    {
+        load_property(ar, "billboard_mode", obj.get_render_mode(), [&](auto v) { obj.set_render_mode(v); });
     }
 }
 LOAD_INSTANTIATE(particle_emitter_component, ser20::iarchive_associative_t);

@@ -2938,17 +2938,12 @@ void test_material_functions()
     graph_material mat;
     mat.set_graph(calls);
     check(mat.copy_functions() && mat.get_functions().count(key) == 1 && mat.find_parameter("Gain"), "a graph material copies the functions it calls");
+    // Written as the compiler writes a compiled material.
     std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
-    {
-        ser20::oarchive_binary_t ar(stream);
-        try_save(ar, ser20::make_nvp("material", mat));
-    }
+    serialization::write_binary(stream, [&](auto& ar) { try_save(ar, ser20::make_nvp("material", mat)); });
     fs::remove(fs::resolve_protocol(key), ec);
     graph_material loaded;
-    {
-        ser20::iarchive_binary_t ar(stream);
-        try_load(ar, ser20::make_nvp("material", loaded));
-    }
+    serialization::read_binary(stream, [&](auto& ar) { return try_load(ar, ser20::make_nvp("material", loaded)); });
     check(loaded.get_functions().count(key) == 1 && loaded.find_parameter("Gain") != nullptr,
           "the compiled material keeps the copies, and binds with them once the file is gone");
 }

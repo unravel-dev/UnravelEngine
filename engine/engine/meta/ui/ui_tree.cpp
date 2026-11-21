@@ -5,6 +5,7 @@
 #include <fstream>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <engine/meta/core/compiled_file.hpp>
 
 namespace unravel
 {
@@ -54,12 +55,7 @@ void save_to_file(const std::string& absolute_path, const ui_tree::sptr& obj)
 
 void save_to_file_bin(const std::string& absolute_path, const ui_tree::sptr& obj)
 {
-    std::ofstream stream(absolute_path, std::ios::binary);
-    if(stream.good())
-    {
-        ser20::oarchive_binary_t ar(stream);
-        try_save(ar, ser20::make_nvp("ui_tree", *obj));
-    }
+    write_compiled_file(absolute_path, "ui_tree", *obj);
 }
 
 void load_from_file(const std::string& absolute_path, ui_tree::sptr& obj)
@@ -74,13 +70,7 @@ void load_from_file(const std::string& absolute_path, ui_tree::sptr& obj)
 
 void load_from_file_bin(const std::string& absolute_path, ui_tree::sptr& obj)
 {
-    fs::file_istream input(absolute_path, std::ios::binary);
-    if(!input.is_open())
-    {
-        return;
-    }
-    ser20::iarchive_binary_t ar(input);
-    try_load(ar, ser20::make_nvp("ui_tree", *obj));
+    load_compiled_file(absolute_path, "ui_tree", *obj);
 }
 
 } // namespace unravel

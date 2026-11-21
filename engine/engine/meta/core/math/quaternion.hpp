@@ -1,16 +1,22 @@
 #pragma once
 
 #include <math/math.h>
+#include <serialization/packed_value.h>
 #include <serialization/serialization.h>
 
 namespace ser20
 {
+// A quaternion is one packed value in a binary document; JSON keeps its named members.
+template<typename T, math::qualifier P>
+struct is_packed_value<math::tquat<T, P>> : std::true_type
+{
+};
+
 template<typename Archive, typename T, math::qualifier P>
 inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::tquat<T, P>& obj)
 {
-    try_serialize(ar, ser20::make_nvp("x", obj.x));
-    try_serialize(ar, ser20::make_nvp("y", obj.y));
-    try_serialize(ar, ser20::make_nvp("z", obj.z));
-    try_serialize(ar, ser20::make_nvp("w", obj.w));
+    serialization::serialize_components(ar,
+                                        std::array<T*, 4>{&obj.x, &obj.y, &obj.z, &obj.w},
+                                        serialization::xyzw_names);
 }
 } // namespace ser20

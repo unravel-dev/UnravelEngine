@@ -6,6 +6,7 @@
 #include <filesystem/pack.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <engine/meta/core/compiled_file.hpp>
 
 namespace unravel
 {
@@ -106,12 +107,7 @@ void save_to_file(const std::string& absolute_path, const std::shared_ptr<materi
 
 void save_to_file_bin(const std::string& absolute_path, const std::shared_ptr<material>& obj)
 {
-    std::ofstream stream(absolute_path, std::ios::binary);
-    if(stream.good())
-    {
-        ser20::oarchive_binary_t ar(stream);
-        try_save(ar, ser20::make_nvp("material", obj));
-    }
+    write_compiled_file(absolute_path, "material", obj);
 }
 
 void load_from_file(const std::string& absolute_path, std::shared_ptr<material>& obj)
@@ -141,13 +137,7 @@ auto is_legacy_material_file(const std::string& absolute_path) -> bool
 
 void load_from_file_bin(const std::string& absolute_path, std::shared_ptr<material>& obj)
 {
-    auto input = fs::open_readable_stream(absolute_path);
-    if(!input)
-    {
-        return;
-    }
-    ser20::iarchive_binary_t ar(*input);
-    try_load(ar, ser20::make_nvp("material", obj));
+    load_compiled_file(absolute_path, "material", obj);
     obj = upgrade_legacy_material(std::move(obj));
 }
 

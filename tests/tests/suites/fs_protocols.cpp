@@ -30,8 +30,11 @@
 
 #include "../tests.h"
 
+#include <filesystem/file_istream.h>
+#include <filesystem/file_ostream.h>
 #include <filesystem/filesystem.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -304,6 +307,37 @@ void test_extended_length_paths(const fs::path& run_root)
     check(!err && !fs::exists(run_root / "long", err), "and removed whole");
 }
 
+/// fs::file_ostream writes every byte it is given: writes of odd sizes crossing its buffer's boundaries, and
+/// the tail still buffered when the stream is destroyed without being closed.
+void test_file_ostream_writes_every_byte(const fs::path& run_root)
+{
+    std::vector<char> bytes(300007);
+    for(size_t i = 0; i < bytes.size(); ++i)
+    {
+        bytes[i] = static_cast<char>((i * 31u + i / 251u) & 0xFF);
+    }
+    const auto file = run_root / "streams" / "written.bin";
+    fs::error_code err;
+    fs::create_directories(file.parent_path(), err);
+    {
+        fs::file_ostream out(file);
+        check(out.is_open(), "the stream opens its file");
+        const size_t sizes[] = {1, 65535, 2, 65536, 131071, 37862};
+        size_t at = 0;
+        for(size_t size : sizes)
+        {
+            out.write(bytes.data() + at, static_cast<std::streamsize>(size));
+            at += size;
+        }
+        check(at == bytes.size(), "the writes add up to the bytes");
+    }
+
+    fs::file_istream in(file);
+    const auto read = fs::read_stream_str(in);
+    check(read.size() == bytes.size(), "the file holds as many bytes as were written");
+    check(read.size() == bytes.size() && std::equal(read.begin(), read.end(), bytes.begin()), "and the same bytes, in order");
+}
+
 void run_fs_protocols_suite(rtti::context& /*ctx*/)
 {
     const fs::path run_root = get_run_root();
@@ -317,6 +351,7 @@ void run_fs_protocols_suite(rtti::context& /*ctx*/)
     RUN_CASE(test_utf8_round_trip(run_root));
     RUN_CASE(test_narrow_paths(run_root));
     RUN_CASE(test_extended_length_paths(run_root));
+    RUN_CASE(test_file_ostream_writes_every_byte(run_root));
 }
 
 } // namespace

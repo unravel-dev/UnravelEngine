@@ -1,4 +1,5 @@
 #include "graph_material.hpp"
+#include <engine/meta/core/compiled_file.hpp>
 #include "material.hpp"
 #include "material_graph.hpp"
 
@@ -28,127 +29,97 @@ REFLECT(graph_material)
         .func<&graph_material::as_derived>("as_derived"_hs);
 }
 
-namespace
-{
 // A compiled material's binding (material_graph_binding), in the binary archive alone: what loading the material binds
-// without compiling its graph. Enums are written as their underlying values.
+// without compiling its graph. Its parameters, textures and static switches are lists of these; enums are written as
+// their underlying values.
 
-template<typename Archive>
-void save_parameter(Archive& ar, const material_graph_parameter& parameter)
+SAVE(material_graph_parameter)
 {
-    try_save(ar, ser20::make_nvp("node_id", parameter.node_id));
-    try_save(ar, ser20::make_nvp("name", parameter.name));
-    try_save(ar, ser20::make_nvp("description", parameter.description));
-    try_save(ar, ser20::make_nvp("type", uint8_t(parameter.type)));
-    try_save(ar, ser20::make_nvp("default_value", parameter.default_value));
-    try_save(ar, ser20::make_nvp("register_index", parameter.register_index));
-    try_save(ar, ser20::make_nvp("component", parameter.component));
-    try_save(ar, ser20::make_nvp("changes", parameter.changes));
+    try_save(ar, ser20::make_nvp("node_id", obj.node_id));
+    try_save(ar, ser20::make_nvp("name", obj.name));
+    try_save(ar, ser20::make_nvp("description", obj.description));
+    try_save(ar, ser20::make_nvp("type", uint8_t(obj.type)));
+    try_save(ar, ser20::make_nvp("default_value", obj.default_value));
+    try_save(ar, ser20::make_nvp("register_index", obj.register_index));
+    try_save(ar, ser20::make_nvp("component", obj.component));
+    try_save(ar, ser20::make_nvp("changes", obj.changes));
 }
 
-template<typename Archive>
-void load_parameter(Archive& ar, material_graph_parameter& parameter)
+LOAD(material_graph_parameter)
 {
     uint8_t type = 0;
-    try_load(ar, ser20::make_nvp("node_id", parameter.node_id));
-    try_load(ar, ser20::make_nvp("name", parameter.name));
-    try_load(ar, ser20::make_nvp("description", parameter.description));
+    try_load(ar, ser20::make_nvp("node_id", obj.node_id));
+    try_load(ar, ser20::make_nvp("name", obj.name));
+    try_load(ar, ser20::make_nvp("description", obj.description));
     try_load(ar, ser20::make_nvp("type", type));
-    try_load(ar, ser20::make_nvp("default_value", parameter.default_value));
-    try_load(ar, ser20::make_nvp("register_index", parameter.register_index));
-    try_load(ar, ser20::make_nvp("component", parameter.component));
-    try_load(ar, ser20::make_nvp("changes", parameter.changes));
-    parameter.type = material_value_type(type);
+    try_load(ar, ser20::make_nvp("default_value", obj.default_value));
+    try_load(ar, ser20::make_nvp("register_index", obj.register_index));
+    try_load(ar, ser20::make_nvp("component", obj.component));
+    try_load(ar, ser20::make_nvp("changes", obj.changes));
+    obj.type = material_value_type(type);
 }
 
-template<typename Archive>
-void save_texture(Archive& ar, const material_graph_texture& texture)
+SAVE(material_graph_texture)
 {
-    try_save(ar, ser20::make_nvp("node_id", texture.node_id));
-    try_save(ar, ser20::make_nvp("name", texture.name));
-    try_save(ar, ser20::make_nvp("description", texture.description));
-    try_save(ar, ser20::make_nvp("texture", texture.texture));
-    try_save(ar, ser20::make_nvp("sampler", texture.sampler));
-    try_save(ar, ser20::make_nvp("stage", texture.stage));
-    try_save(ar, ser20::make_nvp("is_normal_map", texture.is_normal_map));
-    try_save(ar, ser20::make_nvp("kind", uint8_t(texture.kind)));
-    try_save(ar, ser20::make_nvp("address", uint8_t(texture.address)));
-    try_save(ar, ser20::make_nvp("filter", uint8_t(texture.filter)));
-    try_save(ar, ser20::make_nvp("changes", texture.changes));
+    try_save(ar, ser20::make_nvp("node_id", obj.node_id));
+    try_save(ar, ser20::make_nvp("name", obj.name));
+    try_save(ar, ser20::make_nvp("description", obj.description));
+    try_save(ar, ser20::make_nvp("texture", obj.texture));
+    try_save(ar, ser20::make_nvp("sampler", obj.sampler));
+    try_save(ar, ser20::make_nvp("stage", obj.stage));
+    try_save(ar, ser20::make_nvp("is_normal_map", obj.is_normal_map));
+    try_save(ar, ser20::make_nvp("kind", uint8_t(obj.kind)));
+    try_save(ar, ser20::make_nvp("address", uint8_t(obj.address)));
+    try_save(ar, ser20::make_nvp("filter", uint8_t(obj.filter)));
+    try_save(ar, ser20::make_nvp("changes", obj.changes));
 }
 
-template<typename Archive>
-void load_texture(Archive& ar, material_graph_texture& texture)
+LOAD(material_graph_texture)
 {
     uint8_t kind = 0;
     uint8_t address = 0;
     uint8_t filter = 0;
-    try_load(ar, ser20::make_nvp("node_id", texture.node_id));
-    try_load(ar, ser20::make_nvp("name", texture.name));
-    try_load(ar, ser20::make_nvp("description", texture.description));
-    try_load(ar, ser20::make_nvp("texture", texture.texture));
-    try_load(ar, ser20::make_nvp("sampler", texture.sampler));
-    try_load(ar, ser20::make_nvp("stage", texture.stage));
-    try_load(ar, ser20::make_nvp("is_normal_map", texture.is_normal_map));
+    try_load(ar, ser20::make_nvp("node_id", obj.node_id));
+    try_load(ar, ser20::make_nvp("name", obj.name));
+    try_load(ar, ser20::make_nvp("description", obj.description));
+    try_load(ar, ser20::make_nvp("texture", obj.texture));
+    try_load(ar, ser20::make_nvp("sampler", obj.sampler));
+    try_load(ar, ser20::make_nvp("stage", obj.stage));
+    try_load(ar, ser20::make_nvp("is_normal_map", obj.is_normal_map));
     try_load(ar, ser20::make_nvp("kind", kind));
     try_load(ar, ser20::make_nvp("address", address));
     try_load(ar, ser20::make_nvp("filter", filter));
-    try_load(ar, ser20::make_nvp("changes", texture.changes));
-    texture.kind = material_value_type(kind);
-    texture.address = material_texture_address(address);
-    texture.filter = material_texture_filter(filter);
+    try_load(ar, ser20::make_nvp("changes", obj.changes));
+    obj.kind = material_value_type(kind);
+    obj.address = material_texture_address(address);
+    obj.filter = material_texture_filter(filter);
 }
 
-template<typename Archive>
-void save_static_switch(Archive& ar, const material_graph_static_switch& entry)
+SAVE(material_graph_static_switch)
 {
-    try_save(ar, ser20::make_nvp("node_id", entry.node_id));
-    try_save(ar, ser20::make_nvp("name", entry.name));
-    try_save(ar, ser20::make_nvp("description", entry.description));
-    try_save(ar, ser20::make_nvp("value", entry.value));
+    try_save(ar, ser20::make_nvp("node_id", obj.node_id));
+    try_save(ar, ser20::make_nvp("name", obj.name));
+    try_save(ar, ser20::make_nvp("description", obj.description));
+    try_save(ar, ser20::make_nvp("value", obj.value));
 }
 
-template<typename Archive>
-void load_static_switch(Archive& ar, material_graph_static_switch& entry)
+LOAD(material_graph_static_switch)
 {
-    try_load(ar, ser20::make_nvp("node_id", entry.node_id));
-    try_load(ar, ser20::make_nvp("name", entry.name));
-    try_load(ar, ser20::make_nvp("description", entry.description));
-    try_load(ar, ser20::make_nvp("value", entry.value));
+    try_load(ar, ser20::make_nvp("node_id", obj.node_id));
+    try_load(ar, ser20::make_nvp("name", obj.name));
+    try_load(ar, ser20::make_nvp("description", obj.description));
+    try_load(ar, ser20::make_nvp("value", obj.value));
 }
 
-/// Writes @p entries as their count, then each with @p save_entry.
-template<typename Archive, typename Entry, typename Save>
-void save_entries(Archive& ar, const std::vector<Entry>& entries, Save save_entry)
+namespace
 {
-    auto count = uint32_t(entries.size());
-    try_save(ar, ser20::make_nvp("count", count));
-    for(const auto& entry : entries)
-    {
-        save_entry(ar, entry);
-    }
-}
-
-/// Reads what save_entries wrote.
-template<typename Archive, typename Entry, typename Load>
-void load_entries(Archive& ar, std::vector<Entry>& entries, Load load_entry)
-{
-    uint32_t count = 0;
-    try_load(ar, ser20::make_nvp("count", count));
-    entries.assign(count, Entry{});
-    for(auto& entry : entries)
-    {
-        load_entry(ar, entry);
-    }
-}
-
 template<typename Archive>
 void save_binding(Archive& ar, const material_graph_binding& binding)
 {
-    save_entries(ar, binding.parameters, save_parameter<Archive>);
+    try_save(ar, ser20::make_nvp("parameters", binding.parameters));
     try_save(ar, ser20::make_nvp("parameter_registers", binding.parameter_registers));
-    save_entries(ar, binding.textures, save_texture<Archive>);
-    save_entries(ar, binding.static_switches, save_static_switch<Archive>);
+    try_save(ar, ser20::make_nvp("textures", binding.textures));
+    try_save(ar, ser20::make_nvp("static_switches", binding.static_switches));
     try_save(ar, ser20::make_nvp("emissive_is_known", binding.emissive.is_known));
     try_save(ar, ser20::make_nvp("emissive_constant", binding.emissive.constant));
     try_save(ar, ser20::make_nvp("emissive_parameters", binding.emissive.parameters));
@@ -185,17 +156,16 @@ void save_binding(Archive& ar, const material_graph_binding& binding)
 template<typename Archive>
 void load_binding(Archive& ar, material_graph_binding& binding)
 {
-    load_entries(ar, binding.parameters, load_parameter<Archive>);
+    try_load(ar, ser20::make_nvp("parameters", binding.parameters));
     try_load(ar, ser20::make_nvp("parameter_registers", binding.parameter_registers));
-    load_entries(ar, binding.textures, load_texture<Archive>);
-    load_entries(ar, binding.static_switches, load_static_switch<Archive>);
+    try_load(ar, ser20::make_nvp("textures", binding.textures));
+    try_load(ar, ser20::make_nvp("static_switches", binding.static_switches));
     try_load(ar, ser20::make_nvp("emissive_is_known", binding.emissive.is_known));
     try_load(ar, ser20::make_nvp("emissive_constant", binding.emissive.constant));
     try_load(ar, ser20::make_nvp("emissive_parameters", binding.emissive.parameters));
     try_load(ar, ser20::make_nvp("uses_opacity_mask", binding.uses_opacity_mask));
     try_load(ar, ser20::make_nvp("is_opacity_mask_animated", binding.is_opacity_mask_animated));
-    // Fields are read in the order save_binding writes them: binary archives have no names. Files of older format
-    // versions recompile (get_format_version<material>), so none is read here.
+    // Files of older format versions recompile (get_format_version<material>), so none is read here.
     uint8_t blend_mode = uint8_t(material_blend_mode::opaque);
     try_load(ar, ser20::make_nvp("blend_mode", blend_mode));
     binding.blend_mode = blend_mode < MATERIAL_BLEND_MODE_COUNT ? material_blend_mode(blend_mode) : material_blend_mode::opaque;
@@ -229,26 +199,61 @@ void load_binding(Archive& ar, material_graph_binding& binding)
     try_load(ar, ser20::make_nvp("has_gi_variant", binding.has_gi_variant));
     try_load(ar, ser20::make_nvp("has_gi_reflection_variant", binding.has_gi_reflection_variant));
 }
+
+constexpr const char* FUNCTIONS_KEY = "functions";
+
+/// The copies of the material functions a compiled graph calls, keyed by the function's asset key.
+template<typename Archive>
+void save_functions(Archive& ar, const graph_material::function_copies& functions)
+{
+    ar.setNextName(FUNCTIONS_KEY);
+    ar.startNode();
+    for(const auto& [key, function] : functions)
+    {
+        try_save(ar, ser20::make_nvp(key.c_str(), *function));
+    }
+    ar.finishNode();
+}
+
+/// Loads what save_functions saved into functions; leaves them as they are when the document has none.
+template<typename Archive>
+void load_functions(Archive& ar, graph_material::function_copies& functions)
+{
+    graph_material::function_copies loaded;
+    const bool has_functions = serialization::load_named_members(ar,
+                                                                 FUNCTIONS_KEY,
+                                                                 [&](const std::string& key)
+                                                                 {
+                                                                     auto function = std::make_shared<material_graph>();
+                                                                     if(!try_load(ar, ser20::make_nvp(key.c_str(), *function)))
+                                                                     {
+                                                                         return false;
+                                                                     }
+                                                                     loaded[key] = std::move(function);
+                                                                     return true;
+                                                                 });
+    if(has_functions)
+    {
+        functions = std::move(loaded);
+    }
+}
 } // namespace
 
 SAVE(graph_material)
 {
     try_save(ar, ser20::make_nvp("base_type", ser20::base_class<material>(&obj)));
     try_save(ar, ser20::make_nvp("graph", obj.get_graph()));
-    // The source is the graph alone; the compiled material names the code its shader files hold, keeps what a draw
-    // of that code binds, and the material functions the graph calls.
-    if constexpr(is_binary_archive<Archive>())
+    // The source is the graph alone. A binary document - the compiled material, or a copy - keeps the material functions
+    // the graph calls, and once the material is compiled, the code its shader files hold and what a draw of that code
+    // binds. A material not compiled has neither: a copy of one binds its graph when loaded.
+    if constexpr(std::is_same_v<Archive, ser20::oarchive_binary_t>)
     {
-        try_save(ar, ser20::make_nvp("shader_hash", obj.get_shader_hash()));
-        save_binding(ar, obj.get_binding());
-        auto count = uint32_t(obj.get_functions().size());
-        try_save(ar, ser20::make_nvp("function_count", count));
-        for(const auto& [key, function] : obj.get_functions())
+        if(!obj.get_shader_hash().empty())
         {
-            auto name = key;
-            try_save(ar, ser20::make_nvp("function_key", name));
-            try_save(ar, ser20::make_nvp("function", *function));
+            try_save(ar, ser20::make_nvp("shader_hash", obj.get_shader_hash()));
+            save_binding(ar, obj.get_binding());
         }
+        save_functions(ar, obj.get_functions());
     }
 
     // Changes here should be reflected in ex::get_format_version<material>() in asset_extensions.h
@@ -261,25 +266,14 @@ LOAD(graph_material)
     try_load(ar, ser20::make_nvp("base_type", ser20::base_class<material>(&obj)));
     material_graph graph;
     try_load(ar, ser20::make_nvp("graph", graph));
-    if constexpr(is_binary_archive<Archive>())
+    // The copies first: a graph bound below calls them.
+    load_functions(ar, obj.functions_);
+    std::string shader_hash;
+    if(try_load(ar, ser20::make_nvp("shader_hash", shader_hash)) && !shader_hash.empty())
     {
-        std::string shader_hash;
-        material_graph_binding binding;
-        try_load(ar, ser20::make_nvp("shader_hash", shader_hash));
-        load_binding(ar, binding);
-        uint32_t count = 0;
-        try_load(ar, ser20::make_nvp("function_count", count));
-        graph_material::function_copies functions;
-        for(uint32_t i = 0; i < count; ++i)
-        {
-            std::string key;
-            auto function = std::make_shared<material_graph>();
-            try_load(ar, ser20::make_nvp("function_key", key));
-            try_load(ar, ser20::make_nvp("function", *function));
-            functions[key] = std::move(function);
-        }
         // A compiled material binds what its compile laid out: loading it compiles nothing.
-        obj.functions_ = std::move(functions);
+        material_graph_binding binding;
+        load_binding(ar, binding);
         obj.take_compiled(std::move(graph), std::move(shader_hash), std::move(binding));
     }
     else
@@ -312,23 +306,12 @@ LOAD_INSTANTIATE(compiled_graph_material_shader, ser20::iarchive_binary_t);
 
 void save_to_file_bin(const std::string& absolute_path, const compiled_graph_material_shader& shader)
 {
-    std::ofstream stream(absolute_path, std::ios::binary);
-    if(stream.good())
-    {
-        ser20::oarchive_binary_t ar(stream);
-        try_save(ar, ser20::make_nvp("graph_material_shader", shader));
-    }
+    write_compiled_file(absolute_path, "graph_material_shader", shader);
 }
 
 auto load_from_file_bin(const std::string& absolute_path, compiled_graph_material_shader& shader) -> bool
 {
-    auto input = fs::open_readable_stream(absolute_path);
-    if(!input)
-    {
-        return false;
-    }
-    ser20::iarchive_binary_t ar(*input);
-    return try_load(ar, ser20::make_nvp("graph_material_shader", shader));
+    return load_compiled_file(absolute_path, "graph_material_shader", shader);
 }
 
 auto load_header_from_file_bin(const std::string& absolute_path, compiled_graph_material_shader_header& header) -> bool
@@ -338,19 +321,54 @@ auto load_header_from_file_bin(const std::string& absolute_path, compiled_graph_
     {
         return false;
     }
-    // The fields SAVE(compiled_graph_material_shader) writes first, then the variants' count.
-    ser20::iarchive_binary_t ar(*input);
-    ser20::size_type variant_count = 0;
-    try
-    {
-        ar(header.code_hash, header.compile_parameters, ser20::make_size_tag(variant_count));
-    }
-    catch(const std::exception&)
+    // A file of an older format is simply not current: it compiles again, with nothing to warn about.
+    if(!serialization::is_binary_document(*input))
     {
         return false;
     }
-    header.has_variants = variant_count > 0;
-    return true;
+    const auto read_header = [&](auto& ar) -> bool
+    {
+        if(!ar.hasNextName("graph_material_shader"))
+        {
+            return false;
+        }
+        ar.setNextName("graph_material_shader");
+        ar.startNode();
+        ser20::size_type variant_count = 0;
+        // Every shader file holds its variants, an empty list for a compile that failed.
+        const bool has_header = try_load(ar, ser20::make_nvp("code_hash", header.code_hash)) &&
+                                try_load(ar, ser20::make_nvp("compile_parameters", header.compile_parameters)) &&
+                                ar.hasNextName("variants");
+        if(has_header)
+        {
+            ar.setNextName("variants");
+            ar.startNode();
+            ar(ser20::make_size_tag(variant_count));
+            ar.finishNode();
+        }
+        ar.finishNode();
+        header.has_variants = variant_count > 0;
+        return has_header;
+    };
+    // The two strings and the variants' count, from the file's first bytes: the variants' code, megabytes of it,
+    // is not read. A header longer than those bytes is read from the whole file.
+    constexpr size_t header_bytes = 64 * 1024;
+    const auto start = input->tellg();
+    input->seekg(0, std::ios::end);
+    const auto size = static_cast<size_t>(input->tellg() - start);
+    input->seekg(start);
+    if(serialization::read_binary_head(*input, header_bytes, read_header))
+    {
+        return true;
+    }
+    // A file the first bytes held whole has no more to read.
+    if(size <= header_bytes)
+    {
+        return false;
+    }
+    input->clear();
+    input->seekg(start);
+    return serialization::read_binary(*input, read_header);
 }
 
 auto get_graph_material_shader_file(const std::string& compiled_material_path, const std::string& renderer_extension)
