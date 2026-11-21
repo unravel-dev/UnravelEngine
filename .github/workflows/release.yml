@@ -72,8 +72,9 @@ env:
   # CMake 3.x: CMake 4 refuses dependencies that still declare a minimum below 3.5.
   CMAKE_VERSION: '3.31.12'
   NINJA_VERSION: '1.13.2'
-  # Windows clang (official LLVM build); each Linux target names its clang in the targets below.
-  LLVM_VERSION: '21.1.8'
+  # Windows clang (official LLVM build); each Linux target names its clang in the targets below. It is no older
+  # than the Microsoft STL of the runner's Visual Studio accepts: MSVC 14.52 on windows-2025-vs2026 needs clang 22.
+  LLVM_VERSION: '22.1.8'
   # The SHA-256 of each file downloaded for the three versions above, checked before the file is unpacked or
   # run; they change with the versions. CMake's are in the cmake-<version>-SHA-256.txt of its release; Ninja's and
   # LLVM's are the digests their GitHub release pages show for the files.
@@ -81,7 +82,7 @@ env:
   CMAKE_WINDOWS_SHA256: '0c4baa40f28b3f8225eb3fdf6946c987b4fe901403b4eaf2fbbd9378100aaa0c'
   NINJA_LINUX_SHA256: '5749cbc4e668273514150a80e387a957f933c6ed3f5f11e03fb30955e2bbead6'
   NINJA_WINDOWS_SHA256: '07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65'
-  LLVM_WINDOWS_SHA256: '7a5386c26497db1691f320121e5b113364dd0274b98e55f15f4dbc00c0450113'
+  LLVM_WINDOWS_SHA256: '16e5709785fef73c854646241c4a92c5cd574318d1b33c63330dd7721903e55c'
   # Windows .NET; on Linux install_dotnet.sh picks the SDK.
   DOTNET_VERSION: '10.0.x'
   # The .NET SDK the browser player builds with (game/web/UnravelWebPlayer.csproj): its wasm-tools workload
