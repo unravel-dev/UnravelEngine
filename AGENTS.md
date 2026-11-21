@@ -136,6 +136,8 @@ Designs that span several areas: skill `unravel-architect`.
   baseline in the same session before judging a change (skill `unravel-debugging`).
 - When the user edits a tested set of changes, change only the items they name. A measured
   "no benefit" is data to report, not a reason to drop an item.
+- An answer to a design question (a library, a name, a location) is a decision to record, not
+  a go-ahead: start building only when the user asks for it.
 - Driving an editor over MCP: start your own on your own port; never call an editor you did
   not start (skill `unravel-editor-mcp`).
 - Done means verified: the touched targets build in the configured trees and the relevant
