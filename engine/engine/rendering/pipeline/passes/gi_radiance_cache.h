@@ -134,7 +134,11 @@ private:
         trace_args = 4,
     };
 
+    /// Whether the programs of the cache itself loaded: without them it is off, and the gather traces without it.
     auto has_programs() const -> bool;
+    /// Whether the programs that serve see-through surfaces loaded (the marking around their points and the SH):
+    /// without them the cache still serves the gather, and those surfaces take their diffuse light from the sky.
+    auto has_surface_programs() const -> bool;
     /// Creates the buffers once and the atlases at @p probe_res radiance texels per probe axis; new atlases rebuild
     /// the cache.
     auto ensure_resources(uint32_t probe_res) -> bool;

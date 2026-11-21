@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 
 namespace unravel
 {
@@ -116,26 +117,27 @@ auto gi_radiance_cache::init(rtti::context& ctx) -> bool
     filter_program_ = load("cs_gi_rc_filter");
     mark_points_program_ = load("cs_gi_rc_mark_points");
     sh_program_ = load("cs_gi_rc_sh");
-    if(!has_programs() && gi_pass::is_supported())
+    if(gi_pass::is_supported())
     {
-        APPLOG_WARNING("[GI] Radiance cache programs failed to load; the gather traces without it.");
+        if(!has_programs())
+        {
+            APPLOG_WARNING("[GI] Radiance cache programs failed to load; the gather traces without it.");
+        }
+        else if(!has_surface_programs())
+        {
+            APPLOG_WARNING("[GI] The radiance cache programs of see-through surfaces failed to load; those surfaces take "
+                           "their diffuse light from the sky.");
+        }
     }
     return has_programs();
 }
 
-auto gi_radiance_cache::has_programs() const -> bool
+namespace
 {
-    for(const auto* program : {&clear_program_,
-                               &mark_program_,
-                               &update_program_,
-                               &bookkeeping_program_,
-                               &allocate_program_,
-                               &select_program_,
-                               &tiles_program_,
-                               &trace_program_,
-                               &filter_program_,
-                               &mark_points_program_,
-                               &sh_program_})
+/// Whether every program of a list loaded.
+auto are_gi_cache_programs_valid(std::initializer_list<const gpu_program::ptr*> programs) -> bool
+{
+    for(const auto* program : programs)
     {
         if(!*program || !(*program)->is_valid())
         {
@@ -143,6 +145,25 @@ auto gi_radiance_cache::has_programs() const -> bool
         }
     }
     return true;
+}
+} // namespace
+
+auto gi_radiance_cache::has_programs() const -> bool
+{
+    return are_gi_cache_programs_valid({&clear_program_,
+                                        &mark_program_,
+                                        &update_program_,
+                                        &bookkeeping_program_,
+                                        &allocate_program_,
+                                        &select_program_,
+                                        &tiles_program_,
+                                        &trace_program_,
+                                        &filter_program_});
+}
+
+auto gi_radiance_cache::has_surface_programs() const -> bool
+{
+    return are_gi_cache_programs_valid({&mark_points_program_, &sh_program_});
 }
 
 auto gi_radiance_cache::ensure_resources(uint32_t probe_res) -> bool
@@ -513,7 +534,11 @@ auto gi_radiance_cache::update(const frame_inputs& inputs) -> bool
         run_bookkeeping(bookkeeping::reset);
     }
     run_mark(inputs);
-    run_mark_surfaces(inputs);
+    const bool serves_surfaces = has_surface_programs();
+    if(serves_surfaces)
+    {
+        run_mark_surfaces(inputs);
+    }
     run_over_indirection(*update_program_, "GI/Cache Update");
     run_bookkeeping(bookkeeping::frame_start);
     run_over_indirection(*allocate_program_, "GI/Cache Allocate");
@@ -524,7 +549,7 @@ auto gi_radiance_cache::update(const frame_inputs& inputs) -> bool
     run_filter();
     // The SH runs from the first frame surfaces read it: the whole pool that frame (its probes were traced while nothing
     // projected them), then the traced probes every frame, so surfaces coming back into view find it current.
-    if(has_surface_points(inputs) || has_surfaces_)
+    if(serves_surfaces && (has_surface_points(inputs) || has_surfaces_))
     {
         run_sh(!has_surfaces_);
         has_surfaces_ = true;

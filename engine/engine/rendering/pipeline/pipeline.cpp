@@ -1537,11 +1537,16 @@ auto pipeline::run_particle_pass(scene& scn,
     const math::vec3 camera_velocity = get_camera_velocity(camera, dt);
     const float camera_speed = math::length(camera_velocity);
 
-    if(particle_program_ && particle_program_mask_ && particle_program_->begin() && particle_program_mask_->begin())
+    // The particle programs draw the particles alone: see-through meshes draw with their own materials, so a particle
+    // program that did not load or is not ready yet leaves them drawn. Before the pass is set up there is neither.
+    const bool is_set_up = particle_program_ && particle_program_mask_;
+    const bool has_particle_programs = is_set_up && particle_program_->begin() && particle_program_mask_->begin();
+    if(is_set_up && (has_particle_programs || has_meshes))
     {
         const auto cam_pos = camera.get_position();
-        particle_draw_keys particle_emitters =
-            include_particles ? gather_particle_emitters(scn, camera, camera_speed, render_mask, stats_) : particle_draw_keys{};
+        particle_draw_keys particle_emitters = include_particles && has_particle_programs
+                                                   ? gather_particle_emitters(scn, camera, camera_speed, render_mask, stats_)
+                                                   : particle_draw_keys{};
         const bool wants_scene_depth = has_soft_particles(particle_emitters);
         {
             APP_SCOPE_PERF("Rendering/Particle Pass/Sort Emitters");
@@ -1565,8 +1570,11 @@ auto pipeline::run_particle_pass(scene& scn,
                 ps_soa::render_view_params params;
                 params.has_reactive_target = has_reactive_target;
                 forward_has_reactive_target_ = has_reactive_target;
-                params.program = particle_program_->native_handle();
-                params.mask_program = particle_program_mask_->native_handle();
+                if(has_particle_programs)
+                {
+                    params.program = particle_program_->native_handle();
+                    params.mask_program = particle_program_mask_->native_handle();
+                }
                 params.view_matrix = &camera.get_view()[0][0];
                 params.eye = cam_pos;
                 params.camera_velocity = camera_velocity;
@@ -1800,8 +1808,11 @@ auto pipeline::run_particle_pass(scene& scn,
             }
         }
 
-        particle_program_->end();
-        particle_program_mask_->end();
+        if(has_particle_programs)
+        {
+            particle_program_->end();
+            particle_program_mask_->end();
+        }
     }
     return reactive;
 }
