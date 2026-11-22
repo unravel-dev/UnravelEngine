@@ -1,0 +1,82 @@
+OpenGL: with NDC conventions normalized, Emscripten's vertex shaders rename main once
+
+On Emscripten bgfx wraps a vertex shader that does not write gl_PointSize: `#define main bgfx_main` and a new main
+that calls it and writes gl_PointSize = 1.0. BGFX_CONFIG_GL_NORMALIZE_NDC_CONVENTIONS wraps every vertex shader's
+main the same way (`#define main bgfx_ndcMain`) above it, so WebGL 2 rejected every such shader: "'main' : macro
+redefined", "function already has a body".
+
+With the conventions normalized, the NDC wrapper writes gl_PointSize where the Emscripten wrapper would, and that
+wrapper steps aside.
+
+diff --git a/src/renderer_gl.cpp b/src/renderer_gl.cpp
+--- a/src/renderer_gl.cpp
++++ b/src/renderer_gl.cpp
+@@ -7966,6 +7966,7 @@ namespace bgfx { namespace gl
+ 	static bx::StringView patchNdcConventions(
+ 		  const bx::StringView& _code
+ 		, GLenum _type
++		, bool _writePointSize
+ 		, char* _temp
+ 		, int32_t _tempLen
+ 		)
+@@ -8024,7 +8025,14 @@ namespace bgfx { namespace gl
+ 				  "void main()\n"
+ 				  "{\n"
+ 				  "\tbgfx_ndcMain();\n"
+-				  "\tif (0.0 != bgfx_indirectArgBase.w)\n"
++				, &err
++				);
++			if (_writePointSize)
++			{
++				bx::write(&writer, "\tgl_PointSize = 1.0;\n", &err);
++			}
++			bx::write(&writer
++				, "\tif (0.0 != bgfx_indirectArgBase.w)\n"
+ 				  "\t{\n"
+ 				  "\t\tgl_Position.z = gl_Position.z*2.0 - gl_Position.w;\n"
+ 				  "\t\tgl_Position.y = 0.0 > bgfx_indirectArgBase.w ? -gl_Position.y : gl_Position.y;\n"
+@@ -8176,6 +8184,10 @@ namespace bgfx { namespace gl
+ 
+ 		if (0 != m_id)
+ 		{
++			// Emscripten's vertex shaders write gl_PointSize. With NDC conventions normalized, the wrapper of main that
++			// normalizes them writes it too: a second wrapper would rename main twice.
++			bool writePointSize = false;
++
+ 			if (0 != bx::strCmp(code, "#version", 8) )
+ 			{
+ 				const int32_t tempLen = code.getLength() + (4<<10);
+@@ -8209,20 +8221,21 @@ namespace bgfx { namespace gl
+ 					bx::write(&writer, &err, "#version %d\n", BGFX_CONFIG_RENDERER_OPENGL*10);
+ 				}
+ 
+-				const bool writePointSize = true
++				writePointSize = true
+ 					&& BX_ENABLED(BX_PLATFORM_EMSCRIPTEN)
+ 					&& GL_VERTEX_SHADER == m_type
+ 					&& bx::strFind(code, "gl_PointSize").isEmpty()
+ 					;
++				const bool wrapPointSize = writePointSize && !BX_ENABLED(BGFX_CONFIG_GL_NORMALIZE_NDC_CONVENTIONS);
+ 
+-				if (writePointSize)
++				if (wrapPointSize)
+ 				{
+ 					bx::write(&writer, &err, "#define main bgfx_main\n");
+ 				}
+ 
+ 				bx::write(&writer, code.getPtr(), code.getLength(), &err);
+ 
+-				if (writePointSize)
++				if (wrapPointSize)
+ 				{
+ 					bx::write(&writer, &err
+ 						, "\n#undef main\n"
+@@ -8251,7 +8264,7 @@ namespace bgfx { namespace gl
+ 				{
+ 					const int32_t ndcTempLen = code.getLength() + (4<<10);
+ 					ndcTemp = (char*)BX_STACK_ALLOC(ndcTempLen);
+-					code = patchNdcConventions(code, m_type, ndcTemp, ndcTempLen);
++					code = patchNdcConventions(code, m_type, writePointSize, ndcTemp, ndcTempLen);
+ 				}
+ #endif // BGFX_CONFIG_GL_NORMALIZE_NDC_CONVENTIONS
+ 

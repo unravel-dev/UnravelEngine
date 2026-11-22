@@ -152,6 +152,9 @@ GLSL ES (WebGL 2, validated only by the browser):
   `#if BGFX_SHADER_LANGUAGE_ESSL`.
 - After an ESSL-affecting change, deploy a Web profile, open the page with `?graphics=webgl2` and search the
   browser console for `Failed to compile shader`: a failed program drops its pass silently.
+- bgfx rewrites every GLSL and ESSL vertex shader's `main` to normalize clip conventions, and on Emscripten once
+  more to write `gl_PointSize`; patch 0008 folds the second into the first. A further rewrite of `main` in bgfx
+  shows on WebGL 2 alone ("'main' : macro redefined").
 
 SPIR-V and WGSL (Vulkan, OpenGL text and WebGPU all come from SPIR-V or the same HLSL path):
 
