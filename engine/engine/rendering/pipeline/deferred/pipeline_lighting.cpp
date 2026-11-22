@@ -468,8 +468,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview, const fe
                 if(irradiance_intensity <= 0.0f)
                     return;
 
-                const auto& world_transform = transform_comp_ref.get_transform_global();
-                math::vec3 light_dir = world_transform.z_unit_axis();
+                math::vec3 light_dir = light_component::get_light_frame(transform_comp_ref.get_transform_global()).z_unit_axis();
                 math::vec3 irradiance_color = {1.0f, 1.0f, 1.0f};
                 bool use_perez = false;
                 irradiance_perez_params candidate_perez;
@@ -641,7 +640,10 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview, const fe
             {
                 if(e == sky.entity() && skylight_comp_ref.get_irradiance_intensity() > 0.0f)
                 {
-                    ambient = compute_flat_ambient(skylight_comp_ref, transform_comp_ref.get_transform_global().z_unit_axis(), sun_intensity);
+                    ambient = compute_flat_ambient(skylight_comp_ref,
+                                                   light_component::get_light_frame(transform_comp_ref.get_transform_global())
+                                                       .z_unit_axis(),
+                                                   sun_intensity);
                 }
             });
         write_flat_irradiance(irradiance_tex, ambient);
@@ -701,8 +703,7 @@ void deferred::run_direct_lighting_pass(scene& scn,
                 return;
             }
             const auto light = limit_light(light_comp_ref.get_light(), limits);
-            auto world_transform = transform_comp_ref.get_transform_global();
-            world_transform.reset_scale();
+            const auto world_transform = light_component::get_light_frame(transform_comp_ref.get_transform_global());
             const auto& generator = light_comp_ref.get_shadowmap_generator();
             const bool has_shadows = light.casts_shadows && apply_shadows && generator.has_shadow_map();
             submit_light(light,
@@ -1349,8 +1350,8 @@ auto gather_skylight_params(scene& scn,
 
                 if(light.type == light_type::directional)
                 {
-                    const auto& world_transform = transform_comp_ref.get_transform_global();
-                    params_perez.light_direction = world_transform.z_unit_axis();
+                    params_perez.light_direction =
+                        light_component::get_light_frame(transform_comp_ref.get_transform_global()).z_unit_axis();
                 }
             }
             params_skybox.sky_brightness = light_comp_ref.get_sky_brightness();
@@ -1459,7 +1460,7 @@ auto find_fog_sun(scene& scn, bool use_shadow_maps, const feature_limits& limits
             }
             strongest = light.intensity;
             // The light travels along its z axis; the fog wants the direction toward it.
-            sun.direction = -transform_comp.get_transform_global().z_unit_axis();
+            sun.direction = -light_component::get_light_frame(transform_comp.get_transform_global()).z_unit_axis();
             sun.illuminance = light_comp.get_linear_color() * (light.intensity * light.volumetric_intensity);
             const auto& generator = light_comp.get_shadowmap_generator();
             const bool has_shadow = use_shadow_maps && light.casts_shadows && light.shadow_params.type != sm_impl::esm &&
@@ -1506,9 +1507,7 @@ auto gather_fog_local_lights(scene& scn, bool use_shadow_maps) -> std::vector<fo
             {
                 return;
             }
-            // Scale must not skew the light's axis.
-            auto world = transform_comp.get_transform_global();
-            world.reset_scale();
+            const auto world = light_component::get_light_frame(transform_comp.get_transform_global());
             fog_pass::local_light local;
             local.id = static_cast<std::uint32_t>(entt::to_integral(e));
             local.position = world.get_position();

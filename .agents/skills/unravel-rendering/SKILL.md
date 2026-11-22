@@ -123,6 +123,10 @@ Pipeline, targets and draws:
 - A fade or confidence built from view-space dot products normalizes its vectors first.
 - A temporal accumulator's composite shows the running mean; it never mixes the current frame back in by the
   history count.
+- A light's position and axes come from `light_component::get_light_frame(global)`: it shines along the frame's +z,
+  its source lies along +y. Every reader (lighting, shadows, fog, the GPU light list, the sun, culling, the editor's
+  gizmo) goes through it. Never `reset_scale()` a light's transform: the decomposition keeps a mirror as negative
+  scale, and resetting it turns the light around.
 - Shadow biases are in texels (`light.h`). The cascade a receiver reads (the smallest crop containing it,
   `fs_pbr_lighting.sh`) and the nested-cascade caster culling (`shadow.cpp`) are one contract: change both.
 - An overlay that must win over coplanar geometry (the editor grid) biases by a few ulps plus a fraction of a

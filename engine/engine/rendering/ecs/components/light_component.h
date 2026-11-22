@@ -57,10 +57,18 @@ public:
     auto get_bounds_sphere() const -> math::bsphere;
 
     /**
+     * @brief Where a light whose global transform is @p global sits and how it faces, its scale left out: the light
+     *        shines along the frame's +z (z_unit_axis) and a source's length lies along its +y. Every system that places
+     *        a light reads it from this frame: direct lighting, shadows, fog, the GPU light list, the sky's sun and the
+     *        editor's gizmo. A scale gives a light no size; a mirrored parent keeps its flip, so the light shines the
+     *        way its transform's +z really points.
+     */
+    static auto get_light_frame(const math::transform& global) -> math::transform;
+
+    /**
      * @brief World-space bounding sphere of the volume the light reaches, for culling the
      * light against a view and casters against the light (light::compute_world_bounds_sphere).
-     * @param[in] world_transform The light's world transform; only its position and z axis
-     *                            are read, so scale does not matter.
+     * @param[in] world_transform The light's global transform; it is read through get_light_frame.
      */
     auto get_world_bounds_sphere(const math::transform& world_transform) const -> math::bsphere;
 

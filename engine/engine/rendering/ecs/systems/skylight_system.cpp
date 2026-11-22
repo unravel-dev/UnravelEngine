@@ -80,7 +80,8 @@ void skylight_system::update_atmosphere_sun_transmittance(scene& scn)
         return;
     }
     // The light shines along its z axis; the sun lies the other way.
-    const auto direction_to_sun = -sky.get<transform_component>().get_transform_global().z_unit_axis();
+    const auto direction_to_sun =
+        -light_component::get_light_frame(sky.get<transform_component>().get_transform_global()).z_unit_axis();
     light_comp->set_atmosphere_transmittance(compute_atmosphere_sun_transmittance(direction_to_sun));
 }
 

@@ -20,10 +20,14 @@
  *
  * And the glm SIMD fix of 2026-10: a vec3 cut from a vec4 measured with the vec4's w (length, dot, normalize), which
  * left frustum planes degenerate far from the origin.
+ *
+ * And the frame a light is placed with (light_component::get_light_frame): its axes follow the global transform under
+ * a rotated, stretched or mirrored parent, without its scale.
  */
 
 #include "../tests.h"
 
+#include <engine/rendering/ecs/components/light_component.h>
 #include <math/math.h>
 
 #include <algorithm>
@@ -1343,6 +1347,56 @@ void test_vec3_from_vec4_ignores_w()
     check_near(plane.data.w, 150.0f, 1e-3f, "and keeps its distance in the same units");
 }
 
+/// Where @p t really sends @p axis: its matrix applied to the axis, normalized.
+auto get_matrix_axis(const math::transform& t, const math::vec3& axis) -> math::vec3
+{
+    return math::normalize(math::vec3(t.get_matrix() * math::vec4(axis, 0.0f)));
+}
+
+void check_near_vec3(const math::vec3& actual, const math::vec3& expected, float tolerance, const std::string& what)
+{
+    const float off = math::distance(actual, expected);
+    check(off <= tolerance, what + " (off by " + std::to_string(off) + ")");
+}
+
+void test_light_frame_follows_the_global_axes()
+{
+    std::printf("test_light_frame_follows_the_global_axes\n");
+    // A light under a parent: the frame every system places it with (light_component::get_light_frame) faces where its
+    // global transform sends its axes, has no scale, and keeps a mirrored parent's flip.
+    math::transform child;
+    child.set_position(0.5f, 1.0f, -2.0f);
+    child.set_rotation_euler_degrees(20.0f, 35.0f, 10.0f);
+    const auto check_frame = [&child](const math::transform& parent, const std::string& name)
+    {
+        const math::transform global = parent * child;
+        const auto frame = light_component::get_light_frame(global);
+        check_near_vec3(frame.z_unit_axis(),
+                        get_matrix_axis(global, math::vec3(0.0f, 0.0f, 1.0f)),
+                        1e-4f,
+                        "the light shines where " + name + " sends its +z");
+        check_near_vec3(frame.y_unit_axis(),
+                        get_matrix_axis(global, math::vec3(0.0f, 1.0f, 0.0f)),
+                        1e-4f,
+                        "its source axis follows its +y under " + name);
+        check_near_vec3(frame.get_position(), global.get_position(), 1e-5f, "it stays where it is under " + name);
+        const auto scale = math::abs(frame.get_scale());
+        check_near(scale.x + scale.y + scale.z, 3.0f, 1e-5f, "its frame has a unit scale under " + name);
+    };
+    math::transform rotated;
+    rotated.set_position(3.0f, 0.0f, 1.0f);
+    rotated.set_rotation_euler_degrees(0.0f, 90.0f, 0.0f);
+    check_frame(rotated, "a rotated parent");
+    math::transform stretched;
+    stretched.set_rotation_euler_degrees(10.0f, 0.0f, 30.0f);
+    stretched.set_scale(2.0f, 0.5f, 3.0f);
+    check_frame(stretched, "a stretched parent");
+    math::transform mirrored;
+    mirrored.set_rotation_euler_degrees(0.0f, 40.0f, 0.0f);
+    mirrored.set_scale(-1.0f, 1.0f, 1.0f);
+    check_frame(mirrored, "a mirrored parent");
+}
+
 void test_frustum_far_from_origin()
 {
     std::printf("test_frustum_far_from_origin\n");
@@ -1386,6 +1440,7 @@ void run_transform_math_suite(rtti::context& /*ctx*/)
         RUN_CASE(test_inverse_and_axis_fast_paths());
         RUN_CASE(test_vec3_from_vec4_ignores_w());
         RUN_CASE(test_frustum_far_from_origin());
+        RUN_CASE(test_light_frame_follows_the_global_axes());
         run_property_tests();
     }
 

@@ -256,6 +256,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
     {
         const auto& light_comp = e.get<light_component>();
         const auto& light = light_comp.get_light();
+        // Where the renderer places the light: the gizmo points where the light shines.
+        const auto light_frame = light_component::get_light_frame(world_transform);
 
         if(light.type == light_type::spot)
         {
@@ -268,8 +270,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 dd.encoder.setColor(0xff00ff00);
                 dd.encoder.setWireframe(true);
                 dd.encoder.setLod(3);
-                math::vec3 from = transform_comp.get_position_global();
-                math::vec3 to = from + transform_comp.get_z_axis_local() * adjacent;
+                math::vec3 from = light_frame.get_position();
+                math::vec3 to = from + light_frame.z_unit_axis() * adjacent;
                 dd.encoder.drawCone(vec3_to_bx(to), vec3_to_bx(from), oposite);
             }
             {
@@ -280,8 +282,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 dd.encoder.setColor(0xff00ffff);
                 dd.encoder.setWireframe(true);
                 dd.encoder.setLod(3);
-                math::vec3 from = transform_comp.get_position_global();
-                math::vec3 to = from + transform_comp.get_z_axis_local() * adjacent;
+                math::vec3 from = light_frame.get_position();
+                math::vec3 to = from + light_frame.z_unit_axis() * adjacent;
                 dd.encoder.drawCone(vec3_to_bx(to), vec3_to_bx(from), oposite);
             }
         }
@@ -291,7 +293,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             DebugDrawEncoderScopePush scope(dd.encoder);
             dd.encoder.setColor(0xff00ff00);
             dd.encoder.setWireframe(true);
-            math::vec3 center = transform_comp.get_position_global();
+            math::vec3 center = light_frame.get_position();
             dd.encoder.drawCircle(Axis::X, center.x, center.y, center.z, radius);
             dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, radius);
             dd.encoder.drawCircle(Axis::Z, center.x, center.y, center.z, radius);
@@ -302,19 +304,19 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             dd.encoder.setLod(255);
             dd.encoder.setColor(0xff00ff00);
             dd.encoder.setWireframe(true);
-            math::vec3 from1 = transform_comp.get_position_global();
-            math::vec3 to1 = from1 + transform_comp.get_z_axis_local() * 1.0f;
+            math::vec3 from1 = light_frame.get_position();
+            math::vec3 to1 = from1 + light_frame.z_unit_axis() * 1.0f;
 
             bx::Cylinder cylinder = {vec3_to_bx(from1), vec3_to_bx(to1), 0.1f};
 
             dd.encoder.draw(cylinder);
             math::vec3 from2 = to1;
-            math::vec3 to2 = from2 + transform_comp.get_z_axis_local() * 0.5f;
+            math::vec3 to2 = from2 + light_frame.z_unit_axis() * 0.5f;
 
             bx::Cone cone = {vec3_to_bx(from2), vec3_to_bx(to2), 0.25f};
             dd.encoder.draw(cone);
         }
-        draw_light_source_shape(dd, light, world_transform);
+        draw_light_source_shape(dd, light, light_frame);
     }
 
     if(e.all_of<reflection_probe_component>() && em.gizmos.show_reflection_probe)
@@ -905,7 +907,7 @@ void gizmo_entity::draw_billboard(rtti::context& ctx, entt::meta_any& var, const
     }
 
     if(!cam.test_billboard(em.billboard_data.size, world_transform))
-        return; // completely outside → skip draw
+        return; // completely outside -> skip draw
 
     if(icon)
     {

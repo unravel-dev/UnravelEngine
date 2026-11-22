@@ -121,8 +121,7 @@ void deferred::reserve_shadow_atlas_tiles(scene& scn, const camera& camera, cons
             {
                 return;
             }
-            auto world_transform = transform_comp.get_transform_global();
-            world_transform.reset_scale();
+            const auto world_transform = light_component::get_light_frame(transform_comp.get_transform_global());
             const auto light_sphere = light_comp.get_world_bounds_sphere(world_transform);
             if(!camera.get_frustum().test_sphere(light_sphere))
             {
@@ -172,8 +171,7 @@ void deferred::build_shadows(scene& scn,
 
             APP_SCOPE_PERF("Rendering/Shadow Generation Pass Per Light");
 
-            auto world_transform = transform_comp.get_transform_global();
-            world_transform.reset_scale();
+            const auto world_transform = light_component::get_light_frame(transform_comp.get_transform_global());
 
             generator.update(camera, light, world_transform, is_active);
 

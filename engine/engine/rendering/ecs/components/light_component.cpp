@@ -43,9 +43,24 @@ auto light_component::get_bounds_sphere() const -> math::bsphere
     return light_.compute_world_bounds_sphere(math::vec3(0.0f, 0.0f, 0.0f), math::vec3(0.0f, 0.0f, 1.0f));
 }
 
+auto light_component::get_light_frame(const math::transform& global) -> math::transform
+{
+    // A decomposed mirror is a negative scale on every axis with the flip folded into the rotation: a unit scale of
+    // the same signs keeps each axis pointing where the global transform sends it. A zero scale counts as positive.
+    const auto& scale = global.get_scale();
+    const auto unit_sign = [](float value)
+    {
+        return value < 0.0f ? -1.0f : 1.0f;
+    };
+    math::transform frame = global;
+    frame.set_scale(unit_sign(scale.x), unit_sign(scale.y), unit_sign(scale.z));
+    return frame;
+}
+
 auto light_component::get_world_bounds_sphere(const math::transform& world_transform) const -> math::bsphere
 {
-    return light_.compute_world_bounds_sphere(world_transform.get_position(), world_transform.z_unit_axis());
+    const auto frame = get_light_frame(world_transform);
+    return light_.compute_world_bounds_sphere(frame.get_position(), frame.z_unit_axis());
 }
 
 auto light_component::get_bounds() const -> math::bbox

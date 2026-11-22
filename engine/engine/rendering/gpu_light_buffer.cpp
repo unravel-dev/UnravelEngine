@@ -102,10 +102,7 @@ void gpu_light_buffer::update(scene& scn)
             // with zero intensity and no shadows: the record order and count stay stable, so turning
             // a light on or off relights only its own reach instead of the whole scene.
             const bool contributes = light_comp.is_enabled() && light.indirect_intensity > 0.0f;
-            // Scale must not leak into a light's transform: only its position and orientation
-            // are meaningful, and a scaled parent would otherwise skew the direction axis.
-            auto world_transform = transform_comp.get_transform_global();
-            world_transform.reset_scale();
+            const auto world_transform = light_component::get_light_frame(transform_comp.get_transform_global());
             const auto position = world_transform.get_position();
             const auto direction = world_transform.z_unit_axis();
             const auto source_axis = light.compute_source_axis(world_transform.y_unit_axis());

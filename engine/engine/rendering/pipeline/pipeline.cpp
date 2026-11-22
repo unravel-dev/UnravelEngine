@@ -184,8 +184,7 @@ auto gather_particle_lighting(scene& scn,
                 return;
             }
             const auto light = limit_light(light_comp.get_light(), limits);
-            auto world = transform_comp.get_transform_global();
-            world.reset_scale();
+            const auto world = light_component::get_light_frame(transform_comp.get_transform_global());
             const math::vec3 color = light_comp.get_linear_color() * light.intensity * pre_exposure;
             if(light.type == light_type::directional)
             {
