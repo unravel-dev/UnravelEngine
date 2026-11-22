@@ -39,6 +39,13 @@ Backends (OpenGL breaks first; the other backends hide these):
   renderer refuses to start on a backend reporting others. A depth buffer holds clip depth, readbacks arrive top
   row first, and no engine code or shader branches on OpenGL for either. bgfx keys GL program binaries by the
   shaders before it rewrites them, so a change to that rewrite renames the GL cache folder (`renderer.cpp`).
+- Camera views store reversed depth: the near plane at 1, the far plane at 0, depth cleared to 0
+  (`gfx::camera_far_depth`) and tested nearer-is-greater. C++ uses `gfx::depth_test_nearer` and its siblings,
+  shaders `isFarDepth`, `isDepthNearer`, `nearerDepth` / `fartherDepth`, `DEPTH_NEAR` / `DEPTH_FAR`
+  (`shaderlib.sh`), never raw LESS / GREATER, 0.0 / 1.0 or min / max on camera depth (suite "depth convention"
+  counts the raw ones). Shadow maps and GI card captures keep standard depth with their own projections and tests.
+  A float depth's step is relative to the depth on every backend but OpenGL / WebGL 2, where clip z passes through
+  -1..1 first: an error margin in device depth takes the larger of both (`ContactShadow`).
 - `gfx::render_pass::bind()` and `clear()` call `bgfx::touch`, which discards every uniform, texture, state and
   buffer set since the last submit: bind or clear the pass first, then set per-draw state.
 - A bgfx view runs its blits, then all its compute dispatches, then its draws; `bgfx::update` of a dynamic buffer

@@ -257,8 +257,8 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      visualization_group::surface,
      "depth",
      "Depth (Raw)",
-     "Raw device depth as greyscale. Non-linear: near geometry spans most of the range and "
-     "distance compresses hard, so far detail is expected to look flat.",
+     "Raw device depth as greyscale: white at the near plane, black at the far plane and the sky. Non-linear: "
+     "near geometry spans most of the range and distance compresses hard, so far detail is expected to look flat.",
      {}},
 
     // -- Ambient Occlusion ----------------------------------------------------

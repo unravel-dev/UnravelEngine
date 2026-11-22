@@ -128,7 +128,7 @@ auto get_view_stats(const bgfx::Stats& stats) -> std::vector<view_stats>;
 /// Camera views store reversed depth: the near plane at device depth 1, the far plane at 0, cleared to 0 and
 /// tested with GREATER. Shadow maps and GI card captures keep standard depth. Mirrored by REVERSED_DEPTH in
 /// engine_data/data/shaders/shaderlib.sh (suite "depth convention").
-constexpr bool reversed_depth = false;
+constexpr bool reversed_depth = true;
 /// Device depth of a camera view's near plane.
 constexpr float camera_near_depth = reversed_depth ? 1.0f : 0.0f;
 /// Device depth of a camera view's far plane: what a camera's depth clears to, the depth of nothing drawn.

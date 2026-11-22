@@ -445,7 +445,7 @@ float ign16x16(vec2 fragCoord)
 // clears to (gfx::reversed_depth in engine/core/graphics/graphics.h; suite "depth convention" keeps the two equal).
 // Shadow maps and GI card captures keep standard depth and do not use these helpers. The helpers name what a
 // comparison of camera depths means, so no shader spells the convention out.
-#define REVERSED_DEPTH 0
+#define REVERSED_DEPTH 1
 #if REVERSED_DEPTH
 #	define DEPTH_NEAR 1.0
 #	define DEPTH_FAR 0.0
