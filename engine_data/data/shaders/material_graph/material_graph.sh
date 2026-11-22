@@ -916,14 +916,25 @@ vec3 mg_normal_reconstruct_z(vec2 xy)
 }
 
 #if BGFX_SHADER_TYPE_FRAGMENT
+// Screen derivatives of each pixel where the shading language has them: dFdx and dFdy may give one value to a whole
+// 2x2 quad (fxc's ddx, many phone GPUs), which turns a bump from a fine pattern into blocks of four pixels. GLSL
+// before 4.50 and GLSL ES have only those.
+#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV || BGFX_SHADER_LANGUAGE_WGSL
+#define mg_ddx_fine(_x) dFdxFine(_x)
+#define mg_ddy_fine(_y) dFdyFine(_y)
+#else
+#define mg_ddx_fine(_x) dFdx(_x)
+#define mg_ddy_fine(_y) dFdy(_y)
+#endif
+
 // Normal From Height node: the tangent-space normal of a surface raised by height (world units times strength),
-// from the height's and the position's screen derivatives (surface gradient). Fragment stage only.
+// from the height's and the position's screen derivatives of each pixel (surface gradient). Fragment stage only.
 vec3 mg_normal_from_height(float height, float strength, vec3 world_position, vec3 normal, vec3 tangent, vec3 bitangent)
 {
-	vec3 dpdx = dFdx(world_position);
-	vec3 dpdy = dFdy(world_position);
-	float dhdx = dFdx(height) * strength;
-	float dhdy = dFdy(height) * strength;
+	vec3 dpdx = mg_ddx_fine(world_position);
+	vec3 dpdy = mg_ddy_fine(world_position);
+	float dhdx = mg_ddx_fine(height) * strength;
+	float dhdy = mg_ddy_fine(height) * strength;
 	vec3 r1 = cross(dpdy, normal);
 	vec3 r2 = cross(normal, dpdx);
 	float det = dot(dpdx, r1);
