@@ -11,6 +11,7 @@
 #include <functional>
 #include <string>
 #include <set>
+#include <vector>
 
 namespace gfx
 {
@@ -108,6 +109,21 @@ void set_profiler_hooks(gfx_profiler_begin_hook on_begin,
 void clear_profiler_hooks();
 
 void frames(int _count, int32_t _flags = BGFX_FRAME_NONE);
+
+/// One view's work in a frame: bgfx times a view's blits, compute dispatches and draws apart
+/// (bgfx::ViewStatsType); these are their sums.
+struct view_stats
+{
+    bgfx::ViewId view{};
+    std::string name;
+    /// CPU submit and GPU execute time, in milliseconds.
+    double cpu_ms{};
+    double gpu_ms{};
+};
+
+/// The views of @p stats in the order bgfx reports them, one entry per view whatever kinds of work it ran. A timer
+/// whose frequency bgfx does not report gives 0.
+auto get_view_stats(const bgfx::Stats& stats) -> std::vector<view_stats>;
 
 bool is_origin_bottom_left();
 bool is_homogeneous_depth();

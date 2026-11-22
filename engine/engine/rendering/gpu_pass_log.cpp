@@ -3,6 +3,7 @@
 #include <logging/logging.h>
 
 #include <bgfx/bgfx.h>
+#include <graphics/graphics.h>
 
 #include <algorithm>
 #include <cctype>
@@ -67,10 +68,9 @@ void gpu_pass_log::collect()
         return;
     }
     const double gpu_to_ms = MS_PER_SECOND / static_cast<double>(stats->gpuTimerFreq);
-    for(uint16_t i = 0; i < stats->numViews; ++i)
+    for(const auto& view : gfx::get_view_stats(*stats))
     {
-        const bgfx::ViewStats& view = stats->viewStats[i];
-        pass_gpu_ms_[collapse_layer_ids(view.name)] += static_cast<double>(view.gpuTimeEnd - view.gpuTimeBegin) * gpu_to_ms;
+        pass_gpu_ms_[collapse_layer_ids(view.name)] += view.gpu_ms;
     }
     frame_gpu_ms_ += static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) * gpu_to_ms;
     collect_pacing(*stats, gpu_to_ms);

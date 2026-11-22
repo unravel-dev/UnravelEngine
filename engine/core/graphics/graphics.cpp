@@ -547,6 +547,34 @@ void frames(int _count, int32_t _flags)
     }
 }
 
+auto get_view_stats(const bgfx::Stats& stats) -> std::vector<view_stats>
+{
+    const double cpu_to_ms = stats.cpuTimerFreq > 0 ? 1000.0 / static_cast<double>(stats.cpuTimerFreq) : 0.0;
+    const double gpu_to_ms = stats.gpuTimerFreq > 0 ? 1000.0 / static_cast<double>(stats.gpuTimerFreq) : 0.0;
+    std::vector<view_stats> views;
+    for(uint16_t i = 0; i < stats.numViewStats; ++i)
+    {
+        const bgfx::ViewStats& work = stats.viewStats[i];
+        // A view's kinds of work are usually reported together: its row is most often the last one.
+        auto found = !views.empty() && views.back().view == work.view
+                         ? std::prev(views.end())
+                         : std::find_if(views.begin(),
+                                        views.end(),
+                                        [&work](const view_stats& view)
+                                        {
+                                            return view.view == work.view;
+                                        });
+        if(found == views.end())
+        {
+            views.push_back({work.view, work.name});
+            found = std::prev(views.end());
+        }
+        found->cpu_ms += static_cast<double>(work.cpuTimeEnd - work.cpuTimeBegin) * cpu_to_ms;
+        found->gpu_ms += static_cast<double>(work.gpuTimeEnd - work.gpuTimeBegin) * gpu_to_ms;
+    }
+    return views;
+}
+
 auto screen_quad(float dest_width, float dest_height, float depth, float width, float height) -> uint64_t
 {
     float texture_half = get_half_texel();

@@ -1358,26 +1358,20 @@ void register_editor_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "No stats available", .is_error = true};
                  }
-                 const double cpu_to_ms = 1000.0 / static_cast<double>(stats->cpuTimerFreq);
-                 const double gpu_to_ms = 1000.0 / static_cast<double>(stats->gpuTimerFreq);
                  std::string json = "[";
                  bool first = true;
-                 for(uint16_t pos = 0; pos < stats->numViews; ++pos)
+                 for(const auto& view : gfx::get_view_stats(*stats))
                  {
-                     const auto& view = stats->viewStats[pos];
-                     const std::string name(view.name);
-                     if(!prefix.empty() && name.rfind(prefix, 0) != 0)
+                     if(!prefix.empty() && view.name.rfind(prefix, 0) != 0)
                      {
                          continue;
                      }
-                     const double cpu_ms = static_cast<double>(view.cpuTimeEnd - view.cpuTimeBegin) * cpu_to_ms;
-                     const double gpu_ms = static_cast<double>(view.gpuTimeEnd - view.gpuTimeBegin) * gpu_to_ms;
                      json += fmt::format(R"({}{{"view":{},"name":{},"cpu_ms":{:.4f},"gpu_ms":{:.4f}}})",
                                          first ? "" : ",",
                                          int(view.view),
-                                         make_json_string(name),
-                                         cpu_ms,
-                                         gpu_ms);
+                                         make_json_string(view.name),
+                                         view.cpu_ms,
+                                         view.gpu_ms);
                      first = false;
                  }
                  json += "]";

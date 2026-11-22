@@ -77,10 +77,11 @@ WebGPU change, and the shader buffers and skinned draws that keep vertex shaders
   `OES_texture_float_linear`) only point-filtered, else they read zero; bgfx forces point sampling for them.
 - To debug a WebGL frame, read each frame buffer's color attachments back from the page (a browser init script
   wrapping `framebufferTexture2D` and the draw calls) rather than guessing from the final image.
-- WebAssembly is 32-bit: bx's `alignUp` / `alignDown` cast to `size_t`, and bgfx's shared dynamic vertex and index
-  buffers carry their buffer handle in the top half of a 64-bit address that bx aligns, so in the web player every
-  CPU-updated dynamic buffer lands in handle 0's buffer (WebGL 2: `bufferSubData: buffer overflow`). Desktop and
-  Android are 64-bit. `--gfx-check-vertex-streams` on the page (`?arg=--gfx-check-vertex-streams`) shows it.
+- WebAssembly is 32-bit: `size_t` is 32 bits there, so code that aligns or masks a 64-bit value through `size_t`
+  drops its top half. bgfx's shared dynamic vertex and index buffers carry their buffer handle in that top half of a
+  64-bit address (bx aligns it in 64 bits); a 32-bit cast puts every CPU-updated dynamic buffer of the web player in
+  handle 0's buffer (WebGL 2: `bufferSubData: buffer overflow`). Desktop and Android are 64-bit.
+  `--gfx-check-vertex-streams` on the page (`?arg=--gfx-check-vertex-streams`) shows it.
 - WebGL 2 through ANGLE on Direct3D 11 counts `gl_VertexID` from an indexed draw's lowest index when it streams the
   vertices (buffers the CPU updates); a shader that needs a vertex's index reads it from an attribute.
 - A hidden browser pane renders no frames, so the engine never runs there: check a web build in headless Edge with a

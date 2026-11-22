@@ -9,6 +9,7 @@
 #include <imgui/imgui.h>
 
 #include <bgfx/bgfx.h>
+#include <graphics/graphics.h>
 
 #include <algorithm>
 #include <array>
@@ -237,24 +238,23 @@ void apply_pass_smoothing(std::vector<render_pass_entry>& entries)
     }
 }
 
-auto make_render_pass_entries(const bgfx::Stats* stats, const timer_scale& scale, bool group_by_prefix)
+auto make_render_pass_entries(const bgfx::Stats* stats, bool group_by_prefix)
     -> std::vector<render_pass_entry>
 {
+    const auto views = gfx::get_view_stats(*stats);
     std::vector<render_pass_entry> entries;
-    entries.reserve(stats->numViews);
-    for(uint16_t pos = 0; pos < stats->numViews; ++pos)
+    entries.reserve(views.size());
+    for(size_t pos = 0; pos < views.size(); ++pos)
     {
-        const auto& view_stats = stats->viewStats[pos];
+        const auto& view = views[pos];
         render_pass_entry entry;
-        entry.view = view_stats.view;
-        entry.index = pos;
-        entry.name = view_stats.name;
+        entry.view = view.view;
+        entry.index = static_cast<decltype(entry.index)>(pos);
+        entry.name = view.name;
         const std::vector<std::string> parts = split_render_pass_path(entry.name, group_by_prefix);
         entry.display_name = parts.empty() ? entry.name : parts.back();
-        entry.cpu_ms =
-            static_cast<float>(static_cast<double>(view_stats.cpuTimeEnd - view_stats.cpuTimeBegin) * scale.cpu_to_ms);
-        entry.gpu_ms =
-            static_cast<float>(static_cast<double>(view_stats.gpuTimeEnd - view_stats.gpuTimeBegin) * scale.gpu_to_ms);
+        entry.cpu_ms = static_cast<float>(view.cpu_ms);
+        entry.gpu_ms = static_cast<float>(view.gpu_ms);
         entries.push_back(std::move(entry));
     }
     return entries;
@@ -520,7 +520,7 @@ void draw_encoder_stats(const bgfx::Stats* stats, const widget_layout& layout, c
     }
 }
 
-void draw_view_stats(const bgfx::Stats* stats, const widget_layout& layout, const timer_scale& scale)
+void draw_view_stats(const bgfx::Stats* stats, const widget_layout& layout)
 {
     (void)layout;
     static std::array<char, 128> filter = {};
@@ -563,7 +563,7 @@ void draw_view_stats(const bgfx::Stats* stats, const widget_layout& layout, cons
         }
     }
     panel_toolbar::end_strip();
-    std::vector<render_pass_entry> entries = make_render_pass_entries(stats, scale, group_by_prefix);
+    std::vector<render_pass_entry> entries = make_render_pass_entries(stats, group_by_prefix);
     if(average_frames)
     {
         apply_pass_smoothing(entries);
@@ -678,7 +678,7 @@ void draw_gpu_submit_profiler_ui(const bgfx::Stats* stats, bool* enable_profiler
         return;
     }
 
-    if(stats->numViews == 0)
+    if(stats->numViewStats == 0)
     {
         ImGui::TextColored(warning_color, "No GPU profiling data yet (initializing or no views).");
         return;
@@ -688,7 +688,7 @@ void draw_gpu_submit_profiler_ui(const bgfx::Stats* stats, bool* enable_profiler
     const timer_scale scale{1000.0 / static_cast<double>(stats->cpuTimerFreq),
                             1000.0 / static_cast<double>(stats->gpuTimerFreq)};
 
-    draw_view_stats(stats, layout, scale);
+    draw_view_stats(stats, layout);
 
     // Last, and folded away: the per-encoder submit times answer a narrower question than the
     // passes above, and a single-threaded submit shows one lonely row.
