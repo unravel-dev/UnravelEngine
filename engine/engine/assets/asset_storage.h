@@ -19,9 +19,35 @@
 namespace unravel
 {
 
+//-----------------------------------------------------------------------------
+// Shipped info -- what a deployed game reads of an asset's import settings.
+// A build ships no .meta: its asset index carries these (asset_database::meta).
+//-----------------------------------------------------------------------------
+
+/// Base class for the facts of an asset's import settings that a deployed game reads.
+struct asset_shipped_info : crtp_meta_type<asset_shipped_info>
+{
+    virtual ~asset_shipped_info() = default;
+};
+
+/// What a deployed game reads of a texture's import settings.
+struct texture_shipped_info : crtp_meta_type<texture_shipped_info, asset_shipped_info>
+{
+    /// Imported as a normal map, which decides its compiled layout (gfx::get_normal_map_channels: ASTC keeps X in red,
+    /// green and blue and Y in alpha).
+    bool normal_map{};
+};
+
 struct asset_importer_meta : crtp_meta_type<asset_importer_meta>
 {
     virtual ~asset_importer_meta() = default;
+
+    /// The facts of these settings a deployed game reads, which its asset index carries; null while every one of
+    /// them has its default.
+    virtual auto get_shipped_info() const -> std::shared_ptr<asset_shipped_info>
+    {
+        return nullptr;
+    }
 };
 
 struct texture_importer_meta : crtp_meta_type<texture_importer_meta, asset_importer_meta>
@@ -73,6 +99,17 @@ struct texture_importer_meta : crtp_meta_type<texture_importer_meta, asset_impor
     };
 
     texture_type type{texture_type::automatic};
+
+    auto get_shipped_info() const -> std::shared_ptr<asset_shipped_info> override
+    {
+        if(type != texture_type::normal_map)
+        {
+            return nullptr;
+        }
+        auto info = std::make_shared<texture_shipped_info>();
+        info->normal_map = true;
+        return info;
+    }
     color_space colorspace{color_space::automatic};
     bool generate_mipmaps{true};
     /// Bake OpenGL/DirectX normal Y difference into texels at compile (normal_map type only).
@@ -391,6 +428,15 @@ public:
         std::string location{};
         /// Metadata of the asset.
         asset_meta meta;
+        /// What a deployed game reads of the import settings, as its asset index carries it.
+        std::shared_ptr<asset_shipped_info> shipped;
+
+        /// What the runtime reads of the import settings: from the importer where the .meta is at hand (the editor),
+        /// else as the asset index carries it (a deployed game, which ships no .meta).
+        auto get_shipped_info() const -> std::shared_ptr<asset_shipped_info>
+        {
+            return meta.importer ? meta.importer->get_shipped_info() : shipped;
+        }
     };
 
     /// Type definition for the asset database.

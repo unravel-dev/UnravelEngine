@@ -128,7 +128,8 @@ public:
     /// The entry of the asset at `key`. A built-in shape named in its earlier spelling ("engine:/embedded/cube")
     /// is the shape's file.
     auto get_metadata_for_key(const std::string& key) const -> asset_database::meta;
-    /// Whether the import settings of the texture at `key` call it a normal map.
+    /// Whether the texture at `key` was imported as a normal map: from its import settings, or in a deployed game from
+    /// its asset index (asset_database::meta::get_shipped_info).
     auto is_normal_map_texture(const std::string& key) const -> bool;
     auto generate_metadata(const fs::path& p) const -> asset_meta;
 

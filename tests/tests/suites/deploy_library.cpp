@@ -85,6 +85,7 @@
 #include <deploy/windows_resources.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/defaults/engine_asset_keys.h>
+#include <engine/meta/assets/asset_database.hpp>
 #include <filesystem/file_fingerprint.h>
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
@@ -915,6 +916,38 @@ void test_shader_cook_plan(const fs::path& root)
 //-----------------------------------------------------------------------------
 // Android
 //-----------------------------------------------------------------------------
+
+void test_asset_index_normal_maps(const fs::path& root)
+{
+    std::printf("test_asset_index_normal_maps\n");
+    asset_database::database_t database;
+    const auto normal_uid = make_uid("60000000-0000-4000-8000-000000000001");
+    const auto color_uid = make_uid("60000000-0000-4000-8000-000000000002");
+    add_asset(database, normal_uid, "app:/data/textures/wall_normal.png");
+    add_asset(database, color_uid, "app:/data/textures/wall_color.png");
+    auto normal_import = std::make_shared<unravel::texture_importer_meta>();
+    normal_import->type = unravel::texture_importer_meta::texture_type::normal_map;
+    database[normal_uid].meta.importer = normal_import;
+    database[color_uid].meta.importer = std::make_shared<unravel::texture_importer_meta>();
+    const auto editor_side = safe_pointer_cast<unravel::texture_shipped_info>(database[normal_uid].get_shipped_info());
+    check(editor_side && editor_side->normal_map && !database[color_uid].get_shipped_info(),
+          "where the .meta is at hand, the importer says what ships: a normal map's fact, nothing for a color texture");
+    const auto file = root / ex::get_asset_index_file_name();
+    fs::error_code ec;
+    fs::create_directories(root, ec);
+    deployment::write_asset_index(database, file, [](const std::string&) { return true; });
+    asset_database loaded;
+    require(unravel::load_from_file(file.string(), loaded), "a deployed index loads");
+    const auto& entries = loaded.get_database();
+    const auto normal = entries.find(normal_uid);
+    const auto color = entries.find(color_uid);
+    require(normal != entries.end() && color != entries.end(), "both textures are in the index");
+    const auto normal_shipped = safe_pointer_cast<unravel::texture_shipped_info>(normal->second.get_shipped_info());
+    check(!normal->second.meta.importer && normal_shipped && normal_shipped->normal_map,
+          "a normal map's index entry says so without its import settings: a deployed game reads its ASTC layout by it");
+    check(!color->second.get_shipped_info(), "a color texture's entry carries nothing beside its location");
+    fs::remove_all(root, ec);
+}
 
 void test_profile_locations()
 {
@@ -3190,6 +3223,7 @@ void run_deploy_library_suite(rtti::context&)
         RUN_CASE(test_cooked_shader_variants());
         RUN_CASE(test_web_shader_sets());
         RUN_CASE(test_shader_cook_plan(temp / "shader_cook"));
+        RUN_CASE(test_asset_index_normal_maps(temp / "asset_index"));
         RUN_CASE(test_profile_locations());
         RUN_CASE(test_deploy_locations(temp / "locations"));
         RUN_CASE(test_application_ids());

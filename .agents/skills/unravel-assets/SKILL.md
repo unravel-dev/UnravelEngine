@@ -37,6 +37,12 @@ Ids and `.meta`:
   file (`asset_manager::resolve_key`).
 - Code that moves a loaded asset calls `am.rename_asset<T>(old_key, new_key)` right after the move:
   the watcher may report the move as a delete, which unloads the asset from every user.
+- A deployed game has no `.meta`: its asset index holds each asset's location and what the runtime
+  reads of its import settings, a record each importer declares (`get_shipped_info`, such as
+  `texture_shipped_info`). Runtime code reads import settings only through
+  `asset_database::meta::get_shipped_info`, which answers from the importer in the editor and from
+  the index in a build; a new fact joins its importer's record. Desktop builds hide a missing fact
+  where the format alone answers (BC5 is always a two-channel normal map); ASTC builds do not.
 
 Compile and recompile:
 

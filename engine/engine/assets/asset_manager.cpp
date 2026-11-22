@@ -349,8 +349,8 @@ auto asset_manager::resolve_engine_key(const std::string& key, const std::string
 
 auto asset_manager::is_normal_map_texture(const std::string& key) const -> bool
 {
-    const auto importer = safe_pointer_cast<texture_importer_meta>(get_metadata_for_key(key).meta.importer);
-    return importer && importer->type == texture_importer_meta::texture_type::normal_map;
+    const auto shipped = safe_pointer_cast<texture_shipped_info>(get_metadata_for_key(key).get_shipped_info());
+    return shipped && shipped->normal_map;
 }
 
 auto asset_manager::generate_metadata(const fs::path& p) const -> asset_meta

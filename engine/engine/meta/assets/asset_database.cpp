@@ -1,6 +1,7 @@
 #include "asset_database.hpp"
 #include "asset_importer_meta.hpp"
 #include "asset_header_info.hpp"
+#include "asset_shipped_info.hpp"
 #include <engine/meta/core/common/basetypes.hpp>
 
 #include <filesystem/pack.h>
@@ -14,6 +15,12 @@ namespace unravel
 SAVE(asset_database::meta)
 {
     try_save(ar, ser20::make_nvp("location", obj.location));
+    // A deployed game's index is its only metadata: it ships no .meta, so the index carries what the runtime reads of
+    // the import settings.
+    if(const auto shipped = obj.get_shipped_info())
+    {
+        try_save(ar, ser20::make_nvp("shipped", shipped));
+    }
 }
 SAVE_INSTANTIATE(asset_database::meta, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(asset_database::meta, ser20::oarchive_binary_t);
@@ -21,6 +28,7 @@ SAVE_INSTANTIATE(asset_database::meta, ser20::oarchive_binary_t);
 LOAD(asset_database::meta)
 {
     try_load(ar, ser20::make_nvp("location", obj.location));
+    try_load(ar, ser20::make_nvp("shipped", obj.shipped));
 }
 LOAD_INSTANTIATE(asset_database::meta, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(asset_database::meta, ser20::iarchive_binary_t);
