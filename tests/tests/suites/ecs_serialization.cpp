@@ -3510,6 +3510,58 @@ void test_prefab_dependency_enumeration()
     }
 }
 
+void test_loaded_dependents_read_documents_for_prefabs_only()
+{
+    begin_test("loaded prefab documents are searched for a prefab's dependents, and for no other uid");
+
+    scene inner_authoring("inner_authoring");
+    auto inner_source = build_sample_tree(inner_authoring);
+    auto inner_pfb = make_prefab_from(inner_source, "test:/dependents_inner.pfb");
+
+    scene outer_authoring("outer_authoring");
+    auto outer_root = outer_authoring.create_entity("outer_root");
+    outer_authoring.instantiate(inner_pfb, outer_root, false);
+    auto outer_pfb = make_prefab_from(outer_root, "test:/dependents_outer.pfb");
+    check(outer_pfb.get() != nullptr, "the outer prefab loads");
+
+    auto& am = engine::context().get_cached<asset_manager>();
+    check(am.has_asset<prefab>(inner_pfb.uid()), "the manager holds the inner prefab");
+    check(!am.has_asset<scene_prefab>(inner_pfb.uid()), "as a prefab, not as a scene");
+
+    const auto contains = [](const std::vector<hpp::uuid>& uids, const hpp::uuid& uid) -> bool
+    {
+        return std::find(uids.begin(), uids.end(), uid) != uids.end();
+    };
+    check(contains(asset_deps::find_loaded_dependents(am, inner_pfb.uid()), outer_pfb.uid()),
+          "the prefab instancing the inner one is its dependent");
+
+    // A document naming a uid the manager holds no prefab or scene for: the walk would find it,
+    // but no prefab or scene document can depend on anything but a prefab or a scene.
+    const auto stranger = generate_uuid();
+    check(!am.has_asset<prefab>(stranger) && !am.has_asset<scene_prefab>(stranger),
+          "the manager holds nothing for a fresh uid");
+
+    const auto source = serialize_as_prefab(outer_root);
+    std::string text(source.begin(), source.end());
+    const auto inner_text = hpp::to_string(inner_pfb.uid());
+    const auto stranger_text = hpp::to_string(stranger);
+    size_t replaced = 0;
+    for(auto at = text.find(inner_text); at != std::string::npos; at = text.find(inner_text, at + stranger_text.size()))
+    {
+        text.replace(at, inner_text.size(), stranger_text);
+        ++replaced;
+    }
+    check(replaced > 0, "the outer document names the inner prefab's uid");
+
+    auto naming_pfb = make_prefab_asset(std::vector<uint8_t>(text.begin(), text.end()), "test:/dependents_naming.pfb");
+    check(naming_pfb.get() != nullptr && contains(asset_deps::get_referenced_uids(*naming_pfb.get()), stranger),
+          "the edited document lists the fresh uid as an instance source");
+    check(!contains(asset_deps::find_loaded_dependents(am, stranger), naming_pfb.uid()),
+          "documents are not searched for a uid that is no prefab or scene");
+
+    am.unload_asset<prefab>("test:/dependents_naming.pfb");
+}
+
 void test_nested_prefab_instance_keeps_its_link()
 {
     begin_test("a prefab instance nested inside a saved prefab keeps its link");
@@ -7551,6 +7603,7 @@ void run_ecs_serialization_cases()
         RUN_CASE(test_prefab_loaders_refuse_what_they_cannot_read());
         RUN_CASE(test_nesting_resolved_marker());
         RUN_CASE(test_prefab_dependency_enumeration());
+        RUN_CASE(test_loaded_dependents_read_documents_for_prefabs_only());
         RUN_CASE(test_nested_prefab_instance_keeps_its_link());
         RUN_CASE(test_editing_the_inner_asset_reaches_new_outer_instances());
         RUN_CASE(test_a_fresh_instantiate_pulls_the_inner_asset_edit());

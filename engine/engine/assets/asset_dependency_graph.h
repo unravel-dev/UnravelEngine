@@ -59,21 +59,23 @@ ENGINE_EXPORT auto get_referenced_uids(const prefab& p) -> std::vector<hpp::uuid
 //
 // Walks every renderable-asset container registered with `am` (materials,
 // meshes) and returns the UUIDs of those whose `get_referenced_uids`
-// contains `uid`.
+// contains `uid`. Loaded prefabs and scenes are searched too when `uid` names a
+// prefab or a scene: their nested instances are the only references read from
+// their documents, and each search walks a whole document, so other uids skip it.
 //
-// Note: `model` is intentionally absent — it isn't a top-level asset_manager
+// Note: `model` is intentionally absent - it isn't a top-level asset_manager
 // storage type, it lives inside model_component on prefabs/scenes. Prefab
 // thumbnails are handled separately via the mass-invalidation path in
 // `cascade_thumbnail_regen`.
 //
 // This intentionally inspects only assets that are *already in memory*
-// (`asset_handle::peek()` — no forced loads, no deferred-task submission).
+// (`asset_handle::peek()` - no forced loads, no deferred-task submission).
 // Unloaded dependents are correctly handled by the editor's lazy thumbnail
 // regeneration: they'll re-render against the new dependency content the next
 // time their thumbnail is requested.
 //
-// Cost: O(N_loaded × N_deps_per_asset). N is bounded by what the editor
-// actually has open, so this is cheap in practice.
+// Cost: O(N_loaded x N_deps_per_asset) for materials and meshes, plus one walk
+// of every loaded prefab and scene document for a prefab or scene uid.
 //------------------------------------------------------------------------------
 ENGINE_EXPORT auto find_loaded_dependents(asset_manager& am,
                                           const hpp::uuid& uid) -> std::vector<hpp::uuid>;
@@ -84,7 +86,7 @@ ENGINE_EXPORT auto find_loaded_dependents(asset_manager& am,
 // that uses a material that uses the changed texture, etc.).
 //
 // Use this when the dependency chain is about to be torn down (e.g. before
-// `asset_manager::unload_asset`) — the moment an asset is unloaded its
+// `asset_manager::unload_asset`) - the moment an asset is unloaded its
 // `asset_link_t` is cleared, and any other handle that shared the same link
 // will report a nil UUID, making post-unload enumeration miss them.
 //

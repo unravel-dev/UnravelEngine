@@ -429,55 +429,54 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
             }
         }
 
-        if(!changed.empty() || !removed.empty())
+        // The first listing reloads nothing: it reports the files as they are on disk. No instance has a change to
+        // re-sync, and no thumbnail exists yet to refresh, since closing a project clears them.
+        if(is_initial_list || (changed.empty() && removed.empty()))
         {
-            // On-process: a prefab update re-syncs its instances (destroys and recreates entities), which a wait of
-            // the main thread in a render pass or a scene load would otherwise run in the middle of that work.
-            tpp::invoke_on_process(tpp::main_thread::get_id(),
-                        [&tm, &em, &am, changed, removed, removed_dependents, is_initial_list]()
-                        {
-                            // A change in any of these types can visually
-                            // affect a prefab thumbnail (texture in a
-                            // material, material on a mesh, mesh in a
-                            // model_component, animation on a prefab).
-                            // Because prefabs are stored as opaque serialized
-                            // buffers we don't walk them for explicit
-                            // references - instead the cascade conservatively
-                            // marks every loaded prefab thumbnail dirty when
-                            // one of these renderable types changes.
-
-                            constexpr bool affects_prefabs =
-                                std::is_same_v<T, gfx::texture> ||
-                                std::is_same_v<T, material> ||
-                                std::is_same_v<T, mesh> ||
-                                std::is_same_v<T, animation_clip>;
-
-                            // Deletions: drop the removed thumbnails, regen
-                            // every (pre-captured) dependent so missing-slot
-                            // visuals propagate.
-                            asset_deps::cascade_thumbnail_remove(am,
-                                                                 tm,
-                                                                 removed,
-                                                                 removed_dependents,
-                                                                 affects_prefabs);
-
-                            for(const auto& uid : changed)
-                            {
-                                asset_deps::cascade_thumbnail_regen(am, tm, uid, affects_prefabs);
-
-                                // The initial list is the prefabs as they are on disk, which the open scenes were
-                                // just loaded from: re-syncing their instances would only mark the scenes edited.
-                                if constexpr(std::is_same<T, prefab>::value)
-                                {
-                                    if(!is_initial_list)
-                                    {
-                                        auto asset = am.get_asset<T>(uid);
-                                        em.on_prefab_updated(asset);
-                                    }
-                                }
-                            }
-                        });
+            return;
         }
+
+        // On-process: a prefab update re-syncs its instances (destroys and recreates entities), which a wait of
+        // the main thread in a render pass or a scene load would otherwise run in the middle of that work.
+        tpp::invoke_on_process(tpp::main_thread::get_id(),
+                    [&tm, &em, &am, changed, removed, removed_dependents]()
+                    {
+                        // A change in any of these types can visually
+                        // affect a prefab thumbnail (texture in a
+                        // material, material on a mesh, mesh in a
+                        // model_component, animation on a prefab).
+                        // Because prefabs are stored as opaque serialized
+                        // buffers we don't walk them for explicit
+                        // references - instead the cascade conservatively
+                        // marks every loaded prefab thumbnail dirty when
+                        // one of these renderable types changes.
+
+                        constexpr bool affects_prefabs =
+                            std::is_same_v<T, gfx::texture> ||
+                            std::is_same_v<T, material> ||
+                            std::is_same_v<T, mesh> ||
+                            std::is_same_v<T, animation_clip>;
+
+                        // Deletions: drop the removed thumbnails, regen
+                        // every (pre-captured) dependent so missing-slot
+                        // visuals propagate.
+                        asset_deps::cascade_thumbnail_remove(am,
+                                                             tm,
+                                                             removed,
+                                                             removed_dependents,
+                                                             affects_prefabs);
+
+                        for(const auto& uid : changed)
+                        {
+                            asset_deps::cascade_thumbnail_regen(am, tm, uid, affects_prefabs);
+
+                            if constexpr(std::is_same<T, prefab>::value)
+                            {
+                                auto asset = am.get_asset<T>(uid);
+                                em.on_prefab_updated(asset);
+                            }
+                        }
+                    });
     };
 
     std::stringstream ss;

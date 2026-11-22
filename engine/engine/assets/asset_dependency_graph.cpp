@@ -188,6 +188,17 @@ void collect_dependents(asset_manager& am,
         });
 }
 
+namespace
+{
+
+/// Whether `uid` names a prefab or a scene: the only references read from a prefab or scene document.
+auto is_prefab_or_scene(const asset_manager& am, const hpp::uuid& uid) -> bool
+{
+    return am.has_asset<prefab>(uid) || am.has_asset<scene_prefab>(uid);
+}
+
+} // namespace
+
 auto find_loaded_dependents(asset_manager& am, const hpp::uuid& uid) -> std::vector<hpp::uuid>
 {
     std::vector<hpp::uuid> result;
@@ -196,9 +207,13 @@ auto find_loaded_dependents(asset_manager& am, const hpp::uuid& uid) -> std::vec
     collect_dependents<mesh>(am, uid, result);
 
     // Prefabs instance other prefabs, so editing one changes how every prefab and scene
-    // nesting it looks.
-    collect_dependents<prefab>(am, uid, result);
-    collect_dependents<scene_prefab>(am, uid, result);
+    // nesting it looks. Reading a document walks all of it and yields only the prefabs it
+    // instances, so the documents are read for a prefab or a scene only.
+    if(is_prefab_or_scene(am, uid))
+    {
+        collect_dependents<prefab>(am, uid, result);
+        collect_dependents<scene_prefab>(am, uid, result);
+    }
 
     return result;
 }

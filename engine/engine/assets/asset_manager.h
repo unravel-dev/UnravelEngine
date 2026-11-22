@@ -252,6 +252,33 @@ public:
     }
 
     /**
+     * @brief Whether this manager or its parent holds an asset of type T with this UUID.
+     *
+     * Loads nothing and reads no database: it answers for the assets requested so far, loaded or
+     * not.
+     * @tparam T The type of the asset.
+     * @param uid The UUID of the asset.
+     * @return True if a handle of type T with this UUID is held.
+     */
+    template<typename T>
+    auto has_asset(const hpp::uuid& uid) const -> bool
+    {
+        if(uid.is_nil() || !has_storage<T>())
+        {
+            return false;
+        }
+        {
+            auto& storage = get_storage<T>();
+            std::lock_guard<std::recursive_mutex> lock(storage.container_mutex);
+            if(storage.container_by_uid.find(uid) != storage.container_by_uid.end())
+            {
+                return true;
+            }
+        }
+        return parent_ != nullptr && parent_->has_asset<T>(uid);
+    }
+
+    /**
      * @brief Registers an asset by key without loading it.
      * The actual load is triggered on the first handle.get() call.
      * @tparam T The type of the asset.
