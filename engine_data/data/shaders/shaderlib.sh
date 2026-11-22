@@ -441,6 +441,109 @@ float ign16x16(vec2 fragCoord)
 // targets keep their origin at the top left, so uv.y runs opposite to clip y (OpenGL gets both from
 // bgfx's BGFX_CONFIG_GL_NORMALIZE_NDC_CONVENTIONS; the renderer checks them at start).
 
+// Camera views store reversed depth: the near plane at device depth 1, the far plane at 0, which a camera's depth
+// clears to (gfx::reversed_depth in engine/core/graphics/graphics.h; suite "depth convention" keeps the two equal).
+// Shadow maps and GI card captures keep standard depth and do not use these helpers. The helpers name what a
+// comparison of camera depths means, so no shader spells the convention out.
+#define REVERSED_DEPTH 0
+#if REVERSED_DEPTH
+#	define DEPTH_NEAR 1.0
+#	define DEPTH_FAR 0.0
+#else
+#	define DEPTH_NEAR 0.0
+#	define DEPTH_FAR 1.0
+#endif // REVERSED_DEPTH
+
+// Nothing was drawn here: the depth a camera view clears to.
+bool isFarDepth(float _depth)
+{
+#if REVERSED_DEPTH
+	return _depth <= DEPTH_FAR;
+#else
+	return _depth >= DEPTH_FAR;
+#endif // REVERSED_DEPTH
+}
+
+// Within _tolerance of the far plane (device depth), toward the near plane.
+bool isFarDepthWithin(float _depth, float _tolerance)
+{
+#if REVERSED_DEPTH
+	return _depth <= DEPTH_FAR + _tolerance;
+#else
+	return _depth >= DEPTH_FAR - _tolerance;
+#endif // REVERSED_DEPTH
+}
+
+// _a lies in front of _b.
+bool isDepthNearer(float _a, float _b)
+{
+#if REVERSED_DEPTH
+	return _a > _b;
+#else
+	return _a < _b;
+#endif // REVERSED_DEPTH
+}
+
+// _a lies in front of _b or at it.
+bool isDepthNearerOrEqual(float _a, float _b)
+{
+#if REVERSED_DEPTH
+	return _a >= _b;
+#else
+	return _a <= _b;
+#endif // REVERSED_DEPTH
+}
+
+// The depth in front of the other.
+float nearerDepth(float _a, float _b)
+{
+#if REVERSED_DEPTH
+	return max(_a, _b);
+#else
+	return min(_a, _b);
+#endif // REVERSED_DEPTH
+}
+
+// The depth behind the other.
+float fartherDepth(float _a, float _b)
+{
+#if REVERSED_DEPTH
+	return min(_a, _b);
+#else
+	return max(_a, _b);
+#endif // REVERSED_DEPTH
+}
+
+// _depth moved _delta toward the near plane.
+float depthTowardNear(float _depth, float _delta)
+{
+#if REVERSED_DEPTH
+	return _depth + _delta;
+#else
+	return _depth - _delta;
+#endif // REVERSED_DEPTH
+}
+
+// How far _a lies in front of _b, in device depth (negative behind it).
+float depthInFrontBy(float _a, float _b)
+{
+#if REVERSED_DEPTH
+	return _a - _b;
+#else
+	return _b - _a;
+#endif // REVERSED_DEPTH
+}
+
+// A step's change of device depth, positive where it moves away from the camera.
+float depthAwayDelta(float _delta)
+{
+#if REVERSED_DEPTH
+	return -_delta;
+#else
+	return _delta;
+#endif // REVERSED_DEPTH
+}
+
 // Clip-space position of a uv-space one with clip depth: y flips between the two.
 vec3 clipTransform(vec3 clip)
 {

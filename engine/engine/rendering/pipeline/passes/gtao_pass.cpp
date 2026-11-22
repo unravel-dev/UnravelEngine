@@ -285,7 +285,7 @@ auto gtao_pass::run_temporal(gfx::render_view& rview,
     gfx::set_texture(temporal_program_.s_gtao_history, 1, history);
     gfx::set_texture(temporal_program_.s_gtao_velocity, 2, params.velocity ? params.velocity : default_textures::get().black_texture());
     gfx::set_texture(temporal_program_.s_gtao_depth_mips, 3, depth_mips);
-    gfx::set_texture(temporal_program_.s_gtao_prev_depth, 4, params.prev_depth ? params.prev_depth : default_textures::get().white_texture());
+    gfx::set_texture(temporal_program_.s_gtao_prev_depth, 4, params.prev_depth ? params.prev_depth : default_textures::get().camera_far_depth_texture());
     bgfx::setImage(5, output->native_handle(), 0, bgfx::Access::Write);
     gfx::dispatch(pass.id,
                    temporal_program_.program->native_handle(),

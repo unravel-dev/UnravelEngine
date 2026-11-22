@@ -507,7 +507,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
         moved_vertex_programs_.release_unused();
         gfx::render_pass pass("Picking/Buffer Pass");
         // ID buffer clears to black, which represents clicking on nothing (background)
-        pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000ff, 1.0f, 0);
+        pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000ff, gfx::camera_far_depth, 0);
         pass.set_view_proj(pick_view, pick_proj);
         pass.bind(surface_.get());
 

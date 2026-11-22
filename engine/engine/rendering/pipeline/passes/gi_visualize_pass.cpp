@@ -626,7 +626,7 @@ void gi_visualize_pass::draw_card_generation_clusters(const world_params& params
             params.pre_exposure.bind();
             gfx::set_transform(source.local_to_world);
             bgfx::setVertexBuffer(0, buffers.rays, rays.first, rays.count);
-            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LESS | line_raster_state);
+            bgfx::setState(BGFX_STATE_WRITE_RGB | gfx::depth_test_nearer | line_raster_state);
             bgfx::submit(view_id, primitive_program_.program->native_handle());
             primitive_program_.program->end();
         }
@@ -717,7 +717,7 @@ void gi_visualize_pass::draw_surfels(const world_params& params,
     bgfx::setInstanceDataBuffer(buffers.surfels, range.first, count);
     // Unlit discs: opaque, depth tested and written (into the depth copy), seen from their normal's side only.
     // The fan winds counter-clockwise on screen from that side, so the clockwise side is culled.
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_Z | gfx::depth_test_nearer | BGFX_STATE_CULL_CW);
     bgfx::submit(view_id, program.program->native_handle());
     program.program->end();
 }
@@ -1017,7 +1017,7 @@ void gi_visualize_pass::draw_radiosity_probes(const world_params& params, const 
                                   float(slots_per_page)));
     bgfx::setVertexCount(page_count * slots_per_page * probe_cube_vertices);
     // Depth written into the copy, so nearer spheres hide farther ones; both cube sides shade the same sphere.
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_Z | gfx::depth_test_nearer);
     bgfx::submit(pass.id, program.program->native_handle());
     bgfx::setState(BGFX_STATE_DEFAULT);
     program.program->end();
@@ -1054,7 +1054,7 @@ void gi_visualize_pass::draw_radiance_cache_probes(const world_params& params,
                                   0.0f));
     params.radiance_cache->bind_for_sampling(radiance_cache_indirection_stage, radiance_cache_final_stage);
     bgfx::setVertexCount(drawn_clipmaps * cells_per_clipmap * probe_cube_vertices);
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_Z | gfx::depth_test_nearer);
     bgfx::submit(pass.id, program.program->native_handle());
     bgfx::setState(BGFX_STATE_DEFAULT);
     program.program->end();
@@ -1173,7 +1173,7 @@ void gi_visualize_pass::draw_primitives(const world_params& params,
         params.pre_exposure.bind();
         bgfx::setVertexBuffer(0, &buffer);
         // Depth tested against the scene, never written: the scene's depth is read again next frame.
-        const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LESS |
+        const uint64_t state = BGFX_STATE_WRITE_RGB | gfx::depth_test_nearer |
                                (is_lines ? line_raster_state : card_face_state);
         bgfx::setState(state);
         bgfx::submit(view_id, program.program->native_handle());

@@ -2,13 +2,15 @@
 
 #include "graphics.h"
 //
+#include "graphics.h"
 #include "utils/debugdraw/debugdraw.h"
 
 namespace gfx
 {
 struct dd_raii
 {
-    dd_raii(uint16_t _viewId, bool _depthTestLess = true, bgfx::Encoder* _encoder = NULL);
+    /// Draws into a camera view: the depth test follows the camera's depth convention unless _depthTestLess says.
+    dd_raii(uint16_t _viewId, bool _depthTestLess = !reversed_depth, bgfx::Encoder* _encoder = NULL);
 
     ~dd_raii();
 

@@ -313,7 +313,7 @@ auto deferred::draw_gi_reflection_layer(const camera& camera,
     const math::mat4 projection = get_region_projection(camera.get_projection().get_matrix(), view_size, region);
     pass.set_view_proj(camera.get_view(), &projection[0][0]);
     // Roughness 1 traces nothing where no such surface is; depth 1 reads as the sky.
-    pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000ff, 1.0f, 0);
+    pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000ff, gfx::camera_far_depth, 0);
     const math::vec4 layer_target(float(region.pixel_origin.x),
                                   float(region.pixel_origin.y),
                                   1.0f / float(view_size.width),
@@ -612,7 +612,8 @@ void deferred::capture_gi_cards(const camera& camera, const surface_cache_system
         const auto& mat = *src.material;
         const auto program_handle = submit_geometry_material(program, mat);
         // A card basis of the opposite orientation winds triangles the other way: flip culling.
-        uint64_t state = mat.get_render_states(true, true, true);
+        // A card capture keeps standard depth (its own projection, read raw by the copy), whatever camera views use.
+        uint64_t state = (mat.get_render_states(true, true, true) & ~BGFX_STATE_DEPTH_TEST_MASK) | BGFX_STATE_DEPTH_TEST_LESS;
         if(view.orientation != camera_orientation)
         {
             const uint64_t cull = state & BGFX_STATE_CULL_MASK;

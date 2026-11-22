@@ -72,7 +72,7 @@ void main()
 	int sample_index = sample2d.x + samples.x * sample2d.y;
 	ivec2 tile = ivec2(gl_WorkGroupID.xy) * (ivec2(8, 8) / samples) + local_tile;
 	ivec2 pixel = ivec2(0, 0);
-	float depth01 = 1.0;
+	float depth01 = DEPTH_FAR;
 	bool place = false;
 	BRANCH
 	if(all(lessThan(tile, u_gi_probe_count)))

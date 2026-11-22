@@ -358,13 +358,14 @@ auto atmospheric_pass_perez::is_layer_in_view(const run_params& params, const ca
     const float horizon_dip_sin =
         std::sqrt(height * (2.0f * cloud_planet_radius + height)) / (cloud_planet_radius + height);
     // The rays below a height form a cap around the nadir, which holds the whole frustum when it holds the
-    // four corner rays. The corners are the shader's rays, unprojected from the far plane.
+    // four corner rays. The corners are the shader's rays, unprojected from the far plane (any depth gives the
+    // direction: the view is camera-relative).
     const math::mat4 inverse_view_proj = glm::inverse(camera.get_view_projection_relative().get_matrix());
     for(const float x : {-1.0f, 1.0f})
     {
         for(const float y : {-1.0f, 1.0f})
         {
-            const math::vec4 far_point = inverse_view_proj * math::vec4(x, y, 1.0f, 1.0f);
+            const math::vec4 far_point = inverse_view_proj * math::vec4(x, y, gfx::camera_far_depth, 1.0f);
             const math::vec3 ray = math::normalize(math::vec3(far_point) / far_point.w);
             if(ray.y >= -horizon_dip_sin - layer_view_margin)
             {

@@ -42,7 +42,7 @@ void main()
     ivec2 inputCoord = coord * 2;
     
     // Find minimum depth for conservative occlusion testing (standard depth: 0.0 = near, 1.0 = far)
-    float minDepth = 1.0;
+    float nearest = DEPTH_FAR;
     for (int y = 0; y < 3; ++y)
     {
         for (int x = 0; x < 3; ++x)
@@ -50,11 +50,11 @@ void main()
             if (x < footprint.x && y < footprint.y)
             {
                 ivec2 texel = min(inputCoord + ivec2(x, y), lastInput);
-                minDepth = min(minDepth, imageLoad(s_hiz_input, texel).r);
+                nearest = nearerDepth(nearest, imageLoad(s_hiz_input, texel).r);
             }
         }
     }
     
     // Store result
-    imageStore(s_hiz_output, coord, vec4(minDepth, 0.0, 0.0, 1.0));
+    imageStore(s_hiz_output, coord, vec4(nearest, 0.0, 0.0, 1.0));
 } 

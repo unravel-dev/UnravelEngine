@@ -33,7 +33,7 @@ void upscale_pass::run(const run_params& params)
     gfx::render_pass pass("Upscale/Pass");
     pass.bind(has_depth ? params.output_depth.get() : params.output.get());
     // Every pixel is written: a clear instead of a load spares a tile-based GPU reading the old contents.
-    pass.clear(has_depth ? BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH : BGFX_CLEAR_COLOR, 0, 1.0f, 0);
+    pass.clear(has_depth ? BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH : BGFX_CLEAR_COLOR, 0, gfx::camera_far_depth, 0);
     const auto input_size = params.input->get_size();
     const float input_size_uniform[4] = {float(input_size.width),
                                          float(input_size.height),

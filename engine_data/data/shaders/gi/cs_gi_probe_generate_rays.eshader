@@ -98,7 +98,7 @@ vec4 GiFootprintSample(ivec2 probe_pixel, vec3 probe_position, float probe_depth
 	                     : ((vec2(footprint_texel) + 0.5) / float(GI_FOOTPRINT_EDGE) * 2.0 - 1.0) * u_gi_downsample;
 	ivec2 pixel = clamp(probe_pixel + ivec2(offset), ivec2(0, 0), ivec2(u_gi_view_size) - ivec2(1, 1));
 	float depth01 = texelFetch(s_gi_depth, pixel, 0).x;
-	if(depth01 >= 1.0)
+	if(isFarDepth(depth01))
 	{
 		return vec4_splat(0.0);
 	}

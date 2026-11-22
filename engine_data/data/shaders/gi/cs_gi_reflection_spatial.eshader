@@ -121,7 +121,7 @@ void main()
 	}
 	ivec2 texel = GiReflectionTargetTexel(pixel);
 	float depth01 = texelFetch(s_gi_depth, texel, 0).x;
-	if(depth01 >= 1.0)
+	if(isFarDepth(depth01))
 	{
 		// Sky: no traced layer and no probe coverage (no front surface).
 #if GI_REFLECTION_FRONT_LAYER

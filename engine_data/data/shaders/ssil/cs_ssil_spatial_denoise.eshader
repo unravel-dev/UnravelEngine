@@ -138,11 +138,7 @@ void main()
 
     // Sky / background carries no indirect signal and has no surface to borrow from.
     BRANCH
-#ifdef INVERTED_DEPTH_RANGE
-    if(center_depth == 0.0)
-#else
-    if(center_depth == 1.0)
-#endif
+    if(isFarDepth(center_depth))
     {
         imageStore(i_ssil_output, coord, center);
         imageStore(i_ssil_variance_output, coord, vec4_splat(0.0));

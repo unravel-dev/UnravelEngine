@@ -121,7 +121,8 @@ auto post_material_pass::run(gfx::render_view& rview,
         gfx::set_uniform(uniforms_.u_post_inv_view_proj, inverse_view_proj);
         gfx::set_uniform(uniforms_.u_post_params, math::vec4(draw->weight, 0.0f, 0.0f, 0.0f));
         gfx::set_texture(uniforms_.s_post_color, POST_COLOR_STAGE, source->get_texture(0), POST_COLOR_SAMPLER);
-        gfx::set_texture(uniforms_.s_post_depth, POST_DEPTH_STAGE, params.depth ? params.depth : black, POST_POINT_SAMPLER);
+        const auto& far_depth = default_textures::get().camera_far_depth_texture();
+        gfx::set_texture(uniforms_.s_post_depth, POST_DEPTH_STAGE, params.depth ? params.depth : far_depth, POST_POINT_SAMPLER);
         gfx::set_texture(uniforms_.s_post_gbuffer0, POST_GBUFFER0_STAGE, params.gbuffer0 ? params.gbuffer0 : black, POST_POINT_SAMPLER);
         gfx::set_texture(uniforms_.s_post_gbuffer1, POST_GBUFFER1_STAGE, params.gbuffer1 ? params.gbuffer1 : black, POST_POINT_SAMPLER);
         gfx::set_texture(uniforms_.s_post_gbuffer2, POST_GBUFFER2_STAGE, params.gbuffer2 ? params.gbuffer2 : black, POST_POINT_SAMPLER);
@@ -133,7 +134,6 @@ auto post_material_pass::run(gfx::render_view& rview,
         }
         if((scene_textures & material_scene_texture_custom_depth) != 0)
         {
-            const auto& far_depth = default_textures::get().white_texture();
             gfx::set_texture(uniforms_.s_post_custom_depth, POST_CUSTOM_DEPTH_STAGE, params.custom_depth ? params.custom_depth : far_depth, POST_POINT_SAMPLER);
         }
         if(params.pre_exposure != nullptr)

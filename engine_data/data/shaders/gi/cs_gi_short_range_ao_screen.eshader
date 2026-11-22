@@ -30,7 +30,7 @@ void main()
 	{
 		return;
 	}
-	if(texelFetch(s_gi_depth, pixel, 0).x >= 1.0)
+	if(isFarDepth(texelFetch(s_gi_depth, pixel, 0).x))
 	{
 		return;
 	}

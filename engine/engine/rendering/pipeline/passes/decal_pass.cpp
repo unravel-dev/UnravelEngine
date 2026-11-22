@@ -510,8 +510,8 @@ void decal_pass::draw_decals(gfx::render_view& rview,
             bgfx::setIndexBuffer(box_indices_);
             bgfx::setInstanceDataBuffer(&instances);
             // Outside the box, its front faces in front of the surface; inside it, its back faces behind the surface.
-            const uint64_t faces = head.is_camera_inside ? (BGFX_STATE_DEPTH_TEST_GEQUAL | BGFX_STATE_CULL_CW)
-                                                         : (BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_CULL_CCW);
+            const uint64_t faces = head.is_camera_inside ? (gfx::depth_test_farther_or_equal | BGFX_STATE_CULL_CW)
+                                                         : (gfx::depth_test_nearer_or_equal | BGFX_STATE_CULL_CCW);
             bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | blend | faces);
             bgfx::submit(pass.id, program->native_handle(), 0, BGFX_DISCARD_ALL);
             ++stats_.draws;

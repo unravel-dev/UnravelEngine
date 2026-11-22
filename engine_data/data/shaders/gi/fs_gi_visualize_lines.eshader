@@ -22,7 +22,7 @@ void main()
 	ivec2 depth_texel = min(ivec2(gl_FragCoord.xy * u_viewTexel.xy * vec2(size)), size - ivec2(1, 1));
 	float scene_depth = texelFetch(s_scene_depth, depth_texel, 0).x;
 	vec4 color = v_color0;
-	if(gl_FragCoord.z > scene_depth)
+	if(isDepthNearer(scene_depth, gl_FragCoord.z))
 	{
 		int parity = pixel.x + pixel.y;
 		bool is_checker_pixel = parity - (parity / 2) * 2 == 1;

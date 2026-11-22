@@ -99,7 +99,7 @@ void atmospheric_pass_skybox::run(gfx::frame_buffer::ptr target,
     params.pre_exposure.bind();
 
     // 4) The critical part: a less-or-equal depth test, so we only fill the background
-    uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL;
+    uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | gfx::depth_test_nearer_or_equal;
 
     bgfx::setState(state);
 

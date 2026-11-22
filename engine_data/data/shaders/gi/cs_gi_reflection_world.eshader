@@ -176,7 +176,7 @@ vec4 GiReflectionDistantScreenTrace(ivec2 pixel, vec3 origin, vec3 direction)
 	delta *= min(GiScreenExit(start.xy, delta.xy), 1.0);
 	float steps = float(GI_REFLECTION_DISTANT_TRACE_STEPS);
 	float tolerance =
-	    max(abs(delta.z), (depth_reference - start.z) * GI_REFLECTION_DISTANT_TRACE_SLOPE_TOLERANCE) / steps;
+	    max(abs(delta.z), depthInFrontBy(start.z, depth_reference) * GI_REFLECTION_DISTANT_TRACE_SLOPE_TOLERANCE) / steps;
 	vec3 step_uvz = delta / steps;
 	float noise = InterleavedGradientNoise(vec2(pixel) + 0.5, u_gi_frame_mod);
 	vec3 ray_uvz = start + step_uvz * noise;
@@ -191,9 +191,9 @@ vec4 GiReflectionDistantScreenTrace(ivec2 pixel, vec3 origin, vec3 direction)
 		ivec2 texel = clamp(ivec2(sample_uvz.xy * u_gi_view_size), ivec2(0, 0), size - ivec2(1, 1));
 		float scene_depth = texelFetch(s_gi_scene_depth, texel, 0).x;
 		// In front of the depth buffer > 0; a hit lies behind it by less than twice the tolerance, not on the far plane.
-		float difference = scene_depth - sample_uvz.z;
+		float difference = depthInFrontBy(sample_uvz.z, scene_depth);
 		BRANCH
-		if(abs(difference + tolerance) < tolerance && scene_depth < 1.0)
+		if(abs(difference + tolerance) < tolerance && !isFarDepth(scene_depth))
 		{
 			// The crossing between this sample and the last (where the depth difference's linear fit is 0).
 			float crossing = saturate(last_difference / (last_difference - difference));

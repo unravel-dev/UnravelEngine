@@ -147,11 +147,7 @@ void main()
     vec4 curr = texture2D(s_ssil_curr, uv);
     float surface_z = DecodeGBufferDepth(full_uv, s_depth).depth01;
     bool valid_surface =
-#ifdef INVERTED_DEPTH_RANGE
-        surface_z != 0.0;
-#else
-        surface_z != 1.0;
-#endif
+        !isFarDepth(surface_z);
 
     float luma_curr = Luminance(curr.rgb);
 

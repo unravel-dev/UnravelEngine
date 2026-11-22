@@ -74,7 +74,7 @@ void particle_half_res_pass::downsample_depth(const gfx::frame_buffer::ptr& targ
 {
     gfx::render_pass pass("Particles/Half Depth");
     pass.bind(targets.get());
-    pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, CLEAR_TRANSMITTANCE, 1.0f, 0);
+    pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, CLEAR_TRANSMITTANCE, gfx::camera_far_depth, 0);
     gfx::set_texture(depth_program_.s_depth, 0, scene_depth, POINT_CLAMP);
     bgfx::setState(gfx::clip_quad(1.0f) | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_ALWAYS);
     bgfx::submit(pass.id, depth_program_.program->native_handle());

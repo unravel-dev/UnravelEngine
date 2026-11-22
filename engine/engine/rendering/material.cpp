@@ -1,5 +1,6 @@
 #include "material.h"
 
+#include <graphics/graphics.h>
 #include <graphics/texture.h>
 #include <graphics/uniform.h>
 
@@ -86,7 +87,7 @@ auto material::get_render_states(bool apply_cull, bool depth_write, bool depth_t
 
     if(depth_test)
     {
-        states |= BGFX_STATE_DEPTH_TEST_LESS;
+        states |= gfx::depth_test_nearer;
     }
 
     if(apply_cull)

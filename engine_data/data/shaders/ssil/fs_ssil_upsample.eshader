@@ -51,11 +51,7 @@ void main()
     // Sky / background carries no indirect signal; emit zero so the bilinear
     // footprint never drags geometry SSIL into the background.
     BRANCH
-#ifdef INVERTED_DEPTH_RANGE
-    if(center_depth == 0.0)
-#else
-    if(center_depth == 1.0)
-#endif
+    if(isFarDepth(center_depth))
     {
         gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
         return;

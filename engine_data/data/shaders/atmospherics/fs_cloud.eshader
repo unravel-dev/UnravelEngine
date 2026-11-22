@@ -74,7 +74,7 @@ SAMPLER2D(s_depth, 4);
 // the layer, and must not clip the march.
 #define CLOUD_VOL_DISTANCE_SCALE       0.001
 #define CLOUD_VOL_SKY_DISTANCE         1.0e7
-#define CLOUD_VOL_SKY_DEPTH            0.99999
+#define CLOUD_VOL_SKY_DEPTH_TOLERANCE  0.00001
 
 vec2 world_to_prev_uv(vec3 rel_pos, out bool o_valid)
 {
@@ -162,7 +162,7 @@ void main()
     // Scene distance at this pixel (sky pixels sit at the far plane).
     vec2 uv = clipToUv(v_clipPos * 0.5 + 0.5);
     float depth = texture2DLod(s_depth, uv, 0.0).r;
-    float t_depth = depth >= CLOUD_VOL_SKY_DEPTH ? CLOUD_VOL_SKY_DISTANCE : length(computeViewSpacePosition(uv, depth));
+    float t_depth = isFarDepthWithin(depth, CLOUD_VOL_SKY_DEPTH_TOLERANCE) ? CLOUD_VOL_SKY_DISTANCE : length(computeViewSpacePosition(uv, depth));
     float depth_km = t_depth * CLOUD_VOL_DISTANCE_SCALE;
 
     vec4 new_cloud = vec4(0.0, 0.0, 0.0, 1.0);

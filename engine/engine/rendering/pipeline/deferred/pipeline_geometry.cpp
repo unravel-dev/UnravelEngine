@@ -227,7 +227,7 @@ void deferred::run_g_buffer_pass(hpp::span<const visibility_data> visibility_set
     gfx::render_pass pass(is_first_phase ? "G-Buffer/Pass" : "G-Buffer/After Decals");
     if(is_first_phase)
     {
-        pass.clear();
+        pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL, 0x000000FF, gfx::camera_far_depth, 0);
     }
     pass.set_view_proj(view, proj);
     pass.bind(gbuffer.get());
@@ -1300,7 +1300,7 @@ void deferred::draw_translucent_velocity(bgfx::ViewId view, const visibility_dat
         auto* offset_program = begin_model_offset_velocity_program(mat, submit_params.skinned, draws_morph_motion, camera_position);
         // The scene's depth decides what the surface covers; the surface writes none.
         const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL | cull_state);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | gfx::depth_test_nearer_or_equal | cull_state);
         bgfx::submit(view, offset_program != nullptr ? offset_program->native_handle() : prog.program->native_handle(), 0, discard);
     };
     callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
@@ -1460,7 +1460,7 @@ auto deferred::draw_gi_reflection_layer_model(bgfx::ViewId view,
         const uint64_t cull = graph->get_cull_type() == cull_type::none
                                   ? 0
                                   : graph->get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | cull);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | gfx::depth_test_nearer | cull);
         bgfx::submit(view, program->native_handle(), 0, discard);
         drew = true;
     };
@@ -1700,7 +1700,7 @@ void deferred::draw_translucent_model(bgfx::ViewId view, size_t index, const run
                                                                  BGFX_STATE_BLEND_ONE,
                                                                  BGFX_STATE_BLEND_ZERO,
                                                                  BGFX_STATE_BLEND_INV_SRC_ALPHA);
-            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS | sums |
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | gfx::depth_test_nearer | sums |
                            (graph->get_render_states(true, false, false) & BGFX_STATE_CULL_MASK));
             bgfx::submit(view, program->native_handle(), 0, discard);
             stats_.drawn_translucent_submeshes++;
@@ -1713,16 +1713,16 @@ void deferred::draw_translucent_model(bgfx::ViewId view, size_t index, const run
             const uint64_t cull = graph->get_cull_type() == cull_type::none
                                       ? 0
                                       : graph->get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
-            bgfx::setState(BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_MSAA | cull);
+            bgfx::setState(BGFX_STATE_WRITE_Z | gfx::depth_test_nearer | BGFX_STATE_MSAA | cull);
             bgfx::submit(view, program->native_handle(), 0, BGFX_DISCARD_NONE);
-            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_MSAA | cull |
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | gfx::depth_test_nearer_or_equal | BGFX_STATE_MSAA | cull |
                                get_translucent_blend_state(graph->get_blend_mode(), has_reactive_target),
                            blend_rgba);
             bgfx::submit(view, program->native_handle(), 0, discard);
             stats_.drawn_translucent_submeshes++;
             return;
         }
-        const uint64_t base = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_MSAA |
+        const uint64_t base = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | gfx::depth_test_nearer | BGFX_STATE_MSAA |
                               get_translucent_blend_state(graph->get_blend_mode(), has_reactive_target);
         if(graph->get_cull_type() == cull_type::none)
         {

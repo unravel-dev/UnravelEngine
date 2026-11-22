@@ -797,8 +797,7 @@ float ContactShadow(sampler2D depthTex, ivec2 origin_texel, float origin_device_
     float ray_len = min(ray_length, light_distance);
     if(vs_light_dir.z < 0.0)
     {
-        // Our projections put the near plane at clip depth 0 on every backend.
-        float z_near = screenSpaceToViewSpaceDepth(0.0);
+        float z_near = screenSpaceToViewSpaceDepth(DEPTH_NEAR);
         ray_len = min(ray_len, (z0 - z_near) * 0.9 / -vs_light_dir.z);
     }
     if(ray_len <= 0.0) return 1.0;
@@ -856,7 +855,14 @@ float ContactShadow(sampler2D depthTex, ivec2 origin_texel, float origin_device_
         ivec2 texel = min(ivec2(floor(ss_pos.xy * depth_size_f)), max_texel);
         float z_ray = screenSpaceToViewSpaceDepth(ss_pos.z);
         float z_scene = contactTexelDepth(depthTex, texel, max_texel);
+#if REVERSED_DEPTH
+        // A float depth's step is relative where depth falls with distance and absolute where clip z passes
+        // through -1..1 first (OpenGL without clip control): growth with z or z^2, the larger taken.
+        float z_ratio = z_scene / z0;
+        float ulp_scene = depth_ulp * max(z_ratio, z_ratio * z_ratio);
+#else
         float ulp_scene = depth_ulp * (z_scene * z_scene) * inv_z0_sq;
+#endif // REVERSED_DEPTH
         float thickness = max(thickness_min, CONTACT_SHADOW_STEP_THICKNESS * abs(z_ray - z_prev));
         z_prev = z_ray;
         // The visible surface must be in front of the ray point (by more than its precision) and
@@ -1010,7 +1016,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 #if PBR_CONTACT_SHADOWS
     float contact_shadow_length = u_light_data.w;
     BRANCH
-    if(contact_shadow_length > 0.0 && NoL > 0.0 && surface_shadow > CONTACT_SHADOW_SKIP_BELOW && data.depth01 < 1.0)
+    if(contact_shadow_length > 0.0 && NoL > 0.0 && surface_shadow > CONTACT_SHADOW_SKIP_BELOW && !isFarDepth(data.depth01))
     {
 #if DIRECTIONAL_LIGHT
         const float light_distance = 1.0e6;
@@ -1088,7 +1094,7 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // traced reflections only the material AO's cavities, which no tracer's geometry holds.
     // Direct light takes none.
     // Sky pixels read no occlusion and no GI: the GI gather leaves them unwritten (selected, not multiplied away).
-    bool is_surface = data.depth < 1.0;
+    bool is_surface = !isFarDepth(data.depth);
     vec4 screen_ao_sample = is_surface ? texture2D(s_screen_ao, texcoord0) : vec4(0.5, 0.5, 0.5, 1.0);
     float material_ao = data.ambient_occlusion;
     float screen_ao = ScreenSpaceAO(screen_ao_sample.a, u_screen_ao_intensity);
@@ -1166,7 +1172,7 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
 #if !PBR_INDIRECT_DETAIL
     // Behind the last surface there is nothing to light: the sky, where a scene has one, draws there afterward. Only
     // with the detail limited: this branch moves a few foliage pixels beside the sky, where the full image must hold.
-    if(gbuffer_depth.depth >= 1.0)
+    if(isFarDepth(gbuffer_depth.depth))
     {
         return vec4(0.0, 0.0, 0.0, 1.0);
     }

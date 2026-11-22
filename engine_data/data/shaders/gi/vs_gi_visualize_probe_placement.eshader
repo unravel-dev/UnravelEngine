@@ -62,7 +62,7 @@ void main()
 		vec2 pixel = GiPlacementSquareCorner(vec2(GiProbeRecordPixel(record)), corner == 4 ? 0 : corner);
 		vec2 ndc = vec2(pixel.x * u_gi_view_texel.x * 2.0 - 1.0, 1.0 - pixel.y * u_gi_view_texel.y * 2.0);
 		// At the near plane: screen-space lines are never behind the scene.
-		position = vec4(ndc, 0.0, 1.0);
+		position = vec4(ndc, DEPTH_NEAR, 1.0);
 	}
 	gl_Position = position;
 	v_color0 = is_lattice_probe ? vec4(1.0, 1.0, 0.0, 1.0) : vec4(1.0, 0.0, 1.0, 1.0);

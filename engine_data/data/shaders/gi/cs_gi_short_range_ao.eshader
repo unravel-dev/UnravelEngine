@@ -46,7 +46,7 @@ float GiUpdateHorizon(vec2 sample_uv,
 	}
 	ivec2 texel = min(ivec2(sample_uv * u_gi_view_size), ivec2(u_gi_view_size) - ivec2(1, 1));
 	float sample_depth01 = texelFetch(s_gi_depth, texel, 0).x;
-	if(sample_depth01 >= 1.0)
+	if(isFarDepth(sample_depth01))
 	{
 		return horizon_cos;
 	}
@@ -76,7 +76,7 @@ void main()
 	}
 	ivec2 pixel = GiShortRangeAOPixel(texel);
 	float depth01 = texelFetch(s_gi_depth, pixel, 0).x;
-	if(depth01 >= 1.0)
+	if(isFarDepth(depth01))
 	{
 		imageStore(s_gi_short_range_ao_out, texel, uvec4(GiPackShortRangeAO(vec4(0.0, 0.0, 1.0, 1.0)), 0u, 0u, 0u));
 		return;

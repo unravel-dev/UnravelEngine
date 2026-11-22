@@ -172,11 +172,7 @@ void main()
 
     // Skip sky pixels
     BRANCH
-#ifdef INVERTED_DEPTH_RANGE
-    if(surface_z == 0.0)
-#else
-    if(surface_z == 1.0)
-#endif
+    if(isFarDepth(surface_z))
     {
         gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
         return;

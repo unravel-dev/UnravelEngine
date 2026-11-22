@@ -2,6 +2,7 @@
 
 #include "cloud_noise.h"
 #include "specular_occlusion_lut.h"
+#include <graphics/graphics.h>
 #include <graphics/texture.h>
 #include <memory>
 
@@ -19,6 +20,12 @@ public:
     auto black_texture() const -> gfx::texture::ptr { return black_; }
     auto white_texture() const -> gfx::texture::ptr { return white_; }
     auto missing_texture() const -> gfx::texture::ptr { return missing_; }
+    /// A camera depth of nothing drawn, every texel at the far plane (gfx::camera_far_depth): the stand-in for a scene
+    /// depth a draw binds but its view has none of.
+    auto camera_far_depth_texture() const -> gfx::texture::ptr
+    {
+        return gfx::camera_far_depth == 0.0f ? black_ : white_;
+    }
     /// Fully transparent black (alpha 0). Used as the SSIL-disabled fallback so the
     /// indirect-lighting mix(irradiance, ssil.rgb, ssil.a) collapses to the SH probe.
     auto transparent_texture() const -> gfx::texture::ptr { return transparent_; }

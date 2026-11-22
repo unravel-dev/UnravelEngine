@@ -34,7 +34,6 @@ SAMPLER3D(s_fog_volume, 2);
 #include "fog.sh"
 
 /// Device depth of the sky: the depth clear, which the sky pass draws at.
-#define FOG_SKY_DEPTH 1.0
 
 void main()
 {
@@ -45,7 +44,7 @@ void main()
 	vec3 offset = clipToWorld(u_invViewProj, clip);
 	float point_distance = length(offset);
 	vec3 view_direction = offset / max(point_distance, 1e-6);
-	gl_FragColor = fog_to_point(s_fog_environment, uv, view_direction, point_distance, device_depth >= FOG_SKY_DEPTH, u_pre_exposure_value);
+	gl_FragColor = fog_to_point(s_fog_environment, uv, view_direction, point_distance, isFarDepth(device_depth), u_pre_exposure_value);
 }
 
 #endif // FOG_COMPOSITE_SH_HEADER_GUARD

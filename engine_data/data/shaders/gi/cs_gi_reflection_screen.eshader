@@ -110,7 +110,7 @@ bool GiReflectionBlockResolves(ivec2 trace_coord)
 		ivec2 texel = GiReflectionTargetTexel(p);
 		if(all(lessThan(p, view_size)) && GiReflectionFadeAlpha(texelFetch(s_gi_normal, texel, 0).w) > 0.0)
 		{
-			resolves = resolves || texelFetch(s_gi_depth, texel, 0).x < 1.0;
+			resolves = resolves || !isFarDepth(texelFetch(s_gi_depth, texel, 0).x);
 		}
 	}
 	return resolves;
@@ -126,12 +126,12 @@ void main()
 	float roughness = gbuffer1.w;
 	bool traces = is_inside && GiReflectionFadeAlpha(roughness) > 0.0;
 	// Most pixels are too rough to trace: only the others read their depth.
-	float depth01 = 1.0;
+	float depth01 = DEPTH_FAR;
 	BRANCH
 	if(traces)
 	{
 		depth01 = texelFetch(s_gi_depth, GiReflectionTargetTexel(pixel), 0).x;
-		traces = depth01 < 1.0;
+		traces = !isFarDepth(depth01);
 	}
 	// At the downsample a tile resolves wherever a pixel of a traced block wants reflections, whether or not the
 	// block's traced pixel does: the resolve serves it from the traces around.

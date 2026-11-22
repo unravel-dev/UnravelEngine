@@ -225,7 +225,7 @@ void main()
     float mover_nearby = 0.0;
     if(u_use_velocity > 0.5)
     {
-        // Closest-depth dilation source: the nearest (smallest depth01) texel in the 3x3
+        // Closest-depth dilation source: the nearest texel in the 3x3
         // neighborhood, so a MOVER's anti-aliased silhouette reprojects with the object.
         // Deliberately inlined: an out-parameter helper for this loop miscompiled on the
         // HLSL path (garbage src_t/src_depth), which reprojected the whole frame by one
@@ -244,11 +244,11 @@ void main()
                 // GLSL ES selects each component of the texel: shaderc writes a fragment shader that calls the bit
                 // encoders (TAA_IsFinite) as GLSL ES 3.10 unless bgfx patch 0006 is applied, and there SPIRV-Cross
                 // turns a select between two integer vectors into a mix() that WebGL 2's GLSL ES 3.00 lacks.
-                bool is_closer = d < src_depth;
+                bool is_closer = isDepthNearer(d, src_depth);
                 src_depth = is_closer ? d : src_depth;
                 src_t = ivec2(is_closer ? t.x : src_t.x, is_closer ? t.y : src_t.y);
 #else
-                if(d < src_depth)
+                if(isDepthNearer(d, src_depth))
                 {
                     src_depth = d;
                     src_t = t;

@@ -191,12 +191,10 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
     create_or_update_frame_buffers(rview, dims);
 
     const float* viewMtx = cam.get_view();
+    // The camera's own projection: its depth row unpacks the depth buffer whatever the depth convention.
     float projMtx[16];
-
-    float n = cam.get_near_clip();
-    float f = cam.get_far_clip();
-
-    bx::mtxProj(projMtx, cam.get_fov(), float(dims.size[0]) / float(dims.size[1]), n, f, false);
+    const math::mat4 projection = cam.get_projection_unjittered().get_matrix();
+    std::memcpy(projMtx, math::value_ptr(projection), sizeof(projMtx));
 
     const auto& halfDepths0 = rview.tex_get("ASSAO_HALF_DEPTH_0");
     const auto& halfDepths1 = rview.tex_get("ASSAO_HALF_DEPTH_1");

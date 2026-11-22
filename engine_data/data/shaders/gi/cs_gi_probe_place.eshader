@@ -40,7 +40,7 @@ void main()
 	}
 	ivec2 pixel = GiProbePixel(tile);
 	float depth01 = texelFetch(s_gi_depth, pixel, 0).x;
-	if(depth01 >= 1.0)
+	if(isFarDepth(depth01))
 	{
 		imageStore(i_gi_probe_records, tile, vec4(0.0, 0.0, 0.0, 1.0));
 		return;

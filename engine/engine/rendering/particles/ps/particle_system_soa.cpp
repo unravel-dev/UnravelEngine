@@ -37,7 +37,7 @@ namespace
 constexpr float k_standard_gravity = 9.81f;
 constexpr float k_min_particle_lifespan = 1.0e-3f;
 /// The depth of the stand-in for a scene depth: the far plane, behind every particle.
-constexpr float k_no_scene_depth = 1.0f;
+constexpr float k_no_scene_depth = gfx::camera_far_depth;
 /// Seconds of a particle's path one collision search step covers, with the fewest and most steps per path, and
 /// the halvings that pin a crossing down.
 constexpr double k_contact_step_seconds = 1.0 / 30.0;
@@ -1705,7 +1705,7 @@ public:
             }
             // Trails and ribbons turn with their paths: both of their sides face the camera at some point.
             const bool is_two_sided = batch.primitive == particle_primitive::trail || batch.primitive == particle_primitive::ribbon;
-            draw.state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS |
+            draw.state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | gfx::depth_test_nearer |
                          (is_two_sided ? 0 : BGFX_STATE_CULL_CW);
             if(params.prev_view_proj != nullptr)
             {

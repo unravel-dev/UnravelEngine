@@ -7,6 +7,7 @@ vec3 v_far_point
 
 [code]
 #include <bgfx_shader.sh>
+#include "common.sh"
 
 // per frame
 //uniform vec4 u_camera_position;
@@ -20,8 +21,8 @@ vec3 unproject_point (float x, float y, float z)
 }
 void main()
 {
-	v_near_point = unproject_point (a_position.x, a_position.y, 0.0f).xyz;
-	v_far_point = unproject_point (a_position.x, a_position.y, 1.0f).xyz;
+	v_near_point = unproject_point (a_position.x, a_position.y, DEPTH_NEAR).xyz;
+	v_far_point = unproject_point (a_position.x, a_position.y, DEPTH_FAR).xyz;
 
 	gl_Position = vec4 (a_position, 1.0f);
 }

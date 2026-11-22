@@ -150,7 +150,7 @@ void main()
 	vec4 gbuffer1 = texelFetch(s_gi_normal, GiReflectionTargetTexel(pixel), 0);
 	float roughness = gbuffer1.w;
 	// The pixels that trace (cs_gi_reflection_screen.eshader), or at the downsample read the traces around them.
-	if(depth01 >= 1.0 || GiReflectionFadeAlpha(roughness) <= 0.0)
+	if(isFarDepth(depth01) || GiReflectionFadeAlpha(roughness) <= 0.0)
 	{
 		imageStore(s_gi_reflection_resolved_out, pixel, vec4(0.0, 0.0, 0.0, -1.0));
 		return;

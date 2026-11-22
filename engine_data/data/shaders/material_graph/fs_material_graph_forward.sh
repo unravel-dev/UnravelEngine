@@ -117,7 +117,7 @@ void main()
 #if MATERIAL_BLEND_TRANSLUCENT && !MATERIAL_PRESERVE_SPECULAR
 	is_invisible = is_invisible || opacity < 1.0 / 255.0;
 #endif
-	if(is_invisible || gl_FragCoord.z >= texelFetch(s_fwd_gi_layer_depth, ivec2(view_pixel), 0).x)
+	if(is_invisible || !isDepthNearer(gl_FragCoord.z, texelFetch(s_fwd_gi_layer_depth, ivec2(view_pixel), 0).x))
 	{
 		discard;
 	}

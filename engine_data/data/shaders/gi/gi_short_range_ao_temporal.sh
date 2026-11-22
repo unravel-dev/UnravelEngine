@@ -74,7 +74,7 @@ void GiLoadShortRangeAOTile(ivec2 group_origin, int local_index)
 	s_short_range_ao_tile[local_index] = GiUnpackShortRangeAO(texelFetch(s_gi_short_range_ao, clamped, 0).x);
 	ivec2 source = GiShortRangeAOPixel(clamped);
 	float source_depth01 = texelFetch(s_gi_depth, source, 0).x;
-	bool is_valid = is_inside && source_depth01 < 1.0;
+	bool is_valid = is_inside && !isFarDepth(source_depth01);
 	vec3 source_position = is_valid ? GiWorldFromDepth(GiPixelUv(source), source_depth01) : vec3_splat(0.0);
 	ivec2 block_offset = source - clamped * 2;
 	float source_code = 1.0 + float(block_offset.x + 2 * block_offset.y);

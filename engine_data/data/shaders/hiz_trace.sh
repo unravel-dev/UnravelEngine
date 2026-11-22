@@ -63,19 +63,11 @@ bool HizAdvanceRay(vec3 ss_ray_origin,
     vec3 boundary_planes = vec3(xy_plane, surface_z);
     vec3 t = boundary_planes * ss_ray_dir_inv - ss_ray_origin * ss_ray_dir_inv;
 
-#ifdef INVERTED_DEPTH_RANGE
-    t.z = ss_ray_dir.z < 0.0 ? t.z : FFX_SSSR_FLOAT_MAX;
-#else
-    t.z = ss_ray_dir.z > 0.0 ? t.z : FFX_SSSR_FLOAT_MAX;
-#endif
+    t.z = depthAwayDelta(ss_ray_dir.z) > 0.0 ? t.z : FFX_SSSR_FLOAT_MAX;
 
     float t_min = min(min(t.x, t.y), t.z);
 
-#ifdef INVERTED_DEPTH_RANGE
-    bool above_surface = surface_z < ss_pos.z;
-#else
-    bool above_surface = surface_z > ss_pos.z;
-#endif
+    bool above_surface = isDepthNearer(ss_pos.z, surface_z);
 
 #if BGFX_SHADER_LANGUAGE_GLSL
     // Avoid floatBitsToUint in GLSL fragment shaders: shaderc promotes any fragment shader
@@ -285,13 +277,8 @@ float HizValidateHit(sampler2D hiz_sampler,
     float surface_z = HizFetchDepth(hiz_sampler, mip0_size * ss_hit_pos.xy, 0);
 
     BRANCH
-#ifdef INVERTED_DEPTH_RANGE
-    if(surface_z == 0.0)
+    if(isFarDepth(surface_z))
         return 0.0;
-#else
-    if(surface_z == 1.0)
-        return 0.0;
-#endif
 
     vec3 vs_ray_dir = vs_hit_pos - vs_ray_origin;
 

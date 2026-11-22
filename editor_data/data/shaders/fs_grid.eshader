@@ -85,7 +85,7 @@ float compute_depth_visibility(vec3 frag_pos)
 	float scene_depth = sample_scene_depth(uv);
 	float depth_slope = max(abs(dFdx(grid_depth)), abs(dFdy(grid_depth)));
 	float margin = GRID_DEPTH_MARGIN_ULPS * GRID_DEPTH_ULP + GRID_DEPTH_MARGIN_PIXELS * depth_slope;
-	return step(grid_depth - margin, scene_depth);
+	return isDepthNearerOrEqual(depthTowardNear(grid_depth, margin), scene_depth) ? 1.0 : 0.0;
 }
 
 void main()

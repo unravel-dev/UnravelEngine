@@ -119,13 +119,8 @@ float ValidateHit(vec3 ss_hit_pos, vec2 uv, vec3 vs_ray_origin, float roughness,
     float surface_z = HizFetchDepth(s_hiz, screen_size * ss_hit_pos.xy, BASE_LOD);
 
     BRANCH
-#ifdef INVERTED_DEPTH_RANGE
-    if(surface_z == 0.0)
+    if(isFarDepth(surface_z))
         return 0.0;
-#else
-    if(surface_z == 1.0)
-        return 0.0;
-#endif
 
 
     vec3 vs_hit_pos = HizComputeViewspacePosition(ss_hit_pos.xy, ss_hit_pos.z);
@@ -277,11 +272,7 @@ void main()
     // at half-res get smeared into visible bands along the bottom/edges by the
     // bilinear upsample (SSIL has the same guard for the same reason).
     BRANCH
-#ifdef INVERTED_DEPTH_RANGE
-    if(surface_z == 0.0)
-#else
-    if(surface_z == 1.0)
-#endif
+    if(isFarDepth(surface_z))
     {
         gl_FragData[0] = vec4(0.0, 0.0, 0.0, 0.0);
         gl_FragData[1] = vec4_splat(0.0);

@@ -25,7 +25,7 @@ void main()
 	vec2 ratio = vec2(size) / max(u_viewRect.zw, vec2_splat(1.0));
 	ivec2 first = ivec2(floor((gl_FragCoord.xy - 0.5) * ratio));
 	ivec2 end = ivec2(ceil((gl_FragCoord.xy + 0.5) * ratio));
-	float depth = 0.0;
+	float depth = DEPTH_NEAR;
 	for(int y = 0; y < PARTICLE_HALF_FOOTPRINT; ++y)
 	{
 		for(int x = 0; x < PARTICLE_HALF_FOOTPRINT; ++x)
@@ -33,7 +33,7 @@ void main()
 			ivec2 texel = first + ivec2(x, y);
 			if(texel.x < end.x && texel.y < end.y)
 			{
-				depth = max(depth, texelFetch(s_depth, min(texel, last), 0).x);
+				depth = fartherDepth(depth, texelFetch(s_depth, min(texel, last), 0).x);
 			}
 		}
 	}

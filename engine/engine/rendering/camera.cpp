@@ -208,7 +208,9 @@ auto camera::get_projection() const -> const math::transform&
         {
             // Generate the updated perspective projection matrix
             float fov_radians = math::radians<float>(get_fov());
-            math::mat4 projection = math::perspectiveZO<float>(fov_radians, aspect_ratio_, near_clip_, far_clip_);
+            math::mat4 projection = gfx::reversed_depth
+                                        ? math::perspective_reversed_zo(fov_radians, aspect_ratio_, near_clip_, far_clip_)
+                                        : math::perspectiveZO<float>(fov_radians, aspect_ratio_, near_clip_, far_clip_);
 
             projection[2][0] += aa_data_.z;
             projection[2][1] += aa_data_.w;
@@ -230,12 +232,13 @@ auto camera::get_projection() const -> const math::transform&
             const float half_width = has_viewport ? float(viewport_size_.width) / 2.0f : ortho_size_ * aspect_ratio_;
             const float half_height = has_viewport ? float(viewport_size_.height) / 2.0f : ortho_size_;
             const frect_t rect = {-half_width, half_height, half_width, -half_height};
-            math::mat4 projection = math::orthoZO<float>(rect.left * zoom,
-                                           rect.right * zoom,
-                                           rect.bottom * zoom,
-                                           rect.top * zoom,
-                                           get_near_clip(),
-                                           get_far_clip());
+            const auto ortho = gfx::reversed_depth ? math::ortho_reversed_zo : math::orthoZO<float>;
+            math::mat4 projection = ortho(rect.left * zoom,
+                                          rect.right * zoom,
+                                          rect.bottom * zoom,
+                                          rect.top * zoom,
+                                          get_near_clip(),
+                                          get_far_clip());
             // w is 1 here, so the jitter's NDC offset is a translation: a shear would scale it with view depth.
             projection[3][0] += aa_data_.z;
             projection[3][1] += aa_data_.w;

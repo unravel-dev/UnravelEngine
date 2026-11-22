@@ -23,7 +23,7 @@ SHARED uint s_mask[GI_ADAPTIVE_MAX_GROUP_TILES];
 bool GiNeedsAdaptiveProbe(ivec2 pixel)
 {
 	float depth01 = texelFetch(s_gi_depth, pixel, 0).x;
-	if(depth01 >= 1.0)
+	if(isFarDepth(depth01))
 	{
 		return false;
 	}

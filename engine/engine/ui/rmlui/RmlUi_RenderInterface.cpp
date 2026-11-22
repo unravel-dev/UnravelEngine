@@ -2222,7 +2222,7 @@ auto RmlUi_RenderInterface::get_world_clip_region() const -> Rml::Rectanglei
 auto RmlUi_RenderInterface::get_draw_state(Rml::BlendMode blend_mode) -> uint64_t
 {
     const uint64_t state = convert_blend_mode(blend_mode);
-    return is_drawing_to_world_target() ? state | BGFX_STATE_DEPTH_TEST_LESS : state;
+    return is_drawing_to_world_target() ? state | gfx::depth_test_nearer : state;
 }
 
 auto RmlUi_RenderInterface::is_world_target_layer(Rml::LayerHandle layer_handle) const -> bool
@@ -2286,7 +2286,7 @@ void RmlUi_RenderInterface::submit_document_quad(RmlUi_ProgramId program_id,
 
 void RmlUi_RenderInterface::write_document_depth()
 {
-    constexpr uint64_t depth_only_state = BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
+    constexpr uint64_t depth_only_state = BGFX_STATE_WRITE_Z | gfx::depth_test_nearer;
     // Starting a view drops the draw state set before it: the view comes first.
     const bgfx::ViewId view_id = get_layer_view(BASE_LAYER);
     set_clip_rect_uniform(Rml::Rectanglef::FromSize(Rml::Vector2f(get_viewport_size())));
@@ -2331,7 +2331,7 @@ void RmlUi_RenderInterface::composite_to_world_target(Rml::LayerHandle destinati
     set_texture_sampling(Rml::Vector2f(0.0f), Rml::Vector2f(1.0f), layer_texture->get_size(), true);
     set_clip_rect_uniform(Rml::Rectanglef::FromSize(Rml::Vector2f(get_viewport_size())));
     // The world has no layer to replace into: every composite blends.
-    const uint64_t state = convert_blend_mode(Rml::BlendMode::Blend) | BGFX_STATE_DEPTH_TEST_LESS;
+    const uint64_t state = convert_blend_mode(Rml::BlendMode::Blend) | gfx::depth_test_nearer;
     submit_document_quad(RmlUi_ProgramId::Texture, state, view_id, OUTLINE_GROWTH_PIXELS);
 }
 

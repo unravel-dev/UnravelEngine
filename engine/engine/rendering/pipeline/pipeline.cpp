@@ -1381,7 +1381,7 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
         // Premultiplied blend: the document texture holds premultiplied alpha, and blending it
         // by source alpha again would darken every partly transparent pixel.
         constexpr uint64_t world_ui_state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z |
-                                            BGFX_STATE_DEPTH_TEST_LESS |
+                                            gfx::depth_test_nearer |
                                             BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
 
         scn.registry->view<transform_component, ui_document_component, active_component>().each(
@@ -1488,7 +1488,7 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
         auto& text_comp = *entry.comp;
         auto handle = entry.handle;
         const auto& world_transform = entry.transform_comp->get_transform_global();
-        text_comp.submit(get_ui_view(), world_transform, BGFX_STATE_DEPTH_TEST_LESS);
+        text_comp.submit(get_ui_view(), world_transform, gfx::depth_test_nearer);
     }
 
     text_cache.entries.clear();
@@ -1987,7 +1987,9 @@ void pipeline::bind_forward_lighting(const math::bbox& bounds,
         {
             bgfx::setTexture(stages.depth,
                              forward_scene_depth_sampler_->native_handle(),
-                             bgfx::isValid(forward_scene_depth_) ? forward_scene_depth_ : particle_no_shadow_->native_handle());
+                             bgfx::isValid(forward_scene_depth_)
+                                 ? forward_scene_depth_
+                                 : default_textures::get().camera_far_depth_texture()->native_handle());
         }
         if((scene_textures & material_scene_texture_blurred_color) != 0)
         {

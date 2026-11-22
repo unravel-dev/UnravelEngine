@@ -58,7 +58,7 @@ vec3 GiCameraDirection(vec2 uv)
 vec3 GiDedicatedReflectionRays(vec2 uv)
 {
 	GBufferData data = DecodeGBufferSimple(uv, s_gbuffer0, s_gbuffer1, s_gbuffer_depth);
-	if(data.depth01 >= 1.0)
+	if(isFarDepth(data.depth01))
 	{
 		// u_gi_visualize.w is the CPU's share of the pre-exposure; the GPU's share joins it here.
 		vec3 sky = eval_radiance_sh(s_gi_env_sh, GiCameraDirection(uv)) * (u_gi_visualize.w * u_pre_exposure_gpu_scale);

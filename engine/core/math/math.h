@@ -278,6 +278,35 @@ inline void taa_subpixel_offset_halton(std::uint32_t index, float& offset_x, flo
     offset_y = halton(index + 1u, 3u) - 0.5f;
 }
 
+/**
+ * @brief A left-handed perspective projection to clip depth 0..1 with reversed depth: the near plane maps to 1, the
+ * far plane to 0. The depth terms are computed in double: in float, 1 - f / (f - n) cancels and moves the far plane
+ * at a small near plane.
+ */
+inline auto perspective_reversed_zo(float fovy, float aspect, float near_plane, float far_plane) -> mat4
+{
+    mat4 result = perspectiveZO(fovy, aspect, near_plane, far_plane);
+    const double n = near_plane;
+    const double f = far_plane;
+    result[2][2] = float(n / (n - f));
+    result[3][2] = float(n * f / (f - n));
+    return result;
+}
+
+/**
+ * @brief A left-handed orthographic projection to clip depth 0..1 with reversed depth: the near plane maps to 1, the
+ * far plane to 0.
+ */
+inline auto ortho_reversed_zo(float left, float right, float bottom, float top, float near_plane, float far_plane) -> mat4
+{
+    mat4 result = orthoZO(left, right, bottom, top, near_plane, far_plane);
+    const double n = near_plane;
+    const double f = far_plane;
+    result[2][2] = float(-1.0 / (f - n));
+    result[3][2] = float(f / (f - n));
+    return result;
+}
+
 inline std::uint32_t power_of_n_round_down(std::uint32_t val, std::uint32_t n)
 {
     std::uint32_t currentVal = n;

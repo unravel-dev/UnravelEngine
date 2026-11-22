@@ -33,8 +33,9 @@ void main()
 {
 	v_clipPos = a_position.xy;
 
-	vec4 rayStart = mul(u_invViewProj, vec4(vec3(a_position.xy, -1.0), 1.0));
-	vec4 rayEnd = mul(u_invViewProj, vec4(vec3(a_position.xy, 1.0), 1.0));
+	// Two points on the pixel's view ray, the nearer first, both finite whatever the depth convention.
+	vec4 rayStart = mul(u_invViewProj, vec4(vec3(a_position.xy, DEPTH_NEAR), 1.0));
+	vec4 rayEnd = mul(u_invViewProj, vec4(vec3(a_position.xy, 0.5), 1.0));
 
 	rayStart = rayStart / rayStart.w;
 	rayEnd = rayEnd / rayEnd.w;
@@ -42,7 +43,7 @@ void main()
 	v_viewDir = normalize(rayEnd.xyz - rayStart.xyz);
     //v_viewDir.y = abs(v_viewDir.y);
 
-	gl_Position = vec4(a_position.xy, 1.0, 1.0);
+	gl_Position = vec4(a_position.xy, DEPTH_FAR, 1.0);
 
 	vec3 lightDir = normalize(u_sunDirection.xyz);
 	vec3 skyDir = vec3(0.0, 1.0, 0.0);

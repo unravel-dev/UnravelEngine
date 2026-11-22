@@ -119,9 +119,9 @@ GiScreenTraceResult GiTraceHZB(sampler2D hiz,
 		ivec2 texel = clamp(ivec2(p.xy * vec2(mip_size)), ivec2(0, 0), mip_size - ivec2(1, 1));
 		float tile_z = texelFetch(hiz, texel, mip).x;
 		vec2 t_xy = (plane - start.xy) * inv_delta;
-		float t_z = delta.z > 0.0 ? (tile_z - start.z) / delta.z : 1.0;
+		float t_z = depthAwayDelta(delta.z) > 0.0 ? (tile_z - start.z) / delta.z : 1.0;
 		float t_intersect = min(min(t_xy.x, t_xy.y), t_z);
-		bool above = p.z < tile_z;
+		bool above = isDepthNearer(p.z, tile_z);
 		bool skipped = above && t_intersect != t_z;
 		if(skipped)
 		{

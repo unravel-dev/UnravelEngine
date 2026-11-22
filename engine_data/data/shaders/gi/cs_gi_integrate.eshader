@@ -145,7 +145,7 @@ vec2 GiFullResJitter(ivec2 pixel, vec3 position, vec3 normal, float depth)
 	vec2 jitter = (2.0 * noise - 1.0) * u_gi_downsample * width;
 	ivec2 jittered = clamp(pixel + ivec2(floor(jitter + 0.5)), ivec2(0, 0), ivec2(u_gi_view_size) - ivec2(1, 1));
 	float jittered_depth01 = texelFetch(s_gi_depth, jittered, 0).x;
-	if(jittered_depth01 >= 1.0)
+	if(isFarDepth(jittered_depth01))
 	{
 		return vec2_splat(0.0);
 	}
@@ -403,7 +403,7 @@ void main()
 	float depth01 = texelFetch(s_gi_depth, pixel, 0).x;
 	// Sky: nothing is written. Every reader masks the sky by depth (the composite, the debug views) or by the history
 	// taps' depth test, whose weight-0 taps are selected out (GiWeightedHistoryTap).
-	if(depth01 >= 1.0)
+	if(isFarDepth(depth01))
 	{
 		return;
 	}

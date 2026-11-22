@@ -201,7 +201,7 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
     bgfx::setViewClear(pass.id,
                        BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
                        0x00000000, // clear R8 to zero
-                       1.0f,
+                       gfx::camera_far_depth,
                        0);
 
     bool any_drawn = false;
@@ -324,7 +324,7 @@ void gizmos_renderer::draw_selection_wireframe_pass(rtti::context& ctx,
     const uint64_t state = 0
         | BGFX_STATE_WRITE_RGB
         | BGFX_STATE_WRITE_A
-        | BGFX_STATE_DEPTH_TEST_LEQUAL
+        | gfx::depth_test_nearer_or_equal
         | BGFX_STATE_CULL_CCW
         | BGFX_STATE_MSAA
         | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA);
