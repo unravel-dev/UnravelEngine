@@ -5,6 +5,7 @@
 #include <engine/rendering/ecs/systems/particle_system.h>
 #include <engine/rendering/camera.h>
 #include <engine/rendering/instanced_draw_list.h>
+#include <engine/rendering/morph_deformer.h>
 #include <graphics/frame_buffer.h>
 #include <graphics/render_view.h>
 #include <graphics/debugdraw.h>
@@ -248,6 +249,8 @@ private:
     std::vector<std::function<void(gfx::dd_raii& dd)>> debug_draw_callbacks_;
     instanced_draw_list instanced_draws_;
     baked_animation_store baked_animations_;
+    /// Writes the morphed vertices of the models whose morph weights move their meshes, once a frame per scene.
+    std::unique_ptr<morph_deformer> morph_deformer_;
     /// The material instances of create_material_instance(), by id.
     std::unordered_map<uint32_t, std::shared_ptr<material_instance>> material_instances_;
     uint32_t next_material_instance_id_ = 1;

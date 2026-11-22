@@ -4,6 +4,7 @@
 #include "mesh/mesh_import_dependencies.h"
 #include "mesh/mesh_import_geometry.h"
 #include "mesh/mesh_import_materials.h"
+#include "mesh/mesh_import_morphs.h"
 
 #include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/meta/rendering/mesh_shape.hpp>
@@ -104,7 +105,8 @@ void process_imported_scene(asset_manager& am,
                             mesh::load_data& load_data,
                             std::vector<animation_clip>& animations,
                             std::vector<imported_material>& materials,
-                            std::vector<imported_texture>& textures)
+                            std::vector<imported_texture>& textures,
+                            const mesh_import::morph_import_options& morph_options)
 {
     APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Mesh Importer: Parse Imported Data");
 
@@ -116,13 +118,13 @@ void process_imported_scene(asset_manager& am,
     mesh_import::process_materials(am, filename, output_dir, scene, materials, textures);
 
     APPLOG_TRACE("Mesh Importer: Processing meshes ...");
-    const auto submesh_placements = mesh_import::process_meshes(scene, load_data);
+    const auto submesh_placements = mesh_import::process_meshes(scene, load_data, morph_options);
 
     APPLOG_TRACE("Mesh Importer: Processing nodes ...");
     mesh_import::process_nodes(scene, load_data, submesh_placements, name_to_index_lut);
 
     APPLOG_TRACE("Mesh Importer: Processing animations ...");
-    mesh_import::process_animations(scene, filename, name_to_index_lut, animations);
+    mesh_import::process_animations(scene, filename, name_to_index_lut, animations, morph_options);
 
     // Note: bounds are intentionally bind-pose only. Animation-driven expansion happens at
     // runtime from per-bone bind-space bounds (skinned) and per-node submesh proxy bounds
@@ -138,19 +140,30 @@ void process_imported_scene(asset_manager& am,
     APPLOG_TRACE("Mesh Importer: bbox min {}, max {}", load_data.bbox.min, load_data.bbox.max);
 }
 
-auto read_file(Assimp::Importer& importer, const fs::path& file, uint32_t flags) -> const aiScene*
+auto read_file(Assimp::Importer& importer,
+               const fs::path& file,
+               uint32_t flags,
+               const mesh_import::morph_import_options& morph_options) -> const aiScene*
 {
     APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Importer Read File");
     // Read without post-processing first: a mesh-less FBX root is corrected in the frame the file
-    // was read in, as Assimp corrects the others, and only then converted.
+    // was read in, as Assimp corrects the others, and only then converted. The morph targets are
+    // prepared before welding, which would otherwise join vertices only a target separates.
     const aiScene* scene = importer.ReadFile(file.string(), 0);
     if(scene == nullptr)
     {
         return nullptr;
     }
     // The importer owns the scene and post-processing rewrites it in place anyway.
-    correct_meshless_fbx_root(*const_cast<aiScene*>(scene), file);
-    return importer.ApplyPostProcessing(flags);
+    auto& editable = *const_cast<aiScene*>(scene);
+    correct_meshless_fbx_root(editable, file);
+    flags = mesh_import::prepare_morph_targets(editable, morph_options, flags);
+    scene = importer.ApplyPostProcessing(flags);
+    if(scene != nullptr)
+    {
+        mesh_import::remove_morph_signatures(*const_cast<aiScene*>(scene));
+    }
+    return scene;
 }
 
 /// Assimp post-processing for an import with @p import_meta's model and material options.
@@ -213,6 +226,11 @@ auto get_removed_components(const mesh_importer_meta& import_meta) -> int
     if(!import_meta.materials.import_materials)
     {
         rvc_flags |= aiComponent_MATERIALS;
+    }
+    // Without the file's colours every vertex imports white.
+    if(!import_meta.model.import_vertex_colors)
+    {
+        rvc_flags |= aiComponent_COLORS;
     }
     return rvc_flags;
 }
@@ -314,14 +332,15 @@ auto load_mesh_data_from_file(asset_manager& am,
 
     APPLOG_TRACE("Mesh Importer: Loading {}", path.generic_string());
 
-    const aiScene* scene = read_file(importer, path, get_postprocess_flags(import_meta));
+    const auto morph_options = mesh_import::get_morph_import_options(import_meta, path);
+    const aiScene* scene = read_file(importer, path, get_postprocess_flags(import_meta), morph_options);
     if(scene == nullptr)
     {
         APPLOG_ERROR(importer.GetErrorString());
         return false;
     }
 
-    process_imported_scene(am, path.stem(), path.parent_path(), scene, load_data, animations, materials, textures);
+    process_imported_scene(am, path.stem(), path.parent_path(), scene, load_data, animations, materials, textures, morph_options);
 
     APPLOG_TRACE("Mesh Importer: Done with {}", path.generic_string());
 

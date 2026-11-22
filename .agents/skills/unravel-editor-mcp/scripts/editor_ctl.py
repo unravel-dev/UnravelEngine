@@ -2,7 +2,7 @@
 
 From the repository root:
     python .agents/skills/unravel-editor-mcp/scripts/editor_ctl.py start <bin_dir> <project_dir> --port N
-           [--novsync] [--renderer NAME] [--profile developer|user]
+           [--novsync] [--renderer NAME] [--profile developer|user] [--arg=--option ...]
     python .agents/skills/unravel-editor-mcp/scripts/editor_ctl.py wait --port N [--timeout SECONDS]
     python .agents/skills/unravel-editor-mcp/scripts/editor_ctl.py call <tool> [JSON arguments] --port N
            [--image PATH] [--timeout SECONDS]
@@ -85,6 +85,7 @@ def start(arguments: argparse.Namespace) -> int:
         command += ["--renderer", arguments.renderer]
     if arguments.profile:
         command += ["--mcp-profile", arguments.profile]
+    command += arguments.arg
     STATE_FOLDER.mkdir(parents=True, exist_ok=True)
     log = open(STATE_FOLDER / ("editor_%d.log" % arguments.port), "w")
     if os.name == "nt":
@@ -174,6 +175,8 @@ def parse_arguments() -> argparse.Namespace:
     start_parser.add_argument("--novsync", action="store_true", help="render uncapped (GPU timing only)")
     start_parser.add_argument("--renderer", default="")
     start_parser.add_argument("--profile", default="", choices=["", "developer", "user"])
+    start_parser.add_argument("--arg", action="append", default=[],
+                              help="one more editor launch argument, repeatable; write it as --arg=--option")
     wait_parser = commands.add_parser("wait", help="wait until the editor answers")
     wait_parser.add_argument("--timeout", type=int, default=300)
     call_parser = commands.add_parser("call", help="call one MCP tool")

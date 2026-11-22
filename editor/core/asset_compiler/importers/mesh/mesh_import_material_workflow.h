@@ -49,6 +49,10 @@ auto material_workflow_label(material_workflow workflow) -> const char*;
 /// Whether @p material shows its color without lighting: glTF's KHR_materials_unlit (Assimp's Unlit shading mode).
 auto is_material_unlit(const aiMaterial* material) -> bool;
 
+/// Whether @p material comes from a glTF file: Assimp's glTF importer gives every material an alphaMode, and no other
+/// importer writes the key.
+auto is_gltf_material(const aiMaterial* material) -> bool;
+
 /**
  * @brief Classify material input workflow.
  *

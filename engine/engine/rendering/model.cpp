@@ -956,7 +956,7 @@ void model::submit(const math::mat4& world_transform,
                                 gfx::set_prev_world_transform(prev_transform != nullptr ? *prev_transform
                                                                                         : *transform);
                             }
-                            mesh->bind_render_buffers_for_submesh(sm, sm_lod);
+                            mesh->bind_render_buffers_for_submesh(sm, sm_lod, extras.morph_deform, extras.morph_previous_positions);
                             params.preserve_state = (&index != &indices.back());
                             callbacks.setup_params_per_submesh(params, *group_mat);
                         }
@@ -975,7 +975,7 @@ void model::submit(const math::mat4& world_transform,
                     {
                         gfx::set_prev_world_transform(*extras.prev_world_transform);
                     }
-                    mesh->bind_render_buffers_for_submesh(sm, sm_lod);
+                    mesh->bind_render_buffers_for_submesh(sm, sm_lod, extras.morph_deform, extras.morph_previous_positions);
                     params.preserve_state = &index != &indices.back();
                     callbacks.setup_params_per_submesh(params, *group_mat);
                 }
@@ -1045,7 +1045,10 @@ void model::submit(const math::mat4& world_transform,
                 }
 
                 bind_skinning_palette(palette_rows, index);
-                mesh->bind_render_buffers_for_submesh(choice.submesh, choice.lod);
+                mesh->bind_render_buffers_for_submesh(choice.submesh,
+                                                      choice.lod,
+                                                      extras.morph_deform,
+                                                      extras.morph_previous_positions);
                 params.preserve_state = &index != &indices.back();
                 callbacks.setup_params_per_submesh(params, *group_mat);
             }
@@ -1096,9 +1099,15 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
     const uint32_t stride_bytes = vertex_format.getStride();
     const uint32_t pos_offset_bytes = vertex_format.getOffset(bgfx::Attrib::Position);
 
+    // A morphed mesh gives its positions from the deform stream its pass wrote this frame; the rest of its attributes
+    // (bone weights and indices) stay in its own buffer.
+    const morph_deform_binding* morph = extras.morph_deform;
+    const bool is_morphed = morph != nullptr && morph->deforms_readable(mesh.get());
+
     submit_vertex_pulling_callbacks::params params;
     params.vertex_stride_floats = stride_bytes / float_size;
-    params.position_offset_floats = pos_offset_bytes / float_size;
+    params.position_stride_floats = is_morphed ? get_morph_deform_layout().getStride() / float_size : params.vertex_stride_floats;
+    params.position_offset_floats = is_morphed ? 0u : pos_offset_bytes / float_size;
 
     const auto skinned_count = mesh->get_skinned_submeshes_count(lod);
     const auto non_skinned_count = mesh->get_non_skinned_submeshes_count(lod);
@@ -1147,6 +1156,14 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
 
         bgfx::setBuffer(0, vb_handle, bgfx::Access::Read);
         bgfx::setBuffer(1, ib_handle, bgfx::Access::Read);
+        if(is_morphed)
+        {
+            bgfx::setBuffer(2, morph->current, bgfx::Access::Read);
+        }
+        else
+        {
+            bgfx::setBuffer(2, vb_handle, bgfx::Access::Read);
+        }
 
         if(callbacks.setup_params_per_submesh)
         {

@@ -14,6 +14,12 @@ REFLECT_EXTERN(mesh);
 
 SAVE_EXTERN(mesh::triangle);
 LOAD_EXTERN(mesh::triangle);
+SAVE_EXTERN(morph_target);
+LOAD_EXTERN(morph_target);
+SAVE_EXTERN(morph_delta);
+LOAD_EXTERN(morph_delta);
+SAVE_EXTERN(morph_target_data);
+LOAD_EXTERN(morph_target_data);
 
 SAVE_EXTERN(skin_bind_data::vertex_influence);
 LOAD_EXTERN(skin_bind_data::vertex_influence);

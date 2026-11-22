@@ -141,9 +141,51 @@ auto collect_placements(const submesh_pose_mat4& pose, uint32_t submesh_index, c
     return placements;
 }
 
-auto padded(const math::bbox& bounds) -> math::bbox
+/// @p bounds grown by the rounding padding and by @p extra (how far morph targets move a vertex at most).
+auto padded(const math::bbox& bounds, float extra) -> math::bbox
 {
-    return math::bbox(bounds.min - math::vec3(k_bounds_padding), bounds.max + math::vec3(k_bounds_padding));
+    const math::vec3 padding(k_bounds_padding + extra);
+    return math::bbox(bounds.min - padding, bounds.max + padding);
+}
+
+/// The shape a morphed model draws: its weights, how far they move a vertex at most, and the moved positions, built
+/// once the ray reaches one of its submeshes. No padding while every weight is at rest: the mesh's own positions serve.
+struct morph_shape
+{
+    std::shared_ptr<const morph_target_data> targets;
+    std::vector<float> weights;
+    float padding{};
+    std::vector<math::vec3> positions;
+};
+
+auto get_morph_shape(const mesh& source, const model_component& model_comp) -> morph_shape
+{
+    morph_shape shape;
+    shape.targets = source.get_morph_targets();
+    if(shape.targets && !shape.targets->empty())
+    {
+        model_comp.resolve_morph_weights(*shape.targets, shape.weights);
+        shape.padding = get_morph_bounds_padding(*shape.targets, shape.weights);
+    }
+    return shape;
+}
+
+/// The positions the ray is tested against: the mesh's own, or the morphed ones while a weight is active.
+auto get_tested_positions(mesh& source, morph_shape& shape, position_cache& cache) -> const std::vector<math::vec3>&
+{
+    const auto& rest = get_positions(source, cache);
+    if(shape.padding <= 0.0f)
+    {
+        return rest;
+    }
+    if(shape.positions.empty())
+    {
+        std::vector<float> deltas;
+        accumulate_morph_deltas(*shape.targets, shape.weights, deltas);
+        shape.positions = rest;
+        apply_morph_position_deltas(*shape.targets, deltas, shape.positions);
+    }
+    return shape.positions;
 }
 
 /// The nearest surface of one model the ray crosses, or nothing.
@@ -166,6 +208,7 @@ auto raycast_model(entt::handle entity,
     }
     const auto& pose = model_comp.get_submesh_transforms();
     const math::mat4& world = transform.get_transform_global().get_matrix();
+    auto shape = get_morph_shape(*source, model_comp);
     scene_ray_hit nearest;
     nearest.entity = entity;
     nearest.distance = ray.max_distance;
@@ -184,13 +227,14 @@ auto raycast_model(entt::handle entity,
             const math::vec3 local_origin = math::vec3(to_local * math::vec4(ray.origin, 1.0f));
             const math::vec3 local_direction = math::vec3(to_local * math::vec4(ray.direction, 0.0f));
             float entry = 0.0f;
-            if(!padded(submesh->bbox).intersect(local_origin, local_direction, entry, false) || entry > nearest.distance)
+            if(!padded(submesh->bbox, shape.padding).intersect(local_origin, local_direction, entry, false) ||
+               entry > nearest.distance)
             {
                 continue;
             }
             const auto hit = intersect_submesh(*submesh,
                                                indices,
-                                               get_positions(*source, cache),
+                                               get_tested_positions(*source, shape, cache),
                                                local_origin,
                                                local_direction,
                                                nearest.distance);

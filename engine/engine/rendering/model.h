@@ -304,6 +304,12 @@ struct model_submit_extras
     const submesh_pose_mat4* prev_submesh_transforms{nullptr};
     const std::vector<pose_mat4>* prev_skinning_transforms{nullptr};
 
+    /// The model's morph deform streams (model_component::get_morph_deform_binding): draws of the mesh they deform
+    /// read its morphed vertices. With morph_previous_positions, last frame's as well (the velocity pass's morph
+    /// programs read them).
+    const morph_deform_binding* morph_deform{nullptr};
+    bool morph_previous_positions{false};
+
     /// Which submeshes the pass draws by where their material draws (is_material_drawn_in): every one, the G-buffer's
     /// (every surface but those of the translucency pass), or the translucency pass's alone.
     model_material_pass material_pass{model_material_pass::all};
@@ -743,8 +749,10 @@ public:
      *   - Set @c u_world via @c gfx::set_world_transform() with the per-submesh
      *     non-skinned matrix, or bound the submesh's bone palette
      *     (skinning_palette_buffer::bind).
-     *   - Bound the mesh's hardware vertex buffer on compute stage @c 0 and its
-     *     hardware index buffer on compute stage @c 1 (both read-only).
+     *   - Bound the mesh's hardware vertex buffer on compute stage @c 0, its
+     *     hardware index buffer on compute stage @c 1 and the buffer the positions
+     *     come from on compute stage @c 2 (all read-only): the mesh's vertex buffer,
+     *     or a morphed mesh's deform stream (model_submit_extras::morph_deform).
      * The callback is expected to set the shader program, any additional uniforms,
      * render state, call @c bgfx::setVertexCount(...) with the effect-specific
      * vertex multiplier, and finally @c bgfx::submit(...) on the desired view.
@@ -767,8 +775,9 @@ public:
             uint32_t submesh_index{};          ///< Submesh index within the LOD mesh.
             uint32_t index_start{};            ///< Starting index of the submesh in the index buffer (in indices).
             uint32_t index_count{};            ///< Number of indices making up the submesh.
-            uint32_t vertex_stride_floats{};   ///< Vertex stride expressed in float-sized elements.
-            uint32_t position_offset_floats{}; ///< Byte offset of the position attribute converted to floats.
+            uint32_t vertex_stride_floats{};   ///< Vertex stride of the mesh's vertex buffer (stage 0), in floats.
+            uint32_t position_stride_floats{}; ///< Vertex stride of the positions buffer (stage 2), in floats.
+            uint32_t position_offset_floats{}; ///< Offset of the position in the positions buffer (stage 2), in floats.
             uint32_t weight_offset_floats{};   ///< Byte offset of the bone weight attribute converted to floats.
             uint32_t indices_offset_floats{};  ///< Byte offset of the bone indices attribute converted to floats.
         };
@@ -789,7 +798,9 @@ public:
      *
      * Mirrors @ref submit but skips per-submesh material handling and bind_render_buffers
      * calls, and instead exposes the raw vertex/index buffers as read-only compute
-     * buffers so the shader can procedurally generate vertices from @c gl_VertexID.
+     * buffers so the shader can procedurally generate vertices from @c gl_VertexID. A
+     * morphed mesh whose deform stream a shader can read (morph_deform_binding::
+     * deforms_readable) gives its deformed positions; otherwise the rest positions.
      *
      * @param world_transform The world transform of the model.
      * @param submesh_transforms The submesh transforms (many-to-many mapping).

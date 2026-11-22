@@ -25,7 +25,8 @@ namespace mesh_import
 void process_animations(const aiScene* scene,
                         const fs::path& filename,
                         node_index_lut_t& node_to_index_lut,
-                        std::vector<animation_clip>& animations);
+                        std::vector<animation_clip>& animations,
+                        const morph_import_options& morph_options = {});
 
 } // namespace mesh_import
 } // namespace importer

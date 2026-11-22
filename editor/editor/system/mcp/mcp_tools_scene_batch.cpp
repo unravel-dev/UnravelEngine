@@ -8,6 +8,7 @@
 #include <editor/editing/entity_clipboard.h>
 #include <editor/editing/entity_inspect.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
+#include <editor/hub/panels/inspector_panel/inspectors/inspector_model.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/defaults/defaults.h>
 #include <engine/ecs/components/tag_component.h>
@@ -369,6 +370,128 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
          .mutates_scene = true,
          .idempotent = true,
          .former_arguments = {{"items[].index", "material_index"}}});
+
+    registry.add(
+        {.name = "scene_set_morph_weights_batch",
+         .description =
+             "Set the morph target (blend shape) weights of models in one undoable step, as the Model component's "
+             "Morph Targets sliders do. Each item: entity_id; weights, an object of target name to weight (0 is the "
+             "rest shape, 1 the full shape; weights past 1 or below 0 are kept); optional reset true first returns "
+             "every target to its mesh default, so the item states the whole face. Items naming the same entity apply "
+             "in order. Each weight that changes is a prefab override by its target's name. assets_get_mesh_info lists "
+             "a mesh's targets; an animation keying a target sets it again while playing.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"weights":{"type":"object","additionalProperties":{"type":"number"}},"reset":{"type":"boolean"}},"required":["entity_id"]}}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             scene* scn = nullptr;
+             std::string error;
+             if(!require_edit_scene(ctx, scn, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             simdjson::dom::array items_arr;
+             if(!read_required_array(args, "items", items_arr, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             // One change per model: an entity named by several items takes them in order.
+             std::vector<morph_weights_change> changes;
+             for(auto el : items_arr)
+             {
+                 simdjson::dom::object obj;
+                 if(!read_object(el, obj, error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 std::string entity_id;
+                 if(!read_string(obj, "entity_id", entity_id))
+                 {
+                     return {.text = "Item missing entity_id", .is_error = true};
+                 }
+                 auto entity = find_entity(*scn, entity_id);
+                 auto* model_comp = entity ? entity.try_get<model_component>() : nullptr;
+                 if(model_comp == nullptr)
+                 {
+                     return {.text = "Entity missing model_component: " + entity_id, .is_error = true};
+                 }
+                 const auto targets = model_comp->get_morph_targets();
+                 if(!targets)
+                 {
+                     return {.text = fmt::format("The model of {} has no morph targets, or its mesh is still loading.", entity_id),
+                             .is_error = true};
+                 }
+                 auto change = std::find_if(changes.begin(),
+                                            changes.end(),
+                                            [&entity](const morph_weights_change& existing)
+                                            {
+                                                return existing.entity == entity;
+                                            });
+                 if(change == changes.end())
+                 {
+                     changes.push_back({entity, model_comp->get_morph_weights(), model_comp->get_morph_weights()});
+                     change = std::prev(changes.end());
+                 }
+                 bool is_reset = false;
+                 read_bool(obj, "reset", is_reset);
+                 if(is_reset)
+                 {
+                     change->after.clear();
+                 }
+                 simdjson::dom::element weights_value;
+                 if(obj["weights"].get(weights_value) != simdjson::SUCCESS)
+                 {
+                     continue;
+                 }
+                 simdjson::dom::object weights;
+                 if(weights_value.get(weights) != simdjson::SUCCESS)
+                 {
+                     return {.text = fmt::format("The weights of {} must be an object of target name to weight.", entity_id),
+                             .is_error = true};
+                 }
+                 for(auto field : weights)
+                 {
+                     const std::string name(field.key);
+                     if(targets->find_target(name) < 0)
+                     {
+                         std::vector<std::string> names;
+                         for(const auto& target : targets->targets)
+                         {
+                             names.push_back(target.name);
+                         }
+                         return {.text = fmt::format("The mesh of {} has no morph target named {}. Its targets: {}.",
+                                                     entity_id,
+                                                     name,
+                                                     fmt::join(names, ", ")),
+                                 .is_error = true};
+                     }
+                     double value = 0.0;
+                     if(field.value.get(value) != simdjson::SUCCESS || !std::isfinite(value))
+                     {
+                         return {.text = fmt::format("The weight of {} must be a finite number.", name), .is_error = true};
+                     }
+                     auto found = std::find_if(change->after.begin(),
+                                               change->after.end(),
+                                               [&name](const morph_weight& weight)
+                                               {
+                                                   return weight.name == name;
+                                               });
+                     if(found != change->after.end())
+                     {
+                         found->weight = float(value);
+                     }
+                     else
+                     {
+                         change->after.push_back({name, float(value)});
+                     }
+                 }
+             }
+             record_morph_weights_change(ctx, changes, "MCP Batch Set Morph Weights");
+             return {.text = fmt::format(R"({{"ok":true,"count":{}}})", changes.size()), .is_error = false};
+         },
+         .mutates_scene = true,
+         .idempotent = true});
 
     registry.add(
         {.name = "scene_get_bounds_batch",

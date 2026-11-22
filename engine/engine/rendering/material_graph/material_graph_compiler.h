@@ -318,6 +318,10 @@ struct material_graph_compile_result
     bool reads_object_data{};
     /// How many Vertex Interpolators the pixel stage reads (MATERIAL_INTERPOLATORS): values the vertex shader computes.
     uint32_t interpolator_count{};
+    /// The pixel stage reads the mesh's second UV set or its vertex colour: the vertex shader passes them (MATERIAL_UV1,
+    /// MATERIAL_VERTEX_COLOR).
+    bool reads_uv1{};
+    bool reads_vertex_color{};
     /// What the material draws: its output node's domain.
     material_domain domain{material_domain::surface};
     /// Decals: the channels written (material_decal_write_bits).

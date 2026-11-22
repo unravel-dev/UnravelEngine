@@ -70,6 +70,8 @@ void main()
 
 	MaterialInputs i;
 	i.uv0 = vec2(decal_position.x + 0.5, 0.5 - decal_position.y);
+	i.uv1 = i.uv0;
+	i.color0 = vec4_splat(1.0);
 	i.world_position = world_position;
 	i.vertex_normal = geometric_normal;
 	i.tangent = tangent;

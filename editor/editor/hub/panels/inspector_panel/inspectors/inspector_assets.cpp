@@ -938,9 +938,6 @@ void inspector_asset_handle_material::inspect_import_origin(rtti::context& ctx, 
 
 namespace
 {
-/// The mark of a value a material instance overrides: apart from the accent of prefab overrides.
-constexpr ImVec4 MATERIAL_INSTANCE_OVERRIDE_COLOR{61.0f / 255.0f, 191.0f / 255.0f, 166.0f / 255.0f, 1.0f};
-
 /// @p mat as its most derived reflected type, so its base type's properties and its own are found.
 auto make_material_view(material& mat) -> entt::meta_any
 {
@@ -1018,7 +1015,7 @@ auto make_instance_marks(const material_instance& instance, hpp::optional<entt::
     };
     marks.revert_label = "Revert to Shared Material";
     marks.overridden_note = "This model overrides the shared material's value.";
-    marks.marker_color = MATERIAL_INSTANCE_OVERRIDE_COLOR;
+    marks.marker_color = INSTANCE_OVERRIDE_COLOR;
     return marks;
 }
 
@@ -1068,7 +1065,7 @@ auto make_graph_override_marks(const material_instance& instance, hpp::optional<
     };
     marks.revert_label = "Revert to Shared Material";
     marks.overridden_note = "This model overrides the shared material's value.";
-    marks.marker_color = MATERIAL_INSTANCE_OVERRIDE_COLOR;
+    marks.marker_color = INSTANCE_OVERRIDE_COLOR;
     return marks;
 }
 

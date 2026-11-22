@@ -1092,8 +1092,12 @@ void register_asset_tools(mcp_tool_registry& registry)
          .description =
              "A mesh asset by key or uid: its local bounds (min, max, center, extents: its pivot and units, to place "
              "it on a floor and pick its scale), vertex and triangle counts, triangles per LOD, material slots (the "
-             "indices scene_set_model_materials_batch takes) with their default materials, submeshes, and the bones "
-             "of a skinned mesh (which needs an Animation component to play clips).",
+             "indices scene_set_model_materials_batch takes) with their default materials, submeshes, the bones "
+             "of a skinned mesh (which needs an Animation component to play clips), and the vertex channels the "
+             "source file has: vertex_colors (without them every vertex is white) and uv_sets (1 or 2; with 1 the "
+             "second set copies the first). morph_targets lists its morph targets (blend shapes): name, default "
+             "weight, how many vertices each moves and how far at most; morphed_vertices counts the vertices any "
+             "of them moves.",
          .input_schema_json = R"json({"type":"object","properties":{"key":{"type":"string","description":"Mesh asset key or uid"}},"required":["key"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
@@ -1119,8 +1123,22 @@ void register_asset_tools(mcp_tool_registry& registry)
                  const auto location = am.get_metadata(uid).location;
                  default_materials.push_back(location.empty() ? hpp::to_string(uid) : location);
              }
+             const auto info = data.get_info();
+             std::vector<std::string> morph_targets;
+             if(const auto& morphs = data.get_morph_targets())
+             {
+                 for(const auto& target : morphs->targets)
+                 {
+                     morph_targets.push_back(fmt::format(R"({{"name":{},"default_weight":{},"vertices":{},"max_displacement":{}}})",
+                                                         make_json_string(target.name),
+                                                         target.default_weight,
+                                                         target.delta_count,
+                                                         target.max_displacement));
+                 }
+             }
              return {.text = fmt::format(R"({{"key":{},"uid":{},"bounds":{},"vertices":{},"triangles":{},"lod_triangles":[{}],)"
-                                         R"("material_slots":{},"default_materials":{},"submeshes":{},"skinned_submeshes":{},"bones":{}}})",
+                                         R"("material_slots":{},"default_materials":{},"submeshes":{},"skinned_submeshes":{},"bones":{},)"
+                                         R"("vertex_colors":{},"uv_sets":{},"morph_targets":[{}],"morphed_vertices":{}}})",
                                          make_json_string(handle.id()),
                                          make_json_string(hpp::to_string(handle.uid())),
                                          bbox_to_json(data.get_bounds()),
@@ -1131,7 +1149,11 @@ void register_asset_tools(mcp_tool_registry& registry)
                                          strings_to_json_array(default_materials),
                                          data.get_submeshes_count(),
                                          data.get_skinned_submeshes_count(),
-                                         data.get_skin_bind_data().get_bones().size()),
+                                         data.get_skin_bind_data().get_bones().size(),
+                                         info.vertex_colors ? "true" : "false",
+                                         info.uv_sets,
+                                         fmt::join(morph_targets, ","),
+                                         info.morphed_vertices),
                      .is_error = false};
          },
          .mutates_scene = false,

@@ -49,7 +49,12 @@ names ("Animation", "Two Bone IK").
   AnimationEvent, or the event's string, float or int).
 - curves: named float tracks blended with the pose. Read with
   animation.GetCurve(name); a float controller parameter with the same name
-  takes the curve's value; IK components take one as weight_curve.
+  takes the curve's value; IK components take one as weight_curve. A curve
+  named like a morph target of the model on the same entity sets that
+  target's weight: a file's morph animation imports as such curves, and a
+  curve set in the import settings replaces the file's curve of its name.
+  Crossfades and blend spaces blend them; an additive layer adds its curves;
+  bone masks do not filter them.
 
 ## 2. The character entity
 

@@ -201,10 +201,20 @@ void add_maps(material_graph& graph, const standard_surface& surface)
     add_map(graph, "ao_map", "AO Map", surface.ao_map, AO_MAP_HINT);
 }
 
-/// The color map tinted by the base color: its rgb the base (diffuse) color, its alpha what a masked material clips.
-void link_base_color(material_graph& graph)
+/// The color map tinted by the base color, and by the vertex colour where the surface multiplies by it: its rgb the base
+/// (diffuse) color, its alpha what a masked material clips.
+void link_base_color(material_graph& graph, const standard_surface& surface)
 {
-    add_multiply(graph, "albedo", "color_map.rgba", "base_color.rgba");
+    if(surface.multiply_vertex_color)
+    {
+        add_multiply(graph, "tint", "color_map.rgba", "base_color.rgba");
+        add_graph_node(graph, "vertex_color", "vertex_color");
+        add_multiply(graph, "albedo", "tint.out", "vertex_color.rgba");
+    }
+    else
+    {
+        add_multiply(graph, "albedo", "color_map.rgba", "base_color.rgba");
+    }
     link_output(graph, "base_color", "albedo.out.rgb");
 }
 
@@ -437,7 +447,7 @@ auto make_standard_material_graph(const standard_surface& surface) -> material_g
     }
     add_parameters(graph, surface);
     add_maps(graph, surface);
-    link_base_color(graph);
+    link_base_color(graph, surface);
     if(surface.workflow == standard_workflow::specular)
     {
         link_specular(graph);

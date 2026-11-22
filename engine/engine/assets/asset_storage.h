@@ -118,13 +118,32 @@ struct mesh_importer_meta : crtp_meta_type<mesh_importer_meta, asset_importer_me
 {
     struct model_meta
     {
+        /// Where a morph target's normals come from.
+        enum class morph_normals
+        {
+            /// The file's, or calculated for a target the file stores no turning normals for.
+            import,
+            /// Calculated from the moved positions, over the mesh's own faces.
+            calculate,
+            /// None: lighting keeps the rest shape's normals.
+            none,
+        };
+
         bool import_meshes{true};
         bool weld_vertices{true};
         bool optimize_meshes{true};
         bool split_large_meshes{true};
         bool find_degenerates{true};
         bool find_invalid_data{true};
-        
+        ///< Import the file's first vertex colour set; off, every vertex is white.
+        bool import_vertex_colors{true};
+        ///< Import the file's morph targets (blend shapes) and the animation curves that move them.
+        bool import_morph_targets{true};
+        ///< See morph_normals.
+        morph_normals morph_normal_mode{morph_normals::import};
+        ///< A vertex a target moves less than this, in the mesh's units, without turning its normal, is left out of it.
+        float morph_threshold{0.00001f};
+
         ///< Enable automatic LOD generation during compilation
         bool generate_lods{true};
         ///< Target error for LOD generation (lower = higher quality, higher = more aggressive)
@@ -442,7 +461,7 @@ public:
             }
 
             // Update in place, preserving the existing UUID so that other
-            // assets that reference it (e.g. materials → textures) don't get
+            // assets that reference it (e.g. materials -> textures) don't get
             // orphaned by an override pass.
             existing->second.location = location;
             existing->second.meta = meta;

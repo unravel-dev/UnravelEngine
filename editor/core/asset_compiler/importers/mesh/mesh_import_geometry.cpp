@@ -46,9 +46,43 @@ auto process_matrix(const aiMatrix4x4& assimp_matrix) -> math::mat4
     return matrix;
 }
 
+/// The vertex colour and UV sets beyond the first two the engine keeps, named once per mesh in the log.
+void report_dropped_channels(const aiMesh* mesh)
+{
+    const unsigned int color_sets = mesh->GetNumColorChannels();
+    const unsigned int uv_sets = mesh->GetNumUVChannels();
+    if(color_sets > 1)
+    {
+        APPLOG_INFO("Mesh Importer: the mesh {} has {} vertex colour sets. Only the first is imported.",
+                    mesh->mName.C_Str(),
+                    color_sets);
+    }
+    if(uv_sets > 2)
+    {
+        APPLOG_INFO("Mesh Importer: the mesh {} has {} UV sets. Only the first two are imported.",
+                    mesh->mName.C_Str(),
+                    uv_sets);
+    }
+}
+
+/// The first vertex colour of @p mesh's vertex @p i, clamped to 0..1 (glTF stores them so), or opaque white.
+auto get_vertex_color(const aiMesh* mesh, size_t i) -> math::vec4
+{
+    if(!mesh->HasVertexColors(0))
+    {
+        return math::vec4(1.0f);
+    }
+    const aiColor4D& color = mesh->mColors[0][i];
+    return math::clamp(math::vec4(color.r, color.g, color.b, color.a), math::vec4(0.0f), math::vec4(1.0f));
+}
+
 void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
 {
     auto& submesh = load_data.submeshes.back();
+
+    report_dropped_channels(mesh);
+    load_data.has_vertex_colors |= mesh->HasVertexColors(0);
+    load_data.uv_set_count = std::max(load_data.uv_set_count, mesh->HasTextureCoords(1) ? 2u : 1u);
 
     // Determine the correct offset to any relevant elements in the vertex
     bool has_position = load_data.vertex_format.has(bgfx::Attrib::Position);
@@ -56,6 +90,8 @@ void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
     bool has_bitangent = load_data.vertex_format.has(bgfx::Attrib::Bitangent);
     bool has_tangent = load_data.vertex_format.has(bgfx::Attrib::Tangent);
     bool has_texcoord0 = load_data.vertex_format.has(bgfx::Attrib::TexCoord0);
+    bool has_texcoord1 = load_data.vertex_format.has(bgfx::Attrib::TexCoord1);
+    bool has_color0 = load_data.vertex_format.has(bgfx::Attrib::Color0);
     auto vertex_stride = load_data.vertex_format.getStride();
 
     std::uint32_t current_vertex = load_data.vertex_count;
@@ -75,31 +111,44 @@ void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
             bgfx::vertexPack(position, false, bgfx::Attrib::Position, load_data.vertex_format, current_vertex_ptr);
 
             submesh.bbox.add_point(math::vec3(position[0], position[1], position[2]));
+            // The bounds hold every morph target's shape at weight 1 too.
+            for(unsigned int a = 0; a < mesh->mNumAnimMeshes; ++a)
+            {
+                const aiAnimMesh* shape = mesh->mAnimMeshes[a];
+                if(shape->HasPositions() && i < shape->mNumVertices)
+                {
+                    submesh.bbox.add_point(math::vec3(shape->mVertices[i].x, shape->mVertices[i].y, shape->mVertices[i].z));
+                }
+            }
         }
 
-        // tex coords
-
+        // Texture coordinates: the second set copies the first where the file has none, so a material made for two
+        // sets still maps on a mesh with one.
+        float texcoords0[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        if(mesh->HasTextureCoords(0))
+        {
+            std::memcpy(texcoords0, &mesh->mTextureCoords[0][i], sizeof(aiVector2D));
+        }
         if(has_texcoord0)
         {
-            float textureCoords[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            if(mesh->HasTextureCoords(0))
+            bgfx::vertexPack(texcoords0, true, bgfx::Attrib::TexCoord0, load_data.vertex_format, current_vertex_ptr);
+        }
+        if(has_texcoord1)
+        {
+            float texcoords1[4] = {texcoords0[0], texcoords0[1], 0.0f, 0.0f};
+            if(mesh->HasTextureCoords(1))
             {
-                std::memcpy(textureCoords, &mesh->mTextureCoords[0][i], sizeof(aiVector2D));
+                std::memcpy(texcoords1, &mesh->mTextureCoords[1][i], sizeof(aiVector2D));
+            }
+            bgfx::vertexPack(texcoords1, true, bgfx::Attrib::TexCoord1, load_data.vertex_format, current_vertex_ptr);
+        }
 
-                bgfx::vertexPack(textureCoords,
-                                 true,
-                                 bgfx::Attrib::TexCoord0,
-                                 load_data.vertex_format,
-                                 current_vertex_ptr);
-            }
-            else
-            {
-                bgfx::vertexPack(textureCoords,
-                                 true,
-                                 bgfx::Attrib::TexCoord0,
-                                 load_data.vertex_format,
-                                 current_vertex_ptr);
-            }
+        // Vertex colour: the file's value, with no colour-space conversion, rounded to the nearest 8-bit step (the
+        // bytes are packed as they are: bgfx's normalized packing truncates).
+        if(has_color0)
+        {
+            const math::vec4 bytes = math::round(get_vertex_color(mesh, i) * 255.0f);
+            bgfx::vertexPack(math::value_ptr(bytes), false, bgfx::Attrib::Color0, load_data.vertex_format, current_vertex_ptr);
         }
 
 
@@ -280,6 +329,17 @@ void process_bones(aiMesh* mesh, std::uint32_t submesh_offset, mesh::load_data& 
                     const math::vec3 bone_space_position =
                         bone_ptr->bind_pose_transform.transform_coord(mesh_space_position);
                     bone_ptr->bounds.add_point(bone_space_position);
+                    // And where the morph targets move the vertex at weight 1.
+                    for(unsigned int a = 0; a < mesh->mNumAnimMeshes; ++a)
+                    {
+                        const aiAnimMesh* shape = mesh->mAnimMeshes[a];
+                        if(shape->HasPositions() && assimp_influence.mVertexId < shape->mNumVertices)
+                        {
+                            const auto& moved = shape->mVertices[assimp_influence.mVertexId];
+                            bone_ptr->bounds.add_point(
+                                bone_ptr->bind_pose_transform.transform_coord(math::vec3(moved.x, moved.y, moved.z)));
+                        }
+                    }
                 }
             }
         }
@@ -455,12 +515,27 @@ auto find_bind_space_correction(const aiMesh* mesh, const bind_offsets_t& offset
     return correction.value_or(aiMatrix4x4());
 }
 
-/// Re-express @p mesh (vertices, tangent frame, bone offsets) through @p correction.
+/// Re-express @p mesh (vertices, tangent frame, morph targets, bone offsets) through @p correction.
 void apply_bind_space_correction(aiMesh* mesh, const aiMatrix4x4& correction)
 {
     const aiMatrix3x3 linear(correction);
     aiMatrix3x3 normal_matrix = linear;
     normal_matrix.Inverse().Transpose();
+    for(unsigned int a = 0; a < mesh->mNumAnimMeshes; ++a)
+    {
+        aiAnimMesh* shape = mesh->mAnimMeshes[a];
+        for(unsigned int i = 0; i < shape->mNumVertices; ++i)
+        {
+            if(shape->HasPositions())
+            {
+                shape->mVertices[i] = correction * shape->mVertices[i];
+            }
+            if(shape->HasNormals())
+            {
+                shape->mNormals[i] = (normal_matrix * shape->mNormals[i]).Normalize();
+            }
+        }
+    }
     for(unsigned int i = 0; i < mesh->mNumVertices; ++i)
     {
         mesh->mVertices[i] = correction * mesh->mVertices[i];
@@ -583,10 +658,12 @@ void accumulate_bounds_from_armature(const mesh::load_data& load_data, math::bbo
     visit(*load_data.root_node, math::transform::identity());
 }
 
-auto process_meshes(const aiScene* scene, mesh::load_data& load_data) -> submesh_placements_t
+auto process_meshes(const aiScene* scene, mesh::load_data& load_data, const morph_import_options& morph_options)
+    -> submesh_placements_t
 {
     submesh_placements_t placements(scene->mNumMeshes);
     bind_offsets_t bind_offsets;
+    morph_target_builder morphs;
     for(size_t i = 0; i < scene->mNumMeshes; ++i)
     {
         aiMesh* mesh = scene->mMeshes[i];
@@ -594,7 +671,16 @@ auto process_meshes(const aiScene* scene, mesh::load_data& load_data) -> submesh
         {
             placements[i] = align_to_shared_bind_space(mesh, bind_offsets);
         }
+        const uint32_t first_vertex = load_data.vertex_count;
         process_mesh(mesh, load_data);
+        if(morph_options.import_morph_targets)
+        {
+            read_morph_targets(mesh, first_vertex, morph_options, morphs);
+        }
+    }
+    if(!morphs.empty())
+    {
+        load_data.morph_targets = morphs.build(morph_options.position_threshold, k_morph_normal_threshold);
     }
     return placements;
 }

@@ -854,6 +854,12 @@ auto deferred::init(rtti::context& ctx) -> bool
     velocity_program_skinned_.cache_uniforms();
     velocity_program_skinned_.program = load_velocity_program("skinned");
 
+    velocity_program_morph_.cache_uniforms();
+    velocity_program_morph_.program = load_velocity_program("morph");
+
+    velocity_program_skinned_morph_.cache_uniforms();
+    velocity_program_skinned_morph_.program = load_velocity_program("skinned_morph");
+
     velocity_program_instanced_.cache_uniforms();
     velocity_program_instanced_.program = load_velocity_program("instanced");
 

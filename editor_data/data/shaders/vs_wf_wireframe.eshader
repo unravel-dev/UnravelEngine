@@ -19,57 +19,58 @@ uniform vec4 u_wf_params[3];
 #define u_wfColor         u_wf_params[0].xyz
 #define u_wfOpacity       u_wf_params[0].w
 #define u_wfThickness     u_wf_params[1].x
-#define u_wfStride        u_wf_params[1].y
+#define u_wfPosStride     u_wf_params[1].y
 #define u_wfPosOffset     u_wf_params[1].z
 #define u_wfIndexOffset   u_wf_params[1].w
 #if SKINNED
 #define u_wfWeightOffset  u_wf_params[2].x
 #define u_wfIndicesOffset u_wf_params[2].y
+#define u_wfVertexStride  u_wf_params[2].z
 #endif
 
-// Raw read-only views of the mesh vertex/index buffers. Raw, because bgfx fixes a
-// typed buffer view by buffer kind (a vertex buffer is always viewed as vec4).
-// The vertex buffer is read as 32-bit words; per-vertex data is reconstructed
-// manually using u_wfStride and u_wfPosOffset (both expressed in 32-bit words)
-// since arbitrary vertex layouts are supported.
-// The index buffer is 32-bit, so each word is exactly one vertex index.
-BUFFER_RAW_RO(u_positions, 0);
-BUFFER_RAW_RO(u_indices,   1);
+// Raw read-only views of the mesh's vertex and index buffers and of the buffer its positions come from: the vertex
+// buffer itself, or a morphed mesh's deform stream. Raw, because bgfx fixes a typed buffer view by buffer kind (a
+// vertex buffer is always viewed as vec4). Vertex buffers are read as 32-bit words and per-vertex data is rebuilt
+// from the strides and offsets (in 32-bit words), since arbitrary vertex layouts are supported. The index buffer
+// is 32-bit, so each word is exactly one vertex index.
+BUFFER_RAW_RO(u_vertices,         0);
+BUFFER_RAW_RO(u_indices,          1);
+BUFFER_RAW_RO(u_vertex_positions, 2);
 
 #define NEAR_EPSILON   0.001
 #define LENGTH_EPSILON 0.0001
 
 vec3 get_position(uint index)
 {
-    uint stride = uint(u_wfStride);
+    uint stride = uint(u_wfPosStride);
     uint offset = uint(u_wfPosOffset);
     uint base   = index * stride + offset;
-    return vec3(rawLoadFloat(u_positions, base + 0u),
-                rawLoadFloat(u_positions, base + 1u),
-                rawLoadFloat(u_positions, base + 2u));
+    return vec3(rawLoadFloat(u_vertex_positions, base + 0u),
+                rawLoadFloat(u_vertex_positions, base + 1u),
+                rawLoadFloat(u_vertex_positions, base + 2u));
 }
 
 #if SKINNED
 vec4 get_weight(uint index)
 {
-    uint stride = uint(u_wfStride);
+    uint stride = uint(u_wfVertexStride);
     uint offset = uint(u_wfWeightOffset);
     uint base   = index * stride + offset;
-    return vec4(rawLoadFloat(u_positions, base + 0u),
-                rawLoadFloat(u_positions, base + 1u),
-                rawLoadFloat(u_positions, base + 2u),
-                rawLoadFloat(u_positions, base + 3u));
+    return vec4(rawLoadFloat(u_vertices, base + 0u),
+                rawLoadFloat(u_vertices, base + 1u),
+                rawLoadFloat(u_vertices, base + 2u),
+                rawLoadFloat(u_vertices, base + 3u));
 }
 
 vec4 get_bone_indices(uint index)
 {
-    uint stride = uint(u_wfStride);
+    uint stride = uint(u_wfVertexStride);
     uint offset = uint(u_wfIndicesOffset);
     uint base   = index * stride + offset;
-    return vec4(rawLoadFloat(u_positions, base + 0u),
-                rawLoadFloat(u_positions, base + 1u),
-                rawLoadFloat(u_positions, base + 2u),
-                rawLoadFloat(u_positions, base + 3u));
+    return vec4(rawLoadFloat(u_vertices, base + 0u),
+                rawLoadFloat(u_vertices, base + 1u),
+                rawLoadFloat(u_vertices, base + 2u),
+                rawLoadFloat(u_vertices, base + 3u));
 }
 
 // Skinned world transform: the submesh's palette at u_skin_rows.x (skinning_palette_buffer::bind).

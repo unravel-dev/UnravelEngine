@@ -41,7 +41,7 @@ void main()
     vec4 wpos = mul(model, vec4(a_position, 1.0));
 #if MATERIAL_WORLD_POSITION_OFFSET
     // The graph's vertex stage: its offset, and what it passes the pixels.
-    MaterialVertex vertex_stage = mg_evaluate_vertex(model, wpos.xyz, a_normal, a_tangent, a_bitangent, a_texcoord0, u_material_time.x);
+    MaterialVertex vertex_stage = mg_evaluate_vertex(model, wpos.xyz, a_normal, a_tangent, a_bitangent, a_texcoord0, MG_VERTEX_UV1, MG_VERTEX_COLOR0, u_material_time.x);
     wpos.xyz += vertex_stage.world_position_offset;
 #endif
     gl_Position = mul(DEFERRED_GEOM_VIEW_PROJ, wpos);
@@ -86,6 +86,12 @@ void main()
     v_object0 = vec4(mul(model, vec4(1.0, 0.0, 0.0, 0.0)).xyz, object_position.x);
     v_object1 = vec4(mul(model, vec4(0.0, 1.0, 0.0, 0.0)).xyz, object_position.y);
     v_object2 = vec4(mul(model, vec4(0.0, 0.0, 1.0, 0.0)).xyz, object_position.z);
+#endif
+#if MATERIAL_UV1
+    v_texcoord1 = a_texcoord1;
+#endif
+#if MATERIAL_VERTEX_COLOR
+    v_color0 = a_color0;
 #endif
 #if MATERIAL_INTERPOLATORS > 0
     v_interpolator0 = vertex_stage.interpolator0;

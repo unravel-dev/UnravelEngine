@@ -33,6 +33,10 @@ auto get_override_mark(const Overrides& overrides, const std::string& path) -> o
     return overrides.has_overrides_within(path) ? override_mark::contains : override_mark::none;
 }
 
+/// The gutter mark of an object's own value over one it shares, apart from the accent of prefab overrides: a material
+/// instance's value over its shared material's, a model's morph weight over its mesh's default.
+constexpr ImVec4 INSTANCE_OVERRIDE_COLOR{61.0f / 255.0f, 191.0f / 255.0f, 166.0f / 255.0f, 1.0f};
+
 /// How marked properties look.
 enum class override_style : std::uint8_t
 {

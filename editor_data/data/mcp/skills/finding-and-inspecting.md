@@ -32,7 +32,8 @@ the top source of broken scenes.
   documents) - overlap, containment and floor-height checks without a
   screenshot.
 - scene_raycast: what a ray hits on the models' triangles, nearest first
-  (entity_id, point, normal, distance). The ray is origin + direction, or
+  (entity_id, point, normal, distance). A model with morph target weights is
+  hit in the shape they give it. The ray is origin + direction, or
   screen [x,y] - a pixel of viewport_capture_scene at scale 1 - to ask what is
   under that pixel. Works while editing, no physics needed.
 - viewport_world_to_screen: where world points land in the Scene view (pixel,

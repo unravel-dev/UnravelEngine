@@ -1726,6 +1726,81 @@ void test_vertex_stage_outputs()
           "a pixel-only node cannot feed a Vertex Interpolator");
 }
 
+auto make_vertex_attribute_graph() -> material_graph;
+
+/// Vertex Color and Texture Coordinate's second set: the pixels read them through varyings of the graph's own vertex
+/// shader, which declares the attributes either stage reads; decals and post-process materials have no vertex colour.
+void test_vertex_attribute_inputs()
+{
+    std::printf("test_vertex_attribute_inputs\n");
+    const auto both = compile_material_graph(make_vertex_attribute_graph());
+    check(!both.has_errors() && both.reads_vertex_color && both.reads_uv1 && both.reads_vertex_outputs() &&
+              both.uses_world_position_offset,
+          "a graph reading the vertex colour and the second UV set reads vertex outputs" + describe(both));
+    check(contains(both.shader, "#define MATERIAL_VERTEX_COLOR 1") && contains(both.shader, "#define MATERIAL_UV1 1") &&
+              contains(both.shader, "vec4 v_color0\n") && contains(both.shader, "vec2 v_texcoord1\n") &&
+              contains(both.shader, "mg_vertex_color_srgb(i.color0)") && contains(both.shader, "i.uv1"),
+          "the pixels read v_color0 and v_texcoord1, the colour decoded from sRGB");
+    check(contains(both.vertex_shader, "vec4 a_color0\n") && contains(both.vertex_shader, "vec2 a_texcoord1\n") &&
+              contains(both.vertex_shader, "vec4 v_color0 = vec4(1.0, 1.0, 1.0, 1.0)") &&
+              contains(both.vertex_shader, "#define MATERIAL_VERTEX_COLOR_ATTRIBUTE 1") &&
+              contains(both.vertex_shader, "mg_vertex_color_linear(i.color0)"),
+          "its vertex shader declares both attributes, passes the varyings and reads the colour for the offset");
+
+    auto offset_only = make_graph_with_output();
+    add_node(offset_only, "mask", "vertex_color");
+    add_node(offset_only, "lift", "multiply");
+    link(offset_only, "lift", "a", "mask.a");
+    add_node(offset_only, "up", "vector3");
+    link(offset_only, "lift", "b", "up");
+    link(offset_only, "output", "world_position_offset", "lift");
+    const auto vertex_only = compile_material_graph(offset_only);
+    check(!vertex_only.has_errors() && !vertex_only.reads_vertex_color && !vertex_only.reads_vertex_outputs() &&
+              contains(vertex_only.vertex_shader, "vec4 a_color0\n") && !contains(vertex_only.vertex_shader, "v_color0") &&
+              !contains(vertex_only.vertex_shader, "a_texcoord1"),
+          "a colour read by the offset alone is an attribute of the vertex shader, not a varying" + describe(vertex_only));
+
+    auto plain = make_graph_with_output();
+    add_node(plain, "uv", "texcoord");
+    link(plain, "output", "roughness", "uv.out.u");
+    const auto first_set = compile_material_graph(plain);
+    check(!first_set.reads_uv1 && !first_set.reads_vertex_outputs() && first_set.vertex_shader.empty(),
+          "the first UV set needs no vertex shader of the graph's own");
+
+    auto budget = make_vertex_attribute_graph();
+    for(uint32_t slot = 0; slot < 3; ++slot)
+    {
+        const std::string id = "interpolated" + std::to_string(slot);
+        add_node(budget, id, "vertex_interpolator");
+        link(budget, id, "in", "second");
+        link(budget, "output", slot == 0 ? "metallic" : slot == 1 ? "emissive" : "opacity_mask", id + ".out.x");
+    }
+    const auto crowded = compile_material_graph(budget);
+    check(crowded.interpolator_count == 3 && has_diagnostic(crowded, material_graph_severity::warning, "interpolated2") &&
+              !has_diagnostic(crowded, material_graph_severity::warning, "interpolated1"),
+          "the vertex colour and the second UV set leave two Vertex Interpolators of the budget" + describe(crowded));
+
+    standard_surface painted;
+    painted.multiply_vertex_color = true;
+    const auto standard = compile_material_graph(make_standard_material_graph(painted));
+    check(!standard.has_errors() && standard.reads_vertex_color && contains(standard.shader, "mg_vertex_color_linear(i.color0)"),
+          "a Standard surface multiplying by the vertex colour reads it" + describe(standard));
+    check(!compile_material_graph(make_standard_material_graph(standard_surface{})).reads_vertex_color,
+          "a Standard surface reads no vertex colour by default");
+
+    for(const auto domain : {material_domain::decal, material_domain::post_process})
+    {
+        auto graph = make_graph_with_output();
+        set_material_graph_domain(graph, domain);
+        add_node(graph, "paint", "vertex_color");
+        const auto& output = graph.nodes[size_t(find_material_graph_output(graph))];
+        const auto* output_def = find_material_node_def(output.type);
+        link(graph, output.id, output_def->inputs.front().name, "paint.rgb");
+        check(has_diagnostic(compile_material_graph(graph), material_graph_severity::error, "paint"),
+              std::string("Vertex Color reports in a ") + get_material_domain_label(domain) + " material");
+    }
+}
+
 /// Texture Objects feed texture nodes, Custom nodes and material functions; cube textures read along a direction.
 void test_texture_objects()
 {
@@ -1912,7 +1987,9 @@ constexpr size_t PREVIEW_VARIANT_COUNT = 1;
 /// A decal material's shader: the colour path and the decal buffers' path; a post-process material's: one.
 constexpr size_t DECAL_VARIANT_COUNT = 2;
 constexpr size_t POST_PROCESS_VARIANT_COUNT = 1;
-constexpr size_t VERTEX_VARIANT_COUNT = 23;
+/// A vertex stage's shader: the G-buffer variants, the velocity ones (with a morphed model's three) and the
+/// position-only ones.
+constexpr size_t VERTEX_VARIANT_COUNT = 26;
 
 /// A variant WebGL 2 leaves without code: it reads the skinning palettes from storage buffers, which need OpenGL ES
 /// 3.1, and its *_textures twin draws there instead (compile_eshader_variants).
@@ -2041,6 +2118,27 @@ private:
     std::vector<shader_compile_job> jobs_;
     std::set<std::string> file_names_;
 };
+
+/// A surface whose pixels read the mesh's vertex colour, decoded from sRGB, into the base colour and its second UV set
+/// into the roughness, and whose vertex stage moves each vertex up by the colour's red channel.
+auto make_vertex_attribute_graph() -> material_graph
+{
+    auto graph = make_graph_with_output();
+    auto& paint = add_node(graph, "paint", "vertex_color");
+    set_material_graph_setting(paint, "color_space", "srgb");
+    link(graph, "output", "base_color", "paint.rgb");
+    auto& second = add_node(graph, "second", "texcoord");
+    set_material_graph_setting(second, "set", "1");
+    link(graph, "output", "roughness", "second.u");
+    add_node(graph, "mask", "vertex_color");
+    add_node(graph, "lift", "multiply");
+    link(graph, "lift", "a", "mask.r");
+    add_node(graph, "up", "vector3");
+    set_value(graph, "up", "value", math::vec4(0.0f, 0.1f, 0.0f, 0.0f));
+    link(graph, "lift", "b", "up");
+    link(graph, "output", "world_position_offset", "lift");
+    return graph;
+}
 
 /// A graph lifting its vertices along their normal by a wave of the time and its Height parameter, with a texture and
 /// a Custom node of its own feeding the offset, and others feeding the base color alone.
@@ -2501,6 +2599,10 @@ void test_examples(asset_manager* am, const fs::path& output_folder)
         low.quality = material_graph_quality::low;
         batch.add("every_node_low", compile_material_graph(every_node, low));
         batch.add("wave_offset", compile_material_graph(make_wave_offset_graph()));
+        batch.add("vertex_attributes", compile_material_graph(make_vertex_attribute_graph()));
+        standard_surface painted;
+        painted.multiply_vertex_color = true;
+        batch.add("standard_vertex_color", compile_material_graph(make_standard_material_graph(painted)));
         batch.add("standard_mapped", compile_material_graph(make_mapped_standard_graph()));
         batch.add("standard_specular", compile_material_graph(make_specular_standard_graph()));
         standard_surface blended;
@@ -2694,6 +2796,9 @@ void test_world_position_offset()
               contains(result.vertex_shader, "#include \"material_graph/vs_material_graph.sh\"") &&
               contains(result.vertex_shader, "velocity_skinned_baked_instanced_textures"),
           "its vertex shader computes the offset, with the G-buffer and velocity variants");
+    check(contains(result.vertex_shader, "velocity_morph ") && contains(result.vertex_shader, "velocity_skinned_morph ") &&
+              contains(result.vertex_shader, "velocity_skinned_morph_textures") && contains(result.vertex_shader, "vec3 a_texcoord7"),
+          "a morphed model's velocity variants read last frame's deformed positions");
     check(!contains(result.shader, "world_position_offset") && contains(result.shader, "shadow_vsm_linear   SHADOW_CASTER PACK_VSM LINEAR"),
           "the fragment shader has nothing of it, and the shadow casters, as the shadow moves too");
     check(contains(result.vertex_shader, "mg_texture2D(") && contains(result.vertex_shader, "mg_custom_n_shape") &&
@@ -3314,6 +3419,7 @@ void run_material_graph_suite(rtti::context& ctx)
     RUN_CASE(test_graph_material_instances(ctx.get_cached<asset_manager>()));
     RUN_CASE(test_node_code_choices());
     RUN_CASE(test_vertex_stage_outputs());
+    RUN_CASE(test_vertex_attribute_inputs());
     RUN_CASE(test_texture_objects());
     RUN_CASE(test_material_attributes());
     RUN_CASE(test_quality_switch());

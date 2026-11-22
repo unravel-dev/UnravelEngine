@@ -105,9 +105,14 @@ draws them: skill `unravel-rendering`. Driving materials through the editor's MC
   sampler name written where it is read (GLSL has no sampler variables); a texture node reads the provider its
   Texture input reaches (`find_texture_provider`), which holds the sampler. Address and Filter are bound, not
   compiled: `has_same_material_graph_code` drops them.
-- A graph whose pixels read the object's transform (`MATERIAL_OBJECT_DATA`) or Vertex Interpolators
-  (`MATERIAL_INTERPOLATORS`) has a vertex shader of its own without any offset; its draws need it
-  (`graph_material::reads_vertex_outputs`: no fallback to `vs_deferred_geom`, whose varyings differ).
+- A graph whose pixels read the object's transform (`MATERIAL_OBJECT_DATA`), Vertex Interpolators
+  (`MATERIAL_INTERPOLATORS`), the vertex colour (`MATERIAL_VERTEX_COLOR`, Vertex Color) or the second UV set
+  (`MATERIAL_UV1`, Texture Coordinate's UV Index) has a vertex shader of its own without any offset; its draws need
+  it (`graph_material::reads_vertex_outputs`: no fallback to `vs_deferred_geom`, whose varyings differ). The
+  generated vertex shader declares `a_color0` / `a_texcoord1` only where a stage reads them
+  (`MATERIAL_*_ATTRIBUTE`), and each one read takes an interpolator from the varying budget.
+- `MaterialInputs::color0` and `uv1` are white and a copy of `uv0` wherever no varying carries them (decals,
+  post-process, previews, graphs that do not read them); every main sets them (`mg_set_vertex_attribute_inputs`).
 - Shader helpers in `material_graph.sh` compile for FXC too: a loop variable stays in the enclosing scope (two
   loops in one function need their own names), and a struct not yet whole cannot be an `inout` argument (the mains
   fill `MaterialInputs` with macros). Derivative helpers stay inside `#if BGFX_SHADER_TYPE_FRAGMENT`.

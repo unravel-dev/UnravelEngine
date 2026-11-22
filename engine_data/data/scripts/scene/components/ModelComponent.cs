@@ -89,6 +89,90 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// How many morph targets (blend shapes) the model's mesh has: shapes its vertices move toward by a weight
+        /// each. 0 while the mesh is loading.
+        /// </summary>
+        public int morphTargetCount => internal_m2n_model_get_morph_target_count(owner);
+
+        /// <summary>
+        /// The name of the morph target at <paramref name="index"/>, or an empty string past the last one.
+        /// </summary>
+        public string GetMorphTargetName(int index)
+        {
+            return internal_m2n_model_get_morph_target_name(owner, index);
+        }
+
+        /// <summary>
+        /// The index of the morph target named <paramref name="name"/>, or -1 when the mesh has none of that name.
+        /// </summary>
+        public int GetMorphTargetIndex(string name)
+        {
+            return internal_m2n_model_get_morph_target_index(owner, name ?? string.Empty);
+        }
+
+        /// <summary>
+        /// The weight of the morph target named <paramref name="name"/>: the model's, or the mesh's default.
+        /// </summary>
+        public float GetMorphWeight(string name)
+        {
+            return internal_m2n_model_get_morph_weight(owner, name ?? string.Empty);
+        }
+
+        /// <summary>
+        /// The weight of the morph target at <paramref name="index"/>.
+        /// </summary>
+        public float GetMorphWeight(int index)
+        {
+            return GetMorphWeight(GetMorphTargetName(index));
+        }
+
+        /// <summary>
+        /// Sets the weight of the morph target named <paramref name="name"/>: 0 is the rest shape and 1 its full
+        /// shape. Weights past 1 or below 0 are kept, and one that is not a finite number is ignored. An animation that
+        /// keys the target sets it again on its next update; Update and LateUpdate run after the animation, so a
+        /// weight set there holds for the frame.
+        /// </summary>
+        public void SetMorphWeight(string name, float weight)
+        {
+            internal_m2n_model_set_morph_weight(owner, name ?? string.Empty, weight);
+        }
+
+        /// <summary>
+        /// Sets the weight of the morph target at <paramref name="index"/>.
+        /// </summary>
+        public void SetMorphWeight(int index, float weight)
+        {
+            internal_m2n_model_set_morph_weight_at(owner, index, weight);
+        }
+
+        /// <summary>
+        /// Sets the weights of the morph targets from the first on, one per value: a stream from lip sync or face
+        /// capture. Values past the last target are ignored.
+        /// </summary>
+        public void SetMorphWeights(ReadOnlySpan<float> weights)
+        {
+            if (weights.IsEmpty)
+            {
+                return;
+            }
+            unsafe
+            {
+                fixed (float* values = weights)
+                {
+                    internal_m2n_model_set_morph_weights(owner, (IntPtr)values, weights.Length);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Every morph target back to the mesh's default weight.
+        /// </summary>
+        public void ResetMorphWeights()
+        {
+            internal_m2n_model_reset_morph_weights(owner);
+        }
+
+        /// <summary>
         /// LOD 0 mesh asset assigned to the model.
         /// </summary>
         public Mesh mesh
@@ -199,6 +283,30 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern Guid internal_m2n_model_get_mesh(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_model_get_morph_target_count(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern string internal_m2n_model_get_morph_target_name(Entity eid, int index);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_model_get_morph_target_index(Entity eid, string name);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_model_get_morph_weight(Entity eid, string name);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_model_set_morph_weight(Entity eid, string name, float weight);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_model_set_morph_weight_at(Entity eid, int index, float weight);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_model_set_morph_weights(Entity eid, IntPtr weights, int count);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_model_reset_morph_weights(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_model_set_mesh(Entity eid, Guid uid);

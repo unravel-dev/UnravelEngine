@@ -1,0 +1,85 @@
+[code]
+/*
+ * The morph deform pass's last step (morph_deformer.h): writes each morphed vertex into the deform stream, its rest
+ * position and basis from the mesh plus the accumulated deltas. The normal is renormalized, the tangent made
+ * orthogonal to it again and the bitangent rebuilt with the handedness it had, packed as bgfx::vertexPack packs the
+ * mesh (write_morphed_vertices does the same on the CPU).
+ */
+
+#include "../bgfx_compute.sh"
+
+/// 6 ints a slot, stored as uints (cs_morph_accumulate.eshader).
+BUFFER_RO(b_morph_accumulator, uint, 0);
+/// The vertex of each slot.
+BUFFER_RO(b_morph_vertices, uint, 1);
+/// The mesh's vertex buffer, read as uints: its stride is u_morph_finish.y uints.
+BUFFER_RAW_RO(b_morph_mesh, 2);
+/// The deform stream: 6 uints a vertex.
+BUFFER_RAW_WO(b_morph_deformed, 3);
+
+/// x = the slot count, y = the mesh's stride in uints, z = 1 / the position scale, w = 1 / the normal scale.
+uniform vec4 u_morph_finish;
+
+#define SLOT_STRIDE_UINTS 6u
+#define DEFORMED_STRIDE_UINTS 6u
+/// The first basis vector's uint in a vertex of the mesh and of the stream.
+#define FIRST_BASIS_UINT 3u
+
+/// A basis vector packed as 3 x Uint8 normalized, decoded as the mesh shaders decode it (a_normal * 2.0 - 1.0).
+vec3 unpack_basis_vector(uint word)
+{
+	vec3 bytes = vec3(float(word & 255u), float((word >> 8u) & 255u), float((word >> 16u) & 255u));
+	return bytes / 255.0 * 2.0 - 1.0;
+}
+
+/// @p value packed as bgfx::vertexPack packs a normalized 3 x Uint8 attribute marked as int: value * 127 + 128,
+/// truncated.
+uint pack_basis_vector(vec3 value)
+{
+	vec3 bytes = clamp(value, -1.0, 1.0) * 127.0 + 128.0;
+	return uint(bytes.x) | (uint(bytes.y) << 8u) | (uint(bytes.z) << 16u);
+}
+
+/// The accumulated integers from @p first on, as a vector.
+vec3 read_sum(uint first)
+{
+	return vec3(float(int(b_morph_accumulator[first])), float(int(b_morph_accumulator[first + 1u])),
+				float(int(b_morph_accumulator[first + 2u])));
+}
+
+NUM_THREADS(64, 1, 1)
+void main()
+{
+	uint slot = gl_GlobalInvocationID.x;
+	if(slot < uint(u_morph_finish.x))
+	{
+		uint vertex_index = b_morph_vertices[slot];
+		uint sums = slot * SLOT_STRIDE_UINTS;
+		vec3 moved = read_sum(sums) * u_morph_finish.z;
+		vec3 turned = read_sum(sums + 3u) * u_morph_finish.w;
+
+		uint mesh = vertex_index * uint(u_morph_finish.y);
+		uint deformed = vertex_index * DEFORMED_STRIDE_UINTS;
+		vec3 position = vec3(rawLoadFloat(b_morph_mesh, mesh), rawLoadFloat(b_morph_mesh, mesh + 1u),
+							 rawLoadFloat(b_morph_mesh, mesh + 2u)) + moved;
+		vec3 normal = normalize(unpack_basis_vector(rawLoadUint(b_morph_mesh, mesh + FIRST_BASIS_UINT)));
+		vec3 tangent = unpack_basis_vector(rawLoadUint(b_morph_mesh, mesh + FIRST_BASIS_UINT + 1u));
+		vec3 bitangent = unpack_basis_vector(rawLoadUint(b_morph_mesh, mesh + FIRST_BASIS_UINT + 2u));
+		float handedness = dot(cross(normal, tangent), bitangent) < 0.0 ? -1.0 : 1.0;
+
+		vec3 morphed_normal = normal + turned;
+		float normal_length = length(morphed_normal);
+		morphed_normal = normal_length > 1e-6 ? morphed_normal / max(normal_length, 1e-6) : normal;
+		vec3 morphed_tangent = tangent - morphed_normal * dot(morphed_normal, tangent);
+		float tangent_length = length(morphed_tangent);
+		morphed_tangent = tangent_length > 1e-6 ? morphed_tangent / max(tangent_length, 1e-6) : tangent;
+		vec3 morphed_bitangent = cross(morphed_normal, morphed_tangent) * handedness;
+
+		rawStoreFloat(b_morph_deformed, deformed, position.x);
+		rawStoreFloat(b_morph_deformed, deformed + 1u, position.y);
+		rawStoreFloat(b_morph_deformed, deformed + 2u, position.z);
+		rawStoreUint(b_morph_deformed, deformed + FIRST_BASIS_UINT, pack_basis_vector(morphed_normal));
+		rawStoreUint(b_morph_deformed, deformed + FIRST_BASIS_UINT + 1u, pack_basis_vector(morphed_tangent));
+		rawStoreUint(b_morph_deformed, deformed + FIRST_BASIS_UINT + 2u, pack_basis_vector(morphed_bitangent));
+	}
+}

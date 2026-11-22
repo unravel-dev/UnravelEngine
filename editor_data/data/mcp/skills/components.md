@@ -510,6 +510,13 @@ a viewer standing on -Z reads it; rotate the entity 180 in yaw for viewers on
   materials find it by that value, also through walls; 0 none) and
   sort_priority (where its translucency-pass surfaces draw among the other
   see-through surfaces and particles: lower first; equal values far to near).
+  A mesh with morph targets (blend shapes) gets one weight per target: 0 is
+  the rest shape, 1 the target's full shape, values past 1 or below 0 are
+  kept. Set them with scene_set_morph_weights_batch {"items":[{"entity_id":
+  "<id>","weights":{"Smile":0.8,"BlinkLeft":1}}]} (reset true first returns
+  every target to its mesh default); assets_get_mesh_info lists the targets.
+  A playing clip with curves named like the targets sets them again each
+  frame. Each weight that changes is a prefab override by its target's name.
 - Post Process Materials (on a Volume or a Camera): entries [{material, weight,
   enabled, material_overrides}]. Entries of one material in overlapping
   volumes blend their weights and parameters by the volumes' contributions; a

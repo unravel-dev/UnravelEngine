@@ -18,6 +18,8 @@ void main()
 {
 	MaterialInputs i;
 	i.uv0 = v_texcoord0;
+	i.uv1 = v_texcoord0;
+	i.color0 = vec4_splat(1.0);
 	i.world_position = vec3(v_texcoord0 * 2.0 - 1.0, 0.0);
 	i.vertex_normal = vec3(0.0, 0.0, 1.0);
 	i.tangent = vec3(1.0, 0.0, 0.0);

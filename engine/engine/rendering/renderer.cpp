@@ -8,6 +8,7 @@
 #include "render_feature_support.h"
 #include "shadow.h"
 #include "skinning_palette_buffer.h"
+#include "vertex_stream_check.h"
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/engine.h>
 #include <engine/loading_screen.h>
@@ -246,6 +247,11 @@ renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
                               "gfx-frame-log",
                               false,
                               "Log the frame and GPU frame times every few seconds, without the per-pass timers.");
+    parser.set_optional<bool>("",
+                              "gfx-check-vertex-streams",
+                              false,
+                              "Check once that the device draws vertices from a compute-written and a CPU-written "
+                              "stream beside a mesh's own buffer, and log the result.");
     parser.set_optional<std::string>("",
                                      "gfx-disable",
                                      "",
@@ -720,6 +726,12 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     {
         gpu_pass_log_ = std::make_unique<gpu_pass_log>();
     }
+    bool checks_vertex_streams = false;
+    parser.try_get("gfx-check-vertex-streams", checks_vertex_streams);
+    if(checks_vertex_streams)
+    {
+        vertex_stream_check_ = std::make_unique<vertex_stream_check>();
+    }
 
     // Driver-compiled pipeline binaries persist here across runs. Without them, D3D12
     // recompiles every pipeline at first use each launch - the GI compute chain alone was a
@@ -889,6 +901,7 @@ renderer::~renderer()
         return;
     }
 
+    vertex_stream_check_.reset();
     skinning_palettes_->destroy();
     gfx::frames(2, BGFX_FRAME_FLUSH);
 
@@ -1030,9 +1043,14 @@ auto renderer::is_gpu_behind() const -> bool
 #endif
 }
 
-void renderer::frame_end(rtti::context& /*ctx*/, const frame_times& /*times*/)
+void renderer::frame_end(rtti::context& ctx, const frame_times& /*times*/)
 {
     APP_SCOPE_PERF("Graphics Frame Submit");
+
+    if(vertex_stream_check_)
+    {
+        vertex_stream_check_->submit(ctx);
+    }
 
     gfx::render_pass pass(gfx::render_pass::get_max_pass_id(), "Backbuffer/Update Pass");
     pass.bind();
@@ -1050,6 +1068,10 @@ void renderer::frame_end(rtti::context& /*ctx*/, const frame_times& /*times*/)
     if(gpu_pass_log_)
     {
         gpu_pass_log_->collect();
+    }
+    if(vertex_stream_check_ && vertex_stream_check_->is_done())
+    {
+        vertex_stream_check_.reset();
     }
 
     if(!request_screenshot_.empty())

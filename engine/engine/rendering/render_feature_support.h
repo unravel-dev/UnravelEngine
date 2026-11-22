@@ -49,6 +49,7 @@ enum class render_feature : std::uint8_t
     soft_shadows,
     ui_msaa,
     temporal_probe,
+    morph_compute,
 
     count
 };

@@ -28,6 +28,10 @@ struct MaterialInputs
 {
 	// The mesh's first texture coordinates.
 	vec2 uv0;
+	// The mesh's second texture coordinates (a copy of the first where it has one set) and its vertex colour as the file
+	// stores it (white where it has none): what Texture Coordinate's second set and Vertex Color read.
+	vec2 uv1;
+	vec4 color0;
 	vec3 world_position;
 	// The interpolated vertex normal in world space, unit length; turned toward the viewer on the back of a two-sided
 	// material.
@@ -155,6 +159,27 @@ struct MaterialVertex
 	_i.world_position_ddx = vec3_splat(0.0); \
 	_i.world_position_ddy = vec3_splat(0.0); \
 	_i.exposure = 1.0
+// Of a pixel, from the graph's own vertex shader where its pixels read them (MATERIAL_UV1: v_texcoord1,
+// MATERIAL_VERTEX_COLOR: v_color0); the first texture coordinates and white otherwise.
+#if MATERIAL_UV1
+#define MG_PIXEL_UV1 v_texcoord1
+#else
+#define MG_PIXEL_UV1 v_texcoord0
+#endif
+#if MATERIAL_VERTEX_COLOR
+#define MG_PIXEL_COLOR0 v_color0
+#else
+#define MG_PIXEL_COLOR0 vec4_splat(1.0)
+#endif
+#define mg_set_vertex_attribute_inputs(_i) \
+	_i.uv1 = MG_PIXEL_UV1; \
+	_i.color0 = MG_PIXEL_COLOR0
+// Vertex Color by its Color Space: the stored colour as it is, or decoded from sRGB to linear with its alpha as it is.
+#define mg_vertex_color_linear(_color) (_color)
+vec4 mg_vertex_color_srgb(vec4 _color)
+{
+	return vec4(toLinearAccurate(_color.rgb), _color.a);
+}
 // Where no vertex shader passes them: the world's own frame.
 #define mg_set_world_object_inputs(_i) \
 	_i.object_position = vec3_splat(0.0); \

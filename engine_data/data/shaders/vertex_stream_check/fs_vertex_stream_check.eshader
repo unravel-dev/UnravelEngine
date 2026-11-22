@@ -1,0 +1,21 @@
+[inputs]
+vec4 v_failed0
+vec4 v_failed1
+vec4 v_failed2
+
+[code]
+#include "../common.sh"
+
+/*
+ * The vertex stream check's pixels (vertex_stream_check.h): the failure bits of the triangle's vertices. A component
+ * above zero means at least one of the three vertices failed that attribute (the interpolated value of zeros and ones
+ * stays above zero inside the triangle). Red holds bits 0-7, green bits 8-9, blue 1 marks a drawn pixel.
+ */
+void main()
+{
+	vec4 bit_values = vec4(1.0, 2.0, 4.0, 8.0);
+	vec4 threshold = vec4_splat(0.0001);
+	float low = dot(step(threshold, v_failed0), bit_values) + 16.0 * dot(step(threshold, v_failed1), bit_values);
+	float high = dot(step(threshold, v_failed2), bit_values);
+	gl_FragColor = vec4(low / 255.0, high / 255.0, 1.0, 1.0);
+}

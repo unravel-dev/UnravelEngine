@@ -4,14 +4,21 @@ skinned                   SKINNED
 instanced                 INSTANCED
 skinned_instanced         SKINNED_INSTANCED
 skinned_baked_instanced   SKINNED_BAKED_INSTANCED
+// *morph: a morphed model (morph_deformer.h), last frame's deformed position read as a_texcoord7 from stream 2.
+morph                     MORPH
+skinned_morph             SKINNED MORPH
 // *_textures: the skinned variants reading the palettes from a texture (shader_buffer.sh), for devices whose vertex
 // shaders read no storage buffers, as WebGL 2.
 skinned_textures                   SKINNED SHADER_BUFFER_TEXTURES
 skinned_instanced_textures         SKINNED_INSTANCED SHADER_BUFFER_TEXTURES
 skinned_baked_instanced_textures   SKINNED_BAKED_INSTANCED SHADER_BUFFER_TEXTURES
+skinned_morph_textures             SKINNED MORPH SHADER_BUFFER_TEXTURES
 
 [inputs]
 vec3 a_position
+#if MORPH
+vec3 a_texcoord7
+#endif
 #if SKINNED || SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED
 vec4 a_weight
 vec4 a_indices

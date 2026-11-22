@@ -34,7 +34,8 @@ struct scene_ray_hit
  *
  * Tests the triangles each submesh is drawn with, where it is drawn: at each node transform it is
  * mapped to, else at the entity's own transform. Needs no physics, so it answers while editing.
- * Skinned submeshes are tested in their bind pose. Inactive entities, disabled models and models
+ * Skinned submeshes are tested in their bind pose. A model with active morph target weights is
+ * tested in the shape they give it, as it draws. Inactive entities, disabled models and models
  * whose mesh has not loaded are skipped.
  *
  * @param skip Entities left out, together with everything under them.

@@ -115,6 +115,34 @@ REFLECT(mesh::info)
             entt::attribute{"name", "index_memory"},
             entt::attribute{"pretty_name", "Index Memory"},
             entt::attribute{"tooltip", "CPU memory of the index data of every LOD."},
+        })
+        .data<nullptr, &mesh::info::vertex_colors>("vertex_colors"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "vertex_colors"},
+            entt::attribute{"pretty_name", "Vertex Colors"},
+            entt::attribute{"tooltip", "Whether the source file has vertex colours. Without them every vertex is white."},
+        })
+        .data<nullptr, &mesh::info::uv_sets>("uv_sets"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "uv_sets"},
+            entt::attribute{"pretty_name", "UV Sets"},
+            entt::attribute{"tooltip",
+                            "How many UV sets the source file has, at most two. A mesh with one uses a copy of it as its "
+                            "second set."},
+        })
+        .data<nullptr, &mesh::info::morph_targets>("morph_targets"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "morph_targets"},
+            entt::attribute{"pretty_name", "Morph Targets"},
+            entt::attribute{"tooltip",
+                            "How many morph targets (blend shapes) the mesh has: shapes its vertices move toward by "
+                            "weights a model, an animation or a script sets."},
+        })
+        .data<nullptr, &mesh::info::morphed_vertices>("morphed_vertices"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "morphed_vertices"},
+            entt::attribute{"pretty_name", "Morphed Vertices"},
+            entt::attribute{"tooltip", "How many of the mesh's vertices its morph targets move."},
         });
 }
 
@@ -290,6 +318,65 @@ LOAD(mesh::triangle)
 LOAD_INSTANTIATE(mesh::triangle, ser20::iarchive_binary_t);
 LOAD_INSTANTIATE(mesh::triangle, ser20::iarchive_associative_t);
 
+SAVE(morph_target)
+{
+    try_save(ar, ser20::make_nvp("name", obj.name));
+    try_save(ar, ser20::make_nvp("default_weight", obj.default_weight));
+    try_save(ar, ser20::make_nvp("max_displacement", obj.max_displacement));
+    try_save(ar, ser20::make_nvp("first_delta", obj.first_delta));
+    try_save(ar, ser20::make_nvp("delta_count", obj.delta_count));
+}
+SAVE_INSTANTIATE(morph_target, ser20::oarchive_binary_t);
+SAVE_INSTANTIATE(morph_target, ser20::oarchive_associative_t);
+
+LOAD(morph_target)
+{
+    try_load(ar, ser20::make_nvp("name", obj.name));
+    try_load(ar, ser20::make_nvp("default_weight", obj.default_weight));
+    try_load(ar, ser20::make_nvp("max_displacement", obj.max_displacement));
+    try_load(ar, ser20::make_nvp("first_delta", obj.first_delta));
+    try_load(ar, ser20::make_nvp("delta_count", obj.delta_count));
+}
+LOAD_INSTANTIATE(morph_target, ser20::iarchive_binary_t);
+LOAD_INSTANTIATE(morph_target, ser20::iarchive_associative_t);
+
+// A packed row: the load reads every value the save wrote, in order.
+SAVE(morph_delta)
+{
+    try_save(ar, ser20::make_nvp("slot", obj.slot));
+    try_save(ar, ser20::make_nvp("position", obj.position));
+    try_save(ar, ser20::make_nvp("normal", obj.normal));
+}
+SAVE_INSTANTIATE(morph_delta, ser20::oarchive_binary_t);
+SAVE_INSTANTIATE(morph_delta, ser20::oarchive_associative_t);
+
+LOAD(morph_delta)
+{
+    try_load(ar, ser20::make_nvp("slot", obj.slot));
+    try_load(ar, ser20::make_nvp("position", obj.position));
+    try_load(ar, ser20::make_nvp("normal", obj.normal));
+}
+LOAD_INSTANTIATE(morph_delta, ser20::iarchive_binary_t);
+LOAD_INSTANTIATE(morph_delta, ser20::iarchive_associative_t);
+
+SAVE(morph_target_data)
+{
+    try_save(ar, ser20::make_nvp("targets", obj.targets));
+    try_save(ar, ser20::make_nvp("morphed_vertices", obj.morphed_vertices));
+    try_save(ar, ser20::make_nvp("deltas", serialization::packed(obj.deltas)));
+}
+SAVE_INSTANTIATE(morph_target_data, ser20::oarchive_binary_t);
+SAVE_INSTANTIATE(morph_target_data, ser20::oarchive_associative_t);
+
+LOAD(morph_target_data)
+{
+    try_load(ar, ser20::make_nvp("targets", obj.targets));
+    try_load(ar, ser20::make_nvp("morphed_vertices", obj.morphed_vertices));
+    try_load(ar, ser20::make_nvp("deltas", serialization::packed(obj.deltas)));
+}
+LOAD_INSTANTIATE(morph_target_data, ser20::iarchive_binary_t);
+LOAD_INSTANTIATE(morph_target_data, ser20::iarchive_associative_t);
+
 SAVE(skin_bind_data::vertex_influence)
 {
     try_save(ar, ser20::make_nvp("vertex_index", obj.vertex_index));
@@ -403,6 +490,9 @@ SAVE(mesh::load_data)
     try_save(ar, ser20::make_nvp("submesh_cards", obj.submesh_cards));
     try_save(ar, ser20::make_nvp("are_cards_disabled", obj.are_cards_disabled));
     try_save(ar, ser20::make_nvp("cards_lod_index", obj.cards_lod_index));
+    try_save(ar, ser20::make_nvp("has_vertex_colors", obj.has_vertex_colors));
+    try_save(ar, ser20::make_nvp("uv_set_count", obj.uv_set_count));
+    try_save(ar, ser20::make_nvp("morph_targets", obj.morph_targets));
     try_save(ar, ser20::make_nvp("humanoid_overrides", obj.humanoid_overrides));
     try_save(ar, ser20::make_nvp("gi_source_positions", serialization::packed(obj.gi_source_geometry.positions)));
     try_save(ar, ser20::make_nvp("gi_source_indices", obj.gi_source_geometry.indices));
@@ -433,6 +523,9 @@ LOAD(mesh::load_data)
     try_load(ar, ser20::make_nvp("submesh_cards", obj.submesh_cards));
     try_load(ar, ser20::make_nvp("are_cards_disabled", obj.are_cards_disabled));
     try_load(ar, ser20::make_nvp("cards_lod_index", obj.cards_lod_index));
+    try_load(ar, ser20::make_nvp("has_vertex_colors", obj.has_vertex_colors));
+    try_load(ar, ser20::make_nvp("uv_set_count", obj.uv_set_count));
+    try_load(ar, ser20::make_nvp("morph_targets", obj.morph_targets));
     try_load(ar, ser20::make_nvp("humanoid_overrides", obj.humanoid_overrides));
     try_load(ar, ser20::make_nvp("gi_source_positions", serialization::packed(obj.gi_source_geometry.positions)));
     try_load(ar, ser20::make_nvp("gi_source_indices", obj.gi_source_geometry.indices));

@@ -2802,8 +2802,10 @@ void shadowmap_generator::collect_shadow_casters(const shadow_map_models_t& mode
 
         // Skinned batching takes a skinned model's skinned submeshes; its other submeshes then batch like a static
         // model's (or stay individual when static batching is off).
-        const bool batch_skinned = skinned_batching_enabled && is_skinned;
-        const bool can_batch = static_batching_enabled && (!is_skinned || batch_skinned);
+        // A morphed model casts its deformed shape from its own streams, which batches do not bind.
+        const bool is_morphed = model_comp.get_morph_deform_binding() != nullptr;
+        const bool batch_skinned = skinned_batching_enabled && is_skinned && !is_morphed;
+        const bool can_batch = static_batching_enabled && (!is_skinned || batch_skinned) && !is_morphed;
 
         const auto extras = model_comp.get_submit_extras(true);
 

@@ -1,0 +1,34 @@
+[code]
+/*
+ * The morph deform pass, for a new deform stream (morph_deformer.h): copies the rest position and basis of every
+ * vertex of the mesh into the stream, so the vertices no target moves read their rest shape. Both keep them in their
+ * first 24 bytes: the position as 3 floats, then the normal, tangent and bitangent as 3 x Uint8 normalized each.
+ */
+
+#include "../bgfx_compute.sh"
+
+/// The deform stream: 6 uints a vertex.
+BUFFER_RAW_WO(b_morph_deformed, 0);
+/// The mesh's vertex buffer, read as uints: its stride is u_morph_rest.y uints.
+BUFFER_RAW_RO(b_morph_mesh, 1);
+
+/// x = the vertex count, y = the mesh's stride in uints.
+uniform vec4 u_morph_rest;
+
+/// The deform stream's stride in uints.
+#define DEFORMED_STRIDE_UINTS 6u
+
+NUM_THREADS(64, 1, 1)
+void main()
+{
+	uint vertex_index = gl_GlobalInvocationID.x;
+	if(vertex_index < uint(u_morph_rest.x))
+	{
+		uint mesh = vertex_index * uint(u_morph_rest.y);
+		uint deformed = vertex_index * DEFORMED_STRIDE_UINTS;
+		for(uint word = 0u; word < DEFORMED_STRIDE_UINTS; ++word)
+		{
+			rawStoreUint(b_morph_deformed, deformed + word, rawLoadUint(b_morph_mesh, mesh + word));
+		}
+	}
+}

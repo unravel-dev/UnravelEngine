@@ -23,6 +23,28 @@ REFLECT(mesh_importer_meta)
         .func<&mesh_importer_meta::get_static_meta_type>("get_static_meta_type"_hs)
         .func<&mesh_importer_meta::as_derived>("as_derived"_hs);
 
+    entt::meta_factory<mesh_importer_meta::model_meta::morph_normals>{}
+        .type("morph_normals"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "morph_normals"},
+            entt::attribute{"pretty_name", "Morph Normals"},
+        })
+        .data<mesh_importer_meta::model_meta::morph_normals::import>("import"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "import"},
+            entt::attribute{"pretty_name", "Import"},
+        })
+        .data<mesh_importer_meta::model_meta::morph_normals::calculate>("calculate"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "calculate"},
+            entt::attribute{"pretty_name", "Calculate"},
+        })
+        .data<mesh_importer_meta::model_meta::morph_normals::none>("none"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "none"},
+            entt::attribute{"pretty_name", "None"},
+        });
+
     // Register mesh_importer_meta::model_meta with entt
     entt::meta_factory<mesh_importer_meta::model_meta>{}
         .type("model_meta"_hs)
@@ -78,6 +100,45 @@ REFLECT(mesh_importer_meta)
                 "This step searches all meshes for invalid data, such as zeroed\n"
                 "normal vectors or invalid UV coords and removes/fixes them. This is\n"
                 "intended to get rid of some common exporter errors."},
+        })
+        .data<&mesh_importer_meta::model_meta::import_vertex_colors>("import_vertex_colors"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "import_vertex_colors"},
+            entt::attribute{"pretty_name", "Import Vertex Colors"},
+            entt::attribute{"tooltip",
+                            "Import the file's first vertex colour set. Turn it off for a file whose stray colours "
+                            "would tint a material that multiplies by them: every vertex is then white."},
+        })
+        .data<&mesh_importer_meta::model_meta::import_morph_targets>("import_morph_targets"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "import_morph_targets"},
+            entt::attribute{"pretty_name", "Import Morph Targets"},
+            entt::attribute{"tooltip",
+                            "Import the file's morph targets (blend shapes) and the animation curves that move them. "
+                            "While a file has them, Optimize Meshes and Split Large Meshes are skipped, as they would "
+                            "lose them."},
+        })
+        .data<&mesh_importer_meta::model_meta::morph_normal_mode>("morph_normal_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "morph_normal_mode"},
+            entt::attribute{"pretty_name", "Morph Normals"},
+            entt::attribute{"tooltip",
+                            "Where a morph target's normals come from. Import takes the file's, and calculates them for "
+                            "a target whose file stores none or none that turn. Calculate rebuilds them from the moved "
+                            "positions over the mesh's own faces, keeping its hard edges. None keeps the rest shape's "
+                            "lighting and costs the least."},
+        })
+        .data<&mesh_importer_meta::model_meta::morph_threshold>("morph_threshold"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "morph_threshold"},
+            entt::attribute{"pretty_name", "Morph Threshold"},
+            entt::attribute{"tooltip",
+                            "A vertex a morph target moves less than this distance, in the mesh's units, without "
+                            "turning its normal, is left out of the target. The default is a hundredth of a "
+                            "millimetre in metres."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 0.01f},
+            entt::attribute{"step", 0.000001f},
         })
         .data<&mesh_importer_meta::model_meta::generate_lods>("generate_lods"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -374,6 +435,10 @@ SAVE(mesh_importer_meta::model_meta)
     try_save(ar, ser20::make_nvp("split_large_meshes", obj.split_large_meshes));
     try_save(ar, ser20::make_nvp("find_degenerates", obj.find_degenerates));
     try_save(ar, ser20::make_nvp("find_invalid_data", obj.find_invalid_data));
+    try_save(ar, ser20::make_nvp("import_vertex_colors", obj.import_vertex_colors));
+    try_save(ar, ser20::make_nvp("import_morph_targets", obj.import_morph_targets));
+    try_save(ar, ser20::make_nvp("morph_normal_mode", obj.morph_normal_mode));
+    try_save(ar, ser20::make_nvp("morph_threshold", obj.morph_threshold));
     try_save(ar, ser20::make_nvp("generate_lods", obj.generate_lods));
     try_save(ar, ser20::make_nvp("lod_target_error", obj.lod_target_error));
     try_save(ar, ser20::make_nvp("import_meshes", obj.import_meshes));
@@ -388,6 +453,10 @@ LOAD(mesh_importer_meta::model_meta)
     try_load(ar, ser20::make_nvp("split_large_meshes", obj.split_large_meshes));
     try_load(ar, ser20::make_nvp("find_degenerates", obj.find_degenerates));
     try_load(ar, ser20::make_nvp("find_invalid_data", obj.find_invalid_data));
+    try_load(ar, ser20::make_nvp("import_vertex_colors", obj.import_vertex_colors));
+    try_load(ar, ser20::make_nvp("import_morph_targets", obj.import_morph_targets));
+    try_load(ar, ser20::make_nvp("morph_normal_mode", obj.morph_normal_mode));
+    try_load(ar, ser20::make_nvp("morph_threshold", obj.morph_threshold));
     try_load(ar, ser20::make_nvp("generate_lods", obj.generate_lods));
     try_load(ar, ser20::make_nvp("lod_target_error", obj.lod_target_error));
     try_load(ar, ser20::make_nvp("import_meshes", obj.import_meshes));

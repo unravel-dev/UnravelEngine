@@ -44,11 +44,16 @@ void main()
 #endif
 
     vec4 wpos = mul(model, vec4(a_position, 1.0));
+#if MORPH
+    // A morphed vertex was elsewhere last frame too: its previous deformed position.
+    vec4 prev_wpos = mul(prev_model, vec4(a_texcoord7, 1.0));
+#else
     vec4 prev_wpos = mul(prev_model, vec4(a_position, 1.0));
+#endif
 #if MATERIAL_WORLD_POSITION_OFFSET
     // The offset of each frame at its time: the material's animation is motion too.
-    wpos.xyz += mg_world_position_offset(model, wpos.xyz, a_normal, a_tangent, a_bitangent, a_texcoord0, u_material_time.x);
-    prev_wpos.xyz += mg_world_position_offset(prev_model, prev_wpos.xyz, a_normal, a_tangent, a_bitangent, a_texcoord0, u_material_time.y);
+    wpos.xyz += mg_world_position_offset(model, wpos.xyz, a_normal, a_tangent, a_bitangent, a_texcoord0, MG_VERTEX_UV1, MG_VERTEX_COLOR0, u_material_time.x);
+    prev_wpos.xyz += mg_world_position_offset(prev_model, prev_wpos.xyz, a_normal, a_tangent, a_bitangent, a_texcoord0, MG_VERTEX_UV1, MG_VERTEX_COLOR0, u_material_time.y);
 #endif
 
     // Rasterize with the SAME jittered view-projection as the G-buffer pass so the EQUAL

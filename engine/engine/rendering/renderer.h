@@ -19,6 +19,7 @@ namespace unravel
 {
 class gpu_pass_log;
 class skinning_palette_buffer;
+class vertex_stream_check;
 
 /// Why the browser page started WebGL 2 instead of WebGPU (--graphics-fallback, game/web/wwwroot/graphics.js).
 enum class graphics_fallback_reason : std::uint8_t
@@ -184,6 +185,8 @@ protected:
     /// Logs the GPU time of every render pass (--gfx-profile) or the frame times alone (--gfx-frame-log);
     /// null when off.
     std::unique_ptr<gpu_pass_log> gpu_pass_log_{};
+    /// The vertex stream check (--gfx-check-vertex-streams) until it has logged its result; null otherwise.
+    std::unique_ptr<vertex_stream_check> vertex_stream_check_{};
     /// Created with the renderer, its GPU buffer on first use; released before the backend shuts down.
     std::unique_ptr<skinning_palette_buffer> skinning_palettes_{};
     /// The graphics backend's debug features (BGFX_DEBUG_*) and the scale of the overlay's text.

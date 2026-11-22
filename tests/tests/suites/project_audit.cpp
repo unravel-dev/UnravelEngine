@@ -348,6 +348,37 @@ void test_audio_and_mesh_rules()
     check(lods->fix == audit::fixes::GENERATE_LODS, "the mesh issue offers Generate LODs");
 }
 
+void test_heavy_morph_rule()
+{
+    audit::input in;
+    audit::asset_record face;
+    face.key = "app:/data/face.glb";
+    face.importer = std::make_shared<unravel::mesh_importer_meta>();
+    audit::mesh_facts facts{20000, 30000, 1, 3};
+    facts.morph_targets = 52;
+    facts.morphed_vertices = 18000;
+    facts.morph_bytes = 6ull * 1024 * 1024;
+    face.facts.mesh = facts;
+    in.assets.push_back(face);
+    in.profiles.push_back(make_profile("Desktop", target_platform::desktop, {face.key}));
+    in.profiles.push_back(make_profile("Android", target_platform::android, {face.key}));
+    in.profiles.push_back(make_profile("Web", target_platform::web, {face.key}));
+    const auto issues = check_with(in, &audit::detail::check_assets);
+    check(count_rule(issues, audit::rules::MESH_HEAVY_MORPHS) == 2, "6 MB of morph deltas are heavy on Android and the web only");
+    const auto* heavy = find_rule_issue(issues, audit::rules::MESH_HEAVY_MORPHS);
+    require(heavy != nullptr, "a heavy face is reported");
+    check(contains(heavy->message, "52 morph targets") && contains(heavy->message, "6.0 MB"),
+          "the message gives the targets and their size: " + heavy->message);
+
+    audit::input light = in;
+    light.assets[0].facts.mesh->morph_bytes = 1024 * 1024;
+    const auto web_only = check_with(light, &audit::detail::check_assets);
+    const auto* web = find_rule_issue(web_only, audit::rules::MESH_HEAVY_MORPHS);
+    check(count_rule(web_only, audit::rules::MESH_HEAVY_MORPHS) == 1 && web != nullptr &&
+              web->profiles == std::vector<std::string>{"Web"} && contains(web->message, "18000 vertices"),
+          "a light face moving many vertices is reported on the web alone");
+}
+
 void test_duplicate_files(const fs::path& folder)
 {
     fs::error_code ec;
@@ -1068,6 +1099,7 @@ void run_project_audit_suite(rtti::context& ctx)
         RUN_CASE(test_texture_facts_from_compiled_file());
         RUN_CASE(test_texture_rules());
         RUN_CASE(test_audio_and_mesh_rules());
+        RUN_CASE(test_heavy_morph_rule());
         RUN_CASE(test_duplicate_files(temp / "duplicates"));
         RUN_CASE(test_settings_rules());
         RUN_CASE(test_scene_rules());

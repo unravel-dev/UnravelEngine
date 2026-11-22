@@ -64,13 +64,6 @@ auto material_has_pbr_brdf_shading(const aiMaterial* material) -> bool
 }
 
 
-/// Assimp's glTF importer gives every material an alphaMode; no other importer writes the key.
-auto is_gltf_material(const aiMaterial* material) -> bool
-{
-    aiString alpha_mode;
-    return material->Get(AI_MATKEY_GLTF_ALPHAMODE, alpha_mode) == AI_SUCCESS;
-}
-
 /**
  * @brief 3ds Max PBR materials (FBX) with useGlossiness == 1 author glossiness, and Assimp parks those
  * maps in aiTextureType_SHININESS. useGlossiness == 2 puts a true roughness map in DIFFUSE_ROUGHNESS.
@@ -316,6 +309,13 @@ auto material_has_packed_mr_in_specular_slot(const aiMaterial* material) -> bool
     // Path naming is the reliable packed-map signal. Do not require COLOR_SPECULAR ~ white:
     // Assimp FBX keeps Phong defaults (often ~0.2-0.5) even though the engine multiplies by white.
     return specular_texture_path_looks_like_packed_mr(material);
+}
+
+/// Assimp's glTF importer gives every material an alphaMode; no other importer writes the key.
+auto is_gltf_material(const aiMaterial* material) -> bool
+{
+    aiString alpha_mode;
+    return material->Get(AI_MATKEY_GLTF_ALPHAMODE, alpha_mode) == AI_SUCCESS;
 }
 
 /**

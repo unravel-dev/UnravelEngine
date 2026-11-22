@@ -15,15 +15,31 @@
 
 #define MATERIAL_WORLD_POSITION_OFFSET 1
 
-// What the graph gives the vertex at world_position, drawn with model, of the packed normal, tangent and bitangent and
-// the texture coordinates uv, at time seconds. A vertex has no pixel: the screen position is the middle of the view, and
+// The second texture coordinates and the vertex colour of the vertex, for the mains' calls: the attributes where the
+// graph reads them (MATERIAL_UV1_ATTRIBUTE, MATERIAL_VERTEX_COLOR_ATTRIBUTE: its shader declares a_texcoord1,
+// a_color0), the first texture coordinates and white otherwise.
+#if MATERIAL_UV1_ATTRIBUTE
+#define MG_VERTEX_UV1 a_texcoord1
+#else
+#define MG_VERTEX_UV1 a_texcoord0
+#endif
+#if MATERIAL_VERTEX_COLOR_ATTRIBUTE
+#define MG_VERTEX_COLOR0 a_color0
+#else
+#define MG_VERTEX_COLOR0 vec4_splat(1.0)
+#endif
+
+// What the graph gives the vertex at world_position, drawn with model, of the packed normal, tangent and bitangent, the
+// texture coordinates uv and uv1 and the vertex colour color0, at time seconds. A vertex has no pixel: the screen position is the middle of the view, and
 // textures read their top mip.
-MaterialVertex mg_evaluate_vertex(mat4 model, vec3 world_position, vec4 packed_normal, vec4 packed_tangent, vec4 packed_bitangent, vec2 uv, float time)
+MaterialVertex mg_evaluate_vertex(mat4 model, vec3 world_position, vec4 packed_normal, vec4 packed_tangent, vec4 packed_bitangent, vec2 uv, vec2 uv1, vec4 color0, float time)
 {
 	mat3 basis = get_upper_3x3(model);
 	vec3 view_direction = u_camera_wpos.xyz - world_position;
 	MaterialInputs i;
 	i.uv0 = uv;
+	i.uv1 = uv1;
+	i.color0 = color0;
 	i.world_position = world_position;
 	i.vertex_normal = normalize(mul(compute_normal_matrix(basis), packed_normal.xyz * 2.0 - 1.0));
 	i.tangent = normalize(mul(basis, packed_tangent.xyz * 2.0 - 1.0));
@@ -56,9 +72,9 @@ MaterialVertex mg_evaluate_vertex(mat4 model, vec3 world_position, vec4 packed_n
 }
 
 // The offset alone, for the mains that write nothing else (velocity, position only).
-vec3 mg_world_position_offset(mat4 model, vec3 world_position, vec4 packed_normal, vec4 packed_tangent, vec4 packed_bitangent, vec2 uv, float time)
+vec3 mg_world_position_offset(mat4 model, vec3 world_position, vec4 packed_normal, vec4 packed_tangent, vec4 packed_bitangent, vec2 uv, vec2 uv1, vec4 color0, float time)
 {
-	return mg_evaluate_vertex(model, world_position, packed_normal, packed_tangent, packed_bitangent, uv, time).world_position_offset;
+	return mg_evaluate_vertex(model, world_position, packed_normal, packed_tangent, packed_bitangent, uv, uv1, color0, time).world_position_offset;
 }
 
 #if POSITION_ONLY
@@ -71,7 +87,7 @@ void main()
 	mat4 model = u_world[0];
 #endif
 	vec4 wpos = mul(model, vec4(a_position, 1.0));
-	wpos.xyz += mg_world_position_offset(model, wpos.xyz, a_normal, a_tangent, a_bitangent, a_texcoord0, u_material_time.x);
+	wpos.xyz += mg_world_position_offset(model, wpos.xyz, a_normal, a_tangent, a_bitangent, a_texcoord0, MG_VERTEX_UV1, MG_VERTEX_COLOR0, u_material_time.x);
 	gl_Position = mul(u_viewProj, wpos);
 }
 #endif

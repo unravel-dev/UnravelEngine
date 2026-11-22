@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mesh_import_morphs.h"
+
 #include <engine/rendering/mesh.h>
 
 #include <math/math.h>
@@ -30,12 +32,13 @@ auto assign_node_indices(const aiScene* scene) -> node_index_lut_t;
 using submesh_placements_t = std::vector<hpp::optional<math::transform>>;
 
 /**
- * @brief Append every scene mesh as a submesh: vertices, triangles, bones and a stable id.
+ * @brief Append every scene mesh as a submesh: vertices, triangles, bones, morph targets and a stable id.
  *
  * A skinned mesh whose offset matrices place it in another space than the meshes that registered its
- * bones first is re-expressed in theirs (the engine keeps one bind pose per bone).
+ * bones first is re-expressed in theirs (the engine keeps one bind pose per bone), its morph targets with it.
  */
-auto process_meshes(const aiScene* scene, mesh::load_data& load_data) -> submesh_placements_t;
+auto process_meshes(const aiScene* scene, mesh::load_data& load_data, const morph_import_options& morph_options = {})
+    -> submesh_placements_t;
 
 /// Build the armature tree and the bind-pose bounds of the submeshes it places.
 void process_nodes(const aiScene* scene,

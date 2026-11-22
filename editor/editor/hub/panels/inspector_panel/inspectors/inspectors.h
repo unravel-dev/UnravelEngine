@@ -288,6 +288,9 @@ struct prefab_override_context
      */
     static void mark_material_instance_as_changed(entt::handle entity, uint32_t slot);
 
+    /// Marks the Model component's weight of the morph target @p name as changed: its override path is the name's.
+    static void mark_morph_weight_as_changed(entt::handle entity, const std::string& name);
+
     /**
      * @brief Marks a specific property as changed using component type
      * @param entity Entity that was modified

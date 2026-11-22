@@ -703,13 +703,22 @@ void add_input_nodes(std::vector<material_node_def>& nodes)
     auto texcoord = make_fixed("texcoord",
                                "Texture Coordinate",
                                category::input,
-                               "The mesh's first texture coordinates (UV). In a decal: the decal's own UV across its box. "
-                               "In a post-process material: the screen position, 0 to 1 from the top-left corner.",
+                               "The mesh's texture coordinates (UV): its first set, or its second by UV Index, which a mesh "
+                               "with one set copies from the first. In a decal: the decal's own UV across its box. In a "
+                               "post-process material: the screen position, 0 to 1 from the top-left corner. Both sets read "
+                               "the same there.",
                                {},
                                {out("uv", "UV", vt::float2), out("u", "U", vt::float1, ".x"), out("v", "V", vt::float1, ".y")},
                                vt::float2,
-                               UV_CODE);
-    nodes.push_back(as_inline(with_shortcut(texcoord, 'U', "uv texcoord coordinates")));
+                               "i.uv{set}");
+    texcoord.settings = {make_choice_setting("set",
+                                             "UV Index",
+                                             {"0", "1"},
+                                             {"First (UV0)", "Second (UV1)"},
+                                             "0",
+                                             "The mesh's UV set to read: the first, or the second, which a mesh with one "
+                                             "set copies from the first.")};
+    nodes.push_back(as_inline(with_shortcut(texcoord, 'U', "uv texcoord coordinates lightmap second set uv1")));
     nodes.push_back(as_inline(with_keywords(make_fixed("world_position",
                                                        "World Position",
                                                        category::input,
@@ -727,6 +736,31 @@ void add_input_nodes(std::vector<material_node_def>& nodes)
                                          {out("xyz", "XYZ", vt::float3)},
                                          vt::float3,
                                          VERTEX_NORMAL_CODE)));
+    auto vertex_color = make_fixed("vertex_color",
+                                   "Vertex Color",
+                                   category::input,
+                                   "The mesh's vertex colour as its file stores it, interpolated across the triangle: white "
+                                   "on a mesh without colours. Read in the vertex stage too, as a mask for World Position "
+                                   "Offset.",
+                                   {},
+                                   {out("rgba", "RGBA", vt::float4),
+                                    out("rgb", "RGB", vt::float3, ".rgb"),
+                                    out("r", "R", vt::float1, ".r"),
+                                    out("g", "G", vt::float1, ".g"),
+                                    out("b", "B", vt::float1, ".b"),
+                                    out("a", "A", vt::float1, ".a")},
+                                   vt::float4,
+                                   "mg_vertex_color_{color_space}(i.color0)");
+    vertex_color.settings = {make_choice_setting("color_space",
+                                                 "Color Space",
+                                                 {"linear", "srgb"},
+                                                 {"Linear", "sRGB"},
+                                                 "linear",
+                                                 "How the stored colours are read: as they are, or decoded from sRGB to "
+                                                 "linear, for colours painted as display colours in a modelling tool. "
+                                                 "Masks and other data stay Linear.")};
+    nodes.push_back(in_domains(as_inline(with_keywords(vertex_color, "vertex colour color paint rgba mask tint")),
+                               {material_domain::surface}));
     nodes.push_back(as_inline(with_keywords(make_fixed("view_direction",
                                                        "View Direction",
                                                        category::input,

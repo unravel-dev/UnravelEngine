@@ -145,6 +145,9 @@ editor, and never under a hard timeout. Times are a full parallel run, RelWithDe
 | `generated assets` | files an import writes beside its source (a model's default materials) |
 | `audio clip encoding` | compiled clips keep the source codec; the deploy's asset index filter |
 | `mesh import heuristics` | the importer's deductions on synthetic Assimp data |
+| `vertex attributes` | the mesh vertex's colour and second UV set: layout, import defaults, the recorded channels, shapes |
+| `morph targets` | morph target data (merging by name, thresholds, skin-split copies, binary round trip), the CPU deform against a float reference, glTF import of a closed mouth (welding keeps the lips apart, names, default weights, curves; Import Morph Targets off), model weights and their by-name prefab merge |
+| `morph deform` | the morph deform pass's streams over frames on the Noop renderer (CPU path): a new shape, a still model, a weight change, a model no view used kept as it was, one entering a camera's view deformed with no motion |
 | `mesh import corpus digest` | imports a model corpus (opt-in) |
 | `fs protocols` | `fs::add_path_protocol`, `resolve_protocol`, `convert_to_protocol`, long paths, `fs::file_ostream` writing every byte |
 | `fs mirror` | `fs::mirror_directory`, `copy_file_if_changed`, shared reads during a replace |

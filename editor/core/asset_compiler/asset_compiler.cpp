@@ -2864,7 +2864,25 @@ auto compile<animation_clip>(asset_manager& am, const fs::path& key, const fs::p
 
         anim.events = importer->events;
         sanitize_animation_events(anim.events);
-        anim.curves = importer->curves;
+        // The file's own curves (its morph targets') stay; a curve authored in the import settings replaces the
+        // file's curve of the same name.
+        for(const auto& authored : importer->curves)
+        {
+            auto same_name = std::find_if(anim.curves.begin(),
+                                          anim.curves.end(),
+                                          [&authored](const animation_curve& curve)
+                                          {
+                                              return curve.name == authored.name;
+                                          });
+            if(same_name != anim.curves.end())
+            {
+                *same_name = authored;
+            }
+            else
+            {
+                anim.curves.push_back(authored);
+            }
+        }
         sanitize_animation_curves(anim.curves);
 
         fs::error_code err;

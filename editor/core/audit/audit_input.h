@@ -53,6 +53,10 @@ struct mesh_facts
     std::uint32_t submeshes{};
     /// Generated LODs beside the full mesh.
     std::uint32_t lods{};
+    /// Its morph targets, the vertices they move and the bytes their deltas take.
+    std::uint32_t morph_targets{};
+    std::uint32_t morphed_vertices{};
+    std::uint64_t morph_bytes{};
 };
 
 /// What the run read from an asset's compiled file.

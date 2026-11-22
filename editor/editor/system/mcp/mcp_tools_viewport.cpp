@@ -1491,12 +1491,13 @@ void register_viewport_tools(mcp_tool_registry& registry)
          .description =
              "Show or hide the Scene panel's editor overlays for now: gizmos is the master switch over every icon and "
              "gizmo (billboards, selection gizmos, outline and wireframe); icons false hides only the billboards and "
-             "icons true brings back the ones the project shows; the grid; the selection outline. Omitted keys keep "
+             "icons true brings back the ones the project shows; the grid; the selection outline; the selection "
+             "wireframe (the selected models' edges, in their animated and morphed shape). Omitted keys keep "
              "their state. None of this is saved: the project keeps what the user set on the Scene panel's toolbar. "
              "viewport_capture_scene includes them. Returns what is drawn now, so icons and selection_outline read "
              "false while gizmos is off.",
          .input_schema_json =
-             R"({"type":"object","properties":{"gizmos":{"type":"boolean"},"icons":{"type":"boolean"},"grid":{"type":"boolean"},"selection_outline":{"type":"boolean"}}})",
+             R"({"type":"object","properties":{"gizmos":{"type":"boolean"},"icons":{"type":"boolean"},"grid":{"type":"boolean"},"selection_outline":{"type":"boolean"},"selection_wireframe":{"type":"boolean"}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -1508,6 +1509,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
              const bool set_icons = args["icons"].get(icons) == simdjson::SUCCESS;
              const bool set_grid = args["grid"].get(grid) == simdjson::SUCCESS;
              const bool set_selection_outline = args["selection_outline"].get(selection_outline) == simdjson::SUCCESS;
+             bool selection_wireframe = false;
+             const bool set_selection_wireframe = args["selection_wireframe"].get(selection_wireframe) == simdjson::SUCCESS;
              const auto run =
                  [&]() -> std::string
                  {
@@ -1532,11 +1535,17 @@ void register_viewport_tools(mcp_tool_registry& registry)
                      {
                          em.gizmos.show_selection_outline = selection_outline;
                      }
-                     return fmt::format(R"({{"gizmos":{},"icons":{},"grid":{},"selection_outline":{}}})",
-                                        em.show_gizmos,
-                                        em.show_gizmos && em.billboard_data.is_any_shown(),
-                                        em.show_grid,
-                                        em.show_gizmos && em.gizmos.show_selection_outline);
+                     if(set_selection_wireframe)
+                     {
+                         em.gizmos.show_selection_wireframe = selection_wireframe;
+                     }
+                     return fmt::format(
+                         R"({{"gizmos":{},"icons":{},"grid":{},"selection_outline":{},"selection_wireframe":{}}})",
+                         em.show_gizmos,
+                         em.show_gizmos && em.billboard_data.is_any_shown(),
+                         em.show_grid,
+                         em.show_gizmos && em.gizmos.show_selection_outline,
+                         em.show_gizmos && em.gizmos.show_selection_wireframe);
                  };
              return {.text = run(), .is_error = false};
          },

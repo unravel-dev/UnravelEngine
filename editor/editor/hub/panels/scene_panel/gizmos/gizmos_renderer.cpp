@@ -382,11 +382,13 @@ void gizmos_renderer::draw_selection_wireframe_pass(rtti::context& ctx,
         //   u_wf_params[0].xyz  = color rgb
         //   u_wf_params[0].w    = opacity
         //   u_wf_params[1].x    = thickness (pixels)
-        //   u_wf_params[1].y    = vertex stride in floats
-        //   u_wf_params[1].z    = position offset in floats
+        //   u_wf_params[1].y    = stride of the positions buffer (stage 2) in floats
+        //   u_wf_params[1].z    = position offset in the positions buffer in floats
         //   u_wf_params[1].w    = index buffer starting offset (in indices) - per submesh
         //   u_wf_params[2].x    = bone weight offset in floats  (skinned only)
         //   u_wf_params[2].y    = bone indices offset in floats (skinned only)
+        //   u_wf_params[2].z    = stride of the mesh's vertex buffer (stage 0) in floats (skinned only)
+        // A morphed model's positions come from its deform stream, so the wireframe follows its shape.
         std::array<math::vec4, 3> params;
         params[0] = em.gizmos.selection_wireframe_color;
         params[1] = math::vec4(em.gizmos.selection_wireframe_thickness, 0.0f, 0.0f, 0.0f);
@@ -405,12 +407,13 @@ void gizmos_renderer::draw_selection_wireframe_pass(rtti::context& ctx,
 
         callbacks.setup_params_per_instance = [&](const model::submit_vertex_pulling_callbacks::params& info)
         {
-            params[1].y = static_cast<float>(info.vertex_stride_floats);
+            params[1].y = static_cast<float>(info.position_stride_floats);
             params[1].z = static_cast<float>(info.position_offset_floats);
             if(info.skinned)
             {
                 params[2].x = static_cast<float>(info.weight_offset_floats);
                 params[2].y = static_cast<float>(info.indices_offset_floats);
+                params[2].z = static_cast<float>(info.vertex_stride_floats);
             }
         };
 

@@ -34,6 +34,7 @@ constexpr render_target_need GI_TARGETS[] = {{bgfx::TextureFormat::RGBA8},
                                              {bgfx::TextureFormat::RGBA16F},
                                              {bgfx::TextureFormat::D32F}};
 constexpr const char* GI_SHADERS[] = {"gi/"};
+constexpr const char* MORPH_SHADERS[] = {"morph/"};
 /// The most storage images one GI shader binds, above WebGPU's core 4.
 constexpr std::uint8_t GI_STORAGE_TEXTURES_PER_STAGE = 8;
 
@@ -227,6 +228,12 @@ constexpr std::array<render_feature_requirements, RENDER_FEATURE_COUNT> RENDER_F
      .compute_bindings = 9,
      .images = TEMPORAL_PROBE_IMAGES,
      .shader_prefixes = TEMPORAL_PROBE_SHADERS},
+    {.name = "GPU morph targets",
+     .fallback = "Morph targets deform on the CPU, which uploads the vertices they move in every frame their weights "
+                 "change.",
+     .needs_compute = true,
+     .compute_bindings = 4,
+     .shader_prefixes = MORPH_SHADERS},
 }};
 
 constexpr auto get_render_feature_index(render_feature feature) -> std::size_t

@@ -2,10 +2,16 @@
 #include <engine/animation/animation_pose.h>
 #include <engine/ecs/components/basic_component.h>
 #include <engine/rendering/model.h>
+#include <engine/rendering/morph_targets.h>
 #include <engine/rendering/render_change.h>
 #include <engine/rendering/render_proxy.h>
+#include <hpp/optional.hpp>
+#include <hpp/string_view.hpp>
+
 #include <atomic>
 #include <bitset>
+#include <string>
+#include <vector>
 #include <unordered_map>
 namespace unravel
 {
@@ -28,6 +34,18 @@ struct shadow_caster_revision
 /// sink (which is why the entity is unused); also called directly when a model's caster flags
 /// change. Deliberately NOT overloaded: an overload set cannot be named in a sink connect<>.
 void bump_shadow_caster_revision(entt::registry& registry, entt::entity entity);
+
+/**
+ * @brief A morph target weight a model sets, by the target's name. A target the model sets none for keeps the mesh's
+ *        default weight.
+ */
+struct morph_weight
+{
+    std::string name;
+    float weight{0.0f};
+
+    friend auto operator==(const morph_weight& lhs, const morph_weight& rhs) -> bool = default;
+};
 
 /**
  * @class model_component
@@ -105,6 +123,49 @@ public:
     /// first (further back), on the scale particle emitters use; equal values draw far to near.
     void set_sort_priority(int value);
     auto get_sort_priority() const -> int;
+
+    /// The morph target weights the model sets, by target name. Scene data: saved, overridden in prefabs by name.
+    auto get_morph_weights() const -> const std::vector<morph_weight>&;
+    /// Replaces them; an entry whose weight is not a finite number is left out.
+    void set_morph_weights(const std::vector<morph_weight>& weights);
+
+    /// The weight the model sets for the target @p name, or nullopt when it keeps the mesh's default.
+    auto find_morph_weight(hpp::string_view name) const -> hpp::optional<float>;
+
+    /// Sets the weight of the target @p name. Unclamped: past 1 exaggerates the shape, below 0 inverts it. A weight that
+    /// is not a finite number is ignored: the deform pass could not scale it.
+    void set_morph_weight(hpp::string_view name, float weight);
+
+    /// Forgets the weight of the target @p name, which then keeps the mesh's default.
+    void clear_morph_weight(hpp::string_view name);
+
+    /// Every target back to the mesh's default weight.
+    void reset_morph_weights();
+
+    /// Changes whenever a weight changes; the deform pass compares it. Versions are unique across models, so streams
+    /// kept for one model never match another's weights.
+    auto get_morph_weights_version() const -> uint64_t;
+
+    /// One weight for each target of @p targets, in their order: the model's, or the target's default.
+    void resolve_morph_weights(const morph_target_data& targets, std::vector<float>& weights) const;
+
+    /**
+     * @brief Sets the weight of every target of @p targets that one of @p curves keys: @p curves sorted by id (an
+     *        animation pose's), matched through @p curve_targets (make_morph_curve_targets of the same targets). A target
+     *        no curve keys keeps its weight, so a script's weight stays until a clip keys that target. The weights are
+     *        set in the targets' order.
+     */
+    void apply_morph_curves(const std::vector<animation_curve_value>& curves,
+                            const std::vector<morph_curve_target>& curve_targets,
+                            const morph_target_data& targets);
+
+    /// The morph targets of the model's mesh (its first LOD) once it is loaded; null without them.
+    auto get_morph_targets() const -> std::shared_ptr<const morph_target_data>;
+
+    /// The streams the morph deform pass wrote for the model this frame, or null while it draws its mesh at rest.
+    auto get_morph_deform_binding() const -> const morph_deform_binding*;
+    /// Set by the morph deform pass, which owns the streams; an empty binding draws the mesh at rest.
+    void set_morph_deform_binding(const morph_deform_binding& binding);
 
     /**
      * @brief Sets whether the model is static. Skinned models are never static: the armature build makes them dynamic
@@ -454,6 +515,13 @@ private:
     /// How far the World Position Offset of the model's materials moves a vertex at most (graph_material).
     auto find_offset_bounds_padding() const -> float;
 
+    /// Grows world_bounds_ by how far the active morph target weights move a vertex of @p render_mesh at most.
+    void grow_world_bounds_by_morphs(const mesh& render_mesh, const math::transform& world_transform);
+
+    /// get_morph_bounds_padding of the model's weights on @p render_mesh's targets, in the mesh's units: computed again
+    /// only when the weights or the targets change.
+    auto find_morph_bounds_padding(const mesh& render_mesh) -> float;
+
     /// Ends a pending rebuild: the previous mesh's nodes the current armature does not bind
     /// again become stale.
     void settle_previous_armature();
@@ -487,6 +555,15 @@ private:
     decal_receive decal_receive_ = decal_receive::automatic;
     uint8_t post_process_mask_ = 0;
     int32_t sort_priority_ = 0;
+
+    /// See get_morph_weights.
+    std::vector<morph_weight> morph_weights_;
+    /// See get_morph_weights_version.
+    uint64_t morph_weights_version_ = 0;
+    /// See get_morph_deform_binding. Not owned: the morph deform pass releases the streams.
+    morph_deform_binding morph_deform_{};
+    /// Records a weight change: a new version and a pose change for the systems that cache the model's shape.
+    void on_morph_weights_changed();
 
     /**
      * @brief The model object.
@@ -552,6 +629,14 @@ private:
     /// What world_bounds_ grew by for the World Position Offset of the model's materials: while above zero, submeshes
     /// are culled by that box alone, as their own boxes do not grow.
     float offset_bounds_padding_{};
+
+    /// What world_bounds_ grew by for the active morph weights, in world units: while above zero, submeshes are culled
+    /// by that box alone, as their own boxes hold each target alone at weight 1.
+    float morph_bounds_padding_{};
+    /// find_morph_bounds_padding's last answer, in the mesh's units, and the targets and weights version it is for.
+    float morph_padding_local_{};
+    std::weak_ptr<const morph_target_data> morph_padding_targets_;
+    uint64_t morph_padding_version_{0};
 
     /**
      * @brief Tight pose bounds (world pose union) captured in owner-local space at the last

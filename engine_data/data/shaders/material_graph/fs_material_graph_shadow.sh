@@ -25,6 +25,7 @@ void main()
 
 	MaterialInputs i;
 	i.uv0 = v_texcoord0;
+	mg_set_vertex_attribute_inputs(i);
 	i.world_position = v_wpos;
 	i.vertex_normal = normalize(vertex_normal);
 	i.tangent = normalize(v_wtangent);

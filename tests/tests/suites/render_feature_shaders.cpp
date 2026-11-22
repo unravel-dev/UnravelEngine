@@ -61,8 +61,9 @@ constexpr std::uint8_t DIMENSION_CUBE = 4;
 constexpr std::uint8_t DIMENSION_3D = 6;
 /// OpenGL guarantees image units 0-7.
 constexpr int MAX_IMAGE_STAGE = 7;
-/// Compute shaders that serve several features: they bind no image and stay within any device's bindings.
-constexpr const char* UTILITY_SHADERS[] = {"cs_clear_uints"};
+/// Compute shaders of no single feature: utilities that serve several, and the vertex stream check
+/// (--gfx-check-vertex-streams). They bind no image and stay within any device's bindings.
+constexpr const char* UTILITY_SHADERS[] = {"cs_clear_uints", "vertex_stream_check/cs_vertex_stream_check"};
 constexpr std::uint8_t UTILITY_COMPUTE_BINDINGS = 8;
 
 struct shader_image

@@ -6,6 +6,7 @@
 #include <engine/rendering/gi/mesh_sdf.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/material.h>
+#include <engine/rendering/morph_targets.h>
 #include <base/basetypes.hpp>
 #include <graphics/eviction.h>
 #include <graphics/graphics.h>
@@ -342,6 +343,13 @@ public:
         ///< CPU memory of the vertex data, and of the index data of every LOD.
         std::string vertex_memory;
         std::string index_memory;
+        ///< Whether the source file had vertex colours; without them every vertex is white.
+        bool vertex_colors = false;
+        ///< How many UV sets the source file had (at most 2); a missing second set copies the first.
+        uint32_t uv_sets = 1;
+        ///< How many morph targets the mesh has, and how many of its vertices they move.
+        uint32_t morph_targets = 0;
+        uint32_t morphed_vertices = 0;
     };
 
     /// What global illumination keeps for this mesh: its distance fields and its surface cache cards.
@@ -516,6 +524,12 @@ public:
         bool are_cards_disabled = false;
         ///< The LOD the cards are built from, compiled and at runtime (clamped to the generated levels).
         uint32_t cards_lod_index = 1;
+        ///< Whether the source file had vertex colours; the vertices hold white otherwise.
+        bool has_vertex_colors = false;
+        ///< How many UV sets the source file had (at most 2); TexCoord1 copies TexCoord0 when it had one.
+        uint32_t uv_set_count = 1;
+        ///< The mesh's morph targets (blend shapes), their deltas indexed by the final vertices.
+        morph_target_data morph_targets;
         ///< The triangles global illumination represents the mesh by when they differ from the rendered ones (a
         ///< shape's plane: its upward sheet, see mesh::create_plane_gi_geometry); without positions otherwise. The
         ///< compiler bakes the field and the cards from them, and the mesh keeps them for cards built at runtime.
@@ -547,6 +561,16 @@ public:
      * @param vertex_count The number of vertices to render.
      */
     void bind_render_buffers_for_submesh(const submesh* submesh, uint32_t lod_index = 0);
+
+    /**
+     * @brief As bind_render_buffers_for_submesh, with the position and basis read from @p deform's stream when it
+     *        deforms this mesh (stream 0) and the other attributes from the mesh's own buffer (stream 1). With
+     *        @p previous_positions, last frame's deformed positions are stream 2, as a_texcoord7 (the velocity pass).
+     */
+    void bind_render_buffers_for_submesh(const submesh* submesh,
+                                         uint32_t lod_index,
+                                         const morph_deform_binding* deform,
+                                         bool previous_positions = false);
 
     /**
      * @brief Prepares the mesh with the specified vertex format.
@@ -1092,6 +1116,18 @@ public:
      */
     auto get_humanoid_overrides() const -> const std::vector<humanoid_bone_override>&;
 
+    /**
+     * @brief The mesh's morph targets (blend shapes): empty when it has none. Shared, so a deform pass can keep them
+     *        while a reload replaces the mesh.
+     */
+    auto get_morph_targets() const -> const std::shared_ptr<const morph_target_data>&;
+
+    /// Whether the mesh has morph targets.
+    auto has_morph_targets() const -> bool;
+
+    /// The mesh's morph targets by the animation curve ids of their names, ascending (make_morph_curve_targets).
+    auto get_morph_curve_targets() const -> const std::vector<morph_curve_target>&;
+
         /**
      * @brief Gets the imported materials generated during import.
      * @return A constant reference to the vector of imported materials.
@@ -1455,6 +1491,13 @@ protected:
     bool are_cards_disabled_ = false;
     ///< See get_gi_cards_lod.
     uint32_t cards_lod_index_ = 1;
+    ///< See load_data::has_vertex_colors and load_data::uv_set_count.
+    bool has_vertex_colors_ = false;
+    uint32_t uv_set_count_ = 1;
+    ///< See get_morph_targets; null when the mesh has none.
+    std::shared_ptr<const morph_target_data> morph_targets_;
+    ///< See get_morph_curve_targets.
+    std::vector<morph_curve_target> morph_curve_targets_;
     ///< See get_gi_source_geometry.
     std::shared_ptr<const sdf_source_geometry> gi_source_geometry_;
     ///< Total number of faces in the prepared mesh.

@@ -354,6 +354,54 @@ void check_audio(rule_context& context)
     }
 }
 
+/// The guideline a mesh's morph targets pass on @p profile's platform, as a sentence; empty when they keep to it.
+auto describe_heavy_morphs(rule_context& context, const mesh_facts& facts, const profile_record& profile) -> std::string
+{
+    const auto byte_limit = context.get_threshold(rules::MESH_HEAVY_MORPHS, thresholds::MORPH_BYTES, profile.platform);
+    if(byte_limit > 0 && static_cast<std::int64_t>(facts.morph_bytes) > byte_limit)
+    {
+        return fmt::format("Its {} morph targets hold {:.1f} MB of deltas, over this platform's {:.1f} MB guideline.",
+                           facts.morph_targets,
+                           double(facts.morph_bytes) / (1024.0 * 1024.0),
+                           double(byte_limit) / (1024.0 * 1024.0));
+    }
+    const auto vertex_limit = context.get_threshold(rules::MESH_HEAVY_MORPHS, thresholds::MORPHED_VERTICES, profile.platform);
+    if(vertex_limit > 0 && static_cast<std::int64_t>(facts.morphed_vertices) > vertex_limit)
+    {
+        return fmt::format("Its morph targets move {} vertices, over this platform's {}-vertex guideline for a CPU "
+                           "that deforms them.",
+                           facts.morphed_vertices,
+                           vertex_limit);
+    }
+    return {};
+}
+
+void check_heavy_morphs(rule_context& context)
+{
+    for(const auto& asset : context.get_input().assets)
+    {
+        if(as_mesh(asset) == nullptr || !asset.facts.mesh || asset.facts.mesh->morph_targets == 0)
+        {
+            continue;
+        }
+        for(const auto& profile : context.get_input().profiles)
+        {
+            if(!is_shipped_by(profile, asset.key))
+            {
+                continue;
+            }
+            auto message = describe_heavy_morphs(context, *asset.facts.mesh, profile);
+            if(message.empty())
+            {
+                continue;
+            }
+            auto item = context.make(rules::MESH_HEAVY_MORPHS, make_asset_subject(asset), std::move(message));
+            item.profiles.push_back(profile.name);
+            context.add(std::move(item));
+        }
+    }
+}
+
 void check_meshes(rule_context& context)
 {
     for(const auto& asset : context.get_input().assets)
@@ -504,6 +552,7 @@ void check_assets(rule_context& context)
     check_textures(context);
     check_audio(context);
     check_meshes(context);
+    check_heavy_morphs(context);
     if(context.is_enabled(rules::DUPLICATE_FILES))
     {
         check_duplicates(context);

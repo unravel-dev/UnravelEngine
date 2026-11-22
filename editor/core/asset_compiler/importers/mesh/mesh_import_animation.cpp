@@ -381,6 +381,7 @@ void process_animation(const aiScene* scene,
                        const aiAnimation* assimp_anim,
                        const animation_node_sets& node_sets,
                        node_index_lut_t& node_to_index_lut,
+                       const morph_import_options& morph_options,
                        animation_clip& anim)
 {
     anim.name = replace_invalid_file_name_characters(filename.string() + "_" +
@@ -422,6 +423,10 @@ void process_animation(const aiScene* scene,
                   });
     }
     record_source_rest_pose(scene, anim);
+    if(morph_options.import_morph_targets)
+    {
+        read_morph_curves(scene, assimp_anim, ticks_per_second, morph_options, anim);
+    }
     APPLOG_TRACE("Mesh Importer: Animation {} discarded {} non-relevant node channels", anim.name, skipped);
 }
 
@@ -454,7 +459,8 @@ void make_clip_names_unique(std::vector<animation_clip>& animations)
 void process_animations(const aiScene* scene,
                         const fs::path& filename,
                         node_index_lut_t& node_to_index_lut,
-                        std::vector<animation_clip>& animations)
+                        std::vector<animation_clip>& animations,
+                        const morph_import_options& morph_options)
 {
     if(scene->mNumAnimations == 0)
     {
@@ -466,7 +472,7 @@ void process_animations(const aiScene* scene,
     animations.resize(scene->mNumAnimations);
     for(unsigned int i = 0; i < scene->mNumAnimations; ++i)
     {
-        process_animation(scene, filename, scene->mAnimations[i], node_sets, node_to_index_lut, animations[i]);
+        process_animation(scene, filename, scene->mAnimations[i], node_sets, node_to_index_lut, morph_options, animations[i]);
     }
     make_clip_names_unique(animations);
 }

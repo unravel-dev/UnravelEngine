@@ -301,11 +301,15 @@ inline auto get_format_version<unravel::mesh>() -> uint64_t
     //     position the shaders shade away from where the vertex is drawn (double-sided normals flipped).
     // 29: a binary document (serialization/binary_archive.h) starting with 32 zero bytes: triangles, bone weights and
     //     the GI source geometry are packed lists, vectors, quaternions and colors single values.
+    // 30: every vertex holds a colour (Color0, 4 x Uint8) and a second UV set (TexCoord1): the file's first colour set
+    //     or white, its second UV set or a copy of the first; the mesh records which channels the file had.
+    // 31: the mesh keeps its morph targets (blend shapes): names, default weights and sparse position and normal
+    //     deltas of the vertices they move, which the skin split copies with their vertices.
     //
     // NOTE: the compiled asset is a function of the BAKE ALGORITHM, not only of the source
     // mesh. Any change to mesh_sdf_baker that alters its output needs a bump here, or existing
     // projects silently keep the field produced by the previous code. The same holds for the card builder.
-    return 29;
+    return 31;
 }
 
 template<>
@@ -336,7 +340,8 @@ inline auto get_format_version<unravel::animation_clip>() -> uint64_t
     // 4: node_index size_t -> uint32_t
     // 6: a binary document starting with 32 zero bytes: the keys are packed lists, vectors, quaternions and colors
     //    single values.
-    return 6;
+    // 7: clips keep the morph target curves of their file, named after the targets.
+    return 7;
 }
 
 template<>

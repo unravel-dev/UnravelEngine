@@ -36,6 +36,9 @@ void animation_pose_snapshot::capture(entt::handle entity)
     owner_id_ = entt::make_uhandle(entity);
     if(auto* model = entity.try_get<model_component>())
     {
+        // Clip curves named after morph targets set the model's weights while the preview plays.
+        has_model_ = true;
+        morph_weights_ = model->get_morph_weights();
         for(const auto& bone : model->get_armature_entities())
         {
             if(bone && bone.valid() && bone.all_of<transform_component>())
@@ -60,6 +63,11 @@ void animation_pose_snapshot::restore()
                 entry.entity.get<transform_component>().set_transform_local(entry.local);
             }
         }
+        auto* model = owner_.try_get<model_component>();
+        if(has_model_ && model != nullptr && model->get_morph_weights() != morph_weights_)
+        {
+            model->set_morph_weights(morph_weights_);
+        }
     }
     clear();
 }
@@ -67,6 +75,8 @@ void animation_pose_snapshot::restore()
 void animation_pose_snapshot::clear()
 {
     entries_.clear();
+    morph_weights_.clear();
+    has_model_ = false;
     owner_ = {};
     owner_id_ = {};
 }

@@ -41,16 +41,6 @@ namespace
 /// Frames a view can go unrendered before a model forgets its LOD state there (2 seconds at 60 fps).
 constexpr uint64_t STALE_LOD_DATA_FRAMES = 120;
 
-auto is_in_any_view(const std::vector<math::frustum>& view_frustums, const math::bbox& bounds) -> bool
-{
-    return std::any_of(view_frustums.begin(),
-                       view_frustums.end(),
-                       [&](const math::frustum& frustum)
-                       {
-                           return frustum.test_aabb(bounds);
-                       });
-}
-
 /// Destroys the node entities only a previous mesh of each model used.
 void destroy_stale_armature_entities(scene& scn)
 {
@@ -72,6 +62,27 @@ void destroy_stale_armature_entities(scene& scn)
 }
 } // namespace
 
+
+auto model_system::get_camera_frustums(scene& scn) -> std::vector<math::frustum>
+{
+    std::vector<math::frustum> view_frustums;
+    scn.registry->view<camera_component, active_component>().each(
+        [&](auto /*camera_entity*/, auto&& camera_comp, auto&& /*active*/)
+        {
+            view_frustums.emplace_back(camera_comp.get_camera().get_frustum());
+        });
+    return view_frustums;
+}
+
+auto model_system::is_in_any_view(const std::vector<math::frustum>& view_frustums, const math::bbox& bounds) -> bool
+{
+    return std::any_of(view_frustums.begin(),
+                       view_frustums.end(),
+                       [&](const math::frustum& frustum)
+                       {
+                           return frustum.test_aabb(bounds);
+                       });
+}
 
 auto model_system::init(rtti::context& ctx) -> bool
 {
@@ -134,13 +145,8 @@ void model_system::on_frame_before_render(scene& scn, const frame_times& times)
     {
         view.get<transform_component>(entity).resolve_shared_ancestors();
     }
-    // The cameras that render this frame. Their frustums resolve lazily, so copied here for the tasks to read.
-    std::vector<math::frustum> view_frustums;
-    scn.registry->view<camera_component, active_component>().each(
-        [&](auto /*camera_entity*/, auto&& camera_comp, auto&& /*active*/)
-        {
-            view_frustums.emplace_back(camera_comp.get_camera().get_frustum());
-        });
+    // The cameras that render this frame, copied here for the tasks to read.
+    const auto view_frustums = get_camera_frustums(scn);
     // Each task works with one model's hierarchy and only reads the ancestors resolved above.
     // Over the view's leading pool, not its iterator: an entt view iterator is forward-only and
     // poolstl re-walks it once per chunk (see for_each_entity_par).

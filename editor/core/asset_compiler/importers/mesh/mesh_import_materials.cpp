@@ -214,6 +214,21 @@ auto get_sampler_flags(aiTextureMapMode mode, uint32_t unset_flags) -> uint32_t
     }
 }
 
+/// Per material of @p scene, whether a mesh with vertex colours uses it.
+auto find_vertex_colored_materials(const aiScene* scene) -> std::vector<bool>
+{
+    std::vector<bool> colored(scene->mNumMaterials, false);
+    for(unsigned int i = 0; i < scene->mNumMeshes; ++i)
+    {
+        const aiMesh* mesh = scene->mMeshes[i];
+        if(mesh->HasVertexColors(0) && mesh->mMaterialIndex < colored.size())
+        {
+            colored[mesh->mMaterialIndex] = true;
+        }
+    }
+    return colored;
+}
+
 /// Trace every texture slot Assimp populated: exporters park PBR maps under very different slots.
 void log_material_texture_slots(const aiMaterial* material)
 {
@@ -963,12 +978,16 @@ void process_materials(asset_manager& am,
                                            nullptr};
 
     APPLOG_TRACE("Mesh Importer: Binding {} materials to textures ...", scene->mNumMaterials);
+    // The glTF specification makes a primitive's COLOR_0 multiply its base colour; FBX and OBJ colours are often masks
+    // or leftovers, so their materials leave it off.
+    const auto vertex_colored = find_vertex_colored_materials(scene);
     for(size_t i = 0; i < scene->mNumMaterials; ++i)
     {
         const aiMaterial* assimp_mat = scene->mMaterials[i];
 
         standard_surface surface;
         import_material(bind_ctx, assimp_mat, surface, textures);
+        surface.multiply_vertex_color = vertex_colored[i] && is_gltf_material(assimp_mat);
 
         std::string assimp_mat_name = assimp_mat->GetName().C_Str();
         if(assimp_mat_name.empty())

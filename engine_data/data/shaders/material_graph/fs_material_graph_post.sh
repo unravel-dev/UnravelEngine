@@ -22,6 +22,8 @@ void main()
 
 	MaterialInputs i;
 	i.uv0 = uv;
+	i.uv1 = uv;
+	i.color0 = vec4_splat(1.0);
 	i.world_position = world_position;
 	i.vertex_normal = mg_scene_texture_world_normal(uv).xyz;
 	i.tangent = mul(u_invView, vec4(1.0, 0.0, 0.0, 0.0)).xyz;

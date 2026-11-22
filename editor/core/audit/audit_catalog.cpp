@@ -259,6 +259,27 @@ auto make_rules() -> std::vector<rule>
                       "Meshes with more triangles than this and no LODs are reported.",
                       {100000, 20000, 20000}}},
                     true});
+    list.push_back({rules::MESH_HEAVY_MORPHS,
+                    "Heavy Morph Targets",
+                    severity::info,
+                    to_mask(area::memory) | to_mask(area::cpu),
+                    rule_source::assets,
+                    "A mesh whose morph targets hold more delta data than the platform's guideline, or move more "
+                    "vertices than the web's guideline. Without compute shaders (WebGL 2) the CPU deforms them, and "
+                    "every frame a weight changes it rebuilds and uploads every vertex they move.",
+                    "Raise Morph Threshold in the model's import settings, remove the targets nothing uses in the "
+                    "modelling tool, or keep the morphed part (a head) a mesh of its own so fewer vertices morph.",
+                    {{thresholds::MORPH_BYTES,
+                      "Morph data",
+                      "bytes",
+                      "Meshes whose morph targets hold more delta data than this are reported.",
+                      {32 * MIB, 4 * MIB, 4 * MIB}},
+                     {thresholds::MORPHED_VERTICES,
+                      "Morphed vertices",
+                      "vertices",
+                      "Meshes whose morph targets move more vertices than this are reported. At 0 none are.",
+                      {0, 0, 15000}}},
+                    true});
     list.push_back({rules::DUPLICATE_FILES,
                     "Duplicate Asset Files",
                     severity::info,

@@ -13,6 +13,118 @@
 
 namespace unravel
 {
+namespace
+{
+
+/// The key a model's morph weights are saved under: an object whose members are the targets' names.
+constexpr const char* MORPH_WEIGHTS_KEY = "morph_weights";
+
+template<typename Archive>
+void save_morph_weights(Archive& ar, const std::vector<morph_weight>& weights)
+{
+    if(weights.empty())
+    {
+        return;
+    }
+    ar.setNextName(MORPH_WEIGHTS_KEY);
+    ar.startNode();
+    {
+        // Each weight's path is the one its load and its prefab override use: "morph_weights/<name>".
+        const serialization::path_segment_guard list(MORPH_WEIGHTS_KEY);
+        for(const auto& entry : weights)
+        {
+            try_save(ar, ser20::make_nvp(entry.name.c_str(), entry.weight));
+        }
+    }
+    ar.finishNode();
+}
+
+template<typename Archive>
+auto load_morph_weights(Archive& ar) -> std::vector<morph_weight>
+{
+    std::vector<morph_weight> weights;
+    serialization::load_named_members(ar,
+                                      MORPH_WEIGHTS_KEY,
+                                      [&](const std::string& name)
+                                      {
+                                          morph_weight entry{name, 0.0f};
+                                          if(!try_load(ar, ser20::make_nvp(entry.name.c_str(), entry.weight)))
+                                          {
+                                              return false;
+                                          }
+                                          weights.push_back(std::move(entry));
+                                          return true;
+                                      });
+    return weights;
+}
+
+/// Whether the path filter in force reads the weight @p name; always without a filter.
+auto is_morph_weight_listed(const std::string& name) -> bool
+{
+    const auto* path_ctx = serialization::get_path_context();
+    if(path_ctx == nullptr || !path_ctx->is_recording())
+    {
+        return true;
+    }
+    const serialization::path_segment_guard member(name);
+    return path_ctx->should_serialize_property(path_ctx->get_current_path());
+}
+
+/**
+ * @brief The model's weights after a load: every saved weight the filter in force lists is set, every listed weight
+ *        the document lacks goes back to the mesh's default, and the rest stay. Without a filter that is the document's
+ *        weights alone.
+ */
+template<typename Archive>
+auto merge_listed_morph_weights(Archive& ar, std::vector<morph_weight> weights) -> std::vector<morph_weight>
+{
+    std::vector<morph_weight> saved;
+    {
+        const serialization::path_context_pause unfiltered;
+        saved = load_morph_weights(ar);
+    }
+    const serialization::path_segment_guard list(MORPH_WEIGHTS_KEY);
+    const auto is_saved = [&saved](const std::string& name)
+    {
+        return std::any_of(saved.begin(),
+                           saved.end(),
+                           [&name](const morph_weight& entry)
+                           {
+                               return entry.name == name;
+                           });
+    };
+    weights.erase(std::remove_if(weights.begin(),
+                                 weights.end(),
+                                 [&](const morph_weight& entry)
+                                 {
+                                     return !is_saved(entry.name) && is_morph_weight_listed(entry.name);
+                                 }),
+                  weights.end());
+    for(auto& entry : saved)
+    {
+        if(!is_morph_weight_listed(entry.name))
+        {
+            continue;
+        }
+        auto found = std::find_if(weights.begin(),
+                                  weights.end(),
+                                  [&entry](const morph_weight& existing)
+                                  {
+                                      return existing.name == entry.name;
+                                  });
+        if(found != weights.end())
+        {
+            found->weight = entry.weight;
+        }
+        else
+        {
+            weights.push_back(std::move(entry));
+        }
+    }
+    return weights;
+}
+
+} // namespace
 
 REFLECT(model_component)
 {
@@ -121,6 +233,7 @@ SAVE(model_component)
     try_save(ar, ser20::make_nvp("post_process_mask", obj.get_post_process_mask()));
     try_save(ar, ser20::make_nvp("model", obj.get_model()));
     try_save(ar, ser20::make_nvp("sort_priority", obj.get_sort_priority()));
+    save_morph_weights(ar, obj.get_morph_weights());
 }
 SAVE_INSTANTIATE(model_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(model_component, ser20::oarchive_binary_t);
@@ -168,6 +281,8 @@ LOAD(model_component)
     {
         obj.set_sort_priority(sort_priority);
     }
+
+    obj.set_morph_weights(merge_listed_morph_weights(ar, obj.get_morph_weights()));
 }
 LOAD_INSTANTIATE(model_component, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(model_component, ser20::iarchive_binary_t);

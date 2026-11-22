@@ -77,6 +77,15 @@ WebGPU change, and the shader buffers and skinned draws that keep vertex shaders
   `OES_texture_float_linear`) only point-filtered, else they read zero; bgfx forces point sampling for them.
 - To debug a WebGL frame, read each frame buffer's color attachments back from the page (a browser init script
   wrapping `framebufferTexture2D` and the draw calls) rather than guessing from the final image.
+- WebAssembly is 32-bit: bx's `alignUp` / `alignDown` cast to `size_t`, and bgfx's shared dynamic vertex and index
+  buffers carry their buffer handle in the top half of a 64-bit address that bx aligns, so in the web player every
+  CPU-updated dynamic buffer lands in handle 0's buffer (WebGL 2: `bufferSubData: buffer overflow`). Desktop and
+  Android are 64-bit. `--gfx-check-vertex-streams` on the page (`?arg=--gfx-check-vertex-streams`) shows it.
+- WebGL 2 through ANGLE on Direct3D 11 counts `gl_VertexID` from an indexed draw's lowest index when it streams the
+  vertices (buffers the CPU updates); a shader that needs a vertex's index reads it from an attribute.
+- A hidden browser pane renders no frames, so the engine never runs there: check a web build in headless Edge with a
+  profile folder of its own (`--headless=new --user-data-dir=<scratch> --enable-logging=stderr`, the page's
+  console lines arrive as `CONSOLE` lines); ANGLE's first frame there can take about a minute.
 - WebGPU: storage-texture and workgroup limits are the core ones (shader-side checks:
   [shader-change.md](shader-change.md)); texture readback in the browser completes from the browser's event loop: without Asyncify, which the web
   player does not use, bgfx maps it with spontaneous callbacks instead of waiting.

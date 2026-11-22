@@ -35,7 +35,7 @@ enum class script_graphics_backend : int
 };
 
 // Graphics.cs mirrors render_feature (RenderFeature) and graphics_fallback_reason (GraphicsFallbackReason) by value.
-static_assert(static_cast<int>(render_feature::count) == 21, "Update RenderFeature in Graphics.cs with render_feature.");
+static_assert(static_cast<int>(render_feature::count) == 22, "Update RenderFeature in Graphics.cs with render_feature.");
 static_assert(static_cast<int>(graphics_fallback_reason::count) == 7,
               "Update GraphicsFallbackReason in Graphics.cs with graphics_fallback_reason.");
 

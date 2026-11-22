@@ -117,6 +117,30 @@ void move_by_root_motion(const animation_pose::root_motion_result& motion,
     entity_transform.set_rotation_local(math::normalize(entity_transform.get_rotation_local() * turn));
 }
 
+/**
+ * @brief Writes the player's final curves named after the morph targets of the model's mesh into the model's weights.
+ *        A target without a curve keeps its weight, so a script's weight stays until a clip keys that target.
+ */
+void apply_morph_curves(const animation_player& player, model_component& model_comp)
+{
+    if(player.get_curve_values().empty())
+    {
+        return;
+    }
+    const auto& lod = model_comp.get_model().get_lod(0);
+    if(!lod.is_ready())
+    {
+        return;
+    }
+    const auto mesh = lod.get(false);
+    if(!mesh || !mesh->has_morph_targets())
+    {
+        return;
+    }
+    // The mesh keeps its targets by the curve ids of their names: no name is hashed per frame.
+    model_comp.apply_morph_curves(player.get_curve_values(), mesh->get_morph_curve_targets(), *mesh->get_morph_targets());
+}
+
 void on_play_begin_impl(animation_component& comp)
 {
     if(comp.get_autoplay())
@@ -471,6 +495,7 @@ void animation_system::on_update(scene& scn, delta_t dt)
                           {
                               move_by_root_motion(root_motion, model_comp, entt::handle(*scn.registry, entity), transform_comp, character);
                           }
+                          apply_morph_curves(player, model_comp);
                       }
                       else if(updated)
                       {

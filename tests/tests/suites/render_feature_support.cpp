@@ -446,6 +446,7 @@ constexpr std::array<std::pair<render_feature, const char*>, static_cast<std::si
         {render_feature::soft_shadows, "SoftShadows"},
         {render_feature::ui_msaa, "UIMultisampling"},
         {render_feature::temporal_probe, "TemporalStabilityProbe"},
+        {render_feature::morph_compute, "GpuMorphTargets"},
     }};
 
 /// The members of C# enum @p name in @p source by their values.

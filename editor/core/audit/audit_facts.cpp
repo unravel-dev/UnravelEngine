@@ -116,6 +116,10 @@ auto read_mesh_facts(const fs::path& file) -> hpp::optional<mesh_facts>
     facts.triangles = data.triangle_count;
     facts.submeshes = static_cast<std::uint32_t>(data.submeshes.size());
     facts.lods = static_cast<std::uint32_t>(data.lods.size());
+    facts.morph_targets = static_cast<std::uint32_t>(data.morph_targets.targets.size());
+    facts.morphed_vertices = static_cast<std::uint32_t>(data.morph_targets.morphed_vertices.size());
+    facts.morph_bytes = data.morph_targets.deltas.size() * sizeof(morph_delta) +
+                        data.morph_targets.morphed_vertices.size() * sizeof(std::uint32_t);
     return facts;
 }
 

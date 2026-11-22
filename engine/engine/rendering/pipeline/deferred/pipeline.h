@@ -714,6 +714,9 @@ private:
 
     velocity_geom_program velocity_program_;
     velocity_geom_program velocity_program_skinned_;
+    /// The two above for a morphed model: last frame's deformed position from its previous stream.
+    velocity_geom_program velocity_program_morph_;
+    velocity_geom_program velocity_program_skinned_morph_;
     velocity_geom_program velocity_program_instanced_;
     velocity_geom_program velocity_program_skinned_instanced_;
     velocity_geom_program velocity_program_skinned_baked_instanced_;
@@ -1078,6 +1081,18 @@ private:
      * other material, which draws with the pass's own program.
      */
     auto begin_offset_velocity_program(const material& mat, const std::string& vertex_variant, const math::vec3& camera_position)
+        -> gpu_program*;
+    /**
+     * @brief The velocity program of one model draw's submeshes: the morph one when @p morphed (the draw binds the
+     * model's previous deformed positions, model_submit_extras::morph_previous_positions) and it loaded, else the plain
+     * one.
+     */
+    auto get_model_velocity_program(bool skinned, bool morphed) -> velocity_geom_program&;
+    /**
+     * @brief begin_offset_velocity_program for one model draw's submesh: the material's morph velocity variant when
+     * @p morphed, else (or when the material was compiled without one) its plain one.
+     */
+    auto begin_model_offset_velocity_program(const material& mat, bool skinned, bool morphed, const math::vec3& camera_position)
         -> gpu_program*;
     /**
      * @brief Prepares the batches of @p collector and draws them instanced into the G-buffer: the batches whose

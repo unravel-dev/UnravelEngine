@@ -136,6 +136,31 @@ auto deferred::begin_offset_velocity_program(const material& mat, const std::str
                                                          camera_position);
 }
 
+auto deferred::get_model_velocity_program(bool skinned, bool morphed) -> velocity_geom_program&
+{
+    auto& morph_program = skinned ? velocity_program_skinned_morph_ : velocity_program_morph_;
+    if(morphed && morph_program.program && morph_program.program->is_valid())
+    {
+        return morph_program;
+    }
+    return skinned ? velocity_program_skinned_ : velocity_program_;
+}
+
+auto deferred::begin_model_offset_velocity_program(const material& mat,
+                                                   bool skinned,
+                                                   bool morphed,
+                                                   const math::vec3& camera_position) -> gpu_program*
+{
+    if(morphed)
+    {
+        if(auto* program = begin_offset_velocity_program(mat, skinned ? "skinned_morph" : "morph", camera_position))
+        {
+            return program;
+        }
+    }
+    return begin_offset_velocity_program(mat, skinned ? "skinned" : gfx::shader::DEFAULT_VARIANT, camera_position);
+}
+
 namespace
 {
 /// Whether a material @p mdl draws with moves its vertices by a World Position Offset that animates: the model moves
@@ -281,9 +306,12 @@ void deferred::run_g_buffer_pass(hpp::span<const visibility_data> visibility_set
         // instanced matrix math (vs_velocity_instanced mirrors vs_deferred_geom_instanced
         // bit for bit), so the EQUAL depth test holds without excluding them here.
         const bool is_skinned = !skinning_matrices.empty();
+        // A morphed model draws its own deform streams, which batches do not bind.
+        const bool is_morphed = model_comp.get_morph_deform_binding() != nullptr;
         // Skinned batching takes the skinned submeshes; the model's other submeshes then batch like a static model's.
-        const bool batch_skinned = is_skinned && skinned_batching_run_;
-        const bool can_batch = batch_collector::is_static_mesh_batching_enabled() && (!is_skinned || batch_skinned);
+        const bool batch_skinned = is_skinned && skinned_batching_run_ && !is_morphed;
+        const bool can_batch =
+            batch_collector::is_static_mesh_batching_enabled() && (!is_skinned || batch_skinned) && !is_morphed;
 
         if(batch_skinned)
         {
@@ -852,9 +880,11 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
             // transforms and are drawn by submit_batched_velocity below - mirroring the
             // G-buffer's can_batch split exactly so nothing draws twice.
             const bool is_skinned = !model_comp.get_skinning_transforms().empty();
-            const bool batch_skinned = is_skinned && skinned_batching_run_;
+            const auto* morph_deform = model_comp.get_morph_deform_binding();
+            const bool is_morphed = morph_deform != nullptr;
+            const bool batch_skinned = is_skinned && skinned_batching_run_ && !is_morphed;
             const bool batched =
-                batch_collector::is_static_mesh_batching_enabled() && (!is_skinned || batch_skinned);
+                batch_collector::is_static_mesh_batching_enabled() && (!is_skinned || batch_skinned) && !is_morphed;
             if(batched)
             {
                 continue;
@@ -873,24 +903,26 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
             extras.prev_world_transform = &model_comp.get_prev_world_transform();
             extras.prev_submesh_transforms = &model_comp.get_prev_submesh_transforms();
             extras.prev_skinning_transforms = &model_comp.get_prev_skinning_transforms();
+            // A morphed model's previous deformed positions are a stream of their own, read by the morph programs. Only
+            // the mesh its streams deform has them: another LOD's mesh draws at rest with the plain programs.
+            const uint32_t lod_index = element.lod_data.current_lod_index;
+            const bool draws_morph_motion = is_morphed && morph_deform->deforms(model.get_lod(lod_index).get(false).get());
+            extras.morph_previous_positions = draws_morph_motion;
 
             model::submit_callbacks callbacks;
             callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
             {
-                velocity_geom_program& prog =
-                    submit_params.skinned ? velocity_program_skinned_ : velocity_program_;
+                velocity_geom_program& prog = get_model_velocity_program(submit_params.skinned, draws_morph_motion);
                 prog.program->begin();
                 gfx::set_uniform(prog.u_prev_view_proj, prev_vp.get_matrix());
             };
             callbacks.setup_params_per_submesh =
                 [&](const model::submit_callbacks::params& submit_params, const material& mat)
             {
-                velocity_geom_program& prog =
-                    submit_params.skinned ? velocity_program_skinned_ : velocity_program_;
+                velocity_geom_program& prog = get_model_velocity_program(submit_params.skinned, draws_morph_motion);
                 // A material whose World Position Offset moves the vertices draws with its own vertex shader.
-                auto* offset_program = begin_offset_velocity_program(mat,
-                                                                     submit_params.skinned ? "skinned" : gfx::shader::DEFAULT_VARIANT,
-                                                                     camera_position);
+                auto* offset_program =
+                    begin_model_offset_velocity_program(mat, submit_params.skinned, draws_morph_motion, camera_position);
                 // Match the material's cull so two-sided surfaces keep velocity coverage, but
                 // own the depth/write bits: EQUAL test, no depth write, color only.
                 const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
@@ -902,8 +934,7 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
             };
             callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
             {
-                velocity_geom_program& prog =
-                    submit_params.skinned ? velocity_program_skinned_ : velocity_program_;
+                velocity_geom_program& prog = get_model_velocity_program(submit_params.skinned, draws_morph_motion);
                 prog.program->end();
             };
 
@@ -914,7 +945,7 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
                          submesh_transforms,
                          bone_transforms,
                          skinning_matrices,
-                         element.lod_data.current_lod_index,
+                         lod_index,
                          callbacks,
                          &view_frustum,
                          &camera,
@@ -1242,11 +1273,16 @@ void deferred::draw_translucent_velocity(bgfx::ViewId view, const visibility_dat
     extras.prev_world_transform = &model_comp.get_prev_world_transform();
     extras.prev_submesh_transforms = &model_comp.get_prev_submesh_transforms();
     extras.prev_skinning_transforms = &model_comp.get_prev_skinning_transforms();
+    // A morphed model's motion includes its shape's, as in the velocity pass.
+    const auto* morph_deform = model_comp.get_morph_deform_binding();
+    const bool draws_morph_motion =
+        morph_deform != nullptr && morph_deform->deforms(model.get_lod(element.lod_data.current_lod_index).get(false).get());
+    extras.morph_previous_positions = draws_morph_motion;
 
     model::submit_callbacks callbacks;
     callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
     {
-        velocity_geom_program& prog = submit_params.skinned ? velocity_program_skinned_ : velocity_program_;
+        velocity_geom_program& prog = get_model_velocity_program(submit_params.skinned, draws_morph_motion);
         prog.program->begin();
         gfx::set_uniform(prog.u_prev_view_proj, prev_vp.get_matrix());
     };
@@ -1259,10 +1295,9 @@ void deferred::draw_translucent_velocity(bgfx::ViewId view, const visibility_dat
             bgfx::discard(discard);
             return;
         }
-        velocity_geom_program& prog = submit_params.skinned ? velocity_program_skinned_ : velocity_program_;
+        velocity_geom_program& prog = get_model_velocity_program(submit_params.skinned, draws_morph_motion);
         // A World Position Offset moves the vertices in the material's own vertex shader, as in the velocity pass.
-        auto* offset_program =
-            begin_offset_velocity_program(mat, submit_params.skinned ? "skinned" : gfx::shader::DEFAULT_VARIANT, camera_position);
+        auto* offset_program = begin_model_offset_velocity_program(mat, submit_params.skinned, draws_morph_motion, camera_position);
         // The scene's depth decides what the surface covers; the surface writes none.
         const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL | cull_state);
@@ -1270,7 +1305,7 @@ void deferred::draw_translucent_velocity(bgfx::ViewId view, const visibility_dat
     };
     callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
     {
-        velocity_geom_program& prog = submit_params.skinned ? velocity_program_skinned_ : velocity_program_;
+        velocity_geom_program& prog = get_model_velocity_program(submit_params.skinned, draws_morph_motion);
         prog.program->end();
     };
     const auto& view_frustum = camera.get_frustum();

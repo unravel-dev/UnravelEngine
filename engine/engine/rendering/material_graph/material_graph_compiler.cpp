@@ -98,7 +98,8 @@ constexpr const char* SHADER_SHADOW_VARIANTS = "// shadow*: the shadow casters, 
 
 /// The variants of the vertex shader of a graph with a vertex stage: the G-buffer ones of vs_deferred_geom.eshader
 /// (*_material for the batches of instances sharing the draw, which only a graph whose vertex stage computes nothing of
-/// its parameters has), the ones of vs_velocity.eshader as velocity_*, and position_only*, which write the moved
+/// its parameters has), the ones of vs_velocity.eshader as velocity_* (velocity_*morph* for a morphed model, whose last
+/// frame's deformed positions come in as a_texcoord7), and position_only*, which write the moved
 /// position alone for the fragment shaders that read nothing (the editor's picking and selection outline): bgfx makes a
 /// program only of stages whose varyings match.
 constexpr const char* VERTEX_SHADER_VARIANTS = "[variants]\n"
@@ -122,6 +123,9 @@ constexpr const char* VERTEX_SHADER_VARIANTS = "[variants]\n"
                                                "velocity_skinned_textures                 VELOCITY SKINNED SHADER_BUFFER_TEXTURES\n"
                                                "velocity_skinned_instanced_textures       VELOCITY SKINNED_INSTANCED SHADER_BUFFER_TEXTURES\n"
                                                "velocity_skinned_baked_instanced_textures VELOCITY SKINNED_BAKED_INSTANCED SHADER_BUFFER_TEXTURES\n"
+                                               "velocity_morph                            VELOCITY MORPH\n"
+                                               "velocity_skinned_morph                    VELOCITY SKINNED MORPH\n"
+                                               "velocity_skinned_morph_textures           VELOCITY SKINNED MORPH SHADER_BUFFER_TEXTURES\n"
                                                "position_only                             POSITION_ONLY\n"
                                                "position_only_skinned                     POSITION_ONLY SKINNED\n"
                                                "position_only_skinned_textures            POSITION_ONLY SKINNED SHADER_BUFFER_TEXTURES";
@@ -129,12 +133,15 @@ constexpr const char* VERTEX_SHADER_VARIANTS = "[variants]\n"
 /// What the vertex shader's variants read and write: vs_deferred_geom.eshader's, vs_velocity.eshader's with the normal,
 /// tangent, bitangent and texture coordinates the vertex stage reads, and the position alone (POSITION_ONLY). The
 /// G-buffer variants write what the graph's pixels read besides (add_vertex_output_lines), then the code.
-constexpr const char* VERTEX_SHADER_INTERFACE = "[inputs]\n"
+constexpr const char* VERTEX_SHADER_INPUTS = "[inputs]\n"
                                                 "vec3 a_position\n"
                                                 "vec4 a_normal\n"
                                                 "vec4 a_tangent\n"
                                                 "vec4 a_bitangent\n"
                                                 "vec2 a_texcoord0\n"
+                                                "#if MORPH\n"
+                                                "vec3 a_texcoord7\n"
+                                                "#endif\n"
                                                 "#if SKINNED || SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED\n"
                                                 "vec4 a_weight\n"
                                                 "vec4 a_indices\n"
@@ -156,9 +163,10 @@ constexpr const char* VERTEX_SHADER_INTERFACE = "[inputs]\n"
                                                 "#endif\n"
                                                 "#if (VELOCITY && INSTANCED) || (INSTANCED && INSTANCE_MATERIAL)\n"
                                                 "vec4 i_data7\n"
-                                                "#endif\n"
-                                                "\n"
-                                                "[outputs]\n"
+                                                "#endif";
+/// The vertex shader's outputs: the velocity variants', none for the position-only ones, and the others' (left open:
+/// the graph's own varyings follow, add_vertex_output_lines).
+constexpr const char* VERTEX_SHADER_OUTPUTS = "[outputs]\n"
                                                 "#if VELOCITY\n"
                                                 "vec4 v_curr_pos\n"
                                                 "vec4 v_prev_pos\n"
@@ -210,6 +218,19 @@ constexpr uint32_t MAX_INTERPOLATORS = 4;
 constexpr uint32_t MAX_INTERPOLATORS_WITH_OBJECT_DATA = 2;
 /// What code reads of the object's transform (MATERIAL_OBJECT_DATA): its inputs and the functions reading them.
 constexpr std::array<const char*, 4> OBJECT_DATA_CODES = {"i.object_", "mg_object_to_world_", "mg_world_to_object_", "mg_object_scale"};
+/// What code reads of the mesh's second UV set and vertex colour (MaterialInputs::uv1, color0).
+constexpr const char* UV1_CODE = "i.uv1";
+constexpr const char* VERTEX_COLOR_CODE = "i.color0";
+
+/// Whether @p body or @p functions hold @p code.
+auto has_code(const std::vector<std::string>& body, const std::vector<std::string>& functions, const char* code) -> bool
+{
+    const auto holds = [code](const std::string& line)
+    {
+        return line.find(code) != std::string::npos;
+    };
+    return std::any_of(body.begin(), body.end(), holds) || std::any_of(functions.begin(), functions.end(), holds);
+}
 
 /// What generated code reads that changes without an edit: the time, the camera and the screen (MaterialInputs).
 constexpr std::array<const char*, 5> CHANGING_INPUT_CODES = {"i.time", "i.view_direction", "i.camera_position", "i.screen_uv", "i.camera_direction"};
@@ -646,6 +667,7 @@ private:
             collect_vertex_outputs();
             estimate_emissive();
             emit_vertex();
+            collect_vertex_attributes();
         }
         assemble_shader();
         assemble_vertex_shader();
@@ -3509,6 +3531,8 @@ private:
         result_.reads_object_data = std::any_of(body_.begin(), body_.end(), reads_object) ||
                                     std::any_of(functions_.begin(), functions_.end(), reads_object);
         result_.interpolator_count = uint32_t(interpolator_slots_.size());
+        result_.reads_uv1 = has_code(body_, functions_, UV1_CODE);
+        result_.reads_vertex_color = has_code(body_, functions_, VERTEX_COLOR_CODE);
         if(result_.reads_object_data)
         {
             defines_.push_back("#define MATERIAL_OBJECT_DATA 1");
@@ -3517,20 +3541,62 @@ private:
         {
             defines_.push_back(fmt::format("#define MATERIAL_INTERPOLATORS {}", result_.interpolator_count));
         }
-        if(result_.reads_object_data && result_.interpolator_count > MAX_INTERPOLATORS_WITH_OBJECT_DATA)
+        if(result_.reads_uv1)
         {
-            for(const auto& [node, slot] : interpolator_slots_)
+            defines_.push_back("#define MATERIAL_UV1 1");
+        }
+        if(result_.reads_vertex_color)
+        {
+            defines_.push_back("#define MATERIAL_VERTEX_COLOR 1");
+        }
+        report_interpolators_over_budget();
+    }
+
+    /// How many Vertex Interpolators fit beside what else the vertex shader passes the pixels: the object's transform,
+    /// the second UV set and the vertex colour (one varying each, the transform three).
+    auto get_interpolator_budget() const -> uint32_t
+    {
+        const uint32_t budget = result_.reads_object_data ? MAX_INTERPOLATORS_WITH_OBJECT_DATA : MAX_INTERPOLATORS;
+        const uint32_t taken = (result_.reads_uv1 ? 1u : 0u) + (result_.reads_vertex_color ? 1u : 0u);
+        return budget > taken ? budget - taken : 0u;
+    }
+
+    /// Warns on each Vertex Interpolator past the budget: the varyings may not fit what phones and browsers guarantee.
+    void report_interpolators_over_budget()
+    {
+        const uint32_t budget = get_interpolator_budget();
+        if(result_.interpolator_count <= budget)
+        {
+            return;
+        }
+        for(const auto& [node, slot] : interpolator_slots_)
+        {
+            if(slot >= budget)
             {
-                if(slot >= MAX_INTERPOLATORS_WITH_OBJECT_DATA)
-                {
-                    report(material_graph_severity::warning,
-                           states_[node].node->id,
-                           {},
-                           fmt::format("With the object's transform the graph reads, more than {} Vertex Interpolators may not "
-                                       "fit the 15 varyings phones and browsers guarantee.",
-                                       MAX_INTERPOLATORS_WITH_OBJECT_DATA));
-                }
+                report(material_graph_severity::warning,
+                       states_[node].node->id,
+                       {},
+                       fmt::format("With what else the graph's pixels read of the vertex shader (the object's transform, "
+                                   "the second UV set, the vertex colour), more than {} Vertex Interpolators may not fit "
+                                   "the 15 varyings phones and browsers guarantee.",
+                                   budget));
             }
+        }
+    }
+
+    /// The vertex attributes the vertex shader reads beyond the ones every graph does: the second UV set and the vertex
+    /// colour, where either stage reads them (MATERIAL_UV1_ATTRIBUTE, MATERIAL_VERTEX_COLOR_ATTRIBUTE).
+    void collect_vertex_attributes()
+    {
+        reads_uv1_attribute_ = result_.reads_uv1 || has_code(vertex_body_, vertex_functions_, UV1_CODE);
+        reads_color_attribute_ = result_.reads_vertex_color || has_code(vertex_body_, vertex_functions_, VERTEX_COLOR_CODE);
+        if(reads_uv1_attribute_)
+        {
+            defines_.push_back("#define MATERIAL_UV1_ATTRIBUTE 1");
+        }
+        if(reads_color_attribute_)
+        {
+            defines_.push_back("#define MATERIAL_VERTEX_COLOR_ATTRIBUTE 1");
         }
     }
 
@@ -4076,6 +4142,27 @@ private:
         {
             lines.push_back(fmt::format("vec4 v_interpolator{}", slot));
         }
+        if(result_.reads_uv1)
+        {
+            lines.emplace_back("vec2 v_texcoord1");
+        }
+        if(result_.reads_vertex_color)
+        {
+            lines.emplace_back(is_vertex ? "vec4 v_color0 = vec4(1.0, 1.0, 1.0, 1.0)" : "vec4 v_color0");
+        }
+    }
+
+    /// The vertex attributes the graph reads beyond the ones every graph does (collect_vertex_attributes).
+    void add_vertex_attribute_lines(std::vector<std::string>& lines) const
+    {
+        if(reads_uv1_attribute_)
+        {
+            lines.emplace_back("vec2 a_texcoord1");
+        }
+        if(reads_color_attribute_)
+        {
+            lines.emplace_back("vec4 a_color0");
+        }
     }
 
     /// The vertex shader of a graph with a vertex stage (emit_vertex); none for another.
@@ -4092,7 +4179,10 @@ private:
                                     source));
         add_lines(lines, VERTEX_SHADER_VARIANTS);
         lines.emplace_back();
-        add_lines(lines, VERTEX_SHADER_INTERFACE);
+        add_lines(lines, VERTEX_SHADER_INPUTS);
+        add_vertex_attribute_lines(lines);
+        lines.emplace_back();
+        add_lines(lines, VERTEX_SHADER_OUTPUTS);
         add_vertex_output_lines(lines, true);
         lines.emplace_back("#endif");
         lines.emplace_back();
@@ -4351,6 +4441,9 @@ private:
     /// The vertex shader's code and Custom functions (emit_vertex).
     std::vector<std::string> vertex_body_;
     std::vector<std::string> vertex_functions_;
+    /// The vertex shader declares a_texcoord1 and a_color0 (collect_vertex_attributes).
+    bool reads_uv1_attribute_{};
+    bool reads_color_attribute_{};
     /// The Vertex Interpolators the pixel stage reads, by node, and the varying each takes.
     std::map<size_t, uint32_t> interpolator_slots_;
     /// emit_vertex is emitting: Vertex Interpolators give their input itself.
@@ -4421,7 +4514,7 @@ auto reads_node(const material_graph& graph, size_t from, hpp::string_view targe
 
 auto material_graph_compile_result::reads_vertex_outputs() const -> bool
 {
-    return reads_object_data || interpolator_count > 0;
+    return reads_object_data || interpolator_count > 0 || reads_uv1 || reads_vertex_color;
 }
 
 auto material_graph_compile_result::computes_vertex_values() const -> bool

@@ -29,6 +29,12 @@ animation and rig systems) and the Animation Controller editor in
   their keys are packed lists, whose rows the key's SERIALIZE reads in the order it wrote them. A
   change to what a compiled clip holds bumps `get_format_version<animation_clip>` in
   `engine/engine/assets/impl/asset_extensions.h` (`test_clip_curves_survive_both_archives`).
+- Curves named after a morph target of the model on the animation component's entity set that target's weight
+  (`model_component::apply_morph_curves`, after the pose): only the keyed targets, so a script's weight holds until
+  a clip keys it again; scripts run after animation and win their frame. The mesh indexes its targets by the curve
+  ids of their names when it loads (`mesh::get_morph_curve_targets`), so the pose's sorted curves meet them in one
+  walk. Bone masks do not filter curves, additive layers add them. Another entity's model (a separate head) gets no
+  curves.
 - The clip loader resolves every channel's lazy rest transforms (`resolve_rest_transforms`)
   before the clip is shared: players on pool threads only read clips. Anything lazy added to a
   clip is resolved there too.

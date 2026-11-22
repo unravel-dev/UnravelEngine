@@ -93,7 +93,11 @@ void create_mesh(const bgfx::VertexLayout& format,
     bool has_normals = format.has(bgfx::Attrib::Normal);
     bool has_tangents = format.has(bgfx::Attrib::Tangent);
     bool has_bitangents = format.has(bgfx::Attrib::Bitangent);
+    bool has_texcoord1 = format.has(bgfx::Attrib::TexCoord1);
+    bool has_color0 = format.has(bgfx::Attrib::Color0);
     uint16_t vertex_stride = format.getStride();
+    // A shape has no vertex colours (white) and one UV set, which its second set copies.
+    const float white_bytes[4] = {255.0f, 255.0f, 255.0f, 255.0f};
 
     auto triangle_count = generator::count(mesh.triangles());
     auto vertex_count = generator::count(mesh.vertices());
@@ -140,6 +144,15 @@ void create_mesh(const bgfx::VertexLayout& format,
                              format,
                              current_vertex_ptr,
                              uint32_t(i));
+        if(has_texcoord1)
+            bgfx::vertexPack(math::value_ptr(texcoords0),
+                             true,
+                             bgfx::Attrib::TexCoord1,
+                             format,
+                             current_vertex_ptr,
+                             uint32_t(i));
+        if(has_color0)
+            bgfx::vertexPack(white_bytes, false, bgfx::Attrib::Color0, format, current_vertex_ptr, uint32_t(i));
 
         bbox.add_point(position);
         i++;
@@ -219,6 +232,12 @@ void mesh::dispose()
     system_vb_backing_.reset();
     system_ib_backing_.reset();
     gi_source_geometry_.reset();
+
+    // The vertex channels and morph targets of a previous load: a primitive built in this mesh has none of them.
+    has_vertex_colors_ = false;
+    uv_set_count_ = 1;
+    morph_targets_.reset();
+    morph_curve_targets_.clear();
 
     // Clean up LOD data
     for(auto& lod : lods_)
@@ -313,6 +332,13 @@ auto mesh::get_info() const -> info
     }
     result.vertex_memory = format_memory(uint64_t(vertex_count_) * vertex_format_.getStride());
     result.index_memory = format_memory(index_bytes);
+    result.vertex_colors = has_vertex_colors_;
+    result.uv_sets = uv_set_count_;
+    if(morph_targets_)
+    {
+        result.morph_targets = uint32_t(morph_targets_->targets.size());
+        result.morphed_vertices = uint32_t(morph_targets_->morphed_vertices.size());
+    }
     return result;
 }
 auto mesh::prepare_mesh(const bgfx::VertexLayout& format) -> bool
@@ -517,12 +543,19 @@ auto mesh::load_mesh(load_data&& data, bool hardware_copy) -> bool
     }
     are_cards_disabled_ = data.are_cards_disabled;
     cards_lod_index_ = data.cards_lod_index;
-
     const bool has_skin_data = data.skin_data.has_bones();
     auto bone_palette_bones = std::move(data.bone_palette_bones);
 
     bool result = true;
     result &= prepare_mesh(data.vertex_format);
+    // After prepare_mesh, whose dispose clears them from a previous load.
+    has_vertex_colors_ = data.has_vertex_colors;
+    uv_set_count_ = data.uv_set_count;
+    if(!data.morph_targets.empty())
+    {
+        morph_targets_ = std::make_shared<const morph_target_data>(std::move(data.morph_targets));
+        morph_curve_targets_ = make_morph_curve_targets(*morph_targets_);
+    }
     if(data.gi_source_geometry.is_valid())
     {
         gi_source_geometry_ = std::make_shared<const sdf_source_geometry>(std::move(data.gi_source_geometry));
@@ -2191,8 +2224,20 @@ auto mesh::apply_skin_to_load_data(load_data& data) -> bool
     {
         keep_per_submesh_data_in_step(data, splits);
     }
+    const uint32_t unsplit_vertex_count = data.vertex_count;
     assign_vertex_palettes(data, vertex_table);
     encode_vertex_skin(data, vertex_table, palette_bones);
+    // A vertex copied for another palette morphs as its original does.
+    if(!data.morph_targets.empty() && vertex_table.size() > unsplit_vertex_count)
+    {
+        std::vector<std::pair<uint32_t, uint32_t>> copies;
+        copies.reserve(vertex_table.size() - unsplit_vertex_count);
+        for(size_t i = unsplit_vertex_count; i < vertex_table.size(); ++i)
+        {
+            copies.emplace_back(uint32_t(i), uint32_t(vertex_table[i].original_vertex));
+        }
+        add_morph_vertex_copies(data.morph_targets, copies);
+    }
     // The palettes travel with the asset, so a load restores them without baking the skin again.
     data.skin_is_prepared = true;
     data.bone_palette_bones = std::move(palette_bones);
@@ -2256,13 +2301,33 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
     bool has_normal = data.vertex_format.has(bgfx::Attrib::Normal);
     bool has_texcoord = data.vertex_format.has(bgfx::Attrib::TexCoord0);
     bool has_tangent = data.vertex_format.has(bgfx::Attrib::Tangent);
-    
-    if(has_normal || has_texcoord || has_tangent)
+    // The colour and the second UV set count only where the file had them: white and a copy of the first set carry
+    // no seam of their own.
+    bool has_color = data.has_vertex_colors && data.vertex_format.has(bgfx::Attrib::Color0);
+    bool has_texcoord1 = data.uv_set_count > 1 && data.vertex_format.has(bgfx::Attrib::TexCoord1);
+    // How far its morph targets move a vertex, as a share of the farthest: vertices that sit together at rest but part
+    // in a target (closed lips, eyelids) stay apart in every level.
+    std::vector<float> morph_displacements;
+    if(!data.morph_targets.empty())
     {
-        // Calculate total components needed: normal(3) + uv(2) + tangent(3) + bitangent(3) + weight(4) + indices(4) = 19 max
+        morph_displacements = get_morph_vertex_displacements(data.morph_targets, data.vertex_count);
+        const float farthest = *std::max_element(morph_displacements.begin(), morph_displacements.end());
+        for(auto& displacement : morph_displacements)
+        {
+            displacement = farthest > 0.0f ? displacement / farthest : 0.0f;
+        }
+    }
+    bool has_morph = !morph_displacements.empty();
+
+    if(has_normal || has_texcoord || has_tangent || has_color || has_texcoord1 || has_morph)
+    {
+        // Components: normal(3) + uv(2) + tangent(3) + colour(4) + uv1(2) + morph displacement(1) = 15 max.
         if(has_normal) total_components += 3;
         if(has_texcoord) total_components += 2;
         if(has_tangent) total_components += 3;
+        if(has_color) total_components += 4;
+        if(has_texcoord1) total_components += 2;
+        if(has_morph) total_components += 1;
         
         packed_attributes.resize(data.vertex_count * total_components);
         attribute_weights.resize(total_components);
@@ -2288,6 +2353,25 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
             attribute_weights[weight_offset + 1] = 0.75f;
             attribute_weights[weight_offset + 2] = 0.75f;
             weight_offset += 3;
+        }
+        if(has_color)
+        {
+            for(uint32_t c = 0; c < 4; ++c)
+            {
+                attribute_weights[weight_offset + c] = 0.5f;
+            }
+            weight_offset += 4;
+        }
+        if(has_texcoord1)
+        {
+            attribute_weights[weight_offset + 0] = 1.0f;
+            attribute_weights[weight_offset + 1] = 1.0f;
+            weight_offset += 2;
+        }
+        if(has_morph)
+        {
+            attribute_weights[weight_offset] = 1.0f;
+            weight_offset += 1;
         }
 
 
@@ -2324,6 +2408,32 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
                 dst[component_offset + 1] = attr[1];
                 dst[component_offset + 2] = attr[2];
                 component_offset += 3;
+            }
+
+            if(has_color)
+            {
+                float attr[4];
+                bgfx::vertexUnpack(attr, bgfx::Attrib::Color0, data.vertex_format, vertex_data_ptr, i);
+                for(uint32_t c = 0; c < 4; ++c)
+                {
+                    dst[component_offset + c] = attr[c];
+                }
+                component_offset += 4;
+            }
+
+            if(has_texcoord1)
+            {
+                float attr[4];
+                bgfx::vertexUnpack(attr, bgfx::Attrib::TexCoord1, data.vertex_format, vertex_data_ptr, i);
+                dst[component_offset + 0] = attr[0];
+                dst[component_offset + 1] = attr[1];
+                component_offset += 2;
+            }
+
+            if(has_morph)
+            {
+                dst[component_offset] = morph_displacements[i];
+                component_offset += 1;
             }
 
             
@@ -2683,6 +2793,21 @@ auto mesh::get_data_groups_count() const -> size_t
 auto mesh::get_default_material_uids() const -> const std::vector<hpp::uuid>&
 {
     return default_material_uids_;
+}
+
+auto mesh::get_morph_targets() const -> const std::shared_ptr<const morph_target_data>&
+{
+    return morph_targets_;
+}
+
+auto mesh::get_morph_curve_targets() const -> const std::vector<morph_curve_target>&
+{
+    return morph_curve_targets_;
+}
+
+auto mesh::has_morph_targets() const -> bool
+{
+    return morph_targets_ != nullptr && !morph_targets_->empty();
 }
 
 auto mesh::get_humanoid_overrides() const -> const std::vector<humanoid_bone_override>&
@@ -3870,6 +3995,27 @@ auto mesh::sort_mesh_data() -> bool
     preparation_data_.submeshes.clear();
 
     return true;
+}
+
+void mesh::bind_render_buffers_for_submesh(const submesh* submesh,
+                                           uint32_t lod_index,
+                                           const morph_deform_binding* deform,
+                                           bool previous_positions)
+{
+    bind_render_buffers_for_submesh(submesh, lod_index);
+    if(deform == nullptr || !deform->deforms(this) || !hardware_mesh_)
+    {
+        return;
+    }
+    // The index buffer stays; the streams replace the mesh's single one. No attribute is in two streams: Vulkan and
+    // OpenGL would read the last stream's, Direct3D the first's.
+    auto vb = std::static_pointer_cast<gfx::vertex_buffer>(hardware_vb_);
+    bgfx::setVertexBuffer(0, deform->current, 0, UINT32_MAX);
+    bgfx::setVertexBuffer(1, vb->native_handle(), 0, UINT32_MAX, deform->rest_layout);
+    if(previous_positions && bgfx::isValid(deform->previous) && bgfx::isValid(deform->previous_layout))
+    {
+        bgfx::setVertexBuffer(2, deform->previous, 0, UINT32_MAX, deform->previous_layout);
+    }
 }
 
 void mesh::bind_render_buffers_for_submesh(const submesh* submesh, uint32_t lod_index)

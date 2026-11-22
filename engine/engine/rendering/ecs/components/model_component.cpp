@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <utility>
 #include <atomic>
+#include <cmath>
+#include <iterator>
 #include <limits>
 
 
@@ -23,6 +25,10 @@ namespace
 /// Last armature version handed out. Versions are unique across components, so a cache built for
 /// one armature never matches another: a model removed and added again starts over at 1 otherwise.
 std::atomic<uint64_t> last_armature_version{1};
+
+/// Last morph weights version handed out, unique across components for the same reason: the deform pass keys its
+/// streams by registry and entity, and a scene loaded again may give another model's weights the same key.
+std::atomic<uint64_t> last_morph_weights_version{0};
 
 /// Marks a name without namespace that several armature nodes share.
 constexpr size_t AMBIGUOUS_ARMATURE_INDEX = std::numeric_limits<size_t>::max();
@@ -835,6 +841,7 @@ void model_component::refresh_world_bounds(const mesh& render_mesh, const math::
     const auto previous_world_bounds = world_bounds_;
     compute_world_bounds(render_mesh, world_transform);
     grow_world_bounds_by_offsets();
+    grow_world_bounds_by_morphs(render_mesh, world_transform);
     if(world_bounds_ != previous_world_bounds)
     {
         render_dirty_.set(dirty_ids::render_change);
@@ -849,6 +856,47 @@ void model_component::grow_world_bounds_by_offsets()
         world_bounds_.min -= math::vec3(offset_bounds_padding_);
         world_bounds_.max += math::vec3(offset_bounds_padding_);
     }
+}
+
+void model_component::grow_world_bounds_by_morphs(const mesh& render_mesh, const math::transform& world_transform)
+{
+    const float local_padding = find_morph_bounds_padding(render_mesh);
+    if(local_padding <= 0.0f)
+    {
+        morph_bounds_padding_ = 0.0f;
+        return;
+    }
+    // The padding is a distance in the mesh's units: the transform's largest scale carries it into the world's.
+    const math::vec3 scale = math::abs(world_transform.get_scale());
+    morph_bounds_padding_ = local_padding * std::max({scale.x, scale.y, scale.z});
+    if(world_bounds_.is_populated())
+    {
+        world_bounds_.min -= math::vec3(morph_bounds_padding_);
+        world_bounds_.max += math::vec3(morph_bounds_padding_);
+    }
+}
+
+auto model_component::find_morph_bounds_padding(const mesh& render_mesh) -> float
+{
+    const auto& targets = render_mesh.get_morph_targets();
+    if(!targets || targets->empty())
+    {
+        morph_padding_targets_.reset();
+        morph_padding_local_ = 0.0f;
+        return 0.0f;
+    }
+    // Same control block: the same targets, even when a reload freed others at their address.
+    const bool same_targets = !morph_padding_targets_.owner_before(targets) && !targets.owner_before(morph_padding_targets_);
+    if(same_targets && morph_padding_version_ == morph_weights_version_)
+    {
+        return morph_padding_local_;
+    }
+    std::vector<float> weights;
+    resolve_morph_weights(*targets, weights);
+    morph_padding_local_ = get_morph_bounds_padding(*targets, weights);
+    morph_padding_targets_ = targets;
+    morph_padding_version_ = morph_weights_version_;
+    return morph_padding_local_;
 }
 
 auto model_component::find_offset_bounds_padding() const -> float
@@ -1098,6 +1146,8 @@ void model_component::on_create_component(entt::registry& r, entt::entity e)
     component.has_motion_ = false;
     component.prev_submesh_pose_.clear();
     component.prev_skinning_pose_.clear();
+    // Nor with the source's deform streams: the pass gives the copy its own.
+    component.morph_deform_ = {};
 }
 
 void model_component::on_destroy_component(entt::registry& r, entt::entity e)
@@ -1197,6 +1247,166 @@ auto model_component::get_post_process_mask() const -> int
 void model_component::set_sort_priority(int value)
 {
     sort_priority_ = value;
+}
+
+auto model_component::get_morph_weights() const -> const std::vector<morph_weight>&
+{
+    return morph_weights_;
+}
+
+void model_component::set_morph_weights(const std::vector<morph_weight>& weights)
+{
+    const auto is_finite = [](const morph_weight& entry)
+    {
+        return std::isfinite(entry.weight);
+    };
+    if(!std::all_of(weights.begin(), weights.end(), is_finite))
+    {
+        std::vector<morph_weight> finite;
+        std::copy_if(weights.begin(), weights.end(), std::back_inserter(finite), is_finite);
+        set_morph_weights(finite);
+        return;
+    }
+    if(weights == morph_weights_)
+    {
+        return;
+    }
+    morph_weights_ = weights;
+    on_morph_weights_changed();
+}
+
+auto model_component::find_morph_weight(hpp::string_view name) const -> hpp::optional<float>
+{
+    for(const auto& entry : morph_weights_)
+    {
+        if(name == hpp::string_view(entry.name))
+        {
+            return entry.weight;
+        }
+    }
+    return hpp::nullopt;
+}
+
+void model_component::set_morph_weight(hpp::string_view name, float weight)
+{
+    if(!std::isfinite(weight))
+    {
+        return;
+    }
+    for(auto& entry : morph_weights_)
+    {
+        if(name == hpp::string_view(entry.name))
+        {
+            if(entry.weight == weight)
+            {
+                return;
+            }
+            entry.weight = weight;
+            on_morph_weights_changed();
+            return;
+        }
+    }
+    morph_weights_.push_back({std::string(name.data(), name.size()), weight});
+    on_morph_weights_changed();
+}
+
+void model_component::clear_morph_weight(hpp::string_view name)
+{
+    const auto found = std::find_if(morph_weights_.begin(),
+                                    morph_weights_.end(),
+                                    [name](const morph_weight& entry)
+                                    {
+                                        return name == hpp::string_view(entry.name);
+                                    });
+    if(found != morph_weights_.end())
+    {
+        morph_weights_.erase(found);
+        on_morph_weights_changed();
+    }
+}
+
+void model_component::reset_morph_weights()
+{
+    if(!morph_weights_.empty())
+    {
+        morph_weights_.clear();
+        on_morph_weights_changed();
+    }
+}
+
+auto model_component::get_morph_weights_version() const -> uint64_t
+{
+    return morph_weights_version_;
+}
+
+void model_component::resolve_morph_weights(const morph_target_data& targets, std::vector<float>& weights) const
+{
+    weights.resize(targets.targets.size());
+    for(size_t i = 0; i < targets.targets.size(); ++i)
+    {
+        const auto set = find_morph_weight(targets.targets[i].name);
+        weights[i] = set ? *set : targets.targets[i].default_weight;
+    }
+}
+
+void model_component::apply_morph_curves(const std::vector<animation_curve_value>& curves,
+                                         const std::vector<morph_curve_target>& curve_targets,
+                                         const morph_target_data& targets)
+{
+    // Both lists ascend by curve id: one walk pairs them. The matches are set in the targets' order.
+    thread_local std::vector<std::pair<uint32_t, float>> keyed;
+    keyed.clear();
+    auto curve = curves.begin();
+    for(const auto& curve_target : curve_targets)
+    {
+        while(curve != curves.end() && curve->id < curve_target.curve_id)
+        {
+            ++curve;
+        }
+        if(curve == curves.end())
+        {
+            break;
+        }
+        if(curve->id == curve_target.curve_id && curve_target.target < targets.targets.size())
+        {
+            keyed.emplace_back(curve_target.target, curve->value);
+        }
+    }
+    std::sort(keyed.begin(), keyed.end());
+    for(const auto& [target, value] : keyed)
+    {
+        set_morph_weight(targets.targets[target].name, value);
+    }
+}
+
+auto model_component::get_morph_targets() const -> std::shared_ptr<const morph_target_data>
+{
+    const auto& lod = model_.get_lod(0);
+    if(!lod.is_ready())
+    {
+        return nullptr;
+    }
+    const auto loaded = lod.get(false);
+    return loaded && loaded->has_morph_targets() ? loaded->get_morph_targets() : nullptr;
+}
+
+auto model_component::get_morph_deform_binding() const -> const morph_deform_binding*
+{
+    return bgfx::isValid(morph_deform_.current) ? &morph_deform_ : nullptr;
+}
+
+void model_component::set_morph_deform_binding(const morph_deform_binding& binding)
+{
+    morph_deform_ = binding;
+}
+
+void model_component::on_morph_weights_changed()
+{
+    morph_weights_version_ = last_morph_weights_version.fetch_add(1, std::memory_order_relaxed) + 1;
+    // The shape moved: cached shadows and captures of the model refresh. Membership of the caster set is unchanged,
+    // so this is not a touch().
+    render_dirty_.set();
+    pending_changes_ |= render_change::pose;
 }
 
 auto model_component::get_sort_priority() const -> int
@@ -1460,10 +1670,13 @@ auto model_component::get_submit_extras(bool shadow_pass) const -> model_submit_
     // changed) are withheld: submit paths treat missing cached bounds as "draw
     // conservatively", which only costs extra draws on the re-entry frame. The next
     // update_armature runs a full refresh and clears the flag.
-    // Withheld too while the materials' offsets grow the model's box: the submeshes' own boxes do not grow.
-    extras.proxies = render_proxies_stale_ || offset_bounds_padding_ > 0.0f ? nullptr : &render_proxies_;
+    // Withheld too while the materials' offsets or the morph weights grow the model's box: the submeshes' own boxes do
+    // not grow.
+    const bool is_grown = offset_bounds_padding_ > 0.0f || morph_bounds_padding_ > 0.0f;
+    extras.proxies = render_proxies_stale_ || is_grown ? nullptr : &render_proxies_;
     extras.shadow_pass = shadow_pass;
     extras.owner = get_owner();
+    extras.morph_deform = get_morph_deform_binding();
     return extras;
 }
 

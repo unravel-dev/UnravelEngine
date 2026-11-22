@@ -505,6 +505,89 @@ auto internal_m2n_material_instance_has_parameter(entt::entity id, uint32_t slot
     return instance && instance->get_graph_parameter(name).has_value();
 }
 
+auto get_model_morph_targets(entt::entity id) -> std::shared_ptr<const morph_target_data>
+{
+    auto* comp = safe_get_component<model_component>(id);
+    return comp ? comp->get_morph_targets() : nullptr;
+}
+
+auto internal_m2n_model_get_morph_target_count(entt::entity id) -> int
+{
+    const auto targets = get_model_morph_targets(id);
+    return targets ? int(targets->targets.size()) : 0;
+}
+
+auto internal_m2n_model_get_morph_target_name(entt::entity id, int index) -> std::string
+{
+    const auto targets = get_model_morph_targets(id);
+    return targets && index >= 0 && size_t(index) < targets->targets.size() ? targets->targets[size_t(index)].name
+                                                                            : std::string();
+}
+
+auto internal_m2n_model_get_morph_target_index(entt::entity id, const std::string& name) -> int
+{
+    const auto targets = get_model_morph_targets(id);
+    return targets ? targets->find_target(name) : -1;
+}
+
+auto internal_m2n_model_get_morph_weight(entt::entity id, const std::string& name) -> float
+{
+    auto* comp = safe_get_component<model_component>(id);
+    if(comp == nullptr)
+    {
+        return 0.0f;
+    }
+    if(const auto weight = comp->find_morph_weight(name))
+    {
+        return *weight;
+    }
+    const auto targets = comp->get_morph_targets();
+    const int index = targets ? targets->find_target(name) : -1;
+    return index >= 0 ? targets->targets[size_t(index)].default_weight : 0.0f;
+}
+
+void internal_m2n_model_set_morph_weight(entt::entity id, const std::string& name, float weight)
+{
+    if(auto* comp = safe_get_component<model_component>(id))
+    {
+        comp->set_morph_weight(name, weight);
+    }
+}
+
+void internal_m2n_model_set_morph_weight_at(entt::entity id, int index, float weight)
+{
+    auto* comp = safe_get_component<model_component>(id);
+    const auto targets = comp ? comp->get_morph_targets() : nullptr;
+    if(targets && index >= 0 && size_t(index) < targets->targets.size())
+    {
+        comp->set_morph_weight(targets->targets[size_t(index)].name, weight);
+    }
+}
+
+void internal_m2n_model_set_morph_weights(entt::entity id, std::intptr_t weights, int count)
+{
+    auto* comp = safe_get_component<model_component>(id);
+    const auto targets = comp ? comp->get_morph_targets() : nullptr;
+    if(!targets || weights == 0)
+    {
+        return;
+    }
+    const auto* values = reinterpret_cast<const float*>(weights);
+    const size_t used = std::min(size_t(std::max(count, 0)), targets->targets.size());
+    for(size_t i = 0; i < used; ++i)
+    {
+        comp->set_morph_weight(targets->targets[i].name, values[i]);
+    }
+}
+
+void internal_m2n_model_reset_morph_weights(entt::entity id)
+{
+    if(auto* comp = safe_get_component<model_component>(id))
+    {
+        comp->reset_morph_weights();
+    }
+}
+
 auto internal_m2n_material_instance_get_parameter(entt::entity id, uint32_t slot, const std::string& name) -> managed_vector4
 {
     const auto* instance = find_instance(id, slot);
@@ -636,6 +719,20 @@ void register_model_component_script_bindings()
                             script_internal_call(internal_m2n_model_get_shared_material_count));
     reg.add_internal_call("internal_m2n_model_set_shared_material",
                             script_internal_call(internal_m2n_model_set_shared_material));
+    reg.add_internal_call("internal_m2n_model_get_morph_target_count",
+                          script_internal_call(internal_m2n_model_get_morph_target_count));
+    reg.add_internal_call("internal_m2n_model_get_morph_target_name",
+                          script_internal_call(internal_m2n_model_get_morph_target_name));
+    reg.add_internal_call("internal_m2n_model_get_morph_target_index",
+                          script_internal_call(internal_m2n_model_get_morph_target_index));
+    reg.add_internal_call("internal_m2n_model_get_morph_weight", script_internal_call(internal_m2n_model_get_morph_weight));
+    reg.add_internal_call("internal_m2n_model_set_morph_weight", script_internal_call(internal_m2n_model_set_morph_weight));
+    reg.add_internal_call("internal_m2n_model_set_morph_weight_at",
+                          script_internal_call(internal_m2n_model_set_morph_weight_at));
+    reg.add_internal_call("internal_m2n_model_set_morph_weights",
+                          script_internal_call(internal_m2n_model_set_morph_weights));
+    reg.add_internal_call("internal_m2n_model_reset_morph_weights",
+                          script_internal_call(internal_m2n_model_reset_morph_weights));
 
     auto instance_reg = dotnet::internal_call_registry("Unravel.Core.MaterialInstance");
     instance_reg.add_internal_call("internal_m2n_material_instance_set_color",

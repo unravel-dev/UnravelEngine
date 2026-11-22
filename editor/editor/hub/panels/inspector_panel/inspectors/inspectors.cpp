@@ -614,6 +614,12 @@ void prefab_override_context::mark_material_instance_as_changed(entt::handle ent
                              "Model/Material Instances" + element);
 }
 
+void prefab_override_context::mark_morph_weight_as_changed(entt::handle entity, const std::string& name)
+{
+    // The path the Model component's LOAD merges weights by.
+    mark_property_as_changed(entity, entt::resolve<model_component>(), "morph_weights/" + name, "Morph Targets/" + name);
+}
+
 void prefab_override_context::mark_property_as_changed(entt::handle entity,
                                                        const entt::meta_type& component_type,
                                                        const std::string& property_path,

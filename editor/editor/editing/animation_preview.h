@@ -6,6 +6,7 @@
 #include <engine/animation/animation.h>
 #include <engine/assets/asset_handle.h>
 #include <engine/ecs/scene.h>
+#include <engine/rendering/ecs/components/model_component.h>
 
 #include <math/math.h>
 
@@ -17,14 +18,14 @@ namespace unravel
 class animation_component;
 
 /**
- * @brief The local transforms of an animated entity and its armature, captured so an edit-mode
- * preview can put the scene back exactly as it found it.
+ * @brief The local transforms of an animated entity and its armature, and its model's morph weights
+ * (which clip curves set), captured so an edit-mode preview can put the scene back exactly as it found it.
  */
 class animation_pose_snapshot
 {
 public:
     void capture(entt::handle entity);
-    /// Puts the captured transforms back, unless the entity no longer exists (scene reloaded).
+    /// Puts the captured transforms and morph weights back, unless the entity no longer exists (scene reloaded).
     void restore();
     void clear();
     auto is_empty() const -> bool;
@@ -39,6 +40,8 @@ private:
     entt::uhandle owner_id_;
     entt::handle owner_;
     std::vector<entry> entries_;
+    std::vector<morph_weight> morph_weights_;
+    bool has_model_{};
 };
 
 /**

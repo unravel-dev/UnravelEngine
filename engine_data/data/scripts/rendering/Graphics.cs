@@ -65,6 +65,8 @@ namespace Unravel.Core
         SoftShadows = 18,
         UIMultisampling = 19,
         TemporalStabilityProbe = 20,
+        /// <summary>Morph targets deform on the GPU; without it the CPU deforms them.</summary>
+        GpuMorphTargets = 21,
     }
 
     /// <summary>

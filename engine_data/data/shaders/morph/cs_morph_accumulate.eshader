@@ -1,0 +1,58 @@
+[code]
+/*
+ * The morph deform pass's middle step (morph_deformer.h), dispatched once per active target: adds each of the
+ * target's deltas, scaled by its weight, into the accumulator of the vertex it moves. The sums are integers (each
+ * delta scaled by the pass's position or normal scale, chosen so no sum can overflow), so they do not depend on the
+ * order the threads add in.
+ */
+
+#include "../bgfx_compute.sh"
+
+/// The mesh's deltas, 5 uints each: the slot of the vertex, the position delta (3 floats) and the packed normal delta.
+BUFFER_RO(b_morph_deltas, uint, 0);
+/// 6 ints a slot, stored as uints: the weighted position delta, then the weighted normal delta, as integers.
+BUFFER_RW(b_morph_accumulator, uint, 1);
+
+/// x = the target's first delta, y = its delta count, z = its weight times the position scale, w = its weight times
+/// the normal scale.
+uniform vec4 u_morph_accumulate;
+
+#define DELTA_STRIDE_UINTS 5u
+#define SLOT_STRIDE_UINTS 6u
+
+/// A 10-bit signed normalized component, as morph_targets.cpp packs it.
+float unpack_snorm10(uint bits)
+{
+	int value = int(bits << 22u) >> 22;
+	return max(float(value) / 511.0, -1.0);
+}
+
+/// A normal delta pack_morph_normal packed: each component in -2..2.
+vec3 unpack_morph_normal(uint packed)
+{
+	return vec3(unpack_snorm10(packed & 1023u), unpack_snorm10((packed >> 10u) & 1023u),
+				unpack_snorm10((packed >> 20u) & 1023u)) * 2.0;
+}
+
+NUM_THREADS(64, 1, 1)
+void main()
+{
+	uint index = gl_GlobalInvocationID.x;
+	if(index < uint(u_morph_accumulate.y))
+	{
+		uint delta = (uint(u_morph_accumulate.x) + index) * DELTA_STRIDE_UINTS;
+		uint slot = b_morph_deltas[delta] * SLOT_STRIDE_UINTS;
+		vec3 position = vec3(uintBitsToFloat(b_morph_deltas[delta + 1u]),
+							 uintBitsToFloat(b_morph_deltas[delta + 2u]),
+							 uintBitsToFloat(b_morph_deltas[delta + 3u]));
+		vec3 normal = unpack_morph_normal(b_morph_deltas[delta + 4u]);
+		ivec3 moved = ivec3(round(position * u_morph_accumulate.z));
+		ivec3 turned = ivec3(round(normal * u_morph_accumulate.w));
+		atomicAdd(b_morph_accumulator[slot], uint(moved.x));
+		atomicAdd(b_morph_accumulator[slot + 1u], uint(moved.y));
+		atomicAdd(b_morph_accumulator[slot + 2u], uint(moved.z));
+		atomicAdd(b_morph_accumulator[slot + 3u], uint(turned.x));
+		atomicAdd(b_morph_accumulator[slot + 4u], uint(turned.y));
+		atomicAdd(b_morph_accumulator[slot + 5u], uint(turned.z));
+	}
+}

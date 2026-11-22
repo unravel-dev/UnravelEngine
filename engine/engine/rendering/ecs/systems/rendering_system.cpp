@@ -80,6 +80,8 @@ auto rendering_system::init(rtti::context& ctx) -> bool
     ev.on_play_end.connect(sentinel_, -10, this, &rendering_system::on_play_end);
 
     baked_animations_.init();
+    morph_deformer_ = std::make_unique<morph_deformer>();
+    morph_deformer_->init(ctx);
     debug_draw_callbacks_.reserve(128);
     return true;
 }
@@ -89,6 +91,7 @@ auto rendering_system::deinit(rtti::context& ctx) -> bool
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
     baked_animations_.clear();
     baked_animations_.destroy();
+    morph_deformer_.reset();
     material_instances_.clear();
     return true;
 }
@@ -250,6 +253,11 @@ void rendering_system::on_frame_before_render(scene& scn, const frame_times& tim
     rig.before_skinning(*scn.registry, times.scaled);
     ctx.get_cached<model_system>().on_frame_before_render(scn, times);
     rig.after_skinning(*scn.registry);
+    // After the models recorded this frame's motion: a weight change marks theirs.
+    if(morph_deformer_)
+    {
+        morph_deformer_->update(scn);
+    }
     ctx.get_cached<camera_system>().on_frame_before_render(scn, times);
     ctx.get_cached<particle_system>().on_frame_before_render(scn, times);
 

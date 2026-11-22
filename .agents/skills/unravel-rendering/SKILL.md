@@ -70,6 +70,30 @@ Backends (OpenGL breaks first; the other backends hide these):
   use (cache dir: `gfx::set_cache_directory`, set in `renderer.cpp`). Vulkan stages uploads in 32 MB a frame.
 - bgfx has no frame buffer without attachments (asserts), pixel-shader UAVs only from D3D11 feature level 11.1,
   and image atomics only as `imageAtomicAdd` (`bgfx_compute.sh`); other atomics go on buffers.
+- An attribute in two vertex streams of one draw comes from the first stream on D3D11 and D3D12 and from the last
+  on Vulkan and OpenGL. A second buffer that repeats attributes binds under a layout that skips them
+  (`VertexLayout::skip`, the layout argument of `bgfx::setVertexBuffer`). `--gfx-check-vertex-streams` checks
+  multi-stream draws, compute-written vertex buffers and CPU-updated ones on the device and logs the result.
+- A morphed model draws from deform streams (`morph_deformer.h`, once a frame per scene after `model_system`):
+  stream 0 its deformed position and basis, stream 1 its mesh under the rest layout, and in the velocity pass
+  stream 2 last frame's positions as `a_texcoord7` for the `morph` variants of `vs_velocity` and of a graph
+  material's velocity variants (`velocity_morph`, `velocity_skinned_morph`; `deferred::get_model_velocity_program`,
+  `begin_model_offset_velocity_program`). Only the first LOD's mesh deforms: a draw of another LOD mesh binds no
+  streams, so a program reading `a_texcoord7` must not draw it (`morph_deform_binding::deforms`). Every model draw
+  gets them through `model_component::get_submit_extras`; a new draw path that builds its own extras draws the rest
+  shape. Batches bind only the mesh buffer, so morphed models leave static, skinned and shadow batching. A model no
+  view drew last frame (`was_used_last_frame`) is not deformed: it takes its shape the frame it enters a camera's
+  frustum (`model_system::is_in_any_view`, as skinning's stale-pose entry does), with no motion of its own, and a
+  frame late when only a shadow sees it. A mesh past 2^24 deltas, slots or vertices deforms on the CPU even with
+  compute: the compute shaders read their counts from float uniforms. Vertex
+  pulling (the editor's selection wireframe) reads positions from stage 2: the deform stream when a shader can read
+  it (`deforms_readable`: compute wrote it), else the mesh's own buffer; the CPU path's streams have no shader view.
+- A mesh's bounds hold each morph target alone at weight 1. While weights are active a model's world bounds grow by
+  `get_morph_bounds_padding` (each target's reach times its weight's size) and its submeshes are culled by that box
+  alone (`get_submit_extras` withholds the proxies), as for World Position Offset. The editor's raycasts
+  (`scene_raycast.cpp`) test the morphed positions through `apply_morph_position_deltas`, the CPU deform's own sums.
+- A compute shader reads or writes a vertex buffer through `BUFFER_RAW_*` and `rawLoad*` / `rawStore*`: D3D11 gives a
+  vertex buffer only a float4 typed view. bgfx updates no `BGFX_BUFFER_COMPUTE_WRITE` buffer from the CPU.
 
 Pipeline, targets and draws:
 

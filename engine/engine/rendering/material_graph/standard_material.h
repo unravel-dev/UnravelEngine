@@ -57,6 +57,9 @@ struct standard_surface
     bool unlit{false};
     /// The index of refraction of a see-through surface (the Surface Output's Refraction): 1 bends nothing.
     float refraction{1.0f};
+    /// The base color and its alpha are multiplied by the mesh's vertex colour (a Vertex Color node): what a glTF
+    /// primitive with vertex colours means. A mesh without colours reads white, so nothing changes on it.
+    bool multiply_vertex_color{false};
     asset_handle<gfx::texture> color_map;
     asset_handle<gfx::texture> normal_map;
     /// Roughness in red, or in green when it is the metallic map too (one map packing both, glTF 2.0).
