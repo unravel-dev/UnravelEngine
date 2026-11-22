@@ -2,7 +2,9 @@
 #include "audit_facts.h"
 #include "audit_rules.h"
 
+#include <deploy/shader_cook.h>
 #include <engine/assets/impl/asset_extensions.h>
+#include <graphics/graphics.h>
 #include <hpp/uuid.hpp>
 #include <logging/logging.h>
 
@@ -242,6 +244,49 @@ auto find_script_named_assets(const input& in) -> std::unordered_set<std::string
     return named;
 }
 
+/// Whether a profile's builds carry OpenGL or WebGL 2 shaders, the backends whose depth keeps less precision.
+auto ships_opengl(const profile_record& profile) -> bool
+{
+    auto renderers = deployment::get_shader_variants(profile.deploy);
+    if(renderers.empty())
+    {
+        const auto& compiled = gfx::get_renderer_platform_supported_filename_extensions();
+        renderers.insert(compiled.begin(), compiled.end());
+    }
+    return renderers.count(gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGL)) != 0 ||
+           renderers.count(gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGLES)) != 0;
+}
+
+void check_camera_depth_ranges(rule_context& context, const document_scan& scan)
+{
+    for(const auto& range : scan.cameras)
+    {
+        if(range.near_clip <= 0.0f)
+        {
+            continue;
+        }
+        const double ratio = double(range.far_clip) / double(range.near_clip);
+        for(const auto& profile : context.get_input().profiles)
+        {
+            const auto limit = context.get_threshold(rules::CAMERA_DEPTH_RANGE, thresholds::MAX_FAR_TO_NEAR, profile.platform);
+            if(ratio <= double(limit) || !is_shipped_by(profile, range.document) || !ships_opengl(profile))
+            {
+                continue;
+            }
+            auto item = context.make(rules::CAMERA_DEPTH_RANGE,
+                                     make_document_subject(range.document, range.entity_id, range.entity_path),
+                                     fmt::format("The camera's far clip of {:g} m is {:.0f} times its near clip of {:g} m. "
+                                                 "On OpenGL and WebGL 2 distant surfaces can flicker through each other.",
+                                                 range.far_clip,
+                                                 ratio,
+                                                 range.near_clip));
+            item.discriminator = range.entity_id;
+            item.profiles.push_back(profile.name);
+            context.add(std::move(item));
+        }
+    }
+}
+
 void check_stereo_spatial(rule_context& context, const document_scan& scan)
 {
     const auto& in = context.get_input();
@@ -292,6 +337,7 @@ void check_scenes(rule_context& context)
     check_features(context, scan);
     check_scene_color_reads(context, scan);
     check_stereo_spatial(context, scan);
+    check_camera_depth_ranges(context, scan);
 }
 
 } // namespace unravel::audit::detail

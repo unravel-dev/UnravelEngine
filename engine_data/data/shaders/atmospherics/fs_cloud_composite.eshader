@@ -25,7 +25,6 @@ SAMPLER2D(s_depth, 2);
 #define CLOUD_COMPOSITE_DISTANCE_SCALE 0.001
 // Same sky sentinel as the pre-pass (fs_cloud.eshader).
 #define CLOUD_COMPOSITE_SKY_DISTANCE   1.0e7
-#define CLOUD_COMPOSITE_SKY_DEPTH_TOLERANCE 0.00001
 // Relative distance difference at which a half-res texel loses most of its weight.
 #define CLOUD_COMPOSITE_DEPTH_TOLERANCE 0.1
 
@@ -33,11 +32,11 @@ void main()
 {
     vec2 uv = clipToUv(v_clipPos * 0.5 + 0.5);
     float depth = texture2D(s_depth, uv).r;
-    if(u_cloudCompositeParams.x > 0.5 && !isFarDepthWithin(depth, CLOUD_COMPOSITE_SKY_DEPTH_TOLERANCE))
+    if(u_cloudCompositeParams.x > 0.5 && !isFarDepth(depth))
     {
         discard;
     }
-    float pixel_distance = isFarDepthWithin(depth, CLOUD_COMPOSITE_SKY_DEPTH_TOLERANCE) ? CLOUD_COMPOSITE_SKY_DISTANCE : length(computeViewSpacePosition(uv, depth));
+    float pixel_distance = isFarDepth(depth) ? CLOUD_COMPOSITE_SKY_DISTANCE : length(computeViewSpacePosition(uv, depth));
     float pixel_km = pixel_distance * CLOUD_COMPOSITE_DISTANCE_SCALE;
 
     vec2 texel = u_cloudComposite.xy;

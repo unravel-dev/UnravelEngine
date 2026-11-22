@@ -91,6 +91,22 @@ auto make_rules() -> std::vector<rule>
                     "Turn on Force To Mono in the clip's import settings, unless a script also plays it as 2D sound.",
                     {},
                     false});
+    list.push_back({rules::CAMERA_DEPTH_RANGE,
+                    "Camera Depth Range Too Wide for OpenGL",
+                    severity::warning,
+                    to_mask(area::quality),
+                    rule_source::scenes,
+                    "A perspective camera whose far clip is many times its near clip, in a profile that ships OpenGL or "
+                    "WebGL 2 shaders. Those backends keep depth with less precision than the others, so in their builds "
+                    "distant surfaces that lie close together flicker through each other.",
+                    "Raise the camera's Near Clip or lower its Far Clip, or leave OpenGL and WebGL 2 out of the "
+                    "profile's graphics.",
+                    {{thresholds::MAX_FAR_TO_NEAR,
+                      "Far to near ratio",
+                      "times",
+                      "Cameras whose far clip divided by their near clip is over this are reported.",
+                      {100000, 100000, 100000}}},
+                    true});
     list.push_back({rules::DEPLOY_PROBLEM,
                     "Profile Cannot Deploy",
                     severity::error,

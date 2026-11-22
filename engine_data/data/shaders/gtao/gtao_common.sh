@@ -25,8 +25,6 @@
 #define GTAO_HALF_PI 1.5707963267949
 /// View-space depth stored for sky / no-geometry texels (beyond any effect radius).
 #define GTAO_SKY_DEPTH 1.0e6
-/// Device depth within this of the far plane is the far plane (nothing was drawn).
-#define GTAO_SKY_DEVICE_DEPTH_TOLERANCE 0.000001
 /// Sample offsets shorter than this many pixels read the centre texel and are skipped.
 #define GTAO_PIXEL_TOO_CLOSE 1.3
 /// Sectors of the visibility bitmask per slice: the projected normal's hemisphere split into
@@ -103,7 +101,7 @@ uniform vec4 u_gtao_params4;
 /// View-space depth (positive distance along the view axis) of a device depth value.
 float GtaoViewDepthFromDevice(float device_depth)
 {
-	if(isFarDepthWithin(device_depth, GTAO_SKY_DEVICE_DEPTH_TOLERANCE))
+	if(isFarDepth(device_depth))
 	{
 		return GTAO_SKY_DEPTH;
 	}

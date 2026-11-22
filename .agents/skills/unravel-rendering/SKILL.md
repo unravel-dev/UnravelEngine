@@ -45,7 +45,9 @@ Backends (OpenGL breaks first; the other backends hide these):
   (`shaderlib.sh`), never raw LESS / GREATER, 0.0 / 1.0 or min / max on camera depth (suite "depth convention"
   counts the raw ones). Shadow maps and GI card captures keep standard depth with their own projections and tests.
   A float depth's step is relative to the depth on every backend but OpenGL / WebGL 2, where clip z passes through
-  -1..1 first: an error margin in device depth takes the larger of both (`ContactShadow`).
+  -1..1 first: an error margin in device depth takes the larger of both (`ContactShadow`). A sky test is exact
+  (`isFarDepth`), and a tolerance on device depth covers a view distance that grows as the near clip shrinks (the
+  Scene camera's is 1 cm): compare view distances, or scale the tolerance with the depth.
 - `gfx::render_pass::bind()` and `clear()` call `bgfx::touch`, which discards every uniform, texture, state and
   buffer set since the last submit: bind or clear the pass first, then set per-draw state.
 - A bgfx view runs its blits, then all its compute dispatches, then its draws; `bgfx::update` of a dynamic buffer

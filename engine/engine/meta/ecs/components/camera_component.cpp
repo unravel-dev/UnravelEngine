@@ -70,7 +70,7 @@ REFLECT(camera_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "near_clip_distance"},
             entt::attribute{"pretty_name", "Near Clip"},
-            entt::attribute{"min", 0.1f},
+            entt::attribute{"min", 0.001f},
         })
         .data<&camera_component::set_far_clip, &camera_component::get_far_clip>("far_clip_distance"_hs)
         .custom<entt::attributes>(entt::attributes{

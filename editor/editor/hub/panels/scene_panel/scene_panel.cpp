@@ -318,6 +318,18 @@ void reset_preview_state()
 // Toolbar Helper Functions
 // ============================================================================
 
+/// The Scene camera's near clip in metres: close enough to work a surface from a centimetre away. Camera depth is
+/// reversed, so distant surfaces keep their precision with it.
+constexpr float SCENE_CAMERA_NEAR_CLIP = 0.01f;
+
+/// Makes the Scene panel's camera, as a reset makes it again.
+auto create_scene_camera(rtti::context& ctx, scene& panel_scene) -> entt::handle
+{
+    auto camera_entity = defaults::create_camera_entity(ctx, panel_scene, "Scene Camera");
+    camera_entity.get<camera_component>().set_near_clip(SCENE_CAMERA_NEAR_CLIP);
+    return camera_entity;
+}
+
 constexpr const char* SCENE_TOOLBAR_TOOLS_BAR_ID = "##scene_toolbar_tools";
 constexpr const char* SCENE_TOOLBAR_VIEW_BAR_ID = "##scene_toolbar_view";
 constexpr const char* SCENE_TOOLBAR_PREFAB_BAR_ID = "##scene_toolbar_prefab";
@@ -1400,7 +1412,7 @@ void scene_panel::init(rtti::context& ctx)
     gizmos_.init(ctx);
 
     // create editor camera
-    defaults::create_camera_entity(ctx, panel_scene_, "Scene Camera");
+    create_scene_camera(ctx, panel_scene_);
 
     // create center entity
     panel_scene_.create_entity();
@@ -1649,7 +1661,7 @@ void scene_panel::reset_camera(rtti::context& ctx)
     {
         scene::destroy_entity(camera);
     }
-    defaults::create_camera_entity(ctx, panel_scene_, "Scene Camera");
+    create_scene_camera(ctx, panel_scene_);
     camera_controller_.stop();
 }
 

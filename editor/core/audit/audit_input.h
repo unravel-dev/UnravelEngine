@@ -176,6 +176,17 @@ struct audio_source_use
     bool is_spatial{false};
 };
 
+/// A perspective camera's clip range, as a scene or prefab stores it.
+struct camera_depth_range
+{
+    std::string document;
+    std::string entity_id;
+    std::string entity_path;
+    /// Metres.
+    float near_clip{};
+    float far_clip{};
+};
+
 /// A document that cannot be read, and why.
 struct document_problem
 {
@@ -193,6 +204,7 @@ struct document_scan
     std::vector<entity_problem> joints;
     std::vector<feature_use> features;
     std::vector<audio_source_use> audio_sources;
+    std::vector<camera_depth_range> cameras;
     std::vector<document_problem> unreadable;
     /// Each invalid controller's key and its problems.
     std::vector<std::pair<std::string, std::vector<std::string>>> controllers;

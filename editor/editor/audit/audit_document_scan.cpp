@@ -17,6 +17,7 @@
 #include <engine/physics/ecs/components/joint_component.h>
 #include <engine/rendering/ecs/components/assao_component.h>
 #include <engine/rendering/ecs/components/bloom_component.h>
+#include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/decal_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/gi_component.h>
@@ -287,6 +288,25 @@ void add_audio_sources(entt::registry& registry, const std::string& document, au
     }
 }
 
+void add_camera_depth_ranges(entt::registry& registry, const std::string& document, audit::document_scan& out)
+{
+    for(const auto entity : registry.view<camera_component>())
+    {
+        const entt::handle handle(registry, entity);
+        const auto& component = handle.get<camera_component>();
+        // An orthographic camera's depth is linear: its precision does not depend on the near clip.
+        if(component.get_camera().get_projection_mode() != projection_mode::perspective)
+        {
+            continue;
+        }
+        out.cameras.push_back({document,
+                               audit_entity_uid(handle),
+                               make_audit_entity_path(handle),
+                               component.get_near_clip(),
+                               component.get_far_clip()});
+    }
+}
+
 auto get_compiled_file(const std::string& key, const fs::path& project_root) -> fs::path
 {
     const auto files = deployment::get_compiled_paths(key, project_root);
@@ -343,6 +363,7 @@ void audit_document_scanner::scan_entities(rtti::context& ctx, const audit_docum
     add_joint_problems(registry, document.key, out);
     add_feature_uses(registry, document.key, out);
     add_audio_sources(registry, document.key, out);
+    add_camera_depth_ranges(registry, document.key, out);
     scratch.unload();
 }
 

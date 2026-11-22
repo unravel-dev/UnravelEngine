@@ -541,6 +541,21 @@ void test_scene_rules()
               contains(glass->message, "refracts nothing"),
           "only the profile without the scene copy reports it, saying what happens");
 
+    in.scan.cameras.push_back({"app:/data/Main.spfb", "uid-cam", "Root/Close Camera", 0.001f, 1000.0f});
+    in.scan.cameras.push_back({"app:/data/Main.spfb", "uid-wide", "Root/Wide Camera", 0.1f, 1000.0f});
+    auto web_gpu = make_profile("WebGPU", target_platform::web, {"app:/data/Main.spfb"});
+    web_gpu.deploy.web.graphics = unravel::web_graphics::webgpu;
+    auto web_gl = make_profile("WebGL", target_platform::web, {"app:/data/Main.spfb"});
+    web_gl.deploy.web.graphics = unravel::web_graphics::webgpu_then_webgl2;
+    in.profiles = {web_gpu, web_gl};
+    const auto camera_issues = check_with(in, &audit::detail::check_scenes);
+    const auto* camera = find_rule_issue(camera_issues, audit::rules::CAMERA_DEPTH_RANGE);
+    require(camera != nullptr, "a camera whose far clip is a million times its near clip is reported where WebGL 2 ships");
+    check(count_rule(camera_issues, audit::rules::CAMERA_DEPTH_RANGE) == 1 && camera->profiles == std::vector<std::string>{"WebGL"},
+          "only the profile shipping WebGL 2 reports it, and a 10000 to 1 camera is not reported");
+    check(camera->where.detail == "uid-cam" && contains(camera->message, "1000000 times"),
+          "the issue names the camera and the ratio");
+
     in.scan.ran = false;
     check(check_with(in, &audit::detail::check_scenes).empty(), "without a scan the scene rules report nothing");
 }

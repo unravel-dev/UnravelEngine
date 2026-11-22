@@ -454,23 +454,14 @@ float ign16x16(vec2 fragCoord)
 #	define DEPTH_FAR 1.0
 #endif // REVERSED_DEPTH
 
-// Nothing was drawn here: the depth a camera view clears to.
+// Nothing was drawn here: the depth a camera view clears to. Exact: camera depth keeps its precision at the far
+// plane, so a tolerance there would take distant surfaces for the sky.
 bool isFarDepth(float _depth)
 {
 #if REVERSED_DEPTH
 	return _depth <= DEPTH_FAR;
 #else
 	return _depth >= DEPTH_FAR;
-#endif // REVERSED_DEPTH
-}
-
-// Within _tolerance of the far plane (device depth), toward the near plane.
-bool isFarDepthWithin(float _depth, float _tolerance)
-{
-#if REVERSED_DEPTH
-	return _depth <= DEPTH_FAR + _tolerance;
-#else
-	return _depth >= DEPTH_FAR - _tolerance;
 #endif // REVERSED_DEPTH
 }
 
