@@ -330,7 +330,7 @@ auto make_output_node() -> material_node_def
         in_unit("subsurface_opacity", "Subsurface Opacity", vt::float1),
         with_tooltip(in("camera_fade_distance", "Camera Fade Distance", vt::float1),
                      "Within this distance of the camera, in world units, the surface dithers out as the camera comes "
-                     "closer, so it never cuts through the view. 0: it does not fade."),
+                     "closer, gone at twice the near clip, so the near clip never cuts through it. 0: it does not fade."),
         with_tooltip(in("refraction", "Refraction", vt::float1, math::vec4(1.0f)),
                      "Translucent and Premultiplied surfaces: the index of refraction of what the surface bends its view "
                      "through, 1 bending nothing, 1.33 water, 1.5 glass. Only the opaque scene shows bent, not the other "

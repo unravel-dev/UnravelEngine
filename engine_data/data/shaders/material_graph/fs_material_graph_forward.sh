@@ -102,10 +102,10 @@ void main()
 	{
 		discard;
 	}
-	// saturate(distance / threshold): within Camera Fade Distance the surface fades out, and it goes closer than twice
-	// the near plane.
+	// Within Camera Fade Distance the surface fades out as the camera comes closer, gone at twice the near plane, so the
+	// near plane never cuts it. A distance of 0 leaves the surface to the near plane.
 	float distance = length(view_direction) - u_camera_clip_planes.x * 2.0;
-	float distance_factor = s.camera_fade_distance > 0.0 ? saturate(distance / s.camera_fade_distance) : step(0.0, distance);
+	float distance_factor = s.camera_fade_distance > 0.0 ? saturate(distance / s.camera_fade_distance) : 1.0;
 	float opacity = saturate(s.opacity_mask) * distance_factor;
 
 #if FORWARD_GI_LAYER

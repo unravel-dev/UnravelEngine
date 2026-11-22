@@ -78,10 +78,10 @@ void main()
 	MaterialSurface s = mg_default_surface();
 	evaluate_material(i, s);
 
-	// saturate(distance / threshold), a threshold of 0 included (no division by it): the surface fades within the
-	// distance, and goes closer than twice the near plane.
+	// Within Camera Fade Distance the surface dithers out as the camera comes closer, gone at twice the near plane, so
+	// the near plane never cuts it, at the view's corners either. A distance of 0 leaves the surface to the near plane.
 	float distance = length(view_direction) - u_camera_clip_planes.x * 2.0;
-	float distance_factor = s.camera_fade_distance > 0.0 ? saturate(distance / s.camera_fade_distance) : step(0.0, distance);
+	float distance_factor = s.camera_fade_distance > 0.0 ? saturate(distance / s.camera_fade_distance) : 1.0;
 	float dither = ign16x16(gl_FragCoord.xy);
 
 	// LOD transition: v_lod_params.x positive while the current LOD fades out, negative while the target LOD fades in.
