@@ -47,7 +47,10 @@ Backends (OpenGL breaks first; the other backends hide these):
   A float depth's step is relative to the depth on every backend but OpenGL / WebGL 2, where clip z passes through
   -1..1 first: an error margin in device depth takes the larger of both (`ContactShadow`). A sky test is exact
   (`isFarDepth`), and a tolerance on device depth covers a view distance that grows as the near clip shrinks (the
-  Scene camera's is 1 cm): compare view distances, or scale the tolerance with the depth.
+  Scene camera's is 1 cm): compare view distances, or scale the tolerance with the depth. On OpenGL / WebGL 2 a
+  rasterized plane's depth also differs from the same plane's analytic depth by a share of the depth that grows as
+  the near clip shrinks, so a test of analytic depth against the scene's (the editor grid, `fs_grid.eshader`) takes
+  a margin proportional to the depth.
 - `gfx::render_pass::bind()` and `clear()` call `bgfx::touch`, which discards every uniform, texture, state and
   buffer set since the last submit: bind or clear the pass first, then set per-draw state.
 - A bgfx view runs its blits, then all its compute dispatches, then its draws; `bgfx::update` of a dynamic buffer

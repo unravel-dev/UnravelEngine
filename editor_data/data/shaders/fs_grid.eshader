@@ -17,10 +17,14 @@ uniform mat4 u_depth_view_proj;
 #define u_grid_opacity  u_params.w
 
 // Depth margin the grid wins by over a coplanar surface, shaped like a hardware polygon
-// offset: eight float32 ulps of a depth in [0.5, 1) for rounding, plus an eighth of a pixel
-// of the grid's own depth slope, because the rasterizer places the scene's plane a few
-// hundredths of a pixel off the analytic one. A constant offset in post-projection depth
-// would instead grow with the square of the view distance.
+// offset: a share of the depth itself, eight float32 ulps of a depth in [0.5, 1) for rounding,
+// and an eighth of a pixel of the grid's own depth slope, because the rasterizer places the
+// scene's plane a few hundredths of a pixel off the analytic one. Camera depth is reversed, so
+// the share of the depth is the same share of the view distance whatever the near clip: OpenGL
+// and WebGL 2 round a rasterized plane's depth through -1..1 clip depth, an error that is a
+// share of the depth and grows as the near clip shrinks. A constant offset in post-projection
+// depth would instead grow with the square of the view distance.
+#define GRID_DEPTH_RELATIVE_MARGIN 0.002
 #define GRID_DEPTH_ULP (1.0 / 16777216.0)
 #define GRID_DEPTH_MARGIN_ULPS 8.0
 #define GRID_DEPTH_MARGIN_PIXELS 0.125
@@ -84,7 +88,8 @@ float compute_depth_visibility(vec3 frag_pos)
 	float grid_depth = ndc.z;
 	float scene_depth = sample_scene_depth(uv);
 	float depth_slope = max(abs(dFdx(grid_depth)), abs(dFdy(grid_depth)));
-	float margin = GRID_DEPTH_MARGIN_ULPS * GRID_DEPTH_ULP + GRID_DEPTH_MARGIN_PIXELS * depth_slope;
+	float margin = GRID_DEPTH_RELATIVE_MARGIN * grid_depth + GRID_DEPTH_MARGIN_ULPS * GRID_DEPTH_ULP +
+	               GRID_DEPTH_MARGIN_PIXELS * depth_slope;
 	return isDepthNearerOrEqual(depthTowardNear(grid_depth, margin), scene_depth) ? 1.0 : 0.0;
 }
 

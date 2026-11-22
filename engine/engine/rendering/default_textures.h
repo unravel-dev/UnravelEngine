@@ -24,7 +24,8 @@ public:
     /// depth a draw binds but its view has none of.
     auto camera_far_depth_texture() const -> gfx::texture::ptr
     {
-        return gfx::camera_far_depth == 0.0f ? black_ : white_;
+        static_assert(gfx::camera_far_depth == 0.0f, "the far-depth stand-in is the black texture");
+        return black_;
     }
     /// Fully transparent black (alpha 0). Used as the SSIL-disabled fallback so the
     /// indirect-lighting mix(irradiance, ssil.rgb, ssil.a) collapses to the SH probe.

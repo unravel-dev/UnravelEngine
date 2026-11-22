@@ -5,9 +5,9 @@
  *   cmake --build <build-dir> --target tests
  *   <build-dir>/bin/unravel-tests --suite "depth convention"
  *
- * Camera views store reversed depth or standard depth by gfx::reversed_depth, and the shaders mirror it with
- * REVERSED_DEPTH in shaderlib.sh. These check the reversed projection builders, that the camera follows the
- * convention, that the shaders agree with the C++ constant, and that the sources keep the convention in the named
+ * Camera views store reversed depth (gfx::camera_near_depth 1, gfx::camera_far_depth 0), and the shaders mirror it
+ * with DEPTH_NEAR / DEPTH_FAR in shaderlib.sh. These check the reversed projection builders, that the camera builds
+ * with them, that the shaders agree with the C++ constants, and that the sources keep the convention in the named
  * helpers: no raw camera depth test in C++ and none of the removed OpenGL clip helpers in shaders.
  */
 
@@ -94,7 +94,7 @@ void test_camera_follows_the_convention()
     const math::mat4 p = cam.get_projection_unjittered().get_matrix();
     check_near(float(clip_depth(p, 0.05f)), gfx::camera_near_depth, 1e-5f, "the camera's near plane has the near device depth");
     check_near(float(clip_depth(p, 800.0f)), gfx::camera_far_depth, 1e-5f, "the camera's far plane has the far device depth");
-    check(gfx::camera_far_depth == (gfx::reversed_depth ? 0.0f : 1.0f), "the far depth follows the convention");
+    check(gfx::camera_near_depth == 1.0f && gfx::camera_far_depth == 0.0f, "camera depth is reversed");
 }
 
 auto read_text(const fs::path& path) -> std::string
@@ -120,17 +120,21 @@ void test_shaders_mirror_the_convention()
     const fs::path root = repository_root();
     require(!root.empty(), "ENGINE_DATA_DIR is defined by the build");
     const std::string shaderlib = read_text(root / "engine_data/data/shaders/shaderlib.sh");
-    std::smatch match;
-    const bool has_define = std::regex_search(shaderlib, match, std::regex(R"(#define\s+REVERSED_DEPTH\s+([01]))"));
-    require(has_define, "shaderlib.sh defines REVERSED_DEPTH");
-    check((match[1] == "1") == gfx::reversed_depth, "REVERSED_DEPTH in shaderlib.sh equals gfx::reversed_depth");
+    std::smatch near_match;
+    std::smatch far_match;
+    const bool has_near = std::regex_search(shaderlib, near_match, std::regex(R"(#define\s+DEPTH_NEAR\s+([0-9.]+))"));
+    const bool has_far = std::regex_search(shaderlib, far_match, std::regex(R"(#define\s+DEPTH_FAR\s+([0-9.]+))"));
+    require(has_near && has_far, "shaderlib.sh defines DEPTH_NEAR and DEPTH_FAR");
+    check(std::stof(near_match[1].str()) == gfx::camera_near_depth, "DEPTH_NEAR in shaderlib.sh equals gfx::camera_near_depth");
+    check(std::stof(far_match[1].str()) == gfx::camera_far_depth, "DEPTH_FAR in shaderlib.sh equals gfx::camera_far_depth");
+    check(shaderlib.find("REVERSED_DEPTH") == std::string::npos, "shaderlib.sh has one depth convention, no switch");
 }
 
 /// Files allowed raw camera depth tests, with how many: the helpers themselves, and views that keep standard depth.
 auto raw_depth_test_allowances() -> std::map<std::string, int>
 {
     return {
-        {"engine/core/graphics/graphics.h", 6},                         // the named depth tests
+        {"engine/core/graphics/graphics.h", 3},                         // the named depth tests
         {"engine/core/graphics/utils/debugdraw/debugdraw.cpp", 6},      // the encoder's LESS / GREATER switch
         {"engine/engine/rendering/shadow.cpp", 5},                      // shadow maps keep standard depth
         {"engine/engine/rendering/pipeline/deferred/pipeline_gi.cpp", 1}, // GI card captures keep standard depth

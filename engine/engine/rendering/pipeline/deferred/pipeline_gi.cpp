@@ -572,12 +572,10 @@ void deferred::capture_gi_cards(const camera& camera, const surface_cache_system
     }
     const auto& sources = gi_scene.get_gi_sources();
     // The camera's winding convention, which every capture's culling is matched against. The captures keep standard
-    // depth; a reversed projection negates the depth row, which flips the determinant but not the winding on screen,
-    // so the camera's sign is taken as a standard-depth projection's.
+    // depth; the camera's reversed projection negates the depth row, which flips the determinant but not the winding
+    // on screen, so its sign reads the other way round.
     const math::mat4 camera_view_proj = camera.get_projection() * camera.get_view();
-    const float camera_depth_row_sign = gfx::camera_near_depth > gfx::camera_far_depth ? -1.0f : 1.0f;
-    const float camera_orientation =
-        camera_depth_row_sign * math::determinant(math::mat3(camera_view_proj)) < 0.0f ? -1.0f : 1.0f;
+    const float camera_orientation = math::determinant(math::mat3(camera_view_proj)) > 0.0f ? -1.0f : 1.0f;
     const math::vec2 clip_planes(camera.get_near_clip(), camera.get_far_clip());
     // No LOD fade: x = 0 never discards.
     const math::vec3 lod_params(0.0f, -1.0f, 1.0f);

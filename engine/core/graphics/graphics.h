@@ -126,21 +126,18 @@ struct view_stats
 auto get_view_stats(const bgfx::Stats& stats) -> std::vector<view_stats>;
 
 /// Camera views store reversed depth: the near plane at device depth 1, the far plane at 0, cleared to 0 and
-/// tested with GREATER. Shadow maps and GI card captures keep standard depth. Mirrored by REVERSED_DEPTH in
-/// engine_data/data/shaders/shaderlib.sh (suite "depth convention").
-constexpr bool reversed_depth = true;
+/// tested nearer-is-greater. Shadow maps and GI card captures keep standard depth. Mirrored by DEPTH_NEAR / DEPTH_FAR
+/// in engine_data/data/shaders/shaderlib.sh (suite "depth convention").
 /// Device depth of a camera view's near plane.
-constexpr float camera_near_depth = reversed_depth ? 1.0f : 0.0f;
+constexpr float camera_near_depth = 1.0f;
 /// Device depth of a camera view's far plane: what a camera's depth clears to, the depth of nothing drawn.
-constexpr float camera_far_depth = reversed_depth ? 0.0f : 1.0f;
+constexpr float camera_far_depth = 0.0f;
 /// Camera-view depth test passing a fragment in front of the stored depth.
-constexpr uint64_t depth_test_nearer = reversed_depth ? BGFX_STATE_DEPTH_TEST_GREATER : BGFX_STATE_DEPTH_TEST_LESS;
+constexpr uint64_t depth_test_nearer = BGFX_STATE_DEPTH_TEST_GREATER;
 /// Camera-view depth test passing a fragment in front of the stored depth or at it.
-constexpr uint64_t depth_test_nearer_or_equal =
-    reversed_depth ? BGFX_STATE_DEPTH_TEST_GEQUAL : BGFX_STATE_DEPTH_TEST_LEQUAL;
+constexpr uint64_t depth_test_nearer_or_equal = BGFX_STATE_DEPTH_TEST_GEQUAL;
 /// Camera-view depth test passing a fragment behind the stored depth or at it.
-constexpr uint64_t depth_test_farther_or_equal =
-    reversed_depth ? BGFX_STATE_DEPTH_TEST_LEQUAL : BGFX_STATE_DEPTH_TEST_GEQUAL;
+constexpr uint64_t depth_test_farther_or_equal = BGFX_STATE_DEPTH_TEST_LEQUAL;
 
 float get_half_texel();
 uint32_t get_max_blend_transforms();
