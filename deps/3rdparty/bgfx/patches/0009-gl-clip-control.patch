@@ -1,0 +1,111 @@
+OpenGL: clip control keeps clip depth 0..1 where the driver has it
+
+With BGFX_CONFIG_GL_NORMALIZE_NDC_CONVENTIONS every vertex shader maps its 0..1 clip z to OpenGL's -1..1
+(gl_Position.z * 2 - w), and OpenGL maps it back to window depth. Through -1..1 a float keeps an absolute
+precision: reversed depth, whose values near the far plane are small, loses most of the precision a float depth
+buffer gives it on the other backends.
+
+Desktop OpenGL with ARB_clip_control (core in 4.5) now calls glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE) at init
+and on each window's context, and the NDC rewrite leaves clip z as it is there. The origin stays lower left: the
+rewrite still flips y offscreen. OpenGL ES and WebGL keep the mapping.
+
+diff --git a/src/renderer_gl.cpp b/src/renderer_gl.cpp
+--- a/src/renderer_gl.cpp
++++ b/src/renderer_gl.cpp
+@@ -2312,6 +2312,7 @@ namespace bgfx { namespace gl
+ 			, m_readBackSupported(BX_ENABLED(BGFX_CONFIG_RENDERER_OPENGL) )
+ 			, m_readBackFboSupported(false)
+ 			, m_vaoSupport(false)
++			, m_clipControl(false)
+ 			, m_samplerObjectSupport(false)
+ 			, m_srgbWriteControlSupport(BX_ENABLED(BGFX_CONFIG_RENDERER_OPENGL) )
+ 			, m_srgbDecodeSupport(false)
+@@ -3047,6 +3048,18 @@ namespace bgfx { namespace gl
+ 					g_caps.homogeneousDepth = true;
+ 					g_caps.originBottomLeft = true;
+ 				}
++#if BGFX_CONFIG_RENDERER_OPENGL
++				else
++				{
++					// Clip depth 0..1 natively (ARB_clip_control, core in OpenGL 4.5): vertex shaders keep their clip z
++					// instead of mapping it to -1..1, and window depth keeps a float's precision near 0, as on the other
++					// backends.
++					m_clipControl = s_extension[Extension::ARB_clip_control].m_supported
++						&& NULL != glClipControl
++						;
++					setClipControl();
++				}
++#endif // BGFX_CONFIG_RENDERER_OPENGL
+ 
+ 				m_vaoSupport = !BX_ENABLED(BX_PLATFORM_EMSCRIPTEN)
+ 					&& (BX_ENABLED(BGFX_CONFIG_RENDERER_OPENGLES)
+@@ -5605,6 +5618,18 @@ namespace bgfx { namespace gl
+ 			}
+ 		}
+ 
++		// Clip depth 0..1 on the current context, where clip control is in use. Context state: a window's context of
++		// its own (EGL) takes it too.
++		void setClipControl()
++		{
++#if BGFX_CONFIG_RENDERER_OPENGL
++			if (m_clipControl)
++			{
++				GL_CHECK(glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE) );
++			}
++#endif // BGFX_CONFIG_RENDERER_OPENGL
++		}
++
+ 		void setProgram(GLuint program)
+ 		{
+ 			m_uniformStateCache.saveCurrentProgram(program);
+@@ -5737,6 +5762,7 @@ namespace bgfx { namespace gl
+ 		bool m_readBackSupported;
+ 		bool m_readBackFboSupported;
+ 		bool m_vaoSupport;
++		bool m_clipControl;
+ 		bool m_samplerObjectSupport;
+ 		bool m_srgbWriteControlSupport;
+ 		bool m_srgbDecodeSupport;
+@@ -7967,6 +7993,7 @@ namespace bgfx { namespace gl
+ 		  const bx::StringView& _code
+ 		, GLenum _type
+ 		, bool _writePointSize
++		, bool _clipDepthZeroToOne
+ 		, char* _temp
+ 		, int32_t _tempLen
+ 		)
+@@ -8034,8 +8061,14 @@ namespace bgfx { namespace gl
+ 			bx::write(&writer
+ 				, "\tif (0.0 != bgfx_indirectArgBase.w)\n"
+ 				  "\t{\n"
+-				  "\t\tgl_Position.z = gl_Position.z*2.0 - gl_Position.w;\n"
+-				  "\t\tgl_Position.y = 0.0 > bgfx_indirectArgBase.w ? -gl_Position.y : gl_Position.y;\n"
++				, &err
++				);
++			if (!_clipDepthZeroToOne)
++			{
++				bx::write(&writer, "\t\tgl_Position.z = gl_Position.z*2.0 - gl_Position.w;\n", &err);
++			}
++			bx::write(&writer
++				, "\t\tgl_Position.y = 0.0 > bgfx_indirectArgBase.w ? -gl_Position.y : gl_Position.y;\n"
+ 				  "\t}\n"
+ 				  "}\n"
+ 				, &err
+@@ -8264,7 +8297,7 @@ namespace bgfx { namespace gl
+ 				{
+ 					const int32_t ndcTempLen = code.getLength() + (4<<10);
+ 					ndcTemp = (char*)BX_STACK_ALLOC(ndcTempLen);
+-					code = patchNdcConventions(code, m_type, writePointSize, ndcTemp, ndcTempLen);
++					code = patchNdcConventions(code, m_type, writePointSize, s_renderGL->m_clipControl, ndcTemp, ndcTempLen);
+ 				}
+ #endif // BGFX_CONFIG_GL_NORMALIZE_NDC_CONVENTIONS
+ 
+@@ -8521,6 +8554,8 @@ namespace bgfx { namespace gl
+ 			, int32_t(_desc.width)
+ 			, int32_t(_desc.height)
+ 			);
++		s_renderGL->m_glctx.makeCurrent(m_swapChain);
++		s_renderGL->setClipControl();
+ 		m_desc      = _desc;
+ 		m_width     = _desc.width;
+ 		m_height    = _desc.height;

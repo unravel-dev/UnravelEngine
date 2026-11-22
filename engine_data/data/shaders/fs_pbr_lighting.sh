@@ -856,7 +856,7 @@ float ContactShadow(sampler2D depthTex, ivec2 origin_texel, float origin_device_
         float z_ray = screenSpaceToViewSpaceDepth(ss_pos.z);
         float z_scene = contactTexelDepth(depthTex, texel, max_texel);
         // A float depth's step is relative where depth falls with distance and absolute where clip z passes
-        // through -1..1 first (OpenGL without clip control): growth with z or z^2, the larger taken.
+        // through -1..1 first (WebGL 2, OpenGL without clip control): growth with z or z^2, the larger taken.
         float z_ratio = z_scene / z0;
         float ulp_scene = depth_ulp * max(z_ratio, z_ratio * z_ratio);
         float thickness = max(thickness_min, CONTACT_SHADOW_STEP_THICKNESS * abs(z_ray - z_prev));

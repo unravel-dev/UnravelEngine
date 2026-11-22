@@ -547,7 +547,9 @@ void test_scene_rules()
     web_gpu.deploy.web.graphics = unravel::web_graphics::webgpu;
     auto web_gl = make_profile("WebGL", target_platform::web, {"app:/data/Main.spfb"});
     web_gl.deploy.web.graphics = unravel::web_graphics::webgpu_then_webgl2;
-    in.profiles = {web_gpu, web_gl};
+    // Desktop OpenGL clips depth 0..1 where the driver has clip control: a desktop profile is not reported.
+    const auto desktop_gl = make_profile("Desktop", target_platform::desktop, {"app:/data/Main.spfb"});
+    in.profiles = {desktop_gl, web_gpu, web_gl};
     const auto camera_issues = check_with(in, &audit::detail::check_scenes);
     const auto* camera = find_rule_issue(camera_issues, audit::rules::CAMERA_DEPTH_RANGE);
     require(camera != nullptr, "a camera whose far clip is a million times its near clip is reported where WebGL 2 ships");

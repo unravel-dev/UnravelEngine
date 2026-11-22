@@ -92,15 +92,15 @@ auto make_rules() -> std::vector<rule>
                     {},
                     false});
     list.push_back({rules::CAMERA_DEPTH_RANGE,
-                    "Camera Depth Range Too Wide for OpenGL",
+                    "Camera Depth Range Too Wide for WebGL 2",
                     severity::warning,
                     to_mask(area::quality),
                     rule_source::scenes,
-                    "A perspective camera whose far clip is many times its near clip, in a profile that ships OpenGL or "
-                    "WebGL 2 shaders. Those backends keep depth with less precision than the others, so in their builds "
-                    "distant surfaces that lie close together flicker through each other.",
-                    "Raise the camera's Near Clip or lower its Far Clip, or leave OpenGL and WebGL 2 out of the "
-                    "profile's graphics.",
+                    "A perspective camera whose far clip is many times its near clip, in a profile that ships WebGL 2 "
+                    "shaders. WebGL 2 keeps depth with less precision than the other backends, so where a browser runs "
+                    "the game on it, distant surfaces that lie close together flicker through each other.",
+                    "Raise the camera's Near Clip or lower its Far Clip, or choose WebGPU alone in the profile's "
+                    "graphics.",
                     {{thresholds::MAX_FAR_TO_NEAR,
                       "Far to near ratio",
                       "times",

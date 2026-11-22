@@ -244,17 +244,12 @@ auto find_script_named_assets(const input& in) -> std::unordered_set<std::string
     return named;
 }
 
-/// Whether a profile's builds carry OpenGL or WebGL 2 shaders, the backends whose depth keeps less precision.
-auto ships_opengl(const profile_record& profile) -> bool
+/// Whether a profile's builds carry WebGL 2 shaders: WebGL 2 maps clip depth through -1..1, which keeps less precision
+/// than the other backends (desktop OpenGL clips depth 0..1 where the driver has clip control).
+auto ships_webgl2(const profile_record& profile) -> bool
 {
-    auto renderers = deployment::get_shader_variants(profile.deploy);
-    if(renderers.empty())
-    {
-        const auto& compiled = gfx::get_renderer_platform_supported_filename_extensions();
-        renderers.insert(compiled.begin(), compiled.end());
-    }
-    return renderers.count(gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGL)) != 0 ||
-           renderers.count(gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGLES)) != 0;
+    const auto renderers = deployment::get_shader_variants(profile.deploy);
+    return renderers.count(gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGLES)) != 0;
 }
 
 void check_camera_depth_ranges(rule_context& context, const document_scan& scan)
@@ -269,14 +264,14 @@ void check_camera_depth_ranges(rule_context& context, const document_scan& scan)
         for(const auto& profile : context.get_input().profiles)
         {
             const auto limit = context.get_threshold(rules::CAMERA_DEPTH_RANGE, thresholds::MAX_FAR_TO_NEAR, profile.platform);
-            if(ratio <= double(limit) || !is_shipped_by(profile, range.document) || !ships_opengl(profile))
+            if(ratio <= double(limit) || !is_shipped_by(profile, range.document) || !ships_webgl2(profile))
             {
                 continue;
             }
             auto item = context.make(rules::CAMERA_DEPTH_RANGE,
                                      make_document_subject(range.document, range.entity_id, range.entity_path),
                                      fmt::format("The camera's far clip of {:g} m is {:.0f} times its near clip of {:g} m. "
-                                                 "On OpenGL and WebGL 2 distant surfaces can flicker through each other.",
+                                                 "On WebGL 2 distant surfaces can flicker through each other.",
                                                  range.far_clip,
                                                  ratio,
                                                  range.near_clip));

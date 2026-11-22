@@ -775,8 +775,9 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     // player names cache:/ before this; the editor points it at each project it opens later,
     // while its own pipelines stay in the folder it started with.
     // The OpenGL backends key a program binary by the shaders bgfx is given, not by the source it
-    // links after rewriting them for the shared clip conventions: their folders are named after
-    // those conventions, so binaries linked before the rewrite are never loaded.
+    // links after rewriting them for the shared clip conventions (and, on desktop OpenGL, for clip
+    // control): their folders are named after that rewrite, so binaries linked before it changed
+    // are never loaded.
     const auto renderer_slug = [](bgfx::RendererType::Enum type) -> const char*
     {
         switch(type)
@@ -788,7 +789,7 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
             case bgfx::RendererType::Vulkan:
                 return "vulkan";
             case bgfx::RendererType::OpenGL:
-                return "opengl-ndc-zero-to-one";
+                return "opengl-clip-control";
             case bgfx::RendererType::OpenGLES:
                 return "opengles-ndc-zero-to-one";
             case bgfx::RendererType::Metal:
