@@ -383,7 +383,8 @@ inline auto get_format_version<gfx::shader>() -> uint64_t
     // 2: bgfx shader binary version 13.
     // 3: bgfx shader binary version 14 (16-bit uniform array sizes).
     // 5: the variants are a binary document (serialization/binary_archive.h) starting with 32 zero bytes.
-    return 5;
+    // 6: SPIR-V and WGSL attribute lists say which i_data each instance input is (bgfx patch 0010).
+    return 6;
 }
 
 template<>

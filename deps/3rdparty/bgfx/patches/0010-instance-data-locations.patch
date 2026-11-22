@@ -1,0 +1,345 @@
+Vulkan and WebGPU: instance data finds its location past i_data9
+
+A vertex shader's attribute list (written by shaderc after the code) lists the shader's inputs in the order of
+their locations, and the Vulkan and WebGPU renderers take an attribute's place in it as its location. Instance data
+had a bare UINT16_MAX there, and the renderers placed instance vec4 N at the first location after the attributes
+plus N. glslang maps input locations in name order, though: i_data10 and i_data11 come before i_data2, so a shader
+with more than ten instance vec4s read the wrong data from i_data2 on (Metal finds them by name and was right).
+
+shaderc now writes which i_data each instance entry is (ids from 0x0100, instanceDataToId), and the two renderers
+take each instance vec4's location from its place in the list. A shader compiled before keeps its UINT16_MAX
+entries, which are taken in order as before; renderers that know no instance ids count them as instance data as
+they did.
+
+diff --git a/src/vertexlayout.h b/src/vertexlayout.h
+--- a/src/vertexlayout.h
++++ b/src/vertexlayout.h
+@@ -32,6 +32,13 @@ namespace bgfx
+ 	///
+ 	AttribType::Enum idToAttribType(uint16_t id);
+ 
++	/// Returns the id shaderc writes into a vertex shader's attribute list for instance data i_data<_index>. It
++	/// names no attribute: idToAttrib returns Attrib::Count for it, as for the UINT16_MAX older shaderc wrote.
++	uint16_t instanceDataToId(uint8_t _index);
++
++	/// Returns the instance data index (the N of i_dataN) that attribute id `_id` names, UINT8_MAX if none.
++	uint8_t idToInstanceData(uint16_t _id);
++
+ 	///
+ 	int32_t write(bx::WriterI* _writer, const bgfx::VertexLayout& _layout, bx::Error* _err = NULL);
+ 
+diff --git a/src/vertexlayout.cpp b/src/vertexlayout.cpp
+--- a/src/vertexlayout.cpp
++++ b/src/vertexlayout.cpp
+@@ -240,6 +240,23 @@ namespace bgfx
+ 		return s_attribToId[_attr].id;
+ 	}
+ 
++	// Instance data ids: i_data0 to i_data15, past every attribute id.
++	static constexpr uint16_t kInstanceDataIdFirst = 0x0100;
++	static constexpr uint16_t kInstanceDataIdCount = 16;
++
++	uint16_t instanceDataToId(uint8_t _index)
++	{
++		return uint16_t(kInstanceDataIdFirst + _index);
++	}
++
++	uint8_t idToInstanceData(uint16_t _id)
++	{
++		return _id >= kInstanceDataIdFirst && _id < kInstanceDataIdFirst + kInstanceDataIdCount
++			? uint8_t(_id - kInstanceDataIdFirst)
++			: UINT8_MAX
++			;
++	}
++
+ 	struct AttribTypeToId
+ 	{
+ 		AttribType::Enum type;
+diff --git a/tools/shaderc/shaderc.h b/tools/shaderc/shaderc.h
+--- a/tools/shaderc/shaderc.h
++++ b/tools/shaderc/shaderc.h
+@@ -107,6 +107,10 @@ namespace bgfx
+ 	/// dimension id stored in `Uniform::texDimension`.
+ 	uint8_t spirvDimToTextureDimensionId(uint32_t _dim, bool _arrayed, bool _multisampled);
+ 
++	/// The attribute list id of a vertex shader input that is no vertex attribute: instanceDataToId for i_data0 to
++	/// i_data15, UINT16_MAX for anything else.
++	uint16_t nonAttribInputToId(const bx::StringView& _name);
++
+ 	struct Uniform
+ 	{
+ 		Uniform()
+diff --git a/tools/shaderc/shaderc.cpp b/tools/shaderc/shaderc.cpp
+--- a/tools/shaderc/shaderc.cpp
++++ b/tools/shaderc/shaderc.cpp
+@@ -237,6 +237,22 @@ namespace bgfx
+ 		NULL
+ 	};
+ 
++	uint16_t nonAttribInputToId(const bx::StringView& _name)
++	{
++		for (uint8_t ii = 0; ii < 16; ++ii)
++		{
++			char name[16];
++			bx::snprintf(name, sizeof(name), "i_data%d", ii);
++
++			if (0 == bx::strCmp(_name, name) )
++			{
++				return bgfx::instanceDataToId(ii);
++			}
++		}
++
++		return UINT16_MAX;
++	}
++
+ 	void fatal(const char* _filePath, uint16_t _line, Fatal::Enum _code, const char* _format, ...)
+ 	{
+ 		BX_UNUSED(_filePath, _line, _code);
+diff --git a/tools/shaderc/shaderc_spirv.cpp b/tools/shaderc/shaderc_spirv.cpp
+--- a/tools/shaderc/shaderc_spirv.cpp
++++ b/tools/shaderc/shaderc_spirv.cpp
+@@ -907,7 +907,7 @@ namespace bgfx { namespace spirv
+ 						}
+ 						else
+ 						{
+-							bx::write(_shaderWriter, uint16_t(UINT16_MAX), &err);
++							bx::write(_shaderWriter, nonAttribInputToId(program->getAttributeName(ii) ), &err);
+ 						}
+ 					}
+ 
+diff --git a/tools/shaderc/shaderc_wgsl.cpp b/tools/shaderc/shaderc_wgsl.cpp
+--- a/tools/shaderc/shaderc_wgsl.cpp
++++ b/tools/shaderc/shaderc_wgsl.cpp
+@@ -952,7 +952,7 @@ namespace bgfx { namespace wgsl
+ 							}
+ 							else
+ 							{
+-								bx::write(_shaderWriter, uint16_t(UINT16_MAX), &err);
++								bx::write(_shaderWriter, nonAttribInputToId(program->getAttributeName(ii) ), &err);
+ 							}
+ 						}
+ 
+diff --git a/src/renderer_vk.h b/src/renderer_vk.h
+--- a/src/renderer_vk.h
++++ b/src/renderer_vk.h
+@@ -644,6 +644,7 @@ VK_DESTROY_FUNC(DescriptorSet);
+ 		uint8_t m_numPredefined;
+ 		uint8_t m_numAttrs;
+ 		uint8_t m_numInstanceData;
++		uint8_t m_instanceLocation[BGFX_CONFIG_MAX_INSTANCE_DATA_COUNT]; //!< Location of each i_data, UINT8_MAX if unread.
+ 
+ 		BindInfo m_bindInfo[BGFX_CONFIG_MAX_TEXTURE_SAMPLERS];
+ 
+diff --git a/src/renderer_vk.cpp b/src/renderer_vk.cpp
+--- a/src/renderer_vk.cpp
++++ b/src/renderer_vk.cpp
+@@ -630,8 +630,6 @@ VK_IMPORT_DEVICE
+ 
+ 	void fillInstanceBinding(const ShaderVK* _vsh, VkPipelineVertexInputStateCreateInfo& _vertexInputState, uint32_t _numInstanceData)
+ 	{
+-		BX_UNUSED(_vsh);
+-
+ 		uint32_t numBindings = _vertexInputState.vertexBindingDescriptionCount;
+ 		uint32_t numAttribs  = _vertexInputState.vertexAttributeDescriptionCount;
+ 		VkVertexInputBindingDescription*   inputBinding = const_cast<VkVertexInputBindingDescription  *>(_vertexInputState.pVertexBindingDescriptions   + numBindings);
+@@ -643,7 +641,14 @@ VK_IMPORT_DEVICE
+ 
+ 		for (uint32_t inst = 0; inst < _numInstanceData; ++inst)
+ 		{
+-			inputAttrib->location = numAttribs;
++			const uint8_t location = _vsh->m_instanceLocation[inst];
++
++			if (UINT8_MAX == location)
++			{
++				continue;
++			}
++
++			inputAttrib->location = location;
+ 			inputAttrib->binding  = numBindings;
+ 			inputAttrib->format   = VK_FORMAT_R32G32B32A32_SFLOAT;
+ 			inputAttrib->offset   = inst * 16;
+@@ -4358,19 +4363,24 @@ VK_IMPORT_DEVICE
+ 				}
+ 			}
+ 
+-			const uint32_t firstInstanceLocation = _vertexInputState.vertexAttributeDescriptionCount;
+-
+ 			if (0 < _numInstanceData)
+ 			{
+ 				fillInstanceBinding(_program.m_vsh, _vertexInputState, _numInstanceData);
+ 			}
+ 
+-			const uint32_t numFallback = 0 < _numStream ? _program.m_vsh->m_numInstanceData : 0;
++			const uint32_t numFallback = 0 < _numStream ? BX_COUNTOF(_program.m_vsh->m_instanceLocation) : 0;
+ 
+ 			for (uint32_t ii = _numInstanceData; ii < numFallback; ++ii)
+ 			{
++				const uint8_t location = _program.m_vsh->m_instanceLocation[ii];
++
++				if (UINT8_MAX == location)
++				{
++					continue;
++				}
++
+ 				VkVertexInputAttributeDescription* inputAttrib = const_cast<VkVertexInputAttributeDescription*>(_vertexInputState.pVertexAttributeDescriptions + _vertexInputState.vertexAttributeDescriptionCount);
+-				inputAttrib->location = firstInstanceLocation + ii;
++				inputAttrib->location = location;
+ 				inputAttrib->binding  = 0;
+ 				inputAttrib->format   = VK_FORMAT_R8G8B8A8_UNORM;
+ 				inputAttrib->offset   = 0;
+@@ -7485,6 +7495,7 @@ VK_DESTROY
+ 		bx::read(&reader, m_numAttrs, &err);
+ 
+ 		m_numInstanceData = 0;
++		bx::memSet(m_instanceLocation, 0xff, sizeof(m_instanceLocation) );
+ 
+ 		for (uint8_t ii = 0; ii < m_numAttrs; ++ii)
+ 		{
+@@ -7500,6 +7511,16 @@ VK_DESTROY
+ 			}
+ 			else
+ 			{
++				// Instance data sits at its place in the list, as attributes do. A shader whose list does not say
++				// which i_data an entry is (UINT16_MAX) has them in order.
++				const uint8_t index = idToInstanceData(id);
++				const uint8_t slot  = UINT8_MAX != index ? index : m_numInstanceData;
++
++				if (slot < BX_COUNTOF(m_instanceLocation) )
++				{
++					m_instanceLocation[slot] = ii;
++				}
++
+ 				++m_numInstanceData;
+ 			}
+ 		}
+@@ -7512,6 +7533,7 @@ VK_DESTROY
+ 		murmur.add(m_numAttrs);
+ 		murmur.add(m_attrMask,  m_numAttrs);
+ 		murmur.add(m_attrRemap, m_numAttrs);
++		murmur.add(m_instanceLocation, sizeof(m_instanceLocation) );
+ 		m_hash = murmur.end();
+ 
+ 		bx::read(&reader, m_size, &err);
+diff --git a/src/renderer_webgpu.h b/src/renderer_webgpu.h
+--- a/src/renderer_webgpu.h
++++ b/src/renderer_webgpu.h
+@@ -549,6 +549,7 @@ namespace wgpu {
+ 		uint8_t  m_numPredefined;
+ 		uint8_t  m_numAttrs;
+ 		uint8_t  m_numInstanceData;
++		uint8_t  m_instanceLocation[BGFX_CONFIG_MAX_INSTANCE_DATA_COUNT]; //!< Location of each i_data, UINT8_MAX if unread.
+ 		uint8_t  m_outputMask;
+ 
+ 		ShaderBinding m_shaderBinding[BGFX_CONFIG_MAX_TEXTURE_SAMPLERS];
+diff --git a/src/renderer_webgpu.cpp b/src/renderer_webgpu.cpp
+--- a/src/renderer_webgpu.cpp
++++ b/src/renderer_webgpu.cpp
+@@ -4051,13 +4051,6 @@ WGPU_IMPORT
+ 				uint16_t attrMask[Attrib::Count];
+ 				bx::memCopy(attrMask, program.m_vsh->m_attrMask, sizeof(attrMask) );
+ 
+-				uint32_t maxShaderLocation = 0;
+-
+-				for (uint32_t attr = 0; attr < Attrib::Count; ++attr)
+-				{
+-					maxShaderLocation = bx::max(maxShaderLocation, program.m_vsh->m_attrRemap[attr]);
+-				}
+-
+ 				if (UINT32_MAX != _streamMask)
+ 				{
+ 					for (bx::BitMaskToIndexIteratorT it(_streamMask)
+@@ -4109,17 +4102,23 @@ WGPU_IMPORT
+ 					}
+ 				}
+ 
+-				const uint32_t firstInstanceLocation = maxShaderLocation + (0 < numStreams);
+-				const uint32_t numFallback = 0 < numStreams ? program.m_vsh->m_numInstanceData : 0;
++				const uint32_t numFallback = 0 < numStreams ? BX_COUNTOF(program.m_vsh->m_instanceLocation) : 0;
+ 
+ 				for (uint32_t ii = _numInstanceData; ii < numFallback; ++ii)
+ 				{
++					const uint8_t location = program.m_vsh->m_instanceLocation[ii];
++
++					if (UINT8_MAX == location)
++					{
++						continue;
++					}
++
+ 					*elem =
+ 					{
+ 						.nextInChain    = NULL,
+ 						.format         = WGPUVertexFormat_Unorm8x4,
+ 						.offset         = 0,
+-						.shaderLocation = firstInstanceLocation+ii,
++						.shaderLocation = location,
+ 					};
+ 
+ 					++elem;
+@@ -4128,14 +4127,23 @@ WGPU_IMPORT
+ 
+ 				if (0 < _numInstanceData)
+ 				{
++					uint32_t numInstanceAttribs = 0;
++
+ 					for (uint32_t ii = 0; ii < _numInstanceData; ++ii)
+ 					{
+-						elem[ii] =
++						const uint8_t location = program.m_vsh->m_instanceLocation[ii];
++
++						if (UINT8_MAX == location)
++						{
++							continue;
++						}
++
++						elem[numInstanceAttribs++] =
+ 						{
+ 							.nextInChain = 0,
+ 							.format      = WGPUVertexFormat_Float32x4,
+ 							.offset      = ii*16ull,
+-							.shaderLocation = firstInstanceLocation+ii,
++							.shaderLocation = location,
+ 						};
+ 					}
+ 
+@@ -4144,7 +4152,7 @@ WGPU_IMPORT
+ 						.nextInChain    = NULL,
+ 						.stepMode       = WGPUVertexStepMode_Instance,
+ 						.arrayStride    = _numInstanceData*16ull,
+-						.attributeCount = _numInstanceData,
++						.attributeCount = numInstanceAttribs,
+ 						.attributes     = elem,
+ 					};
+ 
+@@ -5234,6 +5242,7 @@ WGPU_IMPORT
+ 		bx::read(&reader, m_numAttrs, &err);
+ 
+ 		m_numInstanceData = 0;
++		bx::memSet(m_instanceLocation, 0xff, sizeof(m_instanceLocation) );
+ 
+ 		for (uint8_t ii = 0; ii < m_numAttrs; ++ii)
+ 		{
+@@ -5249,6 +5258,16 @@ WGPU_IMPORT
+ 			}
+ 			else
+ 			{
++				// Instance data sits at its place in the list, as attributes do. A shader whose list does not say
++				// which i_data an entry is (UINT16_MAX) has them in order.
++				const uint8_t index = idToInstanceData(id);
++				const uint8_t slot  = UINT8_MAX != index ? index : m_numInstanceData;
++
++				if (slot < BX_COUNTOF(m_instanceLocation) )
++				{
++					m_instanceLocation[slot] = ii;
++				}
++
+ 				++m_numInstanceData;
+ 			}
+ 		}
+@@ -5261,6 +5280,7 @@ WGPU_IMPORT
+ 		murmur.add(m_numAttrs);
+ 		murmur.add(m_attrMask,  m_numAttrs);
+ 		murmur.add(m_attrRemap, m_numAttrs);
++		murmur.add(m_instanceLocation, sizeof(m_instanceLocation) );
+ 		m_hash = murmur.end();
+ 
+ 		bx::read(&reader, m_size, &err);

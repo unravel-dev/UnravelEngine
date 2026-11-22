@@ -169,6 +169,11 @@ SPIR-V and WGSL (Vulkan, OpenGL text and WebGPU all come from SPIR-V or the same
   converter, not shader by shader.
 - WebGPU core limits hold for every engine shader: 256 invocations per workgroup, 4 storage textures per stage
   (suite "eshader files"; GI's own limits: [gi.md](gi.md)).
+- glslang gives vertex inputs their locations in name order (`i_data10` before `i_data2`), and Vulkan and WebGPU
+  bind each input at its place in the shader binary's attribute list. shaderc writes which `i_data` each instance
+  entry is (bgfx patch 0010; the suite checks). A shader binary compiled before that names none, and its instance
+  data past `i_data9` reads the wrong vec4s there: a format bump recompiles them. D3D binds by semantic, OpenGL and
+  Metal by name.
 
 ## Bindings checklist
 

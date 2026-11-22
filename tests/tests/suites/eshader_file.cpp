@@ -13,6 +13,8 @@
  *   - what the compiler generates: the $input and $output lines, #if lines kept, semantics, zero defaults, what a
  *     program compares of its two stages;
  *   - the format: is_format, the .sh trap, the compiled file's mapping back to its source, deploy's paths;
+ *   - instance inputs past i_data9: the SPIR-V and WGSL attribute lists say which i_data each instance entry is, and
+ *     on SPIR-V its place in the list is its location, where the Vulkan renderer binds it (bgfx patch 0010);
  *   - gfx::shader::find_variant: the default is the shader itself;
  *   - a program's stages: a varying declared two ways is found;
  *   - dependencies: an include in the code counts, also one among the engine's shaders;
@@ -62,6 +64,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <map>
 #include <regex>
@@ -82,6 +85,8 @@ constexpr const char* SHADER_FOLDER = "data/eshader_tests";
 /// bgfx's instance data slots (BGFX_CONFIG_MAX_INSTANCE_DATA_COUNT) and the tag the first one binds to.
 constexpr int INSTANCE_SLOT_COUNT = 16;
 constexpr int FIRST_INSTANCE_TAG_INDEX = 31;
+/// The attribute list id of i_data0 in a SPIR-V or WGSL shader binary (bgfx::instanceDataToId, bgfx patch 0010).
+constexpr int FIRST_INSTANCE_DATA_ID = 0x0100;
 /// bgfx's numbered vertex attributes.
 constexpr int COLOR_ATTRIBUTE_COUNT = 4;
 constexpr int TEXCOORD_ATTRIBUTE_COUNT = 16;
@@ -622,6 +627,148 @@ void test_every_type_compiles(unravel::asset_manager& am, const fs::path& root)
     }
 }
 
+/// A little-endian value at @p offset of a shader binary, which moves past it; 0 past the end.
+template<typename T>
+auto read_binary_value(const std::string& data, std::size_t& offset) -> T
+{
+    T value{};
+    if(offset + sizeof(T) <= data.size())
+    {
+        std::memcpy(&value, data.data() + offset, sizeof(T));
+    }
+    offset += sizeof(T);
+    return value;
+}
+
+/// A vertex shader's code and the attribute list after it in a bgfx shader binary (version 14): one id per input, in
+/// the order of the inputs' locations.
+struct vertex_input_list
+{
+    std::string code;
+    std::vector<std::uint16_t> ids;
+};
+
+auto read_vertex_input_list(const std::string& binary) -> vertex_input_list
+{
+    // Magic, the input and output hashes, the raw buffer bindings.
+    std::size_t offset = 4 + 4 + 4 + 8;
+    const auto uniform_count = read_binary_value<std::uint16_t>(binary, offset);
+    for(std::uint16_t index = 0; index < uniform_count && offset < binary.size(); ++index)
+    {
+        offset += read_binary_value<std::uint8_t>(binary, offset);
+        // Type, count, register index and count, texture component, dimension and format.
+        offset += 1 + 2 + 2 + 2 + 1 + 1 + 2;
+    }
+    vertex_input_list list;
+    const auto code_size = read_binary_value<std::uint32_t>(binary, offset);
+    list.code = binary.substr(std::min(offset, binary.size()), code_size);
+    offset += code_size + 1;
+    const auto input_count = read_binary_value<std::uint8_t>(binary, offset);
+    for(std::uint8_t index = 0; index < input_count; ++index)
+    {
+        list.ids.push_back(read_binary_value<std::uint16_t>(binary, offset));
+    }
+    return list;
+}
+
+/// The Location decoration of each named Input variable of a SPIR-V module.
+auto read_spirv_input_locations(const std::string& code) -> std::map<std::string, std::uint32_t>
+{
+    constexpr std::uint32_t OP_NAME = 5;
+    constexpr std::uint32_t OP_VARIABLE = 59;
+    constexpr std::uint32_t OP_DECORATE = 71;
+    constexpr std::uint32_t DECORATION_LOCATION = 30;
+    constexpr std::uint32_t STORAGE_CLASS_INPUT = 1;
+    std::vector<std::uint32_t> words(code.size() / 4);
+    std::memcpy(words.data(), code.data(), words.size() * 4);
+    std::map<std::uint32_t, std::string> names;
+    std::map<std::uint32_t, std::uint32_t> locations;
+    std::set<std::uint32_t> inputs;
+    for(std::size_t at = 5; at < words.size();)
+    {
+        const std::uint32_t op = words[at] & 0xFFFFu;
+        const std::uint32_t length = words[at] >> 16u;
+        if(length == 0 || at + length > words.size())
+        {
+            break;
+        }
+        if(op == OP_NAME && length > 2)
+        {
+            const char* text = reinterpret_cast<const char*>(&words[at + 2]);
+            names[words[at + 1]] = std::string(text, strnlen(text, (length - 2) * 4));
+        }
+        else if(op == OP_DECORATE && length > 3 && words[at + 2] == DECORATION_LOCATION)
+        {
+            locations[words[at + 1]] = words[at + 3];
+        }
+        else if(op == OP_VARIABLE && length > 3 && words[at + 3] == STORAGE_CLASS_INPUT)
+        {
+            inputs.insert(words[at + 2]);
+        }
+        at += length;
+    }
+    std::map<std::string, std::uint32_t> result;
+    for(const auto id : inputs)
+    {
+        if(names.count(id) != 0 && locations.count(id) != 0)
+        {
+            result[names[id]] = locations[id];
+        }
+    }
+    return result;
+}
+
+/// A vertex shader with more instance inputs than ten: glslang gives inputs their locations in name order, so
+/// i_data10 comes before i_data2. The attribute list says which i_data each instance entry is (bgfx patch 0010), and
+/// on SPIR-V each one's place in the list is its location, which is where the Vulkan renderer binds it.
+void test_instance_inputs_name_their_slots(unravel::asset_manager& am, const fs::path& root)
+{
+    std::printf("test_instance_inputs_name_their_slots\n");
+    constexpr int instance_count = 12;
+    std::string inputs = "[inputs]\nvec3 a_position\n";
+    std::string position = "vec4(a_position, 1.0)";
+    for(int slot = 0; slot < instance_count; ++slot)
+    {
+        inputs += "vec4 i_data" + std::to_string(slot) + "\n";
+        position += " + i_data" + std::to_string(slot) + " * " + std::to_string(slot + 1) + ".0";
+    }
+    write_text(get_source_folder() / "vs_instances.eshader",
+               inputs + "\n[code]\n#include <bgfx_shader.sh>\nvoid main() { gl_Position = " + position + "; }\n");
+    for(const auto renderer : {bgfx::RendererType::Vulkan, bgfx::RendererType::WebGPU})
+    {
+        const auto extension = gfx::get_renderer_filename_extension(renderer);
+        const auto compiled = compile_variants(am, get_key("vs_instances.eshader"), root / "instances", extension);
+        check(compiled.size() == 1, "a vertex shader with twelve instance inputs compiles on " + extension);
+        if(compiled.size() != 1)
+        {
+            continue;
+        }
+        const auto list = read_vertex_input_list(as_string(compiled[0]));
+        std::map<int, std::size_t> places;
+        for(std::size_t place = 0; place < list.ids.size(); ++place)
+        {
+            const int slot = int(list.ids[place]) - FIRST_INSTANCE_DATA_ID;
+            if(slot >= 0 && slot < INSTANCE_SLOT_COUNT)
+            {
+                places[slot] = place;
+            }
+        }
+        check(list.ids.size() == instance_count + 1, "the attribute list on " + extension + " holds every input");
+        check(int(places.size()) == instance_count, "each instance entry of the attribute list on " + extension + " names its i_data");
+        if(renderer != bgfx::RendererType::Vulkan)
+        {
+            continue;
+        }
+        const auto locations = read_spirv_input_locations(list.code);
+        for(const auto& [slot, place] : places)
+        {
+            const auto name = "i_data" + std::to_string(slot);
+            const auto found = locations.find(name);
+            check(found != locations.end() && found->second == place, name + "'s SPIR-V location is its place in the attribute list");
+        }
+    }
+}
+
 auto count_temp_files(const fs::path& folder) -> std::size_t
 {
     fs::error_code ec;
@@ -1147,6 +1294,7 @@ void run_eshader_files_suite(rtti::context& ctx)
         auto& am = ctx.get_cached<unravel::asset_manager>();
         RUN_CASE(test_compile_matches_sc(am, temp));
         RUN_CASE(test_every_type_compiles(am, temp));
+        RUN_CASE(test_instance_inputs_name_their_slots(am, temp));
         RUN_CASE(test_failed_compile_keeps_output(am, temp));
         RUN_CASE(test_mistyped_define_is_found(am, temp));
         RUN_CASE(test_failed_loads_are_retried(am));
