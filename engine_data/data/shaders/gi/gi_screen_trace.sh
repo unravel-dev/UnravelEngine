@@ -41,7 +41,7 @@ vec3 GiProjectToScreen(vec3 world)
 {
 	vec4 clip = mul(u_viewProj, vec4(world, 1.0));
 	vec3 ndc = clip.xyz / clip.w;
-	return vec3(clipToUv(ndc.xy * 0.5 + 0.5), toDepthTextureZ(ndc.z));
+	return vec3(clipToUv(ndc.xy * 0.5 + 0.5), ndc.z);
 }
 
 /// Parameter t in (0, 1] where S + t R leaves the [0, 1]^2 screen square (1 when it stays inside).
@@ -236,7 +236,7 @@ vec4 GiScreenHistoryRadiance(sampler2D prev_color,
 	float history_depth = texelFetch(prev_depth, depth_texel, 0).x;
 	float tolerance = depth_tolerance *
 	                  mix(GI_SCREEN_TRACE_HISTORY_NOISE_MIN, GI_SCREEN_TRACE_HISTORY_NOISE_MAX, noise);
-	if(abs(history_depth - toDepthTextureZ(prev_ndc.z)) >= tolerance)
+	if(abs(history_depth - prev_ndc.z) >= tolerance)
 	{
 		return vec4_splat(0.0);
 	}

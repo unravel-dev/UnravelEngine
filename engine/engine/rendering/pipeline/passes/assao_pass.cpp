@@ -641,18 +641,9 @@ void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* 
     float tanHalfFOVY = 1.0f / proj[1 * 4 + 1]; // = tan(vertical fov / 2)
     float tanHalfFOVX = 1.0F / proj[0];         // = tanHalfFOVY * aspect
 
-    // Texel rows run bottom-up where render targets keep their origin at the bottom left
-    // (OpenGL and OpenGL ES), so view-space y grows with the texel row there.
-    if(bgfx::getCaps()->originBottomLeft)
-    {
-        set_vec2(m_uniforms.m_ndcToViewMul, tanHalfFOVX * 2.0f, tanHalfFOVY * 2.0f);
-        set_vec2(m_uniforms.m_ndcToViewAdd, tanHalfFOVX * -1.0f, tanHalfFOVY * -1.0f);
-    }
-    else
-    {
-        set_vec2(m_uniforms.m_ndcToViewMul, tanHalfFOVX * 2.0f, tanHalfFOVY * -2.0f);
-        set_vec2(m_uniforms.m_ndcToViewAdd, tanHalfFOVX * -1.0f, tanHalfFOVY * 1.0f);
-    }
+    // Texel rows run top-down, so view-space y falls as the texel row grows.
+    set_vec2(m_uniforms.m_ndcToViewMul, tanHalfFOVX * 2.0f, tanHalfFOVY * -2.0f);
+    set_vec2(m_uniforms.m_ndcToViewAdd, tanHalfFOVX * -1.0f, tanHalfFOVY * 1.0f);
 
     m_uniforms.m_effectRadius = bx::clamp(m_settings.radius, 0.0f, 100000.0f);
     m_uniforms.m_effectShadowStrength = bx::clamp(m_settings.shadow_multiplier * 4.3f, 0.0f, 10.0f);
@@ -695,20 +686,10 @@ void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* 
 
     m_uniforms.m_negRecEffectRadius = -1.0f / m_uniforms.m_effectRadius;
 
-    if(bgfx::getCaps()->originBottomLeft)
-    {
-        set_vec2(m_uniforms.m_perPassFullResCoordOffset, (float)(_pass % 2), 1.0f - (float)(_pass / 2));
-        set_vec2(m_uniforms.m_perPassFullResUVOffset,
-                ((_pass % 2) - 0.0f) / dims.size[0],
-                (1.0f - ((_pass / 2) - 0.0f)) / dims.size[1]);
-    }
-    else
-    {
-        set_vec2(m_uniforms.m_perPassFullResCoordOffset, (float)(_pass % 2), (float)(_pass / 2));
-        set_vec2(m_uniforms.m_perPassFullResUVOffset,
-                ((_pass % 2) - 0.0f) / dims.size[0],
-                ((_pass / 2) - 0.0f) / dims.size[1]);
-    }
+    set_vec2(m_uniforms.m_perPassFullResCoordOffset, (float)(_pass % 2), (float)(_pass / 2));
+    set_vec2(m_uniforms.m_perPassFullResUVOffset,
+            ((_pass % 2) - 0.0f) / dims.size[0],
+            ((_pass / 2) - 0.0f) / dims.size[1]);
 
     m_uniforms.m_invSharpness = bx::clamp(1.0f - m_settings.sharpness, 0.0f, 1.0f);
     m_uniforms.m_passIndex = (float)_pass;

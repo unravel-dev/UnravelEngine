@@ -143,7 +143,7 @@ auto make_nested_cascades() -> cascade_frustums
     {
         const float half_width = CASCADE_HALF_WIDTHS[ii];
         const math::mat4 proj = math::orthoLH_ZO(-half_width, half_width, -half_width, half_width, CASCADE_NEAR, CASCADE_FAR);
-        result[ii].update(view, proj, false);
+        result[ii].update(view, proj);
     }
     return result;
 }
@@ -264,7 +264,7 @@ auto make_sky_view_frustum() -> math::frustum
     const math::mat4 view = math::lookAtLH(math::vec3(0.0f, 2.0f, 0.0f), math::vec3(0.0f, 60.0f, 0.0f), math::vec3(0.0f, 0.0f, 1.0f));
     const math::mat4 proj = math::perspectiveLH_ZO(math::radians(60.0f), 1.0f, 0.1f, 200.0f);
     math::frustum result;
-    result.update(view, proj, false);
+    result.update(view, proj);
     return result;
 }
 
@@ -336,28 +336,24 @@ void test_light_projection_culling_frustum()
     const math::bbox in_range_caster = make_box(math::vec3(0.0f, 0.0f, 20.0f), 1.0f);
     const math::bbox beyond_far_caster = make_box(math::vec3(0.0f, 0.0f, 40.0f), 1.0f);
     const math::bbox behind_light_caster = make_box(math::vec3(0.0f, 0.0f, -5.0f), 1.0f);
-    for(const bool homogeneous_depth : {false, true})
+    for(const bool is_linear_depth : {false, true})
     {
-        const std::string convention = homogeneous_depth ? " (homogeneous depth)" : " (zero to one depth)";
-        for(const bool is_linear_depth : {false, true})
-        {
-            const std::string mode = (is_linear_depth ? "linear depth" : "inverse z") + convention;
-            const auto actual = shadow::make_light_projection(90.0f, 1.0f, INPUT_NEAR, INPUT_FAR, homogeneous_depth, is_linear_depth);
-            math::frustum actual_frustum;
-            actual_frustum.update(input_view, math::make_mat4(actual.cull_proj), actual.homogeneous_depth);
-            check(actual_frustum.classify_aabb(in_range_caster) != math::volume_query::outside, mode + ": a caster in range is kept");
-            check(actual_frustum.classify_aabb(beyond_far_caster) == math::volume_query::outside, mode + ": a caster beyond the far plane is culled");
-            check(actual_frustum.classify_aabb(behind_light_caster) == math::volume_query::outside, mode + ": a caster behind the light is culled");
-            const bool is_same_matrix = std::memcmp(actual.render_proj, actual.cull_proj, sizeof(actual.cull_proj)) == 0;
-            check(is_same_matrix == !is_linear_depth, mode + ": only linear depth rescales the render projection");
-        }
-        // Why cull_proj exists: a frustum extracted from the rescaled render projection loses
-        // its far plane, so the light's range no longer culls anything.
-        const auto linear = shadow::make_light_projection(90.0f, 1.0f, INPUT_NEAR, INPUT_FAR, homogeneous_depth, true);
-        math::frustum rescaled_frustum;
-        rescaled_frustum.update(input_view, math::make_mat4(linear.render_proj), linear.homogeneous_depth);
-        check(rescaled_frustum.classify_aabb(beyond_far_caster) != math::volume_query::outside, "the rescaled render projection cannot cull by range" + convention);
+        const std::string mode = is_linear_depth ? "linear depth" : "inverse z";
+        const auto actual = shadow::make_light_projection(90.0f, 1.0f, INPUT_NEAR, INPUT_FAR, is_linear_depth);
+        math::frustum actual_frustum;
+        actual_frustum.update(input_view, math::make_mat4(actual.cull_proj));
+        check(actual_frustum.classify_aabb(in_range_caster) != math::volume_query::outside, mode + ": a caster in range is kept");
+        check(actual_frustum.classify_aabb(beyond_far_caster) == math::volume_query::outside, mode + ": a caster beyond the far plane is culled");
+        check(actual_frustum.classify_aabb(behind_light_caster) == math::volume_query::outside, mode + ": a caster behind the light is culled");
+        const bool is_same_matrix = std::memcmp(actual.render_proj, actual.cull_proj, sizeof(actual.cull_proj)) == 0;
+        check(is_same_matrix == !is_linear_depth, mode + ": only linear depth rescales the render projection");
     }
+    // Why cull_proj exists: a frustum extracted from the rescaled render projection loses
+    // its far plane, so the light's range no longer culls anything.
+    const auto linear = shadow::make_light_projection(90.0f, 1.0f, INPUT_NEAR, INPUT_FAR, true);
+    math::frustum rescaled_frustum;
+    rescaled_frustum.update(input_view, math::make_mat4(linear.render_proj));
+    check(rescaled_frustum.classify_aabb(beyond_far_caster) != math::volume_query::outside, "the rescaled render projection cannot cull by range");
 }
 
 // ---------------------------------------------------------------------------------

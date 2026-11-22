@@ -36,7 +36,7 @@ vec3 mg_decal_texel_position(ivec2 texel)
 	ivec2 clamped = clamp(texel, ivec2(0, 0), ivec2(size) - ivec2(1, 1));
 	float device_depth = texelFetch(s_decal_depth, clamped, 0).x;
 	vec2 uv = (vec2(clamped) + vec2_splat(0.5)) / size;
-	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(device_depth)));
+	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, device_depth));
 	return u_camera_wpos.xyz + clipToWorld(u_decal_inv_view_proj, clip);
 }
 

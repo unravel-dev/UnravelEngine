@@ -174,8 +174,6 @@ static uint64_t blit_quad(const Rml::Rectanglei& src_rect,
                           const Rml::Vector2i& src_texture_size,
                           const Rml::Vector2i& dst_framebuffer_size)
 {
-    bool origin_bottom_left = gfx::is_origin_bottom_left();
-
     if(4 == bgfx::getAvailTransientVertexBuffer(4, gfx::pos_texcoord0_vertex::get_layout()))
     {
         bgfx::TransientVertexBuffer vb;
@@ -191,13 +189,6 @@ static uint64_t blit_quad(const Rml::Rectanglei& src_rect,
         auto src_left = src_rect.Left();
         auto src_right = src_rect.Right();
 
-        // if(origin_bottom_left)
-        // {
-        //     src_top = src_height - src_top;
-        //     src_bottom = src_height - src_bottom;
-        //     std::swap(src_top, src_bottom);
-        // }
-        
         float min_u = static_cast<float>(src_left) / src_width;
         float max_u = static_cast<float>(src_right) / src_width;
         float min_v = static_cast<float>(src_top) / src_height;
@@ -212,35 +203,12 @@ static uint64_t blit_quad(const Rml::Rectanglei& src_rect,
         auto dst_left = dst_rect.Left();
         auto dst_right = dst_rect.Right();
 
-        // if(origin_bottom_left)
-        // {
-        //     dst_top = dst_framebuffer_size.y - dst_top;
-        //     dst_bottom = dst_framebuffer_size.y - dst_bottom;
-        //     // std::swap(dst_top, dst_bottom);
-        // }
-        
         const float ndc_left = (static_cast<float>(dst_left) / fb_width) * 2.0f - 1.0f;
         const float ndc_right = (static_cast<float>(dst_right) / fb_width) * 2.0f - 1.0f;
         
         float ndc_top = 1.0f - (static_cast<float>(dst_top) / fb_height) * 2.0f;
         float ndc_bottom = 1.0f - (static_cast<float>(dst_bottom) / fb_height) * 2.0f;
         
-        // // For OpenGL, we need to flip the Y coordinates since it uses bottom-left origin
-        // if(origin_bottom_left)
-        // {
-        //     ndc_top = -ndc_top;
-        //     ndc_bottom = -ndc_bottom;
-        //     std::swap(ndc_top, ndc_bottom);
-        // }
-
-        // // Handle UV coordinate system differences for bottom-left origin (like clip_quad does)
-        if(origin_bottom_left)
-        {
-            min_v = 1.0f - min_v;
-            max_v = 1.0f - max_v;
-            std::swap(min_v, max_v);
-        }
-
         // Create quad vertices in triangle strip order
         vertex[0].x = ndc_left;
         vertex[0].y = ndc_top;
@@ -2297,9 +2265,8 @@ void RmlUi_RenderInterface::submit_document_quad(RmlUi_ProgramId program_id,
         return;
     }
     const auto size = Rml::Vector2f(get_viewport_size());
-    // Layer textures are sampled upside down where render targets start at the bottom.
-    const float top_v = gfx::is_origin_bottom_left() ? 1.0f : 0.0f;
-    const float bottom_v = 1.0f - top_v;
+    const float top_v = 0.0f;
+    const float bottom_v = 1.0f;
     const Rml::ColourbPremultiplied white(255, 255, 255, 255);
     const std::array<Rml::Vertex, DOCUMENT_QUAD_VERTEX_COUNT> corners = {
         Rml::Vertex{{0.0f, 0.0f}, white, {0.0f, top_v}},
@@ -3059,13 +3026,6 @@ void RmlUi_RenderInterface::set_tex_coord_limits(Rml::Rectanglei region, Rml::Ve
     // Offset by half-texel values so that texture lookups are clamped to fragment centers
     Rml::Vector2f min = (Rml::Vector2f(region.p0) + Rml::Vector2f(0.5f)) / Rml::Vector2f(framebuffer_size);
     Rml::Vector2f max = (Rml::Vector2f(region.p1) - Rml::Vector2f(0.5f)) / Rml::Vector2f(framebuffer_size);
-
-    if(gfx::is_origin_bottom_left())
-    {
-        min.y = 1.0f - min.y;
-        max.y = 1.0f - max.y;
-        std::swap(min.y, max.y);
-    }
 
     auto min_uniform = get_uniform_handle(RmlUi_UniformId::TexCoordMin);
     auto max_uniform = get_uniform_handle(RmlUi_UniformId::TexCoordMax);

@@ -125,8 +125,6 @@ struct view_stats
 /// whose frequency bgfx does not report gives 0.
 auto get_view_stats(const bgfx::Stats& stats) -> std::vector<view_stats>;
 
-bool is_origin_bottom_left();
-bool is_homogeneous_depth();
 float get_half_texel();
 uint32_t get_max_blend_transforms();
 
@@ -135,7 +133,7 @@ uint64_t clip_quad(float depth = 0.0f, float width = 1.0f, float height = 1.0f);
 
 /// Single large triangle covering the clip rect (same UV convention as @ref clip_quad).
 /// Use for fullscreen passes that must not have a quad diagonal (e.g. SSIL half-res trace).
-/// Returns 0 if transient VB allocation failed — fall back to @ref clip_quad in that case.
+/// Returns 0 if transient VB allocation failed - fall back to @ref clip_quad in that case.
 uint64_t clip_fullscreen_triangle(float depth = 0.0f, float width = 1.0f, float height = 1.0f);
 
 struct clip_quad_def

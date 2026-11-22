@@ -274,9 +274,7 @@ float PCF(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec2 _planeGrad, v
 // pixel pays for the registers of a larger tent.
 //
 // The colour maps store 0.5 z_ndc + 0.5 (z_ndc on [0, 1], the engine's projection), the depth
-// attachments the window depth: z_ndc where the backend's clip depth spans [0, 1] (scale 2),
-// 0.5 z_ndc + 0.5 where it spans [-1, 1] (OpenGL, scale 1).
-#define u_shadowHardwareDepthScale u_params2.w
+// attachments z_ndc itself (clip depth spans [0, 1] on every backend).
 
 // A fetch compares every texel of its 2x2 footprint with one reference: the receiver plane at the
 // fetch, lowered to the lowest the plane gets at those texel centres (exact for planar receivers).
@@ -307,7 +305,7 @@ float compareShadowTap(sampler2DShadow _sampler, vec2 _sampleUV, vec2 _receiverU
 #endif
 
     float receiver = _receiverDepth + dot(_sampleUV - _receiverUV, _planeGrad) - comparePlaneSlack(_sampleUV, _planeGrad);
-    float hardwareDepth = receiver * u_shadowHardwareDepthScale + (1.0 - u_shadowHardwareDepthScale);
+    float hardwareDepth = receiver * 2.0 - 1.0;
     return shadow2D(_sampler, vec3(shadowMapFetchUV(_sampleUV), hardwareDepth));
 }
 

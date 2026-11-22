@@ -121,28 +121,21 @@ struct ProjType
  * by the far plane (the pack shaders then store view depth / far without a per-pixel divide),
  * which stops it being a projection a frustum can be extracted from: the far plane test
  * degenerates and the light's range no longer culls anything. @c cull_proj is the same
- * projection as built, and @c homogeneous_depth the depth convention it was built with - the
- * pair frustum::update needs, whatever the backend or the depth mode.
+ * projection as built, the one frustum::update needs whatever the depth mode.
  */
 struct light_projection
 {
     float render_proj[16];
     float cull_proj[16];
-    bool homogeneous_depth{};
 };
 
 /**
- * @brief Builds a light_projection.
+ * @brief Builds a light_projection, to clip depth 0..1.
  * @param fov_y_degrees Vertical field of view in degrees.
- * @param homogeneous_depth Depth convention to build with ([-1, 1] when true, [0, 1] otherwise).
  * @param is_linear_depth True for sm_depth::linear (rescales render_proj only).
  */
-auto make_light_projection(float fov_y_degrees,
-                           float aspect,
-                           float near_plane,
-                           float far_plane,
-                           bool homogeneous_depth,
-                           bool is_linear_depth) -> light_projection;
+auto make_light_projection(float fov_y_degrees, float aspect, float near_plane, float far_plane, bool is_linear_depth)
+    -> light_projection;
 
 struct ShadowMapRenderTargets
 {
@@ -399,9 +392,8 @@ struct Uniforms
             float m_depthValuePow;
             float m_showSmCoverage;
             float m_shadowMapTexelSize;
-            /// Stored depth to the depth attachment's window depth (x scale + 1 - scale): 2 where
-            /// the backend's clip depth spans [0, 1], 1 where it spans [-1, 1] (OpenGL).
-            float m_hardwareDepthScale;
+            /// Not read by the shaders.
+            float m_params2Unused;
         };
 
         float m_params2[4];
@@ -1018,7 +1010,7 @@ private:
     void submit_stencil_mask(bgfx::ViewId view) const;
 
     /// Writes the light's static copy into its tile: the depth, and the atlas colour rebuilt from it.
-    void submit_static_copy_restore(bgfx::ViewId view, bool origin_bottom_left) const;
+    void submit_static_copy_restore(bgfx::ViewId view) const;
 
     /// The render state a face draws with; @p writes_color false for the static copy, which has no colour.
     auto get_face_render_state(uint8_t face, bool writes_color) const -> RenderState;
@@ -1083,7 +1075,7 @@ private:
 
     /// Fills the geometric bias conversions (depth scale, map axes, perspective texel size)
     /// from the final light view / projection matrices of this update.
-    void update_bias_uniforms(bool origin_bottom_left);
+    void update_bias_uniforms();
 
     ClearValues clear_values_;
 

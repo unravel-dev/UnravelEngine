@@ -34,12 +34,11 @@ Backends (OpenGL breaks first; the other backends hide these):
   of a one-mip volume and stores to the other slices are undefined (NVIDIA hides it; test another driver).
 - Never sample a texture attached to the bound frame buffer: D3D11 unbinds the view silently and every read
   returns 0 (why the velocity pass has a color-only `VELOCITY_FBO_CAMERA`).
-- bgfx runs OpenGL with origin bottom-left and -1..1 clip depth. `gfx::is_homogeneous_depth()` is the engine's
-  projection convention and always false: projections are zero-to-one, a GL depth buffer holds 0.5 + 0.5 z, and
-  shaders read camera depth through `toClipSpaceDepth`. A projection whose depth is read raw, or that must clip
-  at its near plane, takes `bgfx::getCaps()->homogeneousDepth`. A pass that rasterizes tiles and reads them back
-  by texel mirrors its rect or scissor and flips y on GL (`gi_surface_cache::compute_capture_view`); passes that
-  sample by UV need nothing.
+- Every backend renders with clip depth 0..1 and render targets whose first row is the top: OpenGL and WebGL 2
+  get both from bgfx's `BGFX_CONFIG_GL_NORMALIZE_NDC_CONVENTIONS` (`deps/3rdparty/bgfx/CMakeLists.txt`), and the
+  renderer refuses to start on a backend reporting others. A depth buffer holds clip depth, readbacks arrive top
+  row first, and no engine code or shader branches on OpenGL for either. bgfx keys GL program binaries by the
+  shaders before it rewrites them, so a change to that rewrite renames the GL cache folder (`renderer.cpp`).
 - `gfx::render_pass::bind()` and `clear()` call `bgfx::touch`, which discards every uniform, texture, state and
   buffer set since the last submit: bind or clear the pass first, then set per-draw state.
 - A bgfx view runs its blits, then all its compute dispatches, then its draws; `bgfx::update` of a dynamic buffer

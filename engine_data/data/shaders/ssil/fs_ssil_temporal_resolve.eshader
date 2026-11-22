@@ -135,7 +135,7 @@ vec3 SSIL_ComputePreviousFrameSample(vec2 uv, float z)
     vec3 prev_clip = prev_clip4.xyz / prev_clip4.w;
     prev_clip = clipTransform(prev_clip);
     vec2 prev_uv = prev_clip.xy * 0.5 + 0.5;
-    return vec3(prev_uv, toDepthTextureZ(prev_clip.z));
+    return vec3(prev_uv, prev_clip.z);
 }
 
 void main()

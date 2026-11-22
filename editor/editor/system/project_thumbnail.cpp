@@ -101,7 +101,7 @@ auto downscale(const ReadbackImage& image, const image_size& size) -> std::vecto
     return result;
 }
 
-void write_png(const fs::path& path, const image_size& size, const std::vector<uint8_t>& pixels, bool is_bottom_up)
+void write_png(const fs::path& path, const image_size& size, const std::vector<uint8_t>& pixels)
 {
     bx::FileWriter writer;
     if(!bx::open(&writer, bx::FilePath(path.string().c_str())))
@@ -115,7 +115,7 @@ void write_png(const fs::path& path, const image_size& size, const std::vector<u
                         size.width * PROJECT_THUMBNAIL_CHANNELS,
                         pixels.data(),
                         bimg::TextureFormat::RGBA8,
-                        is_bottom_up,
+                        false,
                         &error);
     bx::close(&writer);
     if(!error.isOk())
@@ -133,7 +133,7 @@ void save_thumbnail(const ReadbackImage& image, const fs::path& target)
     asset_writer::atomic_write_file(target,
                                     [&](const fs::path& temp)
                                     {
-                                        write_png(temp, size, pixels, image.isBottomUp);
+                                        write_png(temp, size, pixels);
                                     },
                                     error);
     if(error)

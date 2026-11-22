@@ -300,7 +300,6 @@ void temporal_probe_pass::capture_mark(const run_params& params)
 auto temporal_probe_pass::collect_marks() -> std::vector<mark_capture>
 {
     std::vector<mark_capture> captures;
-    const bool is_bottom_up = bgfx::getCaps()->originBottomLeft;
     for(auto& pending : readback_marks_)
     {
         mark_capture capture;
@@ -313,7 +312,7 @@ auto temporal_probe_pass::collect_marks() -> std::vector<mark_capture>
         capture.age.resize(pending.age_data.size());
         for(uint32_t y = 0; y < height_; ++y)
         {
-            const uint32_t image_y = is_bottom_up ? height_ - 1u - y : y;
+            const uint32_t image_y = y;
             std::copy_n(pending.color_data.data() + size_t(y) * row_bytes,
                         row_bytes,
                         capture.color.data() + size_t(image_y) * row_bytes);
@@ -383,12 +382,10 @@ void temporal_probe_pass::reduce_readback()
     std::vector<uint32_t> std_counts(size_t(grid_size) * grid_size, 0u);
     std::vector<uint32_t> change_counts(size_t(grid_size) * grid_size, 0u);
     double change_sum = 0.0;
-    // The grid is reported from the top of the image, but OpenGL render targets keep their origin
-    // at the bottom left, so there the readback's first row is the bottom one.
-    const bool is_bottom_up = bgfx::getCaps()->originBottomLeft;
+    // The grid is reported from the top of the image, the readback's first row.
     for(uint32_t y = 0; y < height; ++y)
     {
-        const uint32_t image_y = is_bottom_up ? height - 1u - y : y;
+        const uint32_t image_y = y;
         const uint32_t cell_y = std::min(image_y * grid_size / height, grid_size - 1u);
         for(uint32_t x = 0; x < width; ++x)
         {

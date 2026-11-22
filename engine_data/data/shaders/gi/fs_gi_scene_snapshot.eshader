@@ -28,7 +28,7 @@ void main()
 {
 	vec3 scene = texture2DLod(s_scene, v_texcoord0, 0.0).xyz;
 	float depth = texture2DLod(s_depth, v_texcoord0, 0.0).x;
-	vec3 clip = clipTransform(vec3(v_texcoord0 * 2.0 - 1.0, toClipSpaceDepth(depth)));
+	vec3 clip = clipTransform(vec3(v_texcoord0 * 2.0 - 1.0, depth));
 	vec3 world_position = clipToWorld(u_invViewProj, clip);
 	float view_depth = mul(u_viewProj, vec4(world_position, 1.0)).w;
 	gl_FragColor = vec4(scene, view_depth);

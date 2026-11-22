@@ -41,7 +41,7 @@ void main()
 	vec2 uv = gl_FragCoord.xy * u_viewTexel.xy;
 	float device_depth = texture2DLod(s_fog_depth, uv, 0.0).x;
 	// The view is camera-relative (fog_pass::run): the reconstructed position is the pixel's offset from the camera.
-	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(device_depth)));
+	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, device_depth));
 	vec3 offset = clipToWorld(u_invViewProj, clip);
 	float point_distance = length(offset);
 	vec3 view_direction = offset / max(point_distance, 1e-6);

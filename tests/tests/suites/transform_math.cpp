@@ -1405,8 +1405,7 @@ void test_frustum_far_from_origin()
     const math::vec3 forward = math::normalize(math::vec3(0.561035f, -0.207977f, 0.801239f));
     math::frustum frustum;
     frustum.update(math::transform(math::lookAt(eye, eye + forward, math::vec3(0.0f, 1.0f, 0.0f))),
-                   math::transform(math::perspectiveZO(math::radians(60.0f), 1.75f, 0.1f, 1000.0f)),
-                   false);
+                   math::transform(math::perspectiveZO(math::radians(60.0f), 1.75f, 0.1f, 1000.0f)));
     check(!frustum.test_sphere(math::bsphere(math::vec3(0.0f, 2.0f, 0.0f), 12.0f)),
           "a sphere behind a camera far from the origin is outside its frustum");
     check(frustum.test_sphere(math::bsphere(eye + forward * 20.0f, 1.0f)), "a sphere in front of it is inside");

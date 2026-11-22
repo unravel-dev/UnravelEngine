@@ -34,9 +34,9 @@ frustum::frustum()
     position = vec3(0, 0, 0);
 }
 
-frustum::frustum(const transform& View, const transform& Proj, bool homogeneousDepth)
+frustum::frustum(const transform& View, const transform& Proj)
 {
-    update(View, Proj, homogeneousDepth);
+    update(View, Proj);
 }
 
 frustum::frustum(const bbox& AABB)
@@ -63,7 +63,7 @@ frustum::frustum(const bbox& AABB)
     position = p;
 }
 
-void frustum::update(const transform& view, const transform& proj, bool homogeneousDepth)
+void frustum::update(const transform& view, const transform& proj)
 {
     // Build a combined view & projection matrix
     const transform m = proj * view;
@@ -96,20 +96,10 @@ void frustum::update(const transform& view, const transform& proj, bool homogene
     planes[volume_plane::far_plane].data.z = m[2][3] - m[2][2];
     planes[volume_plane::far_plane].data.w = m[3][3] - m[3][2];
 
-    if(homogeneousDepth)
-    {
-        planes[volume_plane::near_plane].data.x = m[0][3] + m[0][2];
-        planes[volume_plane::near_plane].data.y = m[1][3] + m[1][2];
-        planes[volume_plane::near_plane].data.z = m[2][3] + m[2][2];
-        planes[volume_plane::near_plane].data.w = m[3][3] + m[3][2];
-    }
-    else
-    {
-        planes[volume_plane::near_plane].data.x = m[0][2];
-        planes[volume_plane::near_plane].data.y = m[1][2];
-        planes[volume_plane::near_plane].data.z = m[2][2];
-        planes[volume_plane::near_plane].data.w = m[3][2];
-    }
+    planes[volume_plane::near_plane].data.x = m[0][2];
+    planes[volume_plane::near_plane].data.y = m[1][2];
+    planes[volume_plane::near_plane].data.z = m[2][2];
+    planes[volume_plane::near_plane].data.w = m[3][2];
 
     for(auto& plane : planes)
     {
@@ -581,12 +571,12 @@ auto frustum::test_swept_aabb(const bbox& box, const vec3& vecSweepDirection, fl
         const float t_bound = -b_dot_n / d_dot_n;
         if(d_dot_n > 0.0f)
         {
-            // Near corner moving away from inside → upper bound on t.
+            // Near corner moving away from inside -> upper bound on t.
             t_exit = glm::min(t_exit, t_bound);
         }
         else
         {
-            // Near corner moving toward inside → lower bound on t.
+            // Near corner moving toward inside -> lower bound on t.
             t_enter = glm::max(t_enter, t_bound);
         }
 

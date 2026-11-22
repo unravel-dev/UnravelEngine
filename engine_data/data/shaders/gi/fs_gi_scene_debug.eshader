@@ -137,7 +137,7 @@ struct GiDebugHit
 /// The camera ray through @p uv.
 void GiDebugCameraRay(vec2 uv, out vec3 origin, out vec3 direction)
 {
-	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(0.5)));
+	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, 0.5));
 	vec3 world_point = clipToWorld(u_invViewProj, clip);
 	origin = mul(u_invView, vec4(0.0, 0.0, 0.0, 1.0)).xyz;
 	direction = normalize(world_point - origin);

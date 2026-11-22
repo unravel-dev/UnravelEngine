@@ -126,7 +126,7 @@ vec4 mg_scene_texture_scene_depth(vec2 uv)
 /// The farthest, in world units, the opaque scene behind a refracting surface bends its view as if it lay.
 #define FORWARD_REFRACTION_MAX_GAP 1.0
 
-/// @p clip as a position on the view, 0 to 1 as gl_FragCoord runs (from the bottom on OpenGL, the top elsewhere).
+/// @p clip as a position on the view, 0 to 1 from the top as gl_FragCoord runs.
 vec2 forward_clip_to_view_uv(vec4 clip)
 {
 	vec2 ndc = clip.xy / max(clip.w, 1e-6);

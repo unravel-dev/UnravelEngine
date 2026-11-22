@@ -743,7 +743,6 @@ vec3 contactProjectToScreen(vec3 vs_pos)
     vec4 clip = mul(u_proj, vec4(vs_pos, 1.0));
     vec3 ss = clipTransform(clip.xyz / clip.w);
     ss.xy = ss.xy * 0.5 + 0.5;
-    ss.z = toDepthTextureZ(ss.z);
     return ss;
 }
 
@@ -799,7 +798,7 @@ float ContactShadow(sampler2D depthTex, ivec2 origin_texel, float origin_device_
     if(vs_light_dir.z < 0.0)
     {
         // Our projections put the near plane at clip depth 0 on every backend.
-        float z_near = screenSpaceToViewSpaceDepth(toDepthTextureZ(0.0));
+        float z_near = screenSpaceToViewSpaceDepth(0.0);
         ray_len = min(ray_len, (z0 - z_near) * 0.9 / -vs_light_dir.z);
     }
     if(ray_len <= 0.0) return 1.0;
@@ -823,7 +822,7 @@ float ContactShadow(sampler2D depthTex, ivec2 origin_texel, float origin_device_
     // projection's diagonal (safe to index on every backend); the y sign follows clipTransform.
     vec3 d0 = vs_origin / z0;
     float dd_dx = 2.0 / u_proj[0][0] * texel_uv.x;
-    float dd_dy = toClipSpaceY(2.0 / u_proj[1][1] * texel_uv.y);
+    float dd_dy = -(2.0 / u_proj[1][1] * texel_uv.y);
     vec3 d_left = d0 - vec3(dd_dx, 0.0, 0.0);
     vec3 d_right = d0 + vec3(dd_dx, 0.0, 0.0);
     vec3 d_down = d0 - vec3(0.0, dd_dy, 0.0);

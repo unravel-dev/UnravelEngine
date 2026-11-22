@@ -75,7 +75,7 @@ vec3 mg_post_encode_color(vec3 color)
 vec3 mg_post_world_position(vec2 uv)
 {
 	float device_depth = texture2DLod(s_post_depth, uv, 0.0).x;
-	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(device_depth)));
+	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, device_depth));
 	return u_camera_wpos.xyz + clipToWorld(u_post_inv_view_proj, clip);
 }
 
@@ -150,7 +150,7 @@ vec4 mg_scene_texture_custom_depth(vec2 uv)
 {
 	vec2 clamped = mg_post_clamp_uv(uv);
 	float device_depth = texture2DLod(s_post_custom_depth, clamped, 0.0).x;
-	vec3 clip = clipTransform(vec3(clamped * 2.0 - 1.0, toClipSpaceDepth(device_depth)));
+	vec3 clip = clipTransform(vec3(clamped * 2.0 - 1.0, device_depth));
 	vec3 offset = clipToWorld(u_post_inv_view_proj, clip);
 	return vec4_splat(dot(offset, mg_camera_direction()));
 }

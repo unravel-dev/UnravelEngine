@@ -23,8 +23,8 @@ float ScreenSpaceToViewSpaceDepth( float screenDepth )
     // depthLinearizeMul = ( cameraClipFar * cameraClipNear) / ( cameraClipFar - cameraClipNear );
     // depthLinearizeAdd = cameraClipFar / ( cameraClipFar - cameraClipNear );
 
-    // The constants map clip-space depth, which toClipSpaceDepth recovers from the depth buffer.
-    return depthLinearizeMul / ( depthLinearizeAdd - toClipSpaceDepth(screenDepth) );
+    // The constants map clip-space depth, which the depth buffer holds on every backend.
+    return depthLinearizeMul / ( depthLinearizeAdd - screenDepth );
 }
 
 NUM_THREADS(8, 8, 1)

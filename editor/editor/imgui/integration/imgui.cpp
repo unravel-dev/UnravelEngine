@@ -167,7 +167,7 @@ struct OcornutImguiContext
             float width = _drawData->DisplaySize.x;
             float height = _drawData->DisplaySize.y;
 
-            bx::mtxOrtho(ortho, x, x + width, y + height, y, 0.0f, 1000.0f, 0.0f, gfx::is_homogeneous_depth());
+            bx::mtxOrtho(ortho, x, x + width, y + height, y, 0.0f, 1000.0f, 0.0f, false);
             bgfx::setViewTransform(id, nullptr, ortho);
             bgfx::setViewRect(id, 0, 0, uint16_t(fb_width), uint16_t(fb_height));
         }
@@ -205,8 +205,6 @@ struct OcornutImguiContext
 
             bgfx::Encoder* encoder = bgfx::begin();
 
-            std::set<uint32_t> converted{};
-
             for(const ImDrawCmd *cmd = drawList->CmdBuffer.begin(), *cmdEnd = drawList->CmdBuffer.end(); cmd != cmdEnd;
                 ++cmd)
             {
@@ -230,19 +228,6 @@ struct OcornutImguiContext
                     {
                         texture.id = cmd->GetTexID();
 
-
-                        if(0 != (IMGUI_FLAGS_FLIP_UV & texture.s.flags))
-                        {
-                            for(uint32_t e = 0; e < cmd->ElemCount; ++e)
-                            {
-                                auto index = indices[cmd->IdxOffset + e];
-                                if(converted.emplace(index).second)
-                                {
-                                    auto v = (ImDrawVert*)(verts + index);
-                                    v->uv.y = 1.0f - v->uv.y;
-                                }
-                            }
-                        }
 
                         state |= 0 != (IMGUI_FLAGS_ALPHA_BLEND & texture.s.flags)
                                      ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA)

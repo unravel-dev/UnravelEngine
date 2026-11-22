@@ -30,11 +30,10 @@ public:
      * @brief Constructs a frustum from view and projection matrices.
      *
      * @param view The view transform.
-     * @param proj The projection transform.
-     * @param homogeneousDepth True when NDC depth is in [-1, 1] range, otherwise its [0, 1].
+     * @param proj The projection transform, to clip depth 0..1.
      */
 
-    frustum(const transform& view, const transform& proj, bool homogeneousDepth);
+    frustum(const transform& view, const transform& proj);
 
     /**
      * @brief Constructs a frustum from an axis-aligned bounding box.
@@ -51,10 +50,9 @@ public:
      * @brief Updates the frustum based on the specified view and projection matrices.
      *
      * @param view The view transform.
-     * @param proj The projection transform.
-     * @param _oglNDC Whether the frustum uses OpenGL's NDC.
+     * @param proj The projection transform, to clip depth 0..1.
      */
-    void update(const transform& view, const transform& proj, bool _oglNDC);
+    void update(const transform& view, const transform& proj);
 
     /**
      * @brief Sets the frustum planes.

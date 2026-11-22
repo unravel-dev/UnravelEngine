@@ -32,8 +32,8 @@ SAMPLER2D(s_gi_velocity, GI_VELOCITY_STAGE);
 vec3 GiPrevWorldFromViewDepth(vec2 uv, float view_depth, vec3 fallback)
 {
 	vec2 clip = clipTransform(vec3(uv * 2.0 - 1.0, 0.0)).xy;
-	vec3 near_point = clipToWorld(u_gi_prev_inv_view_proj, vec3(clip, toClipSpaceDepth(0.0)));
-	vec3 far_point = clipToWorld(u_gi_prev_inv_view_proj, vec3(clip, toClipSpaceDepth(0.5)));
+	vec3 near_point = clipToWorld(u_gi_prev_inv_view_proj, vec3(clip, 0.0));
+	vec3 far_point = clipToWorld(u_gi_prev_inv_view_proj, vec3(clip, 0.5));
 	float near_depth = mul(u_gi_prev_view_proj, vec4(near_point, 1.0)).w;
 	float far_depth = mul(u_gi_prev_view_proj, vec4(far_point, 1.0)).w;
 	float span = far_depth - near_depth;

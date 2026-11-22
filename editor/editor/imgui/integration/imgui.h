@@ -39,7 +39,6 @@ namespace ImGui
 {
 #define IMGUI_FLAGS_NONE        UINT8_C(1 << 0)
 #define IMGUI_FLAGS_ALPHA_BLEND UINT8_C(1 << 1)
-#define IMGUI_FLAGS_FLIP_UV     UINT8_C(1 << 2)
 #define IMGUI_FLAGS_CUBEMAP     UINT8_C(1 << 3)
 struct Font
 {
@@ -115,11 +114,6 @@ inline ImTexture FromId(ImTextureID _id)
 
 inline ImTextureID ToId(const gfx::texture& _handle, uint8_t _mip = 0, uint8_t _flags = IMGUI_FLAGS_ALPHA_BLEND)
 {
-    if(_handle.is_valid() && _handle.is_render_target() && gfx::is_origin_bottom_left())
-    {
-        _flags |= IMGUI_FLAGS_FLIP_UV;
-    }
-
     if(_handle.info.cubeMap)
     {
         _flags |= IMGUI_FLAGS_CUBEMAP;

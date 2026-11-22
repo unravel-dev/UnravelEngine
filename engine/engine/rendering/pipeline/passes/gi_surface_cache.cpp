@@ -978,9 +978,7 @@ auto gi_surface_cache::compute_capture_view(const gi_scene::capture& cap) const 
     // q = card-local position: depth 0 at the card's front plane, 1 at its back.
     // One pass draws every capture (deferred::capture_gi_cards), so the transform also places the tile in the
     // capture atlas: x = tile.x w / W + (2 left + w) / W - 1, y = tile.y h / H + 1 - (2 top + h) / H with the first row
-    // at the top. The copy reads the captures by texel (cs_gi_card_copy.eshader), so they fill the same rows with the
-    // same depth on every renderer: y flips where a target's first row is its bottom (OpenGL), and the depth maps to
-    // -1..1 where clip space depth is homogeneous.
+    // at the top. The copy reads the captures by texel (cs_gi_card_copy.eshader).
     const auto atlas = capture_target_->get_size();
     const float atlas_width = float(atlas.width);
     const float atlas_height = float(atlas.height);
@@ -988,21 +986,13 @@ auto gi_surface_cache::compute_capture_view(const gi_scene::capture& cap) const 
     const float tile_top = float(cap.capture_offset.y);
     const float tile_width = float(cap.size.x);
     const float tile_height = float(cap.size.y);
-    const bool is_origin_bottom_left = gfx::is_origin_bottom_left();
-    const float y_sign = is_origin_bottom_left ? -1.0f : 1.0f;
     const float scale_x = tile_width / atlas_width;
-    const float scale_y = y_sign * tile_height / atlas_height;
+    const float scale_y = tile_height / atlas_height;
     const float offset_x = (2.0f * tile_left + tile_width) / atlas_width - 1.0f;
-    const float offset_y = y_sign * (1.0f - (2.0f * tile_top + tile_height) / atlas_height);
-    // The backend's own clip depth range, not gfx::is_homogeneous_depth(): that is the engine's projection convention
-    // (zero to one everywhere; shaders reading a camera depth undo the backend's mapping), while the capture must clip
-    // at the card's front plane and the copy reads its depth raw.
-    const bool is_homogeneous_depth = bgfx::getCaps()->homogeneousDepth;
-    const float z_scale = is_homogeneous_depth ? 2.0f : 1.0f;
-    const float z_offset = is_homogeneous_depth ? -1.0f : 0.0f;
+    const float offset_y = 1.0f - (2.0f * tile_top + tile_height) / atlas_height;
     const math::vec3 row_x = axis_x / hx * scale_x;
     const math::vec3 row_y = axis_y / hy * scale_y;
-    const math::vec3 row_z = -axis_z / (2.0f * ez) * z_scale;
+    const math::vec3 row_z = -axis_z / (2.0f * ez);
     math::mat4 m(0.0f);
     for(int c = 0; c < 3; ++c)
     {
@@ -1012,19 +1002,16 @@ auto gi_surface_cache::compute_capture_view(const gi_scene::capture& cap) const 
     }
     m[3][0] = -(math::dot(origin, axis_x) + cx) / hx * scale_x + offset_x;
     m[3][1] = -(math::dot(origin, axis_y) + cy) / hy * scale_y + offset_y;
-    m[3][2] = z_scale * (ez + math::dot(origin, axis_z)) / (2.0f * ez) + z_offset;
+    m[3][2] = (ez + math::dot(origin, axis_z)) / (2.0f * ez);
     m[3][3] = 1.0f;
     capture_view view;
     view.view_proj = m;
     view.orientation = math::determinant(math::mat3(m)) < 0.0f ? -1.0f : 1.0f;
     view.far_eye = origin + axis_z * capture_far_eye_distance;
-    // bgfx turns a scissor's top into rows counted from the bottom where a target's first row is its bottom
-    // (OpenGL), so there the tile goes in mirrored to cover the rows the copy reads.
     const int32_t left = int32_t(cap.capture_offset.x);
     const int32_t width = int32_t(cap.size.x);
     const int32_t height = int32_t(cap.size.y);
-    const int32_t top = is_origin_bottom_left ? int32_t(atlas.height) - int32_t(cap.capture_offset.y) - height
-                                              : int32_t(cap.capture_offset.y);
+    const int32_t top = int32_t(cap.capture_offset.y);
     view.scissor = irect32_t(left, top, left + width, top + height);
     return view;
 }

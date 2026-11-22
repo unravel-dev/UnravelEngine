@@ -383,7 +383,7 @@ GBufferDataDepth DecodeGBufferDepth(
     GBufferDataDepth data;
     float deviceDepth = texture2D(depthTex, texcoord).x;
 
-    data.depth = toClipSpaceDepth(deviceDepth);
+    data.depth = deviceDepth;
     data.depth01 = deviceDepth;
 
     return data;
@@ -397,7 +397,7 @@ GBufferDataDepth DecodeGBufferDepthLod(
     GBufferDataDepth data;
     float deviceDepth = texture2DLod(depthTex, texcoord, lod).x;
 
-    data.depth = toClipSpaceDepth(deviceDepth);
+    data.depth = deviceDepth;
     data.depth01 = deviceDepth;
 
     return data;
@@ -410,7 +410,7 @@ GBufferDataDepth DecodeGBufferDepthTexel(
     GBufferDataDepth data;
     float deviceDepth = texelFetch(depthTex, texel, 0).x;
 
-    data.depth = toClipSpaceDepth(deviceDepth);
+    data.depth = deviceDepth;
     data.depth01 = deviceDepth;
 
     return data;

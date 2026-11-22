@@ -271,7 +271,7 @@ void mtxYawPitchRoll(float* _result, float _yaw, float _pitch, float _roll)
     _result[15] = 1.0f;
 }
 
-void screenSpaceQuad(bool _originBottomLeft = true, float _width = 1.0f, float _height = 1.0f)
+void screenSpaceQuad(float _width = 1.0f, float _height = 1.0f)
 {
     if(3 == bgfx::getAvailTransientVertexBuffer(3, PosColorTexCoord0Vertex::get_layout()))
     {
@@ -289,15 +289,8 @@ void screenSpaceQuad(bool _originBottomLeft = true, float _width = 1.0f, float _
         const float minu = -1.0f;
         const float maxu = 1.0f;
 
-        float minv = 0.0f;
-        float maxv = 2.0f;
-
-        if(_originBottomLeft)
-        {
-            std::swap(minv, maxv);
-            minv -= 1.0f;
-            maxv -= 1.0f;
-        }
+        const float minv = 0.0f;
+        const float maxv = 2.0f;
 
         vertex[0].m_x = minx;
         vertex[0].m_y = miny;
@@ -443,19 +436,14 @@ auto get_cached_maps_epoch() -> uint64_t
     return cached_maps_epoch.load(std::memory_order_relaxed);
 }
 
-auto make_light_projection(float fov_y_degrees,
-                           float aspect,
-                           float near_plane,
-                           float far_plane,
-                           bool homogeneous_depth,
-                           bool is_linear_depth) -> light_projection
+auto make_light_projection(float fov_y_degrees, float aspect, float near_plane, float far_plane, bool is_linear_depth)
+    -> light_projection
 {
     /// Row-major elements that map view z to clip z: the scale and the offset.
     constexpr size_t PROJ_Z_SCALE_INDEX = 10;
     constexpr size_t PROJ_Z_OFFSET_INDEX = 14;
     light_projection result;
-    result.homogeneous_depth = homogeneous_depth;
-    bx::mtxProj(result.cull_proj, fov_y_degrees, aspect, near_plane, far_plane, homogeneous_depth);
+    bx::mtxProj(result.cull_proj, fov_y_degrees, aspect, near_plane, far_plane, false);
     bx::memCopy(result.render_proj, result.cull_proj, sizeof(result.render_proj));
     // For linear depth, prevent depth division by variable w-component in shaders and divide
     // here by far plane.
@@ -1397,10 +1385,8 @@ void shadowmap_generator::update_atlas_tile()
     }
     const float atlas_size = float(atlas.get_size());
     atlas_rect_[0] = float(tile->x) / atlas_size;
-    // View rects count rows from the top; with the texture origin at the bottom (GL) the tile's first row sits at the
-    // far end of v. Inside the tile the light's own matrices already flip v for that origin (mtxBias).
-    const bool is_origin_bottom_left = bgfx::getCaps()->originBottomLeft;
-    atlas_rect_[1] = is_origin_bottom_left ? 1.0f - float(tile->y + tile->size) / atlas_size : float(tile->y) / atlas_size;
+    // View rects count rows from the top, as v does.
+    atlas_rect_[1] = float(tile->y) / atlas_size;
     atlas_rect_[2] = float(tile->size) / atlas_size;
     atlas_rect_[3] = float(tile->size) / atlas_size;
 }
@@ -1672,11 +1658,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     uniforms_.m_lightPtr = (LightType::DirectionalLight == settings_.m_lightType) ? &directional_light_ : &point_light_;
 
     ///
-    bool homogeneousDepth = gfx::is_homogeneous_depth();
-    // The backend's own clip depth range, not the engine's projection convention: it decides the
-    // window depth the depth attachments hold.
-    uniforms_.m_hardwareDepthScale = bgfx::getCaps()->homogeneousDepth ? 1.0f : 2.0f;
-    bool originBottomLeft = gfx::is_origin_bottom_left();
+    uniforms_.m_params2Unused = 0.0f;
 
     // Compute transform matrices.
     auto& lightView = light_view_;
@@ -1695,7 +1677,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
         const float fovy = settings_.m_coverageSpotL;
         const float aspect = 1.0f;
         perspective[ProjType::Horizontal] =
-            make_light_projection(fovy, aspect, currentSmSettings->m_near, currentSmSettings->m_far, false, is_linear_depth);
+            make_light_projection(fovy, aspect, currentSmSettings->m_near, currentSmSettings->m_far, is_linear_depth);
         bx::memCopy(lightProj[ProjType::Horizontal], perspective[ProjType::Horizontal].render_proj, sizeof(lightProj[0]));
 
         const bx::Vec3 at = bx::add(bx::load<bx::Vec3>(point_light_.m_position.m_v),
@@ -1718,7 +1700,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             const float aspect = bx::tan(bx::toRad(fovx * 0.5f)) / bx::tan(bx::toRad(fovy * 0.5f));
 
             perspective[ProjType::Vertical] =
-                make_light_projection(fovx, aspect, currentSmSettings->m_near, currentSmSettings->m_far, false, is_linear_depth);
+                make_light_projection(fovx, aspect, currentSmSettings->m_near, currentSmSettings->m_far, is_linear_depth);
             bx::memCopy(lightProj[ProjType::Vertical], perspective[ProjType::Vertical].render_proj, sizeof(lightProj[0]));
 
             ypr[TetrahedronFaces::Green][2] = bx::toRad(180.0f);
@@ -1732,7 +1714,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
         const float aspect = bx::tan(bx::toRad(fovx * 0.5f)) / bx::tan(bx::toRad(fovy * 0.5f));
 
         perspective[ProjType::Horizontal] =
-            make_light_projection(fovy, aspect, currentSmSettings->m_near, currentSmSettings->m_far, homogeneousDepth, is_linear_depth);
+            make_light_projection(fovy, aspect, currentSmSettings->m_near, currentSmSettings->m_far, is_linear_depth);
         bx::memCopy(lightProj[ProjType::Horizontal], perspective[ProjType::Horizontal].render_proj, sizeof(lightProj[0]));
 
         for(uint8_t ii = 0; ii < TetrahedronFaces::Count; ++ii)
@@ -1805,7 +1787,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
                      -currentSmSettings->m_far,
                      currentSmSettings->m_far,
                      0.0f,
-                     homogeneousDepth);
+                     false);
 
         // Get camera inverse view matrix for frustum corner calculation
         const auto& mtxViewInv = cam.get_view_inverse();
@@ -1939,9 +1921,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     const auto update_perspective_frustum = [&](uint8_t view, ProjType::Enum proj_type) -> void
     {
         const auto& projection = perspective[proj_type];
-        lightFrustums[view].update(math::make_mat4(lightView[view]),
-                                   math::make_mat4(projection.cull_proj),
-                                   projection.homogeneous_depth);
+        lightFrustums[view].update(math::make_mat4(lightView[view]), math::make_mat4(projection.cull_proj));
     };
     if(LightType::SpotLight == settings_.m_lightType)
     {
@@ -1957,20 +1937,20 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     }
     else // LightType::DirectionalLight == settings.m_lightType
     {
-        lightFrustums[0].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[0]), homogeneousDepth);
-        lightFrustums[1].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[1]), homogeneousDepth);
-        lightFrustums[2].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[2]), homogeneousDepth);
-        lightFrustums[3].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[3]), homogeneousDepth);
+        lightFrustums[0].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[0]));
+        lightFrustums[1].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[1]));
+        lightFrustums[2].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[2]));
+        lightFrustums[3].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[3]));
     }
 
-    update_bias_uniforms(originBottomLeft);
+    update_bias_uniforms();
 
     // Prepare for scene.
     {
         // Setup shadow mtx.
         float mtxShadow[16];
 
-        const float ymul = (originBottomLeft) ? 0.5f : -0.5f;
+        const float ymul = -0.5f;
         float zadd = (DepthImpl::Linear == settings_.m_depthImpl) ? 0.0f : 0.5f;
 
         // clang-format off
@@ -1991,7 +1971,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
         }
         else if(LightType::PointLight == settings_.m_lightType)
         {
-            const float s = (originBottomLeft) ? 1.0f : -1.0f; // sign
+            const float s = -1.0f; // the texture's v runs down the light view's up axis
             zadd = (DepthImpl::Linear == settings_.m_depthImpl) ? 0.0f : 0.5f;
 
             // clang-format off
@@ -2055,24 +2035,18 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             // clang-format on
 
             // clang-format off
-                   // Use as: [stencilPack][flipV][tetrahedronFace]
-            static const uint8_t cropBiasIndices[2][2][4] =
+            // Use as: [stencilPack][tetrahedronFace]
+            static const uint8_t cropBiasIndices[2][4] =
                 {
-                 { // settings.m_stencilPack == false
-                     { 0, 1, 2, 3 }, //flipV == false
-                     { 2, 3, 0, 1 }, //flipV == true
-                 },
-                 { // settings.m_stencilPack == true
-                     { 3, 2, 0, 1 }, //flipV == false
-                     { 2, 3, 0, 1 }, //flipV == true
-                 },
+                 { 0, 1, 2, 3 }, // settings.m_stencilPack == false
+                 { 3, 2, 0, 1 }, // settings.m_stencilPack == true
                  };
             // clang-format on
 
             for(uint8_t ii = 0; ii < TetrahedronFaces::Count; ++ii)
             {
                 ProjType::Enum projType = (settings_.m_stencilPack) ? ProjType::Enum(ii > 1) : ProjType::Horizontal;
-                uint8_t biasIndex = cropBiasIndices[settings_.m_stencilPack][uint8_t(originBottomLeft)][ii];
+                uint8_t biasIndex = cropBiasIndices[settings_.m_stencilPack][ii];
 
                 float mtxTmp[16];
                 bx::mtxMul(mtxTmp, mtxYpr[ii], lightProj[projType]);
@@ -2109,7 +2083,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     }
 }
 
-void shadowmap_generator::update_bias_uniforms(bool origin_bottom_left)
+void shadowmap_generator::update_bias_uniforms()
 {
     // Stored depth = 0.5 * z_ndc + zadd (mtxBias), z_ndc = proj[10] * z + proj[14] for ortho and
     // linear maps and proj[10] + proj[14] / z for perspective 1/z maps; the crop matrices of
@@ -2127,7 +2101,7 @@ void shadowmap_generator::update_bias_uniforms(bool origin_bottom_left)
         axis_u[ii] = 0.0f;
         axis_v[ii] = 0.0f;
     }
-    const float v_sign = origin_bottom_left ? 1.0f : -1.0f;
+    const float v_sign = -1.0f;
     const auto set_axes = [&](const float* view)
     {
         axis_u[0] = view[0];
@@ -2243,14 +2217,11 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
     auto& lightProj = light_proj_;
     auto& lightFrustums = light_frustums_;
 
-    bool homogeneousDepth = gfx::is_homogeneous_depth();
-    bool originBottomLeft = gfx::is_origin_bottom_left();
-
     float screenProj[16];
     float screenView[16];
     bx::mtxIdentity(screenView);
 
-    bx::mtxOrtho(screenProj, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 100.0f, 0.0f, bgfx::getCaps()->homogeneousDepth);
+    bx::mtxOrtho(screenProj, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 100.0f, 0.0f, false);
 
     
     /// begin generating
@@ -2424,7 +2395,7 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
     {
         if(uses_static_copy)
         {
-            submit_static_copy_restore(RENDERVIEW_SHADOWMAP_0_ID, originBottomLeft);
+            submit_static_copy_restore(RENDERVIEW_SHADOWMAP_0_ID);
         }
         // Craft stencil mask for point light shadow map packing.
         if(uses_stencil_mask)
@@ -2455,14 +2426,14 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
         {
             bgfx::setTexture(4, shadow_map_[0], bgfx::getTexture(rt_shadow_map_[0]));
             bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-            screenSpaceQuad(originBottomLeft);
+            screenSpaceQuad();
             programs_.m_vBlur[depthType]->begin();
             bgfx::submit(RENDERVIEW_VBLUR_0_ID, programs_.m_vBlur[depthType]->native_handle());
             programs_.m_vBlur[depthType]->end();
 
             bgfx::setTexture(4, shadow_map_[0], bgfx::getTexture(rt_blur_));
             bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-            screenSpaceQuad(originBottomLeft);
+            screenSpaceQuad();
             programs_.m_hBlur[depthType]->begin();
             bgfx::submit(RENDERVIEW_HBLUR_0_ID, programs_.m_hBlur[depthType]->native_handle());
             programs_.m_hBlur[depthType]->end();
@@ -2482,14 +2453,14 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
                     // Each blur begins its own program: the first cascade's blur may have been skipped.
                     bgfx::setTexture(4, shadow_map_[0], bgfx::getTexture(rt_shadow_map_[ii]));
                     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-                    screenSpaceQuad(originBottomLeft);
+                    screenSpaceQuad();
                     programs_.m_vBlur[depthType]->begin();
                     bgfx::submit(viewId, programs_.m_vBlur[depthType]->native_handle());
                     programs_.m_vBlur[depthType]->end();
 
                     bgfx::setTexture(4, shadow_map_[0], bgfx::getTexture(rt_blur_));
                     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-                    screenSpaceQuad(originBottomLeft);
+                    screenSpaceQuad();
                     programs_.m_hBlur[depthType]->begin();
                     bgfx::submit(viewId + 1, programs_.m_hBlur[depthType]->native_handle());
                     programs_.m_hBlur[depthType]->end();
@@ -3026,7 +2997,7 @@ void shadowmap_generator::set_local_light_views(const bgfx::ViewId views[5],
     float screen_view[16];
     float screen_proj[16];
     bx::mtxIdentity(screen_view);
-    bx::mtxOrtho(screen_proj, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 100.0f, 0.0f, bgfx::getCaps()->homogeneousDepth);
+    bx::mtxOrtho(screen_proj, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 100.0f, 0.0f, false);
 
     const uint16_t f = current_shadow_map_size_;     // full size
     const uint16_t h = current_shadow_map_size_ / 2; // half size
@@ -3116,20 +3087,18 @@ void shadowmap_generator::submit_stencil_mask(bgfx::ViewId view) const
     programs_.m_black->end();
 }
 
-void shadowmap_generator::submit_static_copy_restore(bgfx::ViewId view, bool origin_bottom_left) const
+void shadowmap_generator::submit_static_copy_restore(bgfx::ViewId view) const
 {
-    // The atlas colour stores ndc z * 0.5 + 0.5; the device depth is ndc z where depth runs 0..1, and already
-    // ndc z * 0.5 + 0.5 where it runs -1..1. The backend's own clip depth range decides, not the engine's projection
-    // convention (gfx::is_homogeneous_depth).
-    const bool is_homogeneous = bgfx::getCaps()->homogeneousDepth;
-    const float params[4] = {is_homogeneous ? 1.0f : 0.5f, is_homogeneous ? 0.0f : 0.5f, 0.0f, 0.0f};
+    // The atlas colour stores ndc z * 0.5 + 0.5 and the device depth is ndc z (clip depth runs 0..1 on every
+    // backend): the restore writes colour * 2 - 1 as depth.
+    const float params[4] = {0.5f, 0.5f, 0.0f, 0.0f};
     bgfx::setUniform(restore_params_, params);
     bgfx::setTexture(0,
                      static_depth_sampler_,
                      shadow_atlas::get().get_static_depth_texture(),
                      BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_ALWAYS);
-    screenSpaceQuad(origin_bottom_left);
+    screenSpaceQuad();
     programs_.m_restore->begin();
     bgfx::submit(view, programs_.m_restore->native_handle());
     programs_.m_restore->end();

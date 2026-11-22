@@ -324,7 +324,6 @@ vec3 HizProjectVsDirToSsDir(vec3 vs_pos, vec3 vs_dir, vec3 ss_origin)
     vec3 ss_pj = ss_pj4.xyz / ss_pj4.w;
     ss_pj = clipTransform(ss_pj);
     ss_pj.xy = ss_pj.xy * 0.5 + 0.5;
-    ss_pj.z = toDepthTextureZ(ss_pj.z);
 
     return ss_pj - ss_origin;
 }

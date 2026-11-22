@@ -60,7 +60,7 @@ uniform vec4 u_shadowBiasParams;
 uniform vec4 u_fog_jitter;
 /// Last frame's camera-relative, unjittered view-projection.
 uniform mat4 u_fog_prev_view_proj;
-/// xyz = camera position - last frame's camera position, w = 1 when the render targets' row 0 is the bottom (GL).
+/// xyz = camera position - last frame's camera position, w unused.
 uniform vec4 u_fog_prev_offset;
 /// x = the sun's shadow cascades (0 = unshadowed), y = depth a linear-depth cascade stores beyond its receiver.
 uniform vec4 u_fog_shadow;
@@ -296,8 +296,7 @@ vec3 fog_previous_coordinate(vec3 offset)
 		return vec3_splat(-1.0);
 	}
 	vec2 ndc = previous_clip.xy / previous_clip.w;
-	float row = u_fog_prev_offset.w > 0.5 ? ndc.y * 0.5 + 0.5 : 0.5 - ndc.y * 0.5;
-	return vec3(ndc.x * 0.5 + 0.5, row, fog_slice_coordinate(previous_clip.w));
+	return vec3(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5, fog_slice_coordinate(previous_clip.w));
 }
 
 NUM_THREADS(4, 4, 4)

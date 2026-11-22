@@ -208,10 +208,7 @@ auto camera::get_projection() const -> const math::transform&
         {
             // Generate the updated perspective projection matrix
             float fov_radians = math::radians<float>(get_fov());
-            static const auto perspective_ =
-                gfx::is_homogeneous_depth() ? math::perspectiveNO<float> : math::perspectiveZO<float>;
-
-            math::mat4 projection = perspective_(fov_radians, aspect_ratio_, near_clip_, far_clip_);
+            math::mat4 projection = math::perspectiveZO<float>(fov_radians, aspect_ratio_, near_clip_, far_clip_);
 
             projection[2][0] += aa_data_.z;
             projection[2][1] += aa_data_.w;
@@ -233,10 +230,7 @@ auto camera::get_projection() const -> const math::transform&
             const float half_width = has_viewport ? float(viewport_size_.width) / 2.0f : ortho_size_ * aspect_ratio_;
             const float half_height = has_viewport ? float(viewport_size_.height) / 2.0f : ortho_size_;
             const frect_t rect = {-half_width, half_height, half_width, -half_height};
-            static const auto ortho_ =
-                gfx::is_homogeneous_depth() ? math::orthoNO<float> : math::orthoZO<float>;
-
-            math::mat4 projection = ortho_(rect.left * zoom,
+            math::mat4 projection = math::orthoZO<float>(rect.left * zoom,
                                            rect.right * zoom,
                                            rect.bottom * zoom,
                                            rect.top * zoom,
@@ -398,7 +392,7 @@ auto camera::get_frustum() const -> const math::frustum&
     // Recalculate frustum if necessary
     if(frustum_dirty_ && !frustum_locked_)
     {
-        frustum_.update(get_view(), get_projection(), gfx::is_homogeneous_depth());
+        frustum_.update(get_view(), get_projection());
         frustum_dirty_ = false;
 
         // Also build the frustum / volume that represents the space between the
@@ -821,24 +815,10 @@ auto camera::get_face_camera(uint32_t face, const math::transform& transform) ->
             t.set_rotation(+Z, +Y, -X);
             break;
         case 2: // up
-            if(!gfx::is_origin_bottom_left())
-            {
-                t.set_rotation(+X, -Z, +Y);
-            }
-            else
-            {
-                t.set_rotation(+X, +Z, -Y);
-            }
+            t.set_rotation(+X, -Z, +Y);
             break;
         case 3: // down
-            if(!gfx::is_origin_bottom_left())
-            {
-                t.set_rotation(+X, +Z, -Y);
-            }
-            else
-            {
-                t.set_rotation(+X, -Z, +Y);
-            }
+            t.set_rotation(+X, +Z, -Y);
             break;
         case 4: // front
             t.set_rotation(+X, +Y, +Z);

@@ -49,7 +49,7 @@ uniform vec4 u_gi_visualize_tile;
 
 vec3 GiCameraDirection(vec2 uv)
 {
-	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(0.5)));
+	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, 0.5));
 	vec3 world_point = clipToWorld(u_invViewProj, clip);
 	vec3 origin = mul(u_invView, vec4(0.0, 0.0, 0.0, 1.0)).xyz;
 	return normalize(world_point - origin);

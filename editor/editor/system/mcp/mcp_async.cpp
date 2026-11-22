@@ -35,8 +35,6 @@ struct fbo_capture_state
     uint32_t ready_frame{0};
     uint16_t width{0};
     uint16_t height{0};
-    /// Rows arrive bottom-up: OpenGL render targets keep their origin at the bottom left.
-    bool is_bottom_up{false};
     bgfx::TextureHandle blit_tex = BGFX_INVALID_HANDLE;
     std::string error;
 };
@@ -114,7 +112,6 @@ auto submit_fbo_blit(rtti::context& ctx,
 
     state.width = src_tex->info.width;
     state.height = src_tex->info.height;
-    state.is_bottom_up = bgfx::getCaps()->originBottomLeft;
     if(state.width == 0 || state.height == 0)
     {
         state.error = "Viewport framebuffer has zero size";
@@ -242,11 +239,10 @@ auto scale_rgba8_bimg(const std::vector<uint8_t>& src,
     return true;
 }
 
-/// Encodes RGBA8 @p pixels as PNG bytes, top row first; @p is_bottom_up reverses rows stored bottom-up.
+/// Encodes RGBA8 @p pixels, top row first, as PNG bytes.
 auto encode_rgba_png(uint16_t width,
                      uint16_t height,
                      const std::vector<uint8_t>& pixels,
-                     bool is_bottom_up,
                      std::vector<uint8_t>& out,
                      std::string& error) -> bool
 {
@@ -254,7 +250,7 @@ auto encode_rgba_png(uint16_t width,
     bx::MemoryWriter writer(&memory);
     const uint32_t pitch = static_cast<uint32_t>(width) * 4u;
     bx::Error err;
-    bimg::imageWritePng(&writer, width, height, pitch, pixels.data(), bimg::TextureFormat::RGBA8, is_bottom_up, &err);
+    bimg::imageWritePng(&writer, width, height, pitch, pixels.data(), bimg::TextureFormat::RGBA8, false, &err);
     if(!err.isOk())
     {
         error = "bimg::imageWritePng failed";
@@ -404,7 +400,7 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
 
     std::vector<uint8_t> bytes;
     std::string encode_error;
-    if(!encode_rgba_png(out_w, out_h, pixels, state->is_bottom_up, bytes, encode_error))
+    if(!encode_rgba_png(out_w, out_h, pixels, bytes, encode_error))
     {
         return {.text = encode_error, .is_error = true};
     }

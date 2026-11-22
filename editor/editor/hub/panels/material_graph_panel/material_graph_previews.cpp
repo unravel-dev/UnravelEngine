@@ -82,12 +82,6 @@ auto make_swatch_quad(const irect32_t& tile) -> gfx::clip_quad_def
     quad.height = quad.width;
     quad.offset_x = -1.0f + (2.0f * float(tile.left) + float(SWATCH_TILE_SIZE)) / atlas_size;
     quad.offset_y = 1.0f - (2.0f * float(tile.top) + float(SWATCH_TILE_SIZE)) / atlas_size;
-    // clip_quad_ex turns V over where the origin is the bottom left; this turns it back.
-    if(gfx::is_origin_bottom_left())
-    {
-        quad.uv_scaling_y = -1.0f;
-        quad.uv_offset_y = 1.0f;
-    }
     return quad;
 }
 } // namespace
@@ -300,12 +294,6 @@ auto material_graph_previews::get_swatch_uv(const std::string& node_id, ImVec2& 
     const float atlas_size = float(SWATCH_ATLAS_SIZE);
     uv0 = ImVec2(float(tile.left) / atlas_size, float(tile.top) / atlas_size);
     uv1 = ImVec2(float(tile.right) / atlas_size, float(tile.bottom) / atlas_size);
-    // A render target's first row is its bottom where the renderer's origin is there (OpenGL).
-    if(gfx::is_origin_bottom_left())
-    {
-        uv0.y = 1.0f - uv0.y;
-        uv1.y = 1.0f - uv1.y;
-    }
     return true;
 }
 

@@ -12,8 +12,8 @@
  * store the G-buffer normal and visibility 1.
  *
  * VIEW-SPACE CONVENTION: positions come from computeViewSpacePosition (shaderlib.sh), which
- * routes through clipTransform / toClipSpaceDepth, so the backend's y flip and depth range
- * are handled there and nothing here assumes a screen axis orientation. A slice direction
+ * routes through clipTransform, so the y flip between uv and clip space is handled there and
+ * nothing here assumes a screen axis orientation. A slice direction
  * is derived by reconstructing a second view position at a small uv offset (same depth),
  * which keeps the screen-to-view mapping exact for every backend.
  */

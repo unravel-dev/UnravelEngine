@@ -323,9 +323,9 @@ auto read_path_result(const ReadbackImage& image, path p) -> path_result
     for(uint32_t cell = first_cell; cell < first_cell + CELLS_PER_PATH; ++cell)
     {
         const uint32_t x = (cell % COLUMNS) * CELL_PIXELS + READ_PIXEL_IN_CELL;
-        // Rows counted up from clip space y = -1; a target with its origin at the top keeps that row last.
+        // Rows counted up from clip space y = -1; a target's origin is at the top, so that row is its last.
         const uint32_t y_up = (cell / COLUMNS) * CELL_PIXELS + READ_PIXEL_IN_CELL;
-        const uint32_t y = image.isBottomUp ? y_up : image.height - 1 - y_up;
+        const uint32_t y = image.height - 1 - y_up;
         const size_t offset = (size_t(y) * image.width + x) * 4;
         if(offset + 4 > image.pixels.size())
         {

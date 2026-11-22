@@ -172,7 +172,7 @@ vec4 GiReflectionDistantScreenTrace(ivec2 pixel, vec3 origin, vec3 direction)
 	vec3 start = GiProjectToScreen(ray.xyz);
 	vec3 delta = GiProjectToScreen(ray.xyz + direction * trace_length) - start;
 	vec4 depth_clip = start_clip + mul(u_proj, vec4(0.0, 0.0, trace_length, 0.0));
-	float depth_reference = toDepthTextureZ(depth_clip.z / depth_clip.w);
+	float depth_reference = depth_clip.z / depth_clip.w;
 	delta *= min(GiScreenExit(start.xy, delta.xy), 1.0);
 	float steps = float(GI_REFLECTION_DISTANT_TRACE_STEPS);
 	float tolerance =

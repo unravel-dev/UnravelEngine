@@ -33,8 +33,6 @@ struct ReadbackImage
     std::vector<uint8_t> pixels;
     uint32_t width = 0;
     uint32_t height = 0;
-    /// Rows arrive bottom-up: OpenGL render targets keep their origin at the bottom left.
-    bool isBottomUp = false;
 };
 
 /// Receives a readback on the main thread, inside gfx::frame() (or gfx::shutdown()).

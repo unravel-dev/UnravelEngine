@@ -184,7 +184,6 @@ void deferred::get_screen_rect(const camera& camera,
     min = view_size;
     max = math::ivec2(0);
     const math::mat4 view_proj = camera.get_view_projection().get_matrix();
-    const bool is_origin_bottom_left = bgfx::getCaps()->originBottomLeft;
     for(uint32_t corner = 0; corner < 8; ++corner)
     {
         const math::vec3 point((corner & 1u) != 0 ? bounds.max.x : bounds.min.x,
@@ -200,7 +199,7 @@ void deferred::get_screen_rect(const camera& camera,
         }
         const math::vec2 ndc = math::vec2(clip) / clip.w;
         const float u = ndc.x * 0.5f + 0.5f;
-        const float v = is_origin_bottom_left ? ndc.y * 0.5f + 0.5f : 0.5f - ndc.y * 0.5f;
+        const float v = 0.5f - ndc.y * 0.5f;
         const math::ivec2 pixel(int32_t(math::floor(u * float(size.width))), int32_t(math::floor(v * float(size.height))));
         min = math::min(min, pixel);
         max = math::max(max, pixel + 1);
@@ -296,7 +295,7 @@ auto deferred::get_region_projection(const math::mat4& projection,
     to_region[0][0] = view.x / size.x;
     to_region[1][1] = view.y / size.y;
     to_region[3][0] = shift.x - 1.0f;
-    to_region[3][1] = bgfx::getCaps()->originBottomLeft ? shift.y - 1.0f : 1.0f - shift.y;
+    to_region[3][1] = 1.0f - shift.y;
     return to_region * projection;
 }
 

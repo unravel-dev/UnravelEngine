@@ -437,48 +437,22 @@ float ign16x16(vec2 fragCoord)
 }
 
 
-// bgfx_ndc (declared by bgfx_shader.sh for GLSL, baked into a constant by the GL backend)
-// carries the backend's depth range and y origin, so these follow the OpenGL NDC
-// convention bgfx is configured with instead of assuming it.
-float toClipSpaceDepth(float _depthTextureZ)
-{
-#if BGFX_SHADER_LANGUAGE_GLSL
-	return _depthTextureZ * bgfx_ndc.x - bgfx_ndc.y;
-#else
-	return _depthTextureZ;
-#endif // BGFX_SHADER_LANGUAGE_GLSL
-}
+// Every backend renders with clip depth 0..1, so a depth buffer holds clip-space depth, and render
+// targets keep their origin at the top left, so uv.y runs opposite to clip y (OpenGL gets both from
+// bgfx's BGFX_CONFIG_GL_NORMALIZE_NDC_CONVENTIONS; the renderer checks them at start).
 
-float toDepthTextureZ(float _clipSpaceZ)
-{
-#if BGFX_SHADER_LANGUAGE_GLSL
-	return (_clipSpaceZ + bgfx_ndc.y) * bgfx_ndc.w;
-#else
-	return _clipSpaceZ;
-#endif // BGFX_SHADER_LANGUAGE_GLSL
-}
-
-float toClipSpaceY(float _y)
-{
-#if BGFX_SHADER_LANGUAGE_GLSL
-	return _y * bgfx_ndc.z;
-#else
-	return -_y;
-#endif // BGFX_SHADER_LANGUAGE_GLSL
-}
-
+// Clip-space position of a uv-space one with clip depth: y flips between the two.
 vec3 clipTransform(vec3 clip)
 {
-	clip.y = toClipSpaceY(clip.y);
+	clip.y = -clip.y;
 	return clip;
 }
 
-// Uv of a render-target texel from a y-up [0, 1] screen position (clip * 0.5 + 0.5). The y flip
-// is the clip-space one mirrored about the texture centre: where render targets keep their
-// origin at the top left, uv.y runs opposite to clip y.
+// Uv of a render-target texel from a y-up [0, 1] screen position (clip * 0.5 + 0.5): the clip-space
+// y flip mirrored about the texture centre.
 vec2 clipToUv(vec2 clip)
 {
-	clip.y = toClipSpaceY(clip.y - 0.5) + 0.5;
+	clip.y = -(clip.y - 0.5) + 0.5;
 	return clip;
 }
 
@@ -540,12 +514,10 @@ mat3 computeTangentToWorldSpaceMatrix( vec3 N, vec3 p, vec2 uv )
 }
 #endif
 
-// Get view space position from screen space coordinates and depth
+// Get view space position from screen space coordinates and depth (the depth buffer holds clip depth)
 vec3 computeViewSpacePosition(vec2 uv, float z)
 {
-	// Convert screen space depth to clip space depth
-    float clipDepth = toClipSpaceDepth(z);
-	vec3 clip = clipTransform(vec3(uv.xy * 2.0 - 1.0, clipDepth));
+	vec3 clip = clipTransform(vec3(uv.xy * 2.0 - 1.0, z));
 
     vec4 projected = mul(u_invProj, vec4(clip, 1.0));
     projected.xyz /= projected.w;
@@ -554,8 +526,8 @@ vec3 computeViewSpacePosition(vec2 uv, float z)
 }
 
 // Convert screen space depth to view space depth. A perspective projection gives
-// Z_ndc = Mul + Add / Z_view (W_clip = Z_view), and toClipSpaceDepth turns the depth-buffer value
-// back into Z_ndc for the backend's depth range, so no depth convention is assumed here.
+// Z_ndc = Mul + Add / Z_view (W_clip = Z_view), and the depth buffer holds Z_ndc, so no depth
+// convention is assumed here.
 float screenSpaceToViewSpaceDepth(float screenDepth)
 {
 #if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV || BGFX_SHADER_LANGUAGE_WGSL
@@ -567,7 +539,7 @@ float screenSpaceToViewSpaceDepth(float screenDepth)
     float depthLinearizeMul = u_proj[2][2];
     float depthLinearizeAdd = u_proj[3][2];
 #endif
-    return -depthLinearizeAdd / (depthLinearizeMul - toClipSpaceDepth(screenDepth));
+    return -depthLinearizeAdd / (depthLinearizeMul - screenDepth);
 }
 
 #endif // __SHADERLIB_SH__

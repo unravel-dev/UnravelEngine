@@ -1073,7 +1073,7 @@ void writePng(const bx::FilePath& _filePath, const ReadbackImage& _image)
                         _image.width * 4,
                         _image.pixels.data(),
                         bimg::TextureFormat::RGBA8,
-                        _image.isBottomUp,
+                        false,
                         &err);
     bx::close(&writer);
     if(!err.isOk())
@@ -1104,7 +1104,6 @@ bool readTexture(bgfx::ViewId viewId, bgfx::TextureHandle _texture, uint32_t wid
     pending->image.pixels.resize(info.storageSize);
     pending->image.width = width;
     pending->image.height = height;
-    pending->image.isBottomUp = bgfx::getCaps()->originBottomLeft;
     pending->onLanded = std::move(_onLanded);
     bgfx::touch(viewId);
     bgfx::blit(viewId, bgfx::TextureRegion{.handle = pending->readback}, bgfx::TextureRegion{.handle = _texture});

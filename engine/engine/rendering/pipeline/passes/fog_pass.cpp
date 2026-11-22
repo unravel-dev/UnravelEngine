@@ -224,7 +224,6 @@ auto get_grid_corner_rays(const camera& camera) -> std::array<math::vec4, 4>
 {
     const math::mat4 inverse_projection = glm::inverse(camera.get_projection_unjittered().get_matrix());
     const math::mat4 view_to_world = camera.get_view_inverse_relative().get_matrix();
-    const bool is_origin_bottom_left = bgfx::getCaps()->originBottomLeft;
     const std::array<math::vec2, 4> corners{math::vec2(0.0f, 0.0f),
                                                 math::vec2(1.0f, 0.0f),
                                                 math::vec2(0.0f, 1.0f),
@@ -235,7 +234,7 @@ auto get_grid_corner_rays(const camera& camera) -> std::array<math::vec4, 4>
     for(size_t i = 0; i < corners.size(); ++i)
     {
         const float ndc_x = corners[i].x * 2.0f - 1.0f;
-        const float ndc_y = is_origin_bottom_left ? corners[i].y * 2.0f - 1.0f : 1.0f - corners[i].y * 2.0f;
+        const float ndc_y = 1.0f - corners[i].y * 2.0f;
         const math::vec4 point = inverse_projection * math::vec4(ndc_x, ndc_y, ndc_depth, 1.0f);
         math::vec3 view_ray = math::vec3(point) / point.w;
         view_ray /= std::abs(view_ray.z);
@@ -719,8 +718,7 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
         gfx::set_uniform(volumetric_.u_fog_rays, rays.data(), std::uint16_t(rays.size()));
         gfx::set_uniform(volumetric_.u_fog_prev_view_proj, camera.get_prev_view_projection_relative_unjittered().get_matrix());
         const math::vec3 previous_position = math::inverse(camera.get_prev_view()).get_position();
-        const float is_origin_bottom_left = bgfx::getCaps()->originBottomLeft ? 1.0f : 0.0f;
-        gfx::set_uniform(volumetric_.u_fog_prev_offset, math::vec4(camera.get_position() - previous_position, is_origin_bottom_left));
+        gfx::set_uniform(volumetric_.u_fog_prev_offset, math::vec4(camera.get_position() - previous_position, 0.0f));
         const auto pre_exposure = params.pre_exposure.to_uniform();
         gfx::set_uniform(volumetric_.u_pre_exposure, pre_exposure.data());
         bind_uniforms(shader);

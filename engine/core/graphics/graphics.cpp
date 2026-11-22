@@ -578,7 +578,6 @@ auto get_view_stats(const bgfx::Stats& stats) -> std::vector<view_stats>
 auto screen_quad(float dest_width, float dest_height, float depth, float width, float height) -> uint64_t
 {
     float texture_half = get_half_texel();
-    bool origin_bottom_left = is_origin_bottom_left();
 
     if(3 == getAvailTransientVertexBuffer(3, pos_texcoord0_vertex::get_layout()))
     {
@@ -598,18 +597,8 @@ auto screen_quad(float dest_width, float dest_height, float depth, float width, 
 
         const float zz = depth;
 
-        float minv = texel_half_h;
-        float maxv = 2.0f + texel_half_h;
-
-        if(origin_bottom_left)
-        {
-            float temp = minv;
-            minv = maxv;
-            maxv = temp;
-
-            minv -= 1.0f;
-            maxv -= 1.0f;
-        }
+        const float minv = texel_half_h;
+        const float maxv = 2.0f + texel_half_h;
 
         vertex[0].x = minx;
         vertex[0].y = miny;
@@ -637,8 +626,6 @@ auto screen_quad(float dest_width, float dest_height, float depth, float width, 
 
 auto clip_fullscreen_triangle(float depth, float width, float height) -> uint64_t
 {
-    bool origin_bottom_left = is_origin_bottom_left();
-
     if(3 != getAvailTransientVertexBuffer(3, pos_texcoord0_vertex::get_layout()))
     {
         return 0;
@@ -658,14 +645,8 @@ auto clip_fullscreen_triangle(float depth, float width, float height) -> uint64_
 
     const float zz = depth;
 
-    float minv = 1.0f;
-    float maxv = 0.0f;
-
-    if(origin_bottom_left)
-    {
-        minv = 1.0f - minv;
-        maxv = 1.0f - maxv;
-    }
+    const float minv = 1.0f;
+    const float maxv = 0.0f;
 
     // One triangle covering [-width,width] x [-height,height] with extrapolated UVs (no quad diagonal).
     // v0: BL, v1: bottom edge extrapolated past BR, v2: left edge extrapolated past TL.
@@ -695,7 +676,6 @@ auto clip_fullscreen_triangle(float depth, float width, float height) -> uint64_
 auto clip_quad(float depth, float width, float height) -> uint64_t
 {
     // float texture_half = get_half_texel();
-    bool origin_bottom_left = is_origin_bottom_left();
 
     if(4 == getAvailTransientVertexBuffer(4, pos_texcoord0_vertex::get_layout()))
     {
@@ -715,14 +695,8 @@ auto clip_quad(float depth, float width, float height) -> uint64_t
 
         const float zz = depth;
 
-        float minv = 1.0f;
-        float maxv = 0.0f;
-
-        if(origin_bottom_left)
-        {
-            minv = 1.0f - minv;
-            maxv = 1.0f - maxv;
-        }
+        const float minv = 1.0f;
+        const float maxv = 0.0f;
 
         vertex[0].x = minx;
         vertex[0].y = maxy;
@@ -757,7 +731,6 @@ auto clip_quad(float depth, float width, float height) -> uint64_t
 uint64_t clip_quad_ex(const clip_quad_def& def)
 {
     // float texture_half = get_half_texel();
-    bool origin_bottom_left = is_origin_bottom_left();
 
     if(4 == getAvailTransientVertexBuffer(4, pos_texcoord0_vertex::get_layout()))
     {
@@ -810,10 +783,6 @@ uint64_t clip_quad_ex(const clip_quad_def& def)
         {
             vertex[i].u = (vertex[i].u * def.uv_scaling_x) + def.uv_offset_x;
             vertex[i].v = (vertex[i].v * def.uv_scaling_y) + def.uv_offset_y;
-            if(origin_bottom_left)
-            {
-                vertex[i].v = 1.0f - vertex[i].v;
-            }
         }
 
         bgfx::setVertexBuffer(0, &vb);
@@ -918,16 +887,6 @@ auto get_renderer_based_on_filename_extension(const std::string& _type) -> bgfx:
 
 
 
-auto is_homogeneous_depth() -> bool
-{
-    //We handle this in shaders.
-    return false;//get_caps()->homogeneousDepth;
-}
-
-auto is_origin_bottom_left() -> bool
-{
-    return bgfx::getCaps()->originBottomLeft;
-}
 
 auto get_max_blend_transforms() -> uint32_t
 {
@@ -1021,7 +980,7 @@ uint64_t estimate_texture_gpu_size(const bgfx::TextureInfo& _info, uint64_t _fla
     // bgfx tracks textureMemoryUsed as the sum of storageSize per texture. For eviction bookkeeping
     // we start there, then uplift uncompressed layouts to row-pitch size (256-byte alignment) which
     // better matches committed image allocations. We do NOT apply D3D12 placement alignment (64 KiB)
-    // — bgfx uses committed resources / dedicated Vk allocations, not suballocated heap placement.
+    // - bgfx uses committed resources / dedicated Vk allocations, not suballocated heap placement.
     uint64_t size = std::max<uint64_t>(_info.storageSize, estimate_row_pitch_layout_size(_info));
 
     // MSAA render targets allocate sample_count x the single-sample surface.
