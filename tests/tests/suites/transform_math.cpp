@@ -1411,6 +1411,65 @@ void test_frustum_far_from_origin()
     check(frustum.test_sphere(math::bsphere(eye + forward * 20.0f, 1.0f)), "a sphere in front of it is inside");
 }
 
+/// A projection to clip depth 0..1 with the near plane at 1 and the far plane at 0 instead.
+auto reverse_depth_rows(math::mat4 projection, bool is_perspective, float near_plane, float far_plane) -> math::mat4
+{
+    const double n = near_plane;
+    const double f = far_plane;
+    projection[2][2] = is_perspective ? float(n / (n - f)) : float(-1.0 / (f - n));
+    projection[3][2] = is_perspective ? float(n * f / (f - n)) : float(f / (f - n));
+    return projection;
+}
+
+void test_frustum_labels_follow_geometry()
+{
+    std::printf("test_frustum_labels_follow_geometry\n");
+    // The planes where clip z is 0 and where it equals w bound the depth range, near or far depending on the
+    // projection: a reversed projection gives the same named planes as a standard one.
+    constexpr float near_plane = 0.1f;
+    constexpr float far_plane = 500.0f;
+    const math::vec3 eye(-120.0f, 14.0f, 260.0f);
+    const math::vec3 forward = math::normalize(math::vec3(0.3f, -0.4f, -0.8f));
+    const math::transform view(math::lookAt(eye, eye + forward, math::vec3(0.0f, 1.0f, 0.0f)));
+    for(const bool is_perspective : {true, false})
+    {
+        const math::mat4 standard = is_perspective
+                                        ? math::perspectiveZO(math::radians(70.0f), 1.6f, near_plane, far_plane)
+                                        : math::orthoZO(-40.0f, 40.0f, -25.0f, 25.0f, near_plane, far_plane);
+        const math::mat4 reversed = reverse_depth_rows(standard, is_perspective, near_plane, far_plane);
+        math::frustum a;
+        math::frustum b;
+        a.update(view, math::transform(standard));
+        b.update(view, math::transform(reversed));
+        const std::string kind = is_perspective ? "perspective" : "orthographic";
+        bool same_planes = true;
+        for(std::size_t i = 0; i < a.planes.size(); ++i)
+        {
+            const math::vec4 delta = a.planes[i].data - b.planes[i].data;
+            const float scale = std::max(1.0f, std::abs(a.planes[i].data.w));
+            // A perspective far plane carries float error of about 1e-4 in either convention.
+            const bool same = math::length(math::vec3(delta)) < 1e-3f && std::abs(delta.w) < 1e-3f * scale;
+            if(!same)
+            {
+                std::printf("  plane %zu: (%g %g %g %g) vs (%g %g %g %g)\n", i, a.planes[i].data.x, a.planes[i].data.y,
+                            a.planes[i].data.z, a.planes[i].data.w, b.planes[i].data.x, b.planes[i].data.y,
+                            b.planes[i].data.z, b.planes[i].data.w);
+            }
+            same_planes = same_planes && same;
+        }
+        check(same_planes, kind + ": a reversed projection names the same six planes");
+        const auto& near_named = b.planes[math::volume_plane::near_plane];
+        const float eye_to_near = std::abs(math::dot(math::vec3(near_named.data), eye) + near_named.data.w);
+        check_near(eye_to_near, near_plane, 1e-3f, kind + ": the reversed frustum's near plane lies the near clip in front of the eye");
+        const math::vec3 inside = eye + forward * (far_plane * 0.5f);
+        const math::vec3 beyond = eye + forward * (far_plane * 1.5f);
+        const math::vec3 behind = eye - forward * 5.0f;
+        check(a.test_point(inside) && b.test_point(inside), kind + ": a point inside is inside both");
+        check(!a.test_point(beyond) && !b.test_point(beyond), kind + ": a point beyond the far plane is outside both");
+        check(!a.test_point(behind) && !b.test_point(behind), kind + ": a point behind the eye is outside both");
+    }
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------------
@@ -1439,6 +1498,7 @@ void run_transform_math_suite(rtti::context& /*ctx*/)
         RUN_CASE(test_inverse_and_axis_fast_paths());
         RUN_CASE(test_vec3_from_vec4_ignores_w());
         RUN_CASE(test_frustum_far_from_origin());
+        RUN_CASE(test_frustum_labels_follow_geometry());
         RUN_CASE(test_light_frame_follows_the_global_axes());
         run_property_tests();
     }

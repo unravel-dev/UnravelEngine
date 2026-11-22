@@ -101,6 +101,14 @@ void frustum::update(const transform& view, const transform& proj)
     planes[volume_plane::near_plane].data.z = m[2][2];
     planes[volume_plane::near_plane].data.w = m[3][2];
 
+    // Clip z = 0 and clip z = w bound the depth range; which is the near plane depends on the projection
+    // (standard or reversed depth). The near plane's inside faces along the view direction.
+    const vec3 view_direction(view[0][2], view[1][2], view[2][2]);
+    if(dot(vec3(planes[volume_plane::near_plane].data), view_direction) < 0.0f)
+    {
+        std::swap(planes[volume_plane::near_plane], planes[volume_plane::far_plane]);
+    }
+
     for(auto& plane : planes)
     {
         plane.data *= -1.0f;

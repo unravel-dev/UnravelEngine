@@ -30,7 +30,7 @@ public:
      * @brief Constructs a frustum from view and projection matrices.
      *
      * @param view The view transform.
-     * @param proj The projection transform, to clip depth 0..1.
+     * @param proj The projection transform, to clip depth 0..1 (the near plane at 0 or, reversed, at 1).
      */
 
     frustum(const transform& view, const transform& proj);
@@ -50,7 +50,7 @@ public:
      * @brief Updates the frustum based on the specified view and projection matrices.
      *
      * @param view The view transform.
-     * @param proj The projection transform, to clip depth 0..1.
+     * @param proj The projection transform, to clip depth 0..1 (the near plane at 0 or, reversed, at 1).
      */
     void update(const transform& view, const transform& proj);
 
