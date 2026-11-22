@@ -87,35 +87,44 @@ if(EMSCRIPTEN)
     add_definitions(-DBGFX_CONFIG_RENDERER_OPENGLES=30)
 endif()
 
-# Fixes to bgfx itself go in patches/ (*.patch, applied in file name order by apply_patches.cmake). bgfx.cmake
-# fetches bgfx with FetchContent, and the first FetchContent_Declare of a name wins: this one, with bgfx.cmake's pin
-# and a patch step, replaces bgfx.cmake's own. A bgfx from BGFX_DIR or an in-tree checkout is built as it is.
+# Fixes to bgfx go in patches/ and fixes to bx in patches/bx/ (*.patch, applied in file name order by
+# apply_patches.cmake). bgfx.cmake fetches both with FetchContent, and the first FetchContent_Declare of a name wins:
+# these, with bgfx.cmake's pins and a patch step, replace bgfx.cmake's own. A checkout from BGFX_DIR or BX_DIR, or an
+# in-tree one, is built as it is.
 include(FetchContent)
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/bgfx/CMakeLists.txt bgfx_cmake_lists)
-if(NOT bgfx_cmake_lists MATCHES "FetchContent_Declare\\([ \t\r\n]*bgfx[ \t\r\n]+[^)]*GIT_TAG[ \t\r\n]+([0-9a-fA-F]+)")
-    message(FATAL_ERROR "Could not find the bgfx commit that bgfx/CMakeLists.txt pins.")
-endif()
-set(bgfx_pin "${CMAKE_MATCH_1}")
-FetchContent_Declare(
-    bgfx
-    GIT_REPOSITORY https://github.com/bkaradzic/bgfx.git
-    GIT_TAG ${bgfx_pin}
-    PATCH_COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=<SOURCE_DIR> -DPATCH_DIR=${CMAKE_CURRENT_SOURCE_DIR}/patches
-                  -P ${CMAKE_CURRENT_SOURCE_DIR}/apply_patches.cmake
-)
 
-# A pin move updates the patched checkout, and FetchContent's update cannot carry the patches over: the checkout is
-# reset first (reset_moved_checkout.cmake). Disconnected builds never update it, and a checkout of one's own
-# (FETCHCONTENT_SOURCE_DIR_BGFX) is not touched.
-if(NOT FETCHCONTENT_FULLY_DISCONNECTED AND NOT FETCHCONTENT_UPDATES_DISCONNECTED
-   AND NOT FETCHCONTENT_UPDATES_DISCONNECTED_BGFX AND NOT FETCHCONTENT_SOURCE_DIR_BGFX)
-    execute_process(COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=${FETCHCONTENT_BASE_DIR}/bgfx-src -DPIN=${bgfx_pin}
-                            -P ${CMAKE_CURRENT_SOURCE_DIR}/reset_moved_checkout.cmake
-                    RESULT_VARIABLE bgfx_reset_result)
-    if(NOT bgfx_reset_result EQUAL 0)
-        message(FATAL_ERROR "Could not prepare the bgfx checkout for ${bgfx_pin}.")
+# Declares `name` at the commit bgfx/CMakeLists.txt pins, with the patches of `patch_dir` applied. A pin move updates
+# the patched checkout, and FetchContent's update cannot carry the patches over: the checkout is reset first
+# (reset_moved_checkout.cmake). Disconnected builds never update it, and a checkout of one's own
+# (FETCHCONTENT_SOURCE_DIR_<NAME>) is not touched.
+function(unravel_declare_patched_dependency name repository patch_dir)
+    if(NOT bgfx_cmake_lists MATCHES
+       "FetchContent_Declare\\([ \t\r\n]*${name}[ \t\r\n]+[^)]*GIT_TAG[ \t\r\n]+([0-9a-fA-F]+)")
+        message(FATAL_ERROR "Could not find the ${name} commit that bgfx/CMakeLists.txt pins.")
     endif()
-endif()
+    set(pin "${CMAKE_MATCH_1}")
+    FetchContent_Declare(
+        ${name}
+        GIT_REPOSITORY ${repository}
+        GIT_TAG ${pin}
+        PATCH_COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=<SOURCE_DIR> -DPATCH_DIR=${patch_dir}
+                      -P ${CMAKE_CURRENT_SOURCE_DIR}/apply_patches.cmake
+    )
+    string(TOUPPER "${name}" upper_name)
+    if(NOT FETCHCONTENT_FULLY_DISCONNECTED AND NOT FETCHCONTENT_UPDATES_DISCONNECTED
+       AND NOT FETCHCONTENT_UPDATES_DISCONNECTED_${upper_name} AND NOT FETCHCONTENT_SOURCE_DIR_${upper_name})
+        execute_process(COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=${FETCHCONTENT_BASE_DIR}/${name}-src -DPIN=${pin}
+                                -P ${CMAKE_CURRENT_SOURCE_DIR}/reset_moved_checkout.cmake
+                        RESULT_VARIABLE reset_result)
+        if(NOT reset_result EQUAL 0)
+            message(FATAL_ERROR "Could not prepare the ${name} checkout for ${pin}.")
+        endif()
+    endif()
+endfunction()
+
+unravel_declare_patched_dependency(bgfx https://github.com/bkaradzic/bgfx.git ${CMAKE_CURRENT_SOURCE_DIR}/patches)
+unravel_declare_patched_dependency(bx https://github.com/bkaradzic/bx.git ${CMAKE_CURRENT_SOURCE_DIR}/patches/bx)
 
 add_subdirectory(bgfx)
 

@@ -1,4 +1,4 @@
-# Resets the bgfx checkout FetchContent keeps in SOURCE_DIR when its HEAD is not PIN, the commit the next update
+# Resets the bgfx or bx checkout FetchContent keeps in SOURCE_DIR when its HEAD is not PIN, the commit the next update
 # checks out. FetchContent's git update stashes the checkout's changes, checks out the new commit and pops them;
 # the patches apply_patches.cmake left there do not pop where upstream changed the same lines, and the update stops
 # with "Failed to unstash changes" on every configure. A clean checkout updates, and the patch step then applies
@@ -42,6 +42,6 @@ execute_process(COMMAND git reset --hard --quiet
                 WORKING_DIRECTORY "${SOURCE_DIR}"
                 RESULT_VARIABLE result)
 if(NOT result EQUAL 0)
-    message(FATAL_ERROR "Could not reset ${SOURCE_DIR} before bgfx moves to ${PIN}.")
+    message(FATAL_ERROR "Could not reset ${SOURCE_DIR} before it moves to ${PIN}.")
 endif()
-message(STATUS "Reset the patched bgfx checkout before it moves to ${PIN}.")
+message(STATUS "Reset the patched checkout ${SOURCE_DIR} before it moves to ${PIN}.")

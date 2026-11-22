@@ -35,20 +35,22 @@ How it is wired:
 - `deps/3rdparty/bgfx/bgfx` is the bgfx.cmake fork (a submodule). Its `CMakeLists.txt` pins
   bx, bimg and bgfx, one `FetchContent_Declare(<name> GIT_REPOSITORY ... GIT_TAG <sha>)` line
   each.
-- `deps/3rdparty/bgfx/CMakeLists.txt` reads the bgfx pin from the fork with a regex and
-  declares bgfx first, with a patch step; the fork's own declare then does nothing. bgfx build
-  options (`BGFX_CONFIG_*`) are `add_definitions` there, never patches.
-- The checkout is `<FETCHCONTENT_BASE_DIR>/bgfx-src`; the tree's `CMakeCache.txt` names the
-  base folder (default `<tree>/_deps`; the player sub-builds have their own).
+- `deps/3rdparty/bgfx/CMakeLists.txt` reads the bgfx and bx pins from the fork with a regex
+  and declares both first, each with a patch step (`unravel_declare_patched_dependency`); the
+  fork's own declares then do nothing. bgfx build options (`BGFX_CONFIG_*`) are
+  `add_definitions` there, never patches.
+- The checkouts are `<FETCHCONTENT_BASE_DIR>/bgfx-src` and `bx-src`; the tree's
+  `CMakeCache.txt` names the base folder (default `<tree>/_deps`; the player sub-builds have
+  their own).
 - `deps/3rdparty/bgfx/apply_patches.cmake` keeps "HEAD and patch-set hash" in the checkout's
   git folder (`unravel-applied-patches`). An unchanged state touches no file; otherwise it
-  resets the checkout and applies each `deps/3rdparty/bgfx/patches/*.patch` in name order,
-  failing the configure on the first patch that does not apply. Patched files rebuild bgfx and
-  everything that links it.
+  resets the checkout and applies each `deps/3rdparty/bgfx/patches/*.patch` (bgfx) or
+  `deps/3rdparty/bgfx/patches/bx/*.patch` (bx) in name order, failing the configure on the first
+  patch that does not apply. Patched files rebuild the library and everything that links it.
 - `deps/3rdparty/bgfx/reset_moved_checkout.cmake` resets a checkout whose HEAD is not the pin
   before FetchContent updates it; FetchContent's own update stashes the patches and fails to
-  pop them on the new commit. It skips disconnected builds and `FETCHCONTENT_SOURCE_DIR_BGFX`;
-  a bgfx from `BGFX_DIR` or an own checkout is built unpatched.
+  pop them on the new commit. It skips disconnected builds and `FETCHCONTENT_SOURCE_DIR_BGFX` /
+  `_BX`; a bgfx or bx from `BGFX_DIR` / `BX_DIR` or an own checkout is built unpatched.
 
 Moving the pin:
 
@@ -70,4 +72,5 @@ Writing a patch:
   (`diff --git` hunks without `index` lines). Line endings LF (`.gitattributes`:
   `*.patch text eol=lf`).
 - A new patch reaches a tree at its next configure, or at once:
-  `cmake -DSOURCE_DIR=<checkout> -DPATCH_DIR=deps/3rdparty/bgfx/patches -P deps/3rdparty/bgfx/apply_patches.cmake`.
+  `cmake -DSOURCE_DIR=<checkout> -DPATCH_DIR=deps/3rdparty/bgfx/patches -P deps/3rdparty/bgfx/apply_patches.cmake`
+  (bx: its own checkout and `patches/bx`).

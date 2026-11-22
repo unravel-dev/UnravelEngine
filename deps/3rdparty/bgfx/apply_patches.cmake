@@ -1,7 +1,7 @@
-# Applies the patches of PATCH_DIR (*.patch, in file name order) to the git checkout SOURCE_DIR: the bgfx
+# Applies the patches of PATCH_DIR (*.patch, in file name order) to the git checkout SOURCE_DIR: the bgfx or bx
 # that bgfx.cmake fetches. The checkout is reset first, so a changed patch set never lands on an older one.
 # The applied state (the checkout's HEAD and the patches' hash) is kept in its git directory: an unchanged
-# state touches no file, and a configure does not rebuild bgfx.
+# state touches no file, and a configure does not rebuild the library.
 cmake_minimum_required(VERSION 3.16)
 
 if(NOT SOURCE_DIR OR NOT PATCH_DIR)
