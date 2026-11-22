@@ -30,9 +30,6 @@ void main()
 
 		vec2 halfPixel = u_quarterResPixelSize * 0.5f;
 
-#if BGFX_SHADER_LANGUAGE_GLSL
-		halfPixel.y = -halfPixel.y;
-#endif 
 		vec4 vals;
 		vals.x = texture2DLod(s_importanceMap, inUV + vec2( -halfPixel.x * 3, -halfPixel.y ), 0.0 ).x;
 		vals.y = texture2DLod(s_importanceMap, inUV + vec2( +halfPixel.x, -halfPixel.y * 3 ), 0.0 ).x;

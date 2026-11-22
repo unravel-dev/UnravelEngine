@@ -359,6 +359,9 @@ constexpr const char* NO_VULKAN_MESSAGE = "The game needs Vulkan graphics, which
 #endif
 /// Starts the message shown when the device lacks what the engine cannot render without.
 constexpr const char* MINIMUM_REQUIREMENTS_MESSAGE = "This graphics device cannot run the application.";
+/// Shown when the graphics backend was built with clip conventions the engine does not render with.
+constexpr const char* CLIP_CONVENTIONS_MESSAGE =
+    "The graphics backend was built with clip conventions the application does not render with.";
 /// The largest scale bgfx draws its debug text at.
 constexpr float MAX_DEBUG_TEXT_SCALE = 4.0f;
 /// The fingers on the screen at once that switch the statistics overlay (--gfx-stats-gesture). Games
@@ -485,6 +488,27 @@ auto get_minimum_requirements_message() -> std::string
         message += " " + sentence;
     }
     return message;
+}
+
+/**
+ * @brief Whether the backend renders with the clip conventions the engine's shaders and passes are written for:
+ * clip depth 0..1 and render targets with a top-left origin. Every backend has them; bgfx gives them to OpenGL
+ * when it is built with BGFX_CONFIG_GL_NORMALIZE_NDC_CONVENTIONS.
+ */
+auto has_engine_clip_conventions() -> bool
+{
+    const bgfx::Caps* caps = bgfx::getCaps();
+    if(!caps->homogeneousDepth && !caps->originBottomLeft)
+    {
+        return true;
+    }
+    APPLOG_CRITICAL("The {} backend reports {} clip depth and a {} origin. The engine renders with clip depth 0..1 and "
+                    "a top-left origin on every backend: bgfx must be built with "
+                    "BGFX_CONFIG_GL_NORMALIZE_NDC_CONVENTIONS=1.",
+                    bgfx::getRendererName(bgfx::getRendererType()),
+                    caps->homogeneousDepth ? "-1..1" : "0..1",
+                    caps->originBottomLeft ? "bottom-left" : "top-left");
+    return false;
 }
 
 void strip_window_geometry_arguments(std::vector<std::string>& arguments)
@@ -702,6 +726,12 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     backbuffer_window_ = init_data.swapChain.nwh;
     APPLOG_TRACE("Using {0} rendering backend.", bgfx::getRendererName(bgfx::getRendererType()));
     log_device_caps();
+    if(!has_engine_clip_conventions())
+    {
+        engine::context().get_cached<loading_screen>().fail(CLIP_CONVENTIONS_MESSAGE);
+        gfx::shutdown();
+        return false;
+    }
     // Checked on the real device: a simulation masks features to test their fallbacks, not to refuse to start.
     const std::string requirements_message = get_minimum_requirements_message();
     if(!requirements_message.empty())
@@ -744,6 +774,9 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     // first pipeline/program creation, which happens well after this point. Resolved once: the
     // player names cache:/ before this; the editor points it at each project it opens later,
     // while its own pipelines stay in the folder it started with.
+    // The OpenGL backends key a program binary by the shaders bgfx is given, not by the source it
+    // links after rewriting them for the shared clip conventions: their folders are named after
+    // those conventions, so binaries linked before the rewrite are never loaded.
     const auto renderer_slug = [](bgfx::RendererType::Enum type) -> const char*
     {
         switch(type)
@@ -755,9 +788,9 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
             case bgfx::RendererType::Vulkan:
                 return "vulkan";
             case bgfx::RendererType::OpenGL:
-                return "opengl";
+                return "opengl-ndc-zero-to-one";
             case bgfx::RendererType::OpenGLES:
-                return "opengles";
+                return "opengles-ndc-zero-to-one";
             case bgfx::RendererType::Metal:
                 return "metal";
             case bgfx::RendererType::WebGPU:

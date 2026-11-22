@@ -40,17 +40,10 @@ void main()
 	if (all(lessThan(dtID.xy, dim) ) )
 	{ 
 		ivec2 baseCoord = ivec2(dtID.xy) * 2;
-#if BGFX_SHADER_LANGUAGE_GLSL 
-		float a = texelFetch(s_depthSource, baseCoord + ivec2( 0, 1 ), 0).x;
-		float b = texelFetch(s_depthSource, baseCoord + ivec2( 1, 1 ), 0).x;
-		float c = texelFetch(s_depthSource, baseCoord + ivec2( 0, 0 ), 0).x;
-		float d = texelFetch(s_depthSource, baseCoord + ivec2( 1, 0 ), 0).x;
-#else
 		float a = texelFetch(s_depthSource, baseCoord + ivec2( 0, 0 ), 0).x;
 		float b = texelFetch(s_depthSource, baseCoord + ivec2( 1, 0 ), 0).x;
 		float c = texelFetch(s_depthSource, baseCoord + ivec2( 0, 1 ), 0).x;
 		float d = texelFetch(s_depthSource, baseCoord + ivec2( 1, 1 ), 0).x;
-#endif
 
 		imageStore(s_target0, ivec2(dtID.xy), ScreenSpaceToViewSpaceDepth( a ).xxxx);
 		imageStore(s_target1, ivec2(dtID.xy), ScreenSpaceToViewSpaceDepth( b ).xxxx);

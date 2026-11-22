@@ -35,9 +35,6 @@ vec3 GetLookupVectorForSphereCapture(vec3 ReflectionVector, vec3 WorldPosition, 
 		float x = saturate( 2.5f * NormalizedDistanceToCapture - 1.5f );
 		DistanceAlpha = 1.0f - x*x*(3.0f - 2.0f*x);
 	}
-	#if BGFX_SHADER_LANGUAGE_GLSL
-		ProjectedCaptureVector.y = -ProjectedCaptureVector.y;
-	#endif
 	return ProjectedCaptureVector;
 }
 

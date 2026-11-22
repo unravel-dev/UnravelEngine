@@ -65,6 +65,10 @@ add_definitions(-DBGFX_CONFIG_MAX_BONES=128)
 add_definitions(-DBGFX_CONFIG_MAX_TRANSIENT_VERTEX_BUFFER_SIZE=6<<24)
 add_definitions(-DBGFX_CONFIG_MAX_TRANSIENT_INDEX_BUFFER_SIZE=2<<24)
 add_definitions(-DBGFX_CONFIG_DEBUG_UNIFORM=0)
+# OpenGL and OpenGL ES render with the clip conventions of every other backend: clip depth 0..1 and
+# a top-left origin for render targets. The engine's shaders and passes rely on one convention, and
+# the renderer refuses to start when the backend reports another (renderer.cpp).
+add_definitions(-DBGFX_CONFIG_GL_NORMALIZE_NDC_CONVENTIONS=1)
 # The Vulkan backend reuses a command list every BGFX_CONFIG_MAX_FRAME_LATENCY frames, and before it renders
 # into a swap chain image again it waits on the fence of the command list that last rendered into it. With
 # more images than frames in flight, that command list already belongs to the frame just submitted, so the

@@ -130,11 +130,7 @@ vec4 mg_scene_texture_scene_depth(vec2 uv)
 vec2 forward_clip_to_view_uv(vec4 clip)
 {
 	vec2 ndc = clip.xy / max(clip.w, 1e-6);
-#if BGFX_SHADER_LANGUAGE_GLSL
-	return ndc * 0.5 + 0.5;
-#else
 	return vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-#endif
 }
 
 #if MATERIAL_ROUGH_REFRACTION

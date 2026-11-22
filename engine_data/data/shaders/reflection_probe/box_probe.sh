@@ -44,9 +44,6 @@ vec3 GetLookupVectorForBoxCapture(vec3 ReflectionVector, vec3 WorldPosition, vec
 	// Setup a fade based on receiver distance to the box, hides the box influence shape
 	DistanceAlpha = 1.0f - smoothstep(0.0f, 0.7f * BoxScales.w, BoxDistance);
 
-	#if BGFX_SHADER_LANGUAGE_GLSL
-		ProjectedCaptureVector.y = -ProjectedCaptureVector.y;
-	#endif
 
 	return ProjectedCaptureVector;
 }
