@@ -115,34 +115,69 @@ struct reflection_probe
         float range = 5.0f;
     };
 
+    /**
+     * @brief How far the view of a capture face reaches (its far clip), for the probe at @p transform.
+     *
+     * Faces look along the world axes, +X, -X, +Y, -Y, +Z, -Z (camera::get_face_camera). A box reaches along a
+     * face's axis as far as its farthest corner, with the probe's rotation and scale; a sphere reaches its range
+     * times the largest scale in every direction.
+     */
     auto get_face_extents(uint32_t face, const math::transform& transform) const -> float
     {
-        const auto& scale = transform.get_scale();
-
         if(type == probe_type::sphere)
         {
-            auto max_scale = math::max(scale.x, math::max(scale.y, scale.z));
-            return sphere_data.range * max_scale;
+            return get_sphere_radius(transform.get_scale());
         }
 
         if(type == probe_type::box)
         {
-            auto scaled_extents = box_data.extents * scale;
-            return math::max(scaled_extents.x, math::max(scaled_extents.y, scaled_extents.z));
+            // The box's half axes in the world are the transform's columns times the extents; a face's reach is
+            // the sum of their lengths along its world axis.
+            const auto& matrix = transform.get_matrix();
+            const int axis = int(face / 2);
+            float reach = 0.0f;
+            for(int column = 0; column < 3; ++column)
+            {
+                reach += math::abs(matrix[column][axis]) * box_data.extents[column];
+            }
+            return reach;
         }
 
         return {};
     }
 
-    auto get_max_range() const -> float
+    /**
+     * @brief The sphere's radius in the world: its range times the largest of the transform's @p scale, a mirrored
+     * (negative) one too.
+     */
+    auto get_sphere_radius(const math::vec3& scale) const -> float
+    {
+        const math::vec3 size = math::abs(scale);
+        return sphere_data.range * math::max(size.x, math::max(size.y, size.z));
+    }
+
+    /**
+     * @brief How far the box's influence reaches from its centre at the transform's @p scale, a mirrored (negative)
+     * scale too: its half sizes and its transition distance, which the shader measures in the box's own units
+     * (box_probe.sh), both scaled.
+     */
+    auto get_box_influence_radius(const math::vec3& scale) const -> float
+    {
+        return math::length(math::abs(scale) * (box_data.extents + box_data.transition_distance));
+    }
+
+    /**
+     * @brief How far the probe's influence reaches from its centre at the transform's @p scale.
+     */
+    auto get_influence_radius(const math::vec3& scale) const -> float
     {
         if(type == probe_type::sphere)
         {
-            return sphere_data.range;
+            return get_sphere_radius(scale);
         }
-        else if(type == probe_type::box)
+        if(type == probe_type::box)
         {
-            return math::max(box_data.extents.x, math::max(box_data.extents.y, box_data.extents.z));
+            return get_box_influence_radius(scale);
         }
         return 0.0f;
     }

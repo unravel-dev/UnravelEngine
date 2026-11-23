@@ -17,8 +17,9 @@ auto reflection_probe_component::get_bounds() const -> math::bbox
     else if(probe_.type == probe_type::box)
     {
         math::bbox result;
-        result.min = -probe_.box_data.extents;
-        result.max = probe_.box_data.extents;
+        // The fade past the box is in its own units (box_probe.sh): the transition distance at most.
+        result.min = -(probe_.box_data.extents + probe_.box_data.transition_distance);
+        result.max = probe_.box_data.extents + probe_.box_data.transition_distance;
         return result;
     }
 
@@ -39,22 +40,19 @@ auto reflection_probe_component::compute_projected_sphere_rect(irect32_t& rect,
                                                    rect.top,
                                                    rect.bottom,
                                                    position,
-                                                   probe_.sphere_data.range * math::max(scale.x, math::max(scale.y, scale.z)),
+                                                   probe_.get_sphere_radius(scale),
                                                    view_origin,
                                                    view,
                                                    proj);
     }
     else if(probe_.type == probe_type::box)
     {
-        // The extents are half sizes, and the influence reaches the transition distance past them.
-        const math::vec3 reach = math::abs(scale) * probe_.box_data.extents + probe_.box_data.transition_distance;
-
         return math::compute_projected_sphere_rect(rect.left,
                                                    rect.right,
                                                    rect.top,
                                                    rect.bottom,
                                                    position,
-                                                   math::length(reach),
+                                                   probe_.get_box_influence_radius(scale),
                                                    view_origin,
                                                    view,
                                                    proj);

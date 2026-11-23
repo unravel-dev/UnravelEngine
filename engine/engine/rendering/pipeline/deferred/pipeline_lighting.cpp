@@ -217,6 +217,14 @@ void deferred::build_reflections(scene& scn,
     steps.sees = [&](const probe_bake_candidate& candidate)
     {
         const auto& world_transform = scn.registry->get<transform_component>(candidate.entity).get_transform_global();
+        const auto& probe = candidate.probe->get_probe();
+        if(probe.type == probe_type::sphere)
+        {
+            // The sphere it lights: its range times the largest scale, round whatever the scale.
+            math::bbox lit;
+            lit.from_sphere(world_transform.get_position(), probe.get_sphere_radius(world_transform.get_scale()));
+            return camera.get_frustum().test_aabb(lit);
+        }
         return camera.test_obb(candidate.probe->get_bounds(), world_transform);
     };
     steps.has_room_for_face = &has_room_for_probe_face;
@@ -252,7 +260,8 @@ void deferred::render_reflection_probe_face(scene& scn,
     const auto& world_transform = scn.registry->get<transform_component>(candidate.entity).get_transform_global();
 
     auto face_camera = camera::get_face_camera(face, world_transform);
-    face_camera.set_far_clip(probe.get_face_extents(face, world_transform));
+    // A flat or zero-size probe still needs a far plane past the near one for a valid projection.
+    face_camera.set_far_clip(math::max(probe.get_face_extents(face, world_transform), face_camera.get_near_clip() * 2.0f));
     auto& rview = probe_comp.get_render_view(face);
     const auto& cubemap_fbo = probe_comp.get_cubemap_fbo(face);
 
@@ -1117,8 +1126,17 @@ void deferred::run_reflection_probe_pass(scene& scn,
                       return lhs_probe.method < rhs_probe.method;
                   }
 
-                  // The same method: larger ranges first, so the more local probes blend over them.
-                  return lhs_probe.get_max_range() > rhs_probe.get_max_range();
+                  // The same method: larger influences first, so the more local probes blend over them.
+                  const auto& lhs_scale = scn.registry->get<transform_component>(lhs).get_transform_global().get_scale();
+                  const auto& rhs_scale = scn.registry->get<transform_component>(rhs).get_transform_global().get_scale();
+                  const float lhs_radius = lhs_probe.get_influence_radius(lhs_scale);
+                  const float rhs_radius = rhs_probe.get_influence_radius(rhs_scale);
+                  if(lhs_radius != rhs_radius)
+                  {
+                      return lhs_radius > rhs_radius;
+                  }
+                  // Equal influences keep one order from frame to frame.
+                  return entt::to_integral(lhs) < entt::to_integral(rhs);
               });
 
     // Without probes the layer stays empty; the indirect pass reads the same empty layer from a
@@ -1179,8 +1197,7 @@ void deferred::run_reflection_probe_pass(scene& scn,
         if(probe.type == probe_type::sphere && sphere_ref_probe_program_.program)
         {
             ref_probe_program = &sphere_ref_probe_program_;
-            influence_radius =
-                math::max(probe_scale.x, math::max(probe_scale.y, probe_scale.z)) * probe.sphere_data.range;
+            influence_radius = probe.get_sphere_radius(probe_scale);
         }
 
         if(probe.type == probe_type::box && box_ref_probe_program_.program)
@@ -1198,7 +1215,7 @@ void deferred::run_reflection_probe_pass(scene& scn,
             gfx::set_uniform(box_ref_probe_program_.u_inv_world, u_inv_world);
             gfx::set_uniform(box_ref_probe_program_.u_data2, data2);
 
-            influence_radius = math::length(t.get_scale() + probe.box_data.transition_distance);
+            influence_radius = probe.get_box_influence_radius(world_transform.get_scale());
         }
 
         if(ref_probe_program)
@@ -1262,12 +1279,10 @@ auto deferred::make_inline_probe(scene& scn, entt::entity probe, gfx::render_vie
         return {};
     }
     const auto& world_transform = scn.registry->get<transform_component>(probe).get_transform_global();
-    const auto& scale = world_transform.get_scale();
     // The same probe the layer pass would draw (fs_sphere_reflection_probe: u_data0, u_data1, u_capture).
     inline_probe result;
     result.cubemap = cubemap;
-    result.sphere = math::vec4(world_transform.get_position(),
-                               math::max(scale.x, math::max(scale.y, scale.z)) * settings.sphere_data.range);
+    result.sphere = math::vec4(world_transform.get_position(), settings.get_sphere_radius(world_transform.get_scale()));
     result.sample = math::vec4(float(cubemap->info.numMips),
                                settings.intensity * get_pre_exposure(rview).value,
                                probe_comp.get_apply_prefilter() ? 1.0f : 0.0f,

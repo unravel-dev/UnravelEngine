@@ -500,8 +500,9 @@ public:
     /**
      * @brief Retrieves a camera for one of six cube faces.
      *
-     * @param face The index of the cube face.
-     * @param transform The transformation to apply.
+     * @param face The index of the cube face: +X, -X, +Y, -Y, +Z, -Z.
+     * @param transform Where the cube is: the camera sits at its position and looks along the world axis of the
+     * face, whatever its rotation and scale, as cubemaps are looked up by world direction.
      * @return The corresponding face camera.
      */
     static auto get_face_camera(std::uint32_t face, const math::transform& transform) -> camera;

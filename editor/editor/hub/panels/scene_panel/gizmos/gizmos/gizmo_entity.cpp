@@ -340,7 +340,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
         else
         {
           
-            auto radius = probe.get_face_extents(0, world_transform);
+            auto radius = probe.get_sphere_radius(world_transform.get_scale());
             auto transform = world_transform;
             transform.reset_scale();
             DebugDrawEncoderScopePush scope(dd.encoder);

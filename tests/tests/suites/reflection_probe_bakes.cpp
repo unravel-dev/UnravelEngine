@@ -19,7 +19,10 @@
  *     and none used is set aside as if disabled (no bake waits on it, its capture is released), a probe also
  *     used by another view is not, and a set-aside probe a view uses again bakes whole;
  *   - the graphics settings' face budget round trips through a settings document, and a document without it
- *     leaves the value as it was.
+ *     leaves the value as it was;
+ *   - capture faces look along the world axes from the probe's position whatever its rotation and scale (the
+ *     lighting looks cubemaps up by world direction), and each face's far clip reaches as far as the rotated, scaled
+ *     box does along that face's axis; a sphere reaches its range times the largest scale, a mirrored one too.
  *
  * The frames run through reflection_probe_system::bake_due_probes, the driver deferred::build_reflections runs,
  * with steps that count faces instead of rendering them.
@@ -29,6 +32,7 @@
 
 #include <engine/meta/settings/settings.hpp>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
+#include <engine/rendering/camera.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
 #include <engine/rendering/reflection_probe.h>
 #include <engine/settings/settings.h>
@@ -374,6 +378,64 @@ void test_settings_round_trip()
     check_eq(defaults.graphics.reflection_probe_faces_per_frame, 9, "and leaves the value it had");
 }
 
+void test_face_cameras_and_reach()
+{
+    std::printf("test_face_cameras_and_reach\n");
+    // Turned a quarter around Y and stretched along its own X: its X axis lies along the world Z axis, its Z along
+    // the world X axis.
+    math::transform transform;
+    transform.set_position(math::vec3(1.0f, 2.0f, 3.0f));
+    transform.set_rotation_euler_degrees(0.0f, 90.0f, 0.0f);
+    transform.set_scale(math::vec3(2.0f, 1.0f, 1.0f));
+
+    const math::vec3 face_axes[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    for(uint32_t face = 0; face < 6; ++face)
+    {
+        const auto cam = camera::get_face_camera(face, transform);
+        const auto forward = cam.z_unit_axis();
+        check_near(math::distance(cam.get_position(), transform.get_position()), 0.0f, 1e-4f,
+                   "face " + std::to_string(face) + " looks from the probe's position");
+        check_near(math::dot(forward, face_axes[face]), 1.0f, 1e-4f,
+                   "face " + std::to_string(face) + " looks along its world axis, not the probe's turned one");
+    }
+
+    reflection_probe probe;
+    probe.type = probe_type::box;
+    probe.box_data.extents = math::vec3(1.0f, 2.0f, 3.0f);
+    // World half axes: 2 along Z (X extent 1 times scale 2), 2 along Y, 3 along X.
+    const float box_reach[6] = {3.0f, 3.0f, 2.0f, 2.0f, 2.0f, 2.0f};
+    for(uint32_t face = 0; face < 6; ++face)
+    {
+        check_near(probe.get_face_extents(face, transform), box_reach[face], 1e-4f,
+                   "box face " + std::to_string(face) + " reaches as far as the box along its axis");
+    }
+
+    probe.type = probe_type::sphere;
+    probe.sphere_data.range = 5.0f;
+    math::transform mirrored;
+    mirrored.set_scale(math::vec3(-2.0f, 1.0f, 1.0f));
+    check_near(probe.get_face_extents(0, mirrored), 10.0f, 1e-4f, "a mirrored sphere reaches its range times its largest scale");
+    check_near(probe.get_sphere_radius(math::vec3(-2.0f, -3.0f, -1.0f)), 15.0f, 1e-4f, "and lights that radius");
+
+    probe.type = probe_type::box;
+    probe.box_data.extents = math::vec3(5.0f);
+    probe.box_data.transition_distance = 1.0f;
+    check_near(probe.get_box_influence_radius(math::vec3(-1.0f, 1.0f, 1.0f)), math::length(math::vec3(6.0f)), 1e-4f,
+               "a mirrored box's influence reaches past its corners");
+    check_near(probe.get_box_influence_radius(math::vec3(10.0f)), math::length(math::vec3(60.0f)), 1e-3f,
+               "a scaled box's fade scales with it, as the shader measures it in the box's units");
+
+    // Probes layer by the influence they have in the world, scale included.
+    reflection_probe big;
+    big.type = probe_type::sphere;
+    big.sphere_data.range = 2.0f;
+    reflection_probe local;
+    local.type = probe_type::sphere;
+    local.sphere_data.range = 5.0f;
+    check(big.get_influence_radius(math::vec3(10.0f)) > local.get_influence_radius(math::vec3(1.0f)),
+          "a small range scaled up reaches further than a larger one unscaled");
+}
+
 void run_reflection_probe_bakes_suite(rtti::context& /*ctx*/)
 {
     RUN_CASE(test_budget());
@@ -384,6 +446,7 @@ void run_reflection_probe_bakes_suite(rtti::context& /*ctx*/)
     RUN_CASE(test_preview_bakes_whole());
     RUN_CASE(test_gi_reflections_leave_static_probes_out());
     RUN_CASE(test_settings_round_trip());
+    RUN_CASE(test_face_cameras_and_reach());
 }
 
 } // namespace

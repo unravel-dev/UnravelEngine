@@ -1545,8 +1545,7 @@ auto deferred::find_forward_probe(const run_context& run, const math::vec3& posi
         bool is_inside = false;
         if(probe.type == probe_type::sphere)
         {
-            const auto& scale = world.get_scale();
-            radius = math::max(scale.x, math::max(scale.y, scale.z)) * probe.sphere_data.range;
+            radius = probe.get_sphere_radius(world.get_scale());
             is_inside = math::distance(position, world.get_position()) < radius;
         }
         else
@@ -1554,7 +1553,7 @@ auto deferred::find_forward_probe(const run_context& run, const math::vec3& posi
             math::transform box = world;
             box.scale(probe.box_data.extents);
             const math::vec3 local = math::inverse(box).transform_coord(position);
-            radius = math::length(box.get_scale() + probe.box_data.transition_distance);
+            radius = probe.get_box_influence_radius(world.get_scale());
             is_inside = math::abs(local.x) <= 1.0f && math::abs(local.y) <= 1.0f && math::abs(local.z) <= 1.0f;
         }
         if(is_inside && radius < best_radius)
@@ -1580,13 +1579,13 @@ auto deferred::find_forward_probe(const run_context& run, const math::vec3& posi
     if(probe.type == probe_type::sphere)
     {
         result.type = forward_probe::kind::sphere;
-        result.data[0] = math::vec4(world.get_position(), math::max(scale.x, math::max(scale.y, scale.z)) * probe.sphere_data.range);
+        result.data[0] = math::vec4(world.get_position(), probe.get_sphere_radius(scale));
         return result;
     }
     math::transform box = world;
     box.scale(probe.box_data.extents);
     result.type = forward_probe::kind::box;
-    result.data[0] = math::vec4(world.get_position(), math::length(box.get_scale() + probe.box_data.transition_distance));
+    result.data[0] = math::vec4(world.get_position(), probe.get_box_influence_radius(scale));
     result.data[2] = math::vec4(probe.box_data.extents, probe.box_data.transition_distance);
     result.inv_world = math::inverse(box).get_matrix();
     return result;

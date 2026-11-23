@@ -799,8 +799,8 @@ auto camera::get_face_camera(uint32_t face, const math::transform& transform) ->
     cam.set_near_clip(0.01f);
     cam.set_far_clip(256.0f);
 
-    // Configurable axis vectors used to construct view matrices. In the
-    // case of the omni light, we align all frustums to the world axes.
+    // The faces look along the world axes from the transform's position: a cubemap is looked up by world
+    // direction, so the transform's rotation and scale do not turn them.
     math::vec3 X(1, 0, 0);
     math::vec3 Y(0, 1, 0);
     math::vec3 Z(0, 0, 1);
@@ -829,7 +829,7 @@ auto camera::get_face_camera(uint32_t face, const math::transform& transform) ->
             break;
     }
 
-    t = transform * t;
+    t.set_position(transform.get_position());
 
     // Set new transform
     cam.look_at(t.get_position(), t.get_position() + t.z_unit_axis(), t.y_unit_axis());
