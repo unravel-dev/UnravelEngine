@@ -270,12 +270,12 @@ auto gtao_pass::run_temporal(gfx::render_view& rview,
     auto output = create_or_update_texture(rview, write_name, ctx.ao_size, bgfx::TextureFormat::RGBA8, false, clamp_flags);
     const bool history_valid = state.history_valid && params.prev_depth != nullptr;
     gfx::render_pass pass("GTAO/Temporal");
-    pass.set_view_proj(ctx.cam->get_view(), ctx.cam->get_projection());
+    // Offsets from the camera (camera::set_pass_view_proj); last frame's matrix takes them too.
+    ctx.cam->set_pass_view_proj(pass, ctx.cam->get_projection());
     set_common_uniforms(ctx);
     // The TAA-unjittered previous pair, like every temporal consumer in the pipeline: the
     // jittered prev misaligns a still camera's reprojection by the jitter delta each frame.
-    auto prev_view_proj = ctx.cam->get_prev_view_projection_unjittered();
-    gfx::set_uniform(temporal_program_.u_gtao_prev_view_proj, prev_view_proj.get_matrix());
+    gfx::set_uniform(temporal_program_.u_gtao_prev_view_proj, ctx.cam->get_prev_view_projection_from_current_unjittered());
     const float temporal[4] = {std::clamp(ctx.config.temporal_history, 0.0f, 0.98f),
                                params.velocity ? 1.0f : 0.0f,
                                std::max(ctx.config.temporal_depth_threshold, 0.005f),

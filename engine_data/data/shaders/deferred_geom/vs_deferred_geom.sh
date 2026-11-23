@@ -38,10 +38,11 @@ void main()
 #else
     mat4 model = u_world[0];
 #endif
-    vec4 wpos = mul(model, vec4(a_position, 1.0));
+    // The vertex as an offset from the view origin (view_origin.sh): the view's matrices take offsets.
+    vec4 wpos = vec4(mulWorldOffset(model, a_position), 1.0);
 #if MATERIAL_WORLD_POSITION_OFFSET
-    // The graph's vertex stage: its offset, and what it passes the pixels.
-    MaterialVertex vertex_stage = mg_evaluate_vertex(model, wpos.xyz, a_normal, a_tangent, a_bitangent, a_texcoord0, MG_VERTEX_UV1, MG_VERTEX_COLOR0, u_material_time.x);
+    // The graph's vertex stage: its offset, and what it passes the pixels. Its nodes read absolute positions.
+    MaterialVertex vertex_stage = mg_evaluate_vertex(model, viewOffsetToWorld(wpos.xyz), a_normal, a_tangent, a_bitangent, a_texcoord0, MG_VERTEX_UV1, MG_VERTEX_COLOR0, u_material_time.x);
     wpos.xyz += vertex_stage.world_position_offset;
 #endif
     gl_Position = mul(DEFERRED_GEOM_VIEW_PROJ, wpos);

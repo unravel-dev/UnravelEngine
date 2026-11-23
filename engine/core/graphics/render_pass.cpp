@@ -57,6 +57,10 @@ render_pass::render_pass(const char* name) : render_pass(generate_id(), name)
 render_pass::render_pass(bgfx::ViewId i, const char* name) : id(i)
 {
     bgfx::resetView(id);
+    // The reset drops the view's uniforms; without an origin of its own a view would read the last one another view
+    // set.
+    const float world_origin[3] = {0.0f, 0.0f, 0.0f};
+    set_view_origin(id, world_origin);
 
     const auto& scopes = get_scopes();
     if(scopes.empty())
@@ -122,6 +126,12 @@ void render_pass::clear() const
 void render_pass::set_view_proj(const float* v, const float* p)
 {
     bgfx::setViewTransform(id, v, p);
+}
+
+void render_pass::set_view_proj(const float* v, const float* p, const float* origin)
+{
+    bgfx::setViewTransform(id, v, p);
+    set_view_origin(id, origin);
 }
 
 void render_pass::set_view_scissor(uint16_t _x, uint16_t _y, uint16_t _width, uint16_t _height)

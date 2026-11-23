@@ -217,7 +217,6 @@ void deferred::run_g_buffer_pass(hpp::span<const visibility_data> visibility_set
 {
     APP_SCOPE_PERF("Rendering/G-Buffer Pass");
 
-    const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
     const auto& viewport_size = camera.get_viewport_size();
 
@@ -229,7 +228,8 @@ void deferred::run_g_buffer_pass(hpp::span<const visibility_data> visibility_set
     {
         pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL, 0x000000FF, gfx::camera_far_depth, 0);
     }
-    pass.set_view_proj(view, proj);
+    // Offsets from the camera (camera::set_pass_view_proj); the velocity pass draws these meshes again from the same.
+    camera.set_pass_view_proj(pass, proj);
     pass.bind(gbuffer.get());
 
     if(is_first_phase)
@@ -807,12 +807,12 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
     const auto& fbo = create_or_resize_v_buffer(rview, render_size);
     const auto& gbuffer = rview.fbo_get("GBUFFER");
 
-    const auto& view = camera.get_view();
     // Jittered, deliberately: the movers sub-pass must rasterize exactly like the G-buffer for
     // the EQUAL depth test, and the fullscreen reconstruction mirrors the TAA formulation
     // (jittered current unprojection + unjittered previous reprojection, camera.h:267-275).
     const auto& proj = camera.get_projection();
-    const auto prev_vp = camera.get_prev_view_projection_unjittered();
+    // Last frame's view-projection for offsets from this frame's camera: the passes below draw from it.
+    const math::transform prev_vp(camera.get_prev_view_projection_from_current_unjittered());
 
     // 1) Camera-derived velocity for every pixel, reconstructed from depth. Makes the buffer
     //    complete so consumers never branch on "does this pixel have object velocity".
@@ -825,7 +825,7 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
         pass.bind(camera_fbo.get());
         // Every pixel is drawn below: a clear instead of a load spares a tile-based GPU reading the old contents.
         pass.clear(BGFX_CLEAR_COLOR, 0, 1.0f, 0);
-        pass.set_view_proj(view, proj);
+        camera.set_pass_view_proj(pass, proj);
 
         if(velocity_camera_program_.program->begin())
         {
@@ -852,7 +852,7 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
     {
         gfx::render_pass pass("Velocity/Geometry Pass");
         pass.bind(fbo.get());
-        pass.set_view_proj(view, proj);
+        camera.set_pass_view_proj(pass, proj);
 
         const auto& view_frustum = camera.get_frustum();
         const auto camera_position = camera.get_position();
@@ -1267,7 +1267,8 @@ void deferred::draw_translucent_velocity(bgfx::ViewId view, const visibility_dat
     }
     const auto& camera = run.cam;
     const auto camera_position = camera.get_position();
-    const auto prev_vp = camera.get_prev_view_projection_unjittered();
+    // For offsets from the camera: the translucency velocity pass draws from it (camera::set_pass_view_proj).
+    const math::transform prev_vp(camera.get_prev_view_projection_from_current_unjittered());
     auto extras = model_comp.get_submit_extras(false);
     extras.material_pass = model_material_pass::forward;
     extras.prev_world_transform = &model_comp.get_prev_world_transform();
@@ -1576,18 +1577,23 @@ auto deferred::find_forward_probe(const run_context& run, const math::vec3& posi
     const float prefiltered = probe_comp.get_apply_prefilter() ? 1.0f : 0.0f;
     result.cubemap = cubemap->native_handle();
     result.data[1] = math::vec4(float(cubemap->info.numMips), intensity, prefiltered, 0.0f);
+    // The translucency pass draws around the camera (camera::set_pass_view_proj): the probe as offsets from it.
+    const math::vec3& camera_position = run.cam.get_position();
+    const math::vec3 probe_offset = world.get_position() - camera_position;
     if(probe.type == probe_type::sphere)
     {
         result.type = forward_probe::kind::sphere;
-        result.data[0] = math::vec4(world.get_position(), probe.get_sphere_radius(scale));
+        result.data[0] = math::vec4(probe_offset, probe.get_sphere_radius(scale));
         return result;
     }
     math::transform box = world;
     box.scale(probe.box_data.extents);
     result.type = forward_probe::kind::box;
-    result.data[0] = math::vec4(world.get_position(), probe.get_box_influence_radius(scale));
+    result.data[0] = math::vec4(probe_offset, probe.get_box_influence_radius(scale));
     result.data[2] = math::vec4(probe.box_data.extents, probe.box_data.transition_distance);
-    result.inv_world = math::inverse(box).get_matrix();
+    // Inverted and moved by the camera in double, so neither large position is rounded into it.
+    result.inv_world = math::mat4(glm::inverse(glm::dmat4(box.get_matrix())) *
+                                  glm::translate(glm::dmat4(1.0), glm::dvec3(camera_position)));
     return result;
 }
 

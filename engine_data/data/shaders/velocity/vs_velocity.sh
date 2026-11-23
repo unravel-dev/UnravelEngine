@@ -11,7 +11,8 @@
 // Previous-frame counterpart of u_world (gfx::set_prev_world_transform).
 uniform mat4 u_prev_world[1];
 #endif
-// Previous frame's view-projection, jitter removed (camera::get_prev_view_projection_unjittered).
+// Previous frame's view-projection, jitter removed, for offsets from this frame's view origin
+// (camera::get_prev_view_projection_from_current_unjittered).
 uniform mat4 u_prev_view_proj;
 
 void main()
@@ -43,17 +44,18 @@ void main()
     mat4 prev_model = u_prev_world[0];
 #endif
 
-    vec4 wpos = mul(model, vec4(a_position, 1.0));
+    // Both poses as offsets from this frame's view origin (view_origin.sh); u_prev_view_proj takes them so.
+    vec4 wpos = vec4(mulWorldOffset(model, a_position), 1.0);
 #if MORPH
     // A morphed vertex was elsewhere last frame too: its previous deformed position.
-    vec4 prev_wpos = mul(prev_model, vec4(a_texcoord7, 1.0));
+    vec4 prev_wpos = vec4(mulWorldOffset(prev_model, a_texcoord7), 1.0);
 #else
-    vec4 prev_wpos = mul(prev_model, vec4(a_position, 1.0));
+    vec4 prev_wpos = vec4(mulWorldOffset(prev_model, a_position), 1.0);
 #endif
 #if MATERIAL_WORLD_POSITION_OFFSET
-    // The offset of each frame at its time: the material's animation is motion too.
-    wpos.xyz += mg_world_position_offset(model, wpos.xyz, a_normal, a_tangent, a_bitangent, a_texcoord0, MG_VERTEX_UV1, MG_VERTEX_COLOR0, u_material_time.x);
-    prev_wpos.xyz += mg_world_position_offset(prev_model, prev_wpos.xyz, a_normal, a_tangent, a_bitangent, a_texcoord0, MG_VERTEX_UV1, MG_VERTEX_COLOR0, u_material_time.y);
+    // The offset of each frame at its time: the material's animation is motion too. The nodes read absolute positions.
+    wpos.xyz += mg_world_position_offset(model, viewOffsetToWorld(wpos.xyz), a_normal, a_tangent, a_bitangent, a_texcoord0, MG_VERTEX_UV1, MG_VERTEX_COLOR0, u_material_time.x);
+    prev_wpos.xyz += mg_world_position_offset(prev_model, viewOffsetToWorld(prev_wpos.xyz), a_normal, a_tangent, a_bitangent, a_texcoord0, MG_VERTEX_UV1, MG_VERTEX_COLOR0, u_material_time.y);
 #endif
 
     // Rasterize with the SAME jittered view-projection as the G-buffer pass so the EQUAL

@@ -13,6 +13,7 @@ vec3 v_far_point
 //uniform vec4 u_camera_position;
 
 
+// The pass's view takes offsets from the view origin (view_origin.sh): so are these points.
 vec3 unproject_point (float x, float y, float z)
 {
 	vec4 unprojected_point = mul(u_invViewProj, vec4 (x, y, z, 1.0));

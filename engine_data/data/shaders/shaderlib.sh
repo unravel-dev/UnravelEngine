@@ -6,6 +6,8 @@
 #ifndef __SHADERLIB_SH__
 #define __SHADERLIB_SH__
 
+#include "view_origin.sh"
+
 #if BGFX_SHADER_LANGUAGE_GLSL
 #	define CONST_ARRAY_BEGIN(_type, _name, _count) CONST(_type) _name[_count] = _type[](
 #else
@@ -516,6 +518,23 @@ vec3 clipToWorld(mat4 _invViewProj, vec3 _clipPos)
 {
 	vec4 wpos = mul(_invViewProj, vec4(_clipPos, 1.0));
 	return wpos.xyz / wpos.w;
+}
+
+// View-space position of the clip position @p _clipPos of the pass's view (u_invProj).
+vec3 clipToView(vec3 _clipPos)
+{
+	vec4 view = mul(u_invProj, vec4(_clipPos, 1.0));
+	return view.xyz / view.w;
+}
+
+// World position of the clip position @p _clipPos of the pass's view: to view space through the inverse projection,
+// then through the inverse view. Rebuild positions from depth through this, not through u_invViewProj: the fused
+// inverse carries the camera position in every element, so its rounding grows with the camera's distance from the
+// origin and the divide by w scales it. Taken apart, the view-space point keeps its precision and the camera position
+// is added once.
+vec3 clipToWorldThroughView(vec3 _clipPos)
+{
+	return mul(u_invView, vec4(clipToView(_clipPos), 1.0)).xyz;
 }
 
 mat3 invert_3x3( mat3 M )

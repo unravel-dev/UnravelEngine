@@ -83,7 +83,8 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
     pass.clear(BGFX_CLEAR_COLOR, 0, 1.0f, 0);
     // The output lives on the unjittered pixel grid: fs_taa.eshader reconstructs positions through the unjittered
     // projection and resamples the current frame around the unjittered centre with the jitter below.
-    pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
+    // Offsets from the camera (camera::set_pass_view_proj); last frame's matrix takes them too.
+    params.cam->set_pass_view_proj(pass, params.cam->get_projection_unjittered());
 
     gfx::set_texture(program_.s_curr, 0, input->get_texture(0), TAA_SAMPLER_FLAGS);
     gfx::set_texture(program_.s_history, 1, history_tex, TAA_SAMPLER_FLAGS);
@@ -108,8 +109,7 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
                      use_reactive ? params.reactive : params.g_buffer->get_texture(4),
                      use_reactive ? TAA_SAMPLER_FLAGS : TAA_PLACEHOLDER_FLAGS);
 
-    const auto prev_vp = params.cam->get_prev_view_projection_unjittered();
-    gfx::set_uniform(program_.u_prev_view_proj, prev_vp.get_matrix());
+    gfx::set_uniform(program_.u_prev_view_proj, params.cam->get_prev_view_projection_from_current_unjittered());
 
     const float taa_params[4] = {params.config.history_blend,
                                  params.config.sharpen,

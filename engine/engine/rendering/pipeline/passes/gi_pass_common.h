@@ -1,5 +1,6 @@
 #pragma once
 
+#include <engine/rendering/camera.h>
 #include <engine/rendering/default_textures.h>
 #include <engine/rendering/gi/gi_pass_constants.h>
 #include <engine/rendering/gi/gi_project_settings.h>
@@ -401,36 +402,41 @@ inline constexpr uint64_t experiment_no_direct_page_skip = 1ull << 34u;
 /// (gi_reflection_common.sh, the reflection tiles).
 inline constexpr uint64_t experiment_all_reflection_tiles = 1ull << 35u;
 
-/// What gi_motion.sh reads: last frame's view projection and its inverse, the velocity buffer and u_gi_motion.
+/// What gi_motion.sh reads: last frame's view projection, the inverse of its camera-relative form and last frame's
+/// camera position, the velocity buffer and u_gi_motion.
 struct motion_uniforms : uniforms_cache
 {
     gfx::program::uniform_ptr u_gi_prev_view_proj;
-    gfx::program::uniform_ptr u_gi_prev_inv_view_proj;
+    gfx::program::uniform_ptr u_gi_prev_inv_view_proj_relative;
+    gfx::program::uniform_ptr u_gi_prev_camera_position;
     gfx::program::uniform_ptr u_gi_motion;
     gfx::program::uniform_ptr s_gi_velocity;
 
     void cache_uniforms()
     {
         cache_uniform(nullptr, u_gi_prev_view_proj, "u_gi_prev_view_proj", bgfx::UniformType::Mat4);
-        cache_uniform(nullptr, u_gi_prev_inv_view_proj, "u_gi_prev_inv_view_proj", bgfx::UniformType::Mat4);
+        cache_uniform(nullptr,
+                      u_gi_prev_inv_view_proj_relative,
+                      "u_gi_prev_inv_view_proj_relative",
+                      bgfx::UniformType::Mat4);
+        cache_uniform(nullptr, u_gi_prev_camera_position, "u_gi_prev_camera_position", bgfx::UniformType::Vec4);
         cache_uniform(nullptr, u_gi_motion, "u_gi_motion", bgfx::UniformType::Vec4);
         cache_uniform(nullptr, s_gi_velocity, "s_gi_velocity", bgfx::UniformType::Sampler);
     }
 
     /// Binds @p velocity at @p stage (black without one or under experiment_no_velocity, which every surface then
-    /// reads as static) and last frame's TAA-unjittered view projection @p prev_view_proj.
-    void bind(uint8_t stage,
-              const gfx::texture::ptr& velocity,
-              const math::mat4& prev_view_proj,
-              uint64_t experiments) const
+    /// reads as static) and the previous frame of @p cam: its TAA-unjittered view projection, the inverse of the
+    /// camera-relative one (made in double) and its camera position.
+    void bind(uint8_t stage, const gfx::texture::ptr& velocity, const camera& cam, uint64_t experiments) const
     {
         const bool has_velocity = velocity && velocity->is_valid() && (experiments & experiment_no_velocity) == 0u;
         const bool has_fast_update = has_velocity && (experiments & experiment_no_fast_update) == 0u;
         const math::vec4 motion(has_velocity ? 1.0f : 0.0f, has_fast_update ? 1.0f : 0.0f, 0.0f, 0.0f);
         gfx::set_texture(s_gi_velocity, stage, has_velocity ? velocity : default_textures::get().black_texture());
         gfx::set_uniform(u_gi_motion, motion);
-        gfx::set_uniform(u_gi_prev_view_proj, prev_view_proj);
-        gfx::set_uniform(u_gi_prev_inv_view_proj, glm::inverse(prev_view_proj));
+        gfx::set_uniform(u_gi_prev_view_proj, cam.get_prev_view_projection_unjittered().get_matrix());
+        gfx::set_uniform(u_gi_prev_inv_view_proj_relative, cam.get_prev_inverse_view_projection_relative_unjittered());
+        gfx::set_uniform(u_gi_prev_camera_position, math::vec4(cam.get_prev_position(), 0.0f));
     }
 };
 

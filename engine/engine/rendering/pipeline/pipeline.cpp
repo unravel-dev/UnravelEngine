@@ -135,6 +135,9 @@ struct particle_scene_lighting
     const shadow::shadowmap_generator* shadow = nullptr;
     float pre_exposure = 1.0f;
     std::vector<local_light> lights;
+    /// The view origin of the passes that read this (gfx::set_view_origin): the lights' positions and the shadow
+    /// matrices are packed as offsets from it.
+    math::vec3 origin{0.0f};
 };
 
 namespace
@@ -162,15 +165,18 @@ void create_particle_light_fallbacks(std::shared_ptr<gfx::texture>& no_sky, std:
 }
 
 /// The sky, the strongest directional light (with its shadow when @p use_shadow_maps) and every point / spot
-/// light, as lit particles read them: each light as @p limits render it, so the maps and their reader agree.
+/// light, as lit particles read them: each light as @p limits render it, so the maps and their reader agree. The
+/// passes that read them draw around @p origin.
 auto gather_particle_lighting(scene& scn,
                               gfx::render_view& rview,
                               float pre_exposure,
                               bool use_shadow_maps,
-                              const feature_limits& limits) -> particle_scene_lighting
+                              const feature_limits& limits,
+                              const math::vec3& origin) -> particle_scene_lighting
 {
     particle_scene_lighting lighting;
     lighting.pre_exposure = pre_exposure;
+    lighting.origin = origin;
     if(const auto& sky = rview.tex_find("IRRADIANCE_SH"))
     {
         lighting.irradiance = sky->native_handle();
@@ -269,7 +275,7 @@ auto pick_particle_lights(const particle_scene_lighting& lighting,
         {
             (*picked)[i] = candidates[i].index;
         }
-        out[i * 3] = light.placement;
+        out[i * 3] = math::vec4(math::vec3(light.placement) - lighting.origin, light.placement.w);
         out[i * 3 + 1] = light.cone;
         out[i * 3 + 2] = light.intensity;
     }
@@ -289,7 +295,7 @@ auto get_camera_velocity(const camera& camera, delta_t dt) -> math::vec3
     {
         return math::vec3(0.0f);
     }
-    const math::vec3 previous = math::inverse(camera.get_prev_view()).get_position();
+    const math::vec3& previous = camera.get_prev_position();
     const math::vec3 velocity = (camera.get_position() - previous) / seconds;
     const float speed = math::length(velocity);
     return speed > k_max_stretch_camera_speed ? velocity * (k_max_stretch_camera_speed / speed) : velocity;
@@ -1337,7 +1343,6 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
 {
     APP_SCOPE_PERF("Rendering/3D Text Pass");
 
-    const auto& view = camera.get_view();
     // This pass draws into the final image after temporal AA has resolved the frame, so
     // nothing removes the subpixel jitter afterwards: a jittered projection would shift
     // every document and text by up to half a pixel each frame.
@@ -1354,7 +1359,9 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
         {
             gfx::render_pass pass("World UI/Elements Pass");
             pass.bind(output.get());
-            pass.set_view_proj(view, proj);
+            // Offsets from the camera (camera::set_pass_view_proj): quads through vs_world_quad, text by its
+            // transform's offset.
+            camera.set_pass_view_proj(pass, proj);
             ui_view_id = pass.id;
             has_ui_view = true;
         }
@@ -1417,7 +1424,10 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
         });
 
         auto& ui = engine::context().get_cached<ui_system>();
-        const math::mat4 world_to_clip = proj.get_matrix() * view.get_matrix();
+        // World to clip through the camera-relative view, the camera's position subtracted in double: a document's
+        // large translation never meets the view's.
+        const glm::dmat4 world_to_clip = glm::dmat4(proj.get_matrix() * camera.get_view_relative().get_matrix()) *
+                                         glm::translate(glm::dmat4(1.0), -glm::dvec3(camera.get_position()));
         for(const auto& entry : ui_cache.entries)
         {
             auto& ui_comp = *entry.comp;
@@ -1425,7 +1435,8 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
             const auto& world_transform = entry.transform_comp->get_transform_global();
             if(ui_comp.draws_into_scene())
             {
-                ui.render_world_space_into(ui_comp, output, world_to_clip * ui_comp.get_document_to_world(world_transform));
+                const glm::dmat4 document_to_world(ui_comp.get_document_to_world(world_transform));
+                ui.render_world_space_into(ui_comp, output, math::mat4(world_to_clip * document_to_world));
                 has_ui_view = false;
                 continue;
             }
@@ -1487,8 +1498,10 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
     {
         auto& text_comp = *entry.comp;
         auto handle = entry.handle;
-        const auto& world_transform = entry.transform_comp->get_transform_global();
-        text_comp.submit(get_ui_view(), world_transform, gfx::depth_test_nearer);
+        // Placed as an offset from the camera, the view's origin.
+        math::transform view_transform = entry.transform_comp->get_transform_global();
+        view_transform.set_position(view_transform.get_position() - camera.get_position());
+        text_comp.submit(get_ui_view(), view_transform, gfx::depth_test_nearer);
     }
 
     text_cache.entries.clear();
@@ -1607,7 +1620,7 @@ auto pipeline::run_particle_pass(scene& scn,
                 if(has_lit_particles || has_meshes)
                 {
                     forward_lighting_ = std::make_shared<particle_scene_lighting>(
-                        gather_particle_lighting(scn, rview, pre_exposure_values[0], use_shadow_maps, limits));
+                        gather_particle_lighting(scn, rview, pre_exposure_values[0], use_shadow_maps, limits, camera.get_position()));
                     forward_fog_ = &fog;
                     forward_pre_exposure_ = params.pre_exposure;
                     forward_environment_ = pre_exposure.gpu_texture;
@@ -1657,7 +1670,7 @@ auto pipeline::run_particle_pass(scene& scn,
                                                                                : resolve_particle_scene_depth(rview, hiz_depth, depth_copy_pass_);
                     gfx::render_pass pass("Translucency/Pass");
                     pass.bind(targets.get());
-                    pass.set_view_proj(camera.get_view(), camera.get_projection());
+                    camera.set_pass_view_proj(pass, camera.get_projection());
                     // The meshes and the order-independent composite draw among the particle batches in one order:
                     // those that sort before a batch, before it.
                     size_t next_mesh = 0;
@@ -1745,7 +1758,7 @@ auto pipeline::run_particle_pass(scene& scn,
                     // Surfaces that Write Velocity replace the scene's motion behind them with their own.
                     gfx::render_pass pass("Translucency/Velocity");
                     pass.bind(velocity_target.get());
-                    pass.set_view_proj(camera.get_view(), camera.get_projection());
+                    camera.set_pass_view_proj(pass, camera.get_projection());
                     meshes->draw_velocity(pass.id);
                 }
                 if(!velocity_batches.empty() && velocity_target && particle_velocity_program_->begin())
@@ -1754,8 +1767,9 @@ auto pipeline::run_particle_pass(scene& scn,
                     // reprojects them (rasterized jittered like the scene's movers, previous frame unjittered).
                     gfx::render_pass pass("Particles/Velocity");
                     pass.bind(velocity_target.get());
-                    pass.set_view_proj(camera.get_view(), camera.get_projection());
-                    const auto prev_view_proj = camera.get_prev_view_projection_unjittered();
+                    camera.set_pass_view_proj(pass, camera.get_projection());
+                    // For offsets from the camera, the view's origin (camera::set_pass_view_proj).
+                    const math::transform prev_view_proj(camera.get_prev_view_projection_from_current_unjittered());
                     params.view = pass.id;
                     params.program = particle_velocity_program_->native_handle();
                     params.mask_program = params.program;
@@ -1790,7 +1804,7 @@ auto pipeline::run_particle_pass(scene& scn,
                         }
                         gfx::render_pass pass("Particles/Overdraw");
                         pass.bind(overdraw_target.get());
-                        pass.set_view_proj(camera.get_view(), camera.get_projection());
+                        camera.set_pass_view_proj(pass, camera.get_projection());
                         params.view = pass.id;
                         params.overdraw_weight = weight;
                         ps_soa::render_view(params, batches.data(), uint32_t(batches.size()));
@@ -1915,7 +1929,7 @@ auto pipeline::run_order_independent_pass(gfx::render_view& rview,
         gfx::render_pass pass("Translucency/Order Independent");
         pass.clear(BGFX_CLEAR_COLOR, 0x000000ff, 1.0f, 0);
         pass.bind(fbo.get());
-        pass.set_view_proj(camera.get_view(), camera.get_projection());
+        camera.set_pass_view_proj(pass, camera.get_projection());
         meshes.draw_order_independent(pass.id);
     }
     return true;
@@ -2062,7 +2076,7 @@ void pipeline::bind_forward_lighting(const math::bbox& bounds,
     gfx::set_uniform(forward_probe_inv_world_uniform_, probe.inv_world);
     if(lighting != nullptr && lighting->shadow != nullptr)
     {
-        lighting->shadow->submit_uniforms(k_forward_shadow_stage);
+        lighting->shadow->submit_uniforms(k_forward_shadow_stage, shadow::shadowmap_generator::no_compare_stage, lighting->origin);
         return;
     }
     for(size_t i = 0; i < particle_shadow_samplers_.size(); ++i)
@@ -2110,7 +2124,10 @@ void pipeline::pack_forward_light_shadows(const particle_scene_lighting* lightin
     for(uint32_t i = 0; i < light_count; ++i)
     {
         const auto& light = lighting->lights[picked[i]];
-        fog_pass::pack_light_shadow(light.shadow, light.is_spot, pick.shadows.data() + i * fog_pass::light_shadow_vec4s);
+        fog_pass::pack_light_shadow(light.shadow,
+                                    light.is_spot,
+                                    pick.shadows.data() + i * fog_pass::light_shadow_vec4s,
+                                    lighting->origin);
         pick.has_shadow = pick.has_shadow || light.shadow != nullptr;
     }
 }
@@ -2167,7 +2184,7 @@ void pipeline::bind_particle_lighting(const particle_scene_lighting& lighting, c
     bgfx::setTexture(k_particle_irradiance_stage, particle_irradiance_sampler_->native_handle(), sky);
     if(lighting.shadow)
     {
-        lighting.shadow->submit_uniforms(k_particle_shadow_stage);
+        lighting.shadow->submit_uniforms(k_particle_shadow_stage, shadow::shadowmap_generator::no_compare_stage, lighting.origin);
         return;
     }
     for(size_t i = 0; i < particle_shadow_samplers_.size(); ++i)

@@ -74,6 +74,10 @@ struct render_pass
     //-----------------------------------------------------------------------------
     void set_view_proj(const float* v, const float* p);
 
+    /// Sets the view matrices @p v and @p p, which take positions as offsets from the world position @p origin (three
+    /// floats), and that origin (gfx::set_view_origin).
+    void set_view_proj(const float* v, const float* p, const float* origin);
+
     //-----------------------------------------------------------------------------
     //  Name : set_view_scissor ()
     /// <summary>

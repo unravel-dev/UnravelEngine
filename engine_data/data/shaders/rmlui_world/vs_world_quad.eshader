@@ -15,7 +15,8 @@ vec2 v_texcoord0
 
 void main()
 {
-    vec4 clipPos = mul(u_viewProj, mul(u_world[0], vec4(a_position, 1.0)));
+    // Offsets from the view origin (view_origin.sh).
+    vec4 clipPos = mul(u_viewProj, vec4(mulWorldOffset(u_world[0], a_position), 1.0));
     // World size of one screen pixel at this vertex's depth.
     float pixelWorldSize = 2.0 * abs(clipPos.w) / (u_viewRect.w * u_proj[1][1]);
     vec3 axisX = mul(u_world[0], vec4(1.0, 0.0, 0.0, 0.0)).xyz;
@@ -24,6 +25,6 @@ void main()
     // Corners sit at +-0.5 and texcoords at 0 / 1, so a corner moves outward by the same amount
     // in both spaces; the texcoords keep their mapping and run past [0, 1] in the grown border.
     vec3 position = vec3(a_position.xy + sign(a_position.xy) * expand, a_position.z);
-    gl_Position = mul(u_viewProj, mul(u_world[0], vec4(position, 1.0)));
+    gl_Position = mul(u_viewProj, vec4(mulWorldOffset(u_world[0], position), 1.0));
     v_texcoord0 = a_texcoord0 + (a_texcoord0 - 0.5) * 2.0 * expand;
 }

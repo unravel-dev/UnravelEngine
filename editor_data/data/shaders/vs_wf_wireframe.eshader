@@ -104,9 +104,9 @@ void main()
     vec3 p1 = get_position(i1);
 
     // The engine feeds transforms through u_world (via gfx::set_world_transform),
-    // so compose world and view/projection manually.
-    vec4 p0_world = mul(get_world_matrix(i0), vec4(p0, 1.0));
-    vec4 p1_world = mul(get_world_matrix(i1), vec4(p1, 1.0));
+    // so compose world and view/projection manually, as offsets from the view origin (view_origin.sh).
+    vec4 p0_world = vec4(mulWorldOffset(get_world_matrix(i0), p0), 1.0);
+    vec4 p1_world = vec4(mulWorldOffset(get_world_matrix(i1), p1), 1.0);
 
     vec4 p0_clip = mul(u_viewProj, p0_world);
     vec4 p1_clip = mul(u_viewProj, p1_world);

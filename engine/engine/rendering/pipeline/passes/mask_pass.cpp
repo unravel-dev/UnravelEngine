@@ -75,7 +75,7 @@ auto mask_pass::run(gfx::render_view& rview,
     gfx::render_pass pass(params.pass_name);
     pass.bind(fbo.get());
     pass.clear(BGFX_CLEAR_COLOR | (has_own_depth ? BGFX_CLEAR_DEPTH : 0), params.clear_rgba, gfx::camera_far_depth, 0);
-    pass.set_view_proj(cam.get_view(), cam.get_projection());
+    cam.set_pass_view_proj(pass, cam.get_projection());
 
     const bool is_visible_only = !has_own_depth;
     const uint64_t depth_state = has_own_depth ? (BGFX_STATE_WRITE_Z | gfx::depth_test_nearer) : 0;

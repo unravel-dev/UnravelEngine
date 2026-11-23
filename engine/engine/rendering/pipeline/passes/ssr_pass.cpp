@@ -261,7 +261,8 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
 
     gfx::render_pass pass("Trace Pass");
     pass.bind(ssr_curr_fbo.get());
-    pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+    // Offsets from the camera (camera::set_pass_view_proj); last frame's matrix takes them too.
+    params.cam->set_pass_view_proj(pass, params.cam->get_projection());
 
     // Set input textures
     gfx::set_texture(fidelityfx_pixel_program_.s_color, 0, params.previous_frame);
@@ -301,8 +302,8 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
 
     // The TAA-unjittered previous pair, never get_prev_view_projection(): the jittered prev
     // misaligns a still camera's reprojection by the jitter delta every frame.
-    auto prev_view_proj = params.cam->get_prev_view_projection_unjittered();
-    gfx::set_uniform(fidelityfx_pixel_program_.u_prev_view_proj, prev_view_proj.get_matrix());
+    gfx::set_uniform(fidelityfx_pixel_program_.u_prev_view_proj,
+                     params.cam->get_prev_view_projection_from_current_unjittered());
 
     uint64_t topology = gfx::clip_fullscreen_triangle(1.0f);
     if(topology == 0)
@@ -362,7 +363,8 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
 
     gfx::render_pass pass("Temporal Resolve Pass");
     pass.bind(temp_fbo.get());
-    pass.set_view_proj(cam->get_view(), cam->get_projection());
+    // Offsets from the camera (camera::set_pass_view_proj); last frame's matrix takes them too.
+    cam->set_pass_view_proj(pass, cam->get_projection());
 
     // Set input textures
     gfx::set_texture(temporal_resolve_program_.s_ssr_curr, 0, ssr_curr->get_texture());
@@ -414,8 +416,7 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
 
     // The TAA-unjittered previous pair (see the trace-side comment); keeps the camera-only
     // reprojection jitter-aligned with the velocity buffer's convention.
-    auto prev_view_proj = cam->get_prev_view_projection_unjittered();
-    gfx::set_uniform(temporal_resolve_program_.u_prev_view_proj, prev_view_proj.get_matrix());
+    gfx::set_uniform(temporal_resolve_program_.u_prev_view_proj, cam->get_prev_view_projection_from_current_unjittered());
 
     // Draw fullscreen quad
     auto topology = gfx::clip_quad(1.0f);

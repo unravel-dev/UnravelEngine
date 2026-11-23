@@ -31,6 +31,7 @@ void main()
 	mat4 model = u_world[0];
 #endif
 
-	vec4 world_position = mul(model, vec4(a_position, 1.0));
+	// An offset from the view origin, as the G-buffer places the vertex (view_origin.sh).
+	vec4 world_position = vec4(mulWorldOffset(model, a_position), 1.0);
 	gl_Position = mul(u_viewProj, world_position);
 }

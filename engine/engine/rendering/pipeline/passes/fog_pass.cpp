@@ -277,7 +277,10 @@ auto pack_light_shadows(const std::vector<fog_pass::local_light>& lights) -> std
 }
 } // namespace
 
-void fog_pass::pack_light_shadow(const shadow::shadowmap_generator* shadow, bool is_spot, math::vec4* record)
+void fog_pass::pack_light_shadow(const shadow::shadowmap_generator* shadow,
+                                 bool is_spot,
+                                 math::vec4* record,
+                                 const math::vec3& view_origin)
 {
     const auto tile = shadow != nullptr ? shadow->get_atlas_tile() : hpp::optional<shadow::shadow_atlas_tile>{};
     if(!tile)
@@ -290,7 +293,7 @@ void fog_pass::pack_light_shadow(const shadow::shadowmap_generator* shadow, bool
     const std::uint8_t maps = is_spot ? SPOT_SHADOW_MAPS : POINT_SHADOW_MAPS;
     for(std::uint8_t map = 0; map < maps; ++map)
     {
-        const math::mat4 world_to_map = shadow->get_world_to_map(map);
+        const math::mat4 world_to_map = shadow->get_world_to_map(map, view_origin);
         for(int column = 0; column < 4; ++column)
         {
             record[LIGHT_SHADOW_MATRICES_OFFSET + map * 4 + column] = world_to_map[column];
@@ -717,7 +720,7 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
         gfx::set_uniform(volumetric_.u_fog_grid, grid_uniform);
         gfx::set_uniform(volumetric_.u_fog_rays, rays.data(), std::uint16_t(rays.size()));
         gfx::set_uniform(volumetric_.u_fog_prev_view_proj, camera.get_prev_view_projection_relative_unjittered().get_matrix());
-        const math::vec3 previous_position = math::inverse(camera.get_prev_view()).get_position();
+        const math::vec3& previous_position = camera.get_prev_position();
         gfx::set_uniform(volumetric_.u_fog_prev_offset, math::vec4(camera.get_position() - previous_position, 0.0f));
         const auto pre_exposure = params.pre_exposure.to_uniform();
         gfx::set_uniform(volumetric_.u_pre_exposure, pre_exposure.data());

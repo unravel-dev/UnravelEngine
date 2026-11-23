@@ -322,6 +322,19 @@ struct Uniforms
         bgfx::setUniform(u_color, m_colorPtr);
     }
 
+    /// Sets u_lightMtx for the next draw to @p matrix (16 floats) in place of the stored one.
+    void submitLightMtx(const float* matrix) const
+    {
+        bgfx::setUniform(u_lightMtx, matrix);
+    }
+
+    /// Sets u_shadowMapMtx<@p index> (0..3) for the next draw to @p matrix (16 floats) in place of the stored one.
+    void submitShadowMapMtx(uint8_t index, const float* matrix) const
+    {
+        const bgfx::UniformHandle handles[] = {u_shadowMapMtx0, u_shadowMapMtx1, u_shadowMapMtx2, u_shadowMapMtx3};
+        bgfx::setUniform(handles[index], matrix);
+    }
+
     void destroy()
     {
         auto safe_destroy = [](bgfx::UniformHandle& handle)
@@ -801,8 +814,12 @@ public:
     auto get_depth_render_program(PackDepth::Enum depth) const -> gpu_program::ptr;
     /// Binds the stored-depth maps from @p stage on and, unless @p compare_stage is
     /// no_compare_stage, the maps' depth attachments with LEQUAL comparison samplers from
-    /// @p compare_stage on (point-sampled maps only: hard, PCF and PCSS).
-    void submit_uniforms(uint8_t stage, uint8_t compare_stage = no_compare_stage) const;
+    /// @p compare_stage on (point-sampled maps only: hard, PCF and PCSS). The matrices take
+    /// positions as offsets from @p view_origin, the origin of the view that reads them
+    /// (gfx::set_view_origin; 0 for a view that works in absolute positions).
+    void submit_uniforms(uint8_t stage,
+                         uint8_t compare_stage = no_compare_stage,
+                         const math::vec3& view_origin = math::vec3(0.0f)) const;
 
 
     /// Whether @p l renders its map into the shared shadow atlas (shadow_atlas): spot and point lights whose shadows
@@ -828,8 +845,9 @@ public:
     auto has_linear_depth() const -> bool;
 
     /// World position -> map coordinates (before the divide by w) of map @p face: a spot light's one map (0), or a
-    /// point light's tetrahedron face (0 green, 1 yellow, 2 blue, 3 red), as the lighting pass projects a receiver.
-    auto get_world_to_map(uint8_t face) const -> math::mat4;
+    /// point light's tetrahedron face (0 green, 1 yellow, 2 blue, 3 red), as the lighting pass projects a receiver. It
+    /// takes positions as offsets from @p view_origin (0: absolute positions).
+    auto get_world_to_map(uint8_t face, const math::vec3& view_origin = math::vec3(0.0f)) const -> math::mat4;
 
     /// Edge of every split's map in texels.
     auto get_shadow_map_size() const -> uint16_t
@@ -1082,6 +1100,11 @@ private:
     float color_[4];
     Light point_light_;
     Light directional_light_;
+
+    /// Every matrix below takes positions as offsets from this world position (the views it renders with get it as their
+    /// view origin, gfx::set_view_origin): a spot or point light's position, or for the cascades the camera position
+    /// on a coarse grid, so a still map keeps its matrices while the camera moves within a cell.
+    math::vec3 origin_{0.0f, 0.0f, 0.0f};
 
     float light_mtx_[16];
     float shadow_map_mtx_[ShadowMapRenderTargets::Count][16];

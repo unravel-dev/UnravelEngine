@@ -9,6 +9,8 @@
  * s_particle_sorted at stage 4, then includes particle_common.sh.
  */
 
+#include "../view_origin.sh"
+
 #if !SHADER_BUFFER_TEXTURES
 /// Each GPU batch's live count (cs_particle_draw_args.eshader): a ribbon reads its neighbours within it. The vertex
 /// shaders' buffers stay below stage 8 (particle_gpu_schema.h).
@@ -162,6 +164,23 @@ struct particle_vertex
 	vec2 quad_corner;
 };
 
+/// particle_place_at for this view: the position as an offset from the view origin (view_origin.sh), as the view's
+/// matrices, the lights and the shadow matrices take it.
+particle_state particle_place_at_in_view(particle_record record, uint now)
+{
+	particle_state placed = particle_place_at(record, now);
+	placed.position = worldToViewOffset(placed.position);
+	return placed;
+}
+
+/// particle_place for this view (particle_place_at_in_view).
+particle_state particle_place_in_view(particle_record record)
+{
+	particle_state placed = particle_place(record);
+	placed.position = worldToViewOffset(placed.position);
+	return placed;
+}
+
 /**
  * A trail mode corner of @p vertex: @p corner.x across the trail (-0.5..0.5), corner.y along it (0 at the
  * particle, 1 at the tail trail_length seconds back along its path, clamped to its birth). The trail faces the
@@ -173,7 +192,7 @@ void particle_trail_corner(particle_record record, vec2 corner, float width, vec
 	vec4 trail = particle_static(emitter, PARTICLE_STATIC_TRAIL);
 	uint now = particle_dynamic_uint(emitter, PARTICLE_DYNAMIC_NOW);
 	uint back = uint(corner.y * trail.x * PARTICLE_TICKS_PER_SECOND);
-	particle_state earlier = particle_place_at(record, now - min(back, now - record.birth));
+	particle_state earlier = particle_place_at_in_view(record, now - min(back, now - record.birth));
 	vec3 toward_tail = -earlier.velocity;
 	if(dot(toward_tail, toward_tail) < PARTICLE_MIN_DIRECTION_SQ)
 	{
@@ -222,7 +241,7 @@ particle_state particle_ribbon_point(uint index, out particle_record record)
 {
 	uint entry = uint(u_particle_draw.x) + index;
 	record = particle_load(particle_sorted_slot(entry));
-	return particle_place(record);
+	return particle_place_in_view(record);
 }
 
 /**
@@ -308,7 +327,7 @@ particle_vertex particle_build_vertex(vec3 corner_position, vec2 corner_uv, uint
 {
 	uint entry = uint(u_particle_draw.x) + instance;
 	particle_record record = particle_load(particle_sorted_slot(entry));
-	particle_state state = particle_place(record);
+	particle_state state = particle_place_in_view(record);
 	uint emitter = record.emitter;
 	uint flags = particle_flags(emitter);
 	// Stretched particles may stretch against the camera's motion (a share of it, the facing slot's w).

@@ -2,6 +2,7 @@
 #include "base/basetypes.hpp"
 
 #include <graphics/graphics.h>
+#include <graphics/render_pass.h>
 
 #include <algorithm>
 
@@ -299,6 +300,11 @@ auto camera::get_prev_view() const -> const math::transform&
     return prev_matrices_valid_ ? prev_view_ : view_;
 }
 
+auto camera::get_prev_position() const -> const math::vec3&
+{
+    return prev_matrices_valid_ ? prev_position_ : position_;
+}
+
 auto camera::get_prev_projection() const -> const math::transform&
 {
     return prev_matrices_valid_ ? prev_projection_ : get_projection();
@@ -348,6 +354,28 @@ auto camera::get_view_projection_relative() const -> math::transform
     return get_projection() * get_view_relative();
 }
 
+auto camera::get_inverse_view_projection_relative() const -> math::mat4
+{
+    return math::mat4(glm::inverse(glm::dmat4(get_view_projection_relative().get_matrix())));
+}
+
+auto camera::get_prev_inverse_view_projection_relative_unjittered() const -> math::mat4
+{
+    return math::mat4(glm::inverse(glm::dmat4(get_prev_view_projection_relative_unjittered().get_matrix())));
+}
+
+void camera::set_pass_view_proj(gfx::render_pass& pass, const math::transform& projection) const
+{
+    pass.set_view_proj(get_view_relative(), projection, math::value_ptr(position_));
+}
+
+auto camera::get_prev_view_projection_from_current_unjittered() const -> math::mat4
+{
+    const glm::dvec3 move = glm::dvec3(position_) - glm::dvec3(get_prev_position());
+    return math::mat4(glm::dmat4(get_prev_view_projection_relative_unjittered().get_matrix()) *
+                      glm::translate(glm::dmat4(1.0), move));
+}
+
 
 void camera::look_at(const math::vec3& eye, const math::vec3& at)
 {
@@ -356,19 +384,23 @@ void camera::look_at(const math::vec3& eye, const math::vec3& at)
 
 void camera::look_at(const math::vec3& eye, const math::vec3& at, const math::vec3& up)
 {
-    view_ = math::lookAt(eye, at, up);
-    view_inverse_ = math::inverse(view_);
+    look_along(eye, at - eye, up);
+}
 
-
-    view_relative_ = math::lookAt(math::vec3(0.0f, 0.0f, 0.0f), at - eye, up);
+void camera::look_along(const math::vec3& eye, const math::vec3& forward, const math::vec3& up)
+{
+    position_ = eye;
+    view_relative_ = math::lookAt(math::vec3(0.0f, 0.0f, 0.0f), forward, up);
     view_inverse_relative_ = math::inverse(view_relative_);
+    view_ = view_relative_.get_matrix() * math::transform::translation(-eye).get_matrix();
+    view_inverse_ = math::inverse(view_);
 
     touch();
 }
 
 auto camera::get_position() const -> const math::vec3&
 {
-    return view_inverse_.get_position();
+    return position_;
 }
 
 auto camera::x_unit_axis() const -> math::vec3
@@ -768,11 +800,13 @@ void camera::record_current_matrices()
     // would capture the CURRENT view (the camera already moved), which cancels the
     // view term in the reprojection and reduces it to a jitter-only offset.
     prev_view_ = prev_matrices_valid_ ? frame_view_ : frame_view;
+    prev_position_ = prev_matrices_valid_ ? frame_position_ : position_;
     prev_projection_ = prev_matrices_valid_ ? frame_projection_ : frame_proj;
     prev_projection_unjittered_ =
         prev_matrices_valid_ ? frame_projection_unjittered_ : frame_proj_unjittered;
 
     frame_view_ = frame_view;
+    frame_position_ = position_;
     frame_projection_ = frame_proj;
     frame_projection_unjittered_ = frame_proj_unjittered;
     prev_matrices_valid_ = true;
@@ -832,7 +866,7 @@ auto camera::get_face_camera(uint32_t face, const math::transform& transform) ->
     t.set_position(transform.get_position());
 
     // Set new transform
-    cam.look_at(t.get_position(), t.get_position() + t.z_unit_axis(), t.y_unit_axis());
+    cam.look_along(t.get_position(), t.z_unit_axis(), t.y_unit_axis());
     return cam;
 }
 } // namespace unravel

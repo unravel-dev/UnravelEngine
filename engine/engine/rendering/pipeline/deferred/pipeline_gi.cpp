@@ -311,7 +311,8 @@ auto deferred::draw_gi_reflection_layer(const camera& camera,
     // The targets cover the region from their first texel.
     pass.set_view_rect(0, 0, uint16_t(region.pixel_size.x), uint16_t(region.pixel_size.y));
     const math::mat4 projection = get_region_projection(camera.get_projection().get_matrix(), view_size, region);
-    pass.set_view_proj(camera.get_view(), &projection[0][0]);
+    // Offsets from the camera (camera::set_pass_view_proj), as the translucency pass draws these surfaces.
+    camera.set_pass_view_proj(pass, math::transform(projection));
     // Roughness 1 traces nothing where no such surface is; the far-plane depth reads as the sky.
     pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000ff, gfx::camera_far_depth, 0);
     const math::vec4 layer_target(float(region.pixel_origin.x),

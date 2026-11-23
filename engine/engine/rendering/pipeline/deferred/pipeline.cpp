@@ -882,10 +882,10 @@ auto deferred::init(rtti::context& ctx) -> bool
     exposure_debug_program_.program = load_screen_program("vs_clip_quad", "exposure/fs_exposure_debug");
 
     sphere_ref_probe_program_.cache_uniforms();
-    sphere_ref_probe_program_.program = load_screen_program("vs_clip_quad_ex", "reflection_probe/fs_sphere_reflection_probe");
+    sphere_ref_probe_program_.program = load_screen_program("vs_clip_quad", "reflection_probe/fs_sphere_reflection_probe");
 
     box_ref_probe_program_.cache_uniforms();
-    box_ref_probe_program_.program = load_screen_program("vs_clip_quad_ex", "reflection_probe/fs_box_reflection_probe");
+    box_ref_probe_program_.program = load_screen_program("vs_clip_quad", "reflection_probe/fs_box_reflection_probe");
 
     indirect_lighting_program_.cache_uniforms();
     indirect_lighting_program_.program = load_screen_program("vs_clip_quad", "fs_deferred_indirect_light");

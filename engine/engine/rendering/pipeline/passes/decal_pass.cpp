@@ -434,12 +434,13 @@ void decal_pass::draw_decals(gfx::render_view& rview,
 {
     gfx::render_pass pass(is_full_path ? "Decals/Accumulate" : "Decals/Draw");
     pass.bind(target);
-    pass.set_view_proj(cam.get_view(), cam.get_projection());
+    // Offsets from the camera (camera::set_pass_view_proj), as the G-buffer was drawn.
+    cam.set_pass_view_proj(pass, cam.get_projection());
 
     const bool is_jittered = cam.get_aa_data().y > 1.0f;
     const math::vec4 view_params(is_jittered ? DECAL_TAA_MIP_BIAS : 0.0f, gbuffer0 ? 1.0f : 0.0f, layers ? 1.0f : 0.0f, 0.0f);
     const auto& layer_texture = layers ? layers : default_textures::get().black_texture();
-    const math::mat4 inverse_view_proj = math::mat4(glm::inverse(glm::dmat4(cam.get_view_projection_relative().get_matrix())));
+    const math::mat4 inverse_view_proj = cam.get_inverse_view_projection_relative();
     const auto& surface_color = gbuffer0 ? gbuffer0 : default_textures::get().black_texture();
     // Premultiplied over what is there; the colour path keeps the G-buffer's AO, the full path keeps the share left.
     const uint64_t blend = is_full_path
@@ -464,7 +465,7 @@ void decal_pass::draw_decals(gfx::render_view& rview,
         overdraw_pass.emplace("Decals/Overdraw");
         overdraw_pass->bind(overdraw_fbo.get());
         overdraw_pass->clear(BGFX_CLEAR_COLOR, 0x00000000, 1.0f, 0);
-        overdraw_pass->set_view_proj(cam.get_view(), cam.get_projection());
+        cam.set_pass_view_proj(*overdraw_pass, cam.get_projection());
     }
 
     size_t first = 0;

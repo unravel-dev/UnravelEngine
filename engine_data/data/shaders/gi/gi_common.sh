@@ -255,10 +255,11 @@ vec2 GiPixelUv(ivec2 pixel)
 	return (vec2(pixel) + vec2_splat(0.5)) * u_gi_view_texel;
 }
 
-/// World position of screen @p uv at device depth @p depth01 (u_invViewProj of the pass view).
+/// World position of screen @p uv at device depth @p depth01 (through the pass view's inverse projection and inverse
+/// view, clipToWorldThroughView).
 vec3 GiWorldFromDepth(vec2 uv, float depth01)
 {
-	return clipToWorld(u_invViewProj, clipTransform(vec3(uv * 2.0 - 1.0, depth01)));
+	return clipToWorldThroughView(clipTransform(vec3(uv * 2.0 - 1.0, depth01)));
 }
 
 /// One probe ray slot: the octahedral texel it traces and its level (1 = a texel of the probe's N x N map,

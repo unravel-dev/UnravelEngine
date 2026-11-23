@@ -97,15 +97,15 @@ auto tonemapping_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto vs_clip_quad_ex = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
     auto fs_atmospherics = am.get_asset<gfx::shader>("engine:/data/shaders/tonemapping/fs_tonemapping.eshader");
     auto fs_lut = am.get_asset<gfx::shader>("engine:/data/shaders/tonemapping/fs_tonemapping_lut.eshader");
 
     tonemapping_program_.cache_uniforms();
-    tonemapping_program_.program = std::make_unique<gpu_program>(vs_clip_quad_ex, fs_atmospherics);
+    tonemapping_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_atmospherics);
 
     lut_program_.cache_uniforms();
-    lut_program_.program = std::make_unique<gpu_program>(vs_clip_quad_ex, fs_lut);
+    lut_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_lut);
 
     return tonemapping_program_.program->is_valid() && lut_program_.program->is_valid();
 }

@@ -661,19 +661,6 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview, const fe
     return result;
 }
 
-namespace
-{
-/**
- * The inverse of @p camera's camera-relative view-projection: the light passes rebuild each pixel's offset from the
- * camera through it (fs_pbr_lighting.sh u_invViewProjRelative), which keeps millimetres anywhere in the world. Inverted
- * in double, so the inversion adds no rounding of its own.
- */
-auto get_inverse_view_projection_relative(const camera& camera) -> math::mat4
-{
-    return math::mat4(glm::inverse(glm::dmat4(camera.get_view_projection_relative().get_matrix())));
-}
-} // namespace
-
 void deferred::run_direct_lighting_pass(scene& scn,
                                         const camera& camera,
                                         gfx::render_view& rview,
@@ -683,7 +670,6 @@ void deferred::run_direct_lighting_pass(scene& scn,
 {
     APP_SCOPE_PERF("Rendering/Direct Lighting Pass");
 
-    const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
     const auto& camera_pos = camera.get_position();
 
@@ -694,7 +680,8 @@ void deferred::run_direct_lighting_pass(scene& scn,
 
     gfx::render_pass pass("Direct Lighting/Pass");
     pass.bind(lbuffer.get());
-    pass.set_view_proj(view, proj);
+    // Offsets from the camera (camera::set_pass_view_proj): every position the lights upload is one too.
+    camera.set_pass_view_proj(pass, proj);
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
 
     light_submit_context context;
@@ -703,7 +690,7 @@ void deferred::run_direct_lighting_pass(scene& scn,
     context.gbuffer = gbuffer;
     context.buffer_size = buffer_size;
     context.pre_exposure = get_pre_exposure(rview);
-    context.inv_view_proj_relative = get_inverse_view_projection_relative(camera);
+    context.inv_view_proj_relative = camera.get_inverse_view_projection_relative();
     scn.registry->view<transform_component, light_component, active_component>().each(
         [&](auto e, auto&& transform_comp_ref, auto&& light_comp_ref, auto&& active)
         {
@@ -798,7 +785,7 @@ void deferred::submit_light(const light& light,
     {
         float light_data[4] = {light.point_data.range, 0.0f, 0.0f, contact_shadow_distance};
 
-        gfx::set_uniform(lprogram.u_light_position, light_position);
+        gfx::set_uniform(lprogram.u_light_position, light_position - camera_pos);
         gfx::set_uniform(lprogram.u_light_data, light_data);
     }
 
@@ -810,7 +797,7 @@ void deferred::submit_light(const light& light,
                                contact_shadow_distance};
 
         gfx::set_uniform(lprogram.u_light_direction, light_direction);
-        gfx::set_uniform(lprogram.u_light_position, light_position);
+        gfx::set_uniform(lprogram.u_light_position, light_position - camera_pos);
         gfx::set_uniform(lprogram.u_light_data, light_data);
     }
 
@@ -831,7 +818,8 @@ void deferred::submit_light(const light& light,
 
     gfx::set_uniform(lprogram.u_light_color_intensity, light_color_intensity);
 
-    gfx::set_uniform(lprogram.u_camera_position, camera_pos);
+    // The camera as an offset from the pass's view origin, which is the camera.
+    gfx::set_uniform(lprogram.u_camera_position, math::vec4(0.0f));
     gfx::set_uniform(lprogram.u_inv_view_proj_relative, context.inv_view_proj_relative);
 
     size_t i = 0;
@@ -842,7 +830,7 @@ void deferred::submit_light(const light& light,
     // Skip s_tex5 (RBUFFER) and s_tex6 (BRDF LUT) - not used by per-light direct shaders.
     if(has_shadows)
     {
-        shadows->submit_uniforms(ANONYMOUS::light_shadow_map_stage, ANONYMOUS::light_shadow_compare_stage);
+        shadows->submit_uniforms(ANONYMOUS::light_shadow_map_stage, ANONYMOUS::light_shadow_compare_stage, camera_pos);
     }
 
     if(light.type == light_type::directional)
@@ -932,7 +920,6 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
 {
     APP_SCOPE_PERF("Rendering/Indirect Lighting Pass");
 
-    const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
     const auto& camera_pos = camera.get_position();
 
@@ -941,7 +928,8 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
 
     gfx::render_pass pass("Indirect Lighting/Pass");
     pass.bind(lbuffer.get());
-    pass.set_view_proj(view, proj);
+    // Offsets from the camera (camera::set_pass_view_proj).
+    camera.set_pass_view_proj(pass, proj);
 
     const bool samples_probe_inline = apply_reflection && inline_probe_.cubemap;
     const auto& defaults = default_textures::get();
@@ -971,8 +959,9 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
             : full_program;
     iprogram.program->begin();
 
-    gfx::set_uniform(iprogram.u_camera_position, camera_pos);
-    gfx::set_uniform(iprogram.u_inv_view_proj_relative, get_inverse_view_projection_relative(camera));
+    // The camera as an offset from the pass's view origin, which is the camera.
+    gfx::set_uniform(iprogram.u_camera_position, math::vec4(0.0f));
+    gfx::set_uniform(iprogram.u_inv_view_proj_relative, camera.get_inverse_view_projection_relative());
 
     size_t i = 0;
     for(; i < gbuffer->get_attachment_count(); ++i)
@@ -1006,7 +995,9 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     if(samples_probe_inline)
     {
         gfx::set_texture(iprogram.s_probe_cube, 10, inline_probe_.cubemap);
-        gfx::set_uniform(iprogram.u_probe_sphere, inline_probe_.sphere);
+        // Its position as an offset from the camera, the pass's view origin.
+        gfx::set_uniform(iprogram.u_probe_sphere,
+                         math::vec4(math::vec3(inline_probe_.sphere) - camera_pos, inline_probe_.sphere.w));
         gfx::set_uniform(iprogram.u_probe_sample, inline_probe_.sample);
         gfx::set_uniform(iprogram.u_probe_layer_params, probe_layer_inputs{}.params.data());
     }
@@ -1168,7 +1159,8 @@ void deferred::run_reflection_probe_pass(scene& scn,
 
     gfx::render_pass pass("Reflections/Buffer Pass");
     pass.bind(pbuffer.get());
-    pass.set_view_proj(view, proj);
+    // Offsets from the camera (camera::set_pass_view_proj): the probes' positions and boxes upload as offsets too.
+    camera.set_pass_view_proj(pass, proj);
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
     probe_layer_written_ = true;
 
@@ -1204,7 +1196,10 @@ void deferred::run_reflection_probe_pass(scene& scn,
         {
             math::transform t = world_transform;
             t.scale(probe.box_data.extents);
-            auto u_inv_world = math::inverse(t).get_matrix();
+            // World to box for offsets from the camera: inverted and moved by the camera in double, so neither large
+            // position is rounded into it.
+            const math::mat4 u_inv_world(glm::inverse(glm::dmat4(t.get_matrix())) *
+                                         glm::translate(glm::dmat4(1.0), glm::dvec3(camera_pos)));
             float data2[4] = {probe.box_data.extents.x,
                               probe.box_data.extents.y,
                               probe.box_data.extents.z,
@@ -1221,10 +1216,11 @@ void deferred::run_reflection_probe_pass(scene& scn,
         if(ref_probe_program)
         {
             float mips = cubemap ? float(cubemap->info.numMips) : 1.0f;
+            const math::vec3 probe_offset = probe_position - camera_pos;
             float data0[4] = {
-                probe_position.x,
-                probe_position.y,
-                probe_position.z,
+                probe_offset.x,
+                probe_offset.y,
+                probe_offset.z,
                 influence_radius,
             };
 

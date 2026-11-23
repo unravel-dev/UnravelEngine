@@ -20,13 +20,14 @@
 void main()
 {
 #if MATERIAL_OPACITY_MASK || MATERIAL_FORWARD_SHADOW
-	vec3 view_direction = u_camera_wpos.xyz - v_wpos;
+	// v_wpos is an offset from the view origin (view_origin.sh); the graph's nodes read absolute positions.
+	vec3 view_direction = mg_camera_offset() - v_wpos;
 	vec3 vertex_normal = mg_facing_vertex_normal(v_wpos, v_wnormal, view_direction);
 
 	MaterialInputs i;
 	i.uv0 = v_texcoord0;
 	mg_set_vertex_attribute_inputs(i);
-	i.world_position = v_wpos;
+	i.world_position = viewOffsetToWorld(v_wpos);
 	i.vertex_normal = normalize(vertex_normal);
 	i.tangent = normalize(v_wtangent);
 	i.bitangent = normalize(v_wbitangent);

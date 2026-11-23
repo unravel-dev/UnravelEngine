@@ -419,10 +419,7 @@ void gi_gather_pass::bind_radiance_cache(bool radiance_cache_ready) const
 
 void gi_gather_pass::bind_motion(const gi_run_params& params, uint8_t velocity_stage) const
 {
-    uniforms_.motion.bind(velocity_stage,
-                          params.velocity,
-                          params.cam->get_prev_view_projection_unjittered().get_matrix(),
-                          experiments_);
+    uniforms_.motion.bind(velocity_stage, params.velocity, *params.cam, experiments_);
 }
 
 void gi_gather_pass::run_generate_rays(const gi_run_params& params,

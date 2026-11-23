@@ -187,6 +187,13 @@ void set_world_transform(const void* _mtx);
 /// the velocity (motion vector) pass.
 void set_prev_world_transform(const void* _mtx);
 
+/// Sets the world position view @p _id draws around (@p _origin, three floats; the per-view uniform
+/// @c u_view_origin). The view's matrices then hold no translation of their own: shaders subtract the
+/// origin from absolute world positions before they meet the matrices, so the GPU works with offsets
+/// from it and keeps their precision anywhere in the world. Every render_pass starts at the world
+/// origin (0).
+void set_view_origin(bgfx::ViewId _id, const float* _origin);
+
 /// Estimate of GPU memory a texture occupies for eviction accounting. Matches bgfx's internal
 /// @c textureMemoryUsed baseline (@ref texture_info::storageSize), with row-pitch uplift for
 /// uncompressed formats (256-byte alignment) and a 4 KiB minimum for committed image allocations.

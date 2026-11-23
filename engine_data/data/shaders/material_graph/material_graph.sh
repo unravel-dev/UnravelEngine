@@ -20,6 +20,13 @@
 
 // per frame
 uniform vec4 u_camera_wpos;
+
+/// The camera as an offset from the view origin (view_origin.sh), where the pass's positions are offsets too.
+vec3 mg_camera_offset()
+{
+	return u_camera_wpos.xyz - u_view_origin.xyz;
+}
+
 // x: seconds since the game started.
 uniform vec4 u_material_time;
 
@@ -521,11 +528,12 @@ vec3 mg_world_to_tangent_direction(MaterialInputs i, vec3 v) { return vec3(dot(v
 vec3 mg_world_to_tangent_position(MaterialInputs i, vec3 v) { return mg_world_to_tangent_direction(i, v); }
 vec3 mg_world_to_tangent_normal(MaterialInputs i, vec3 v) { return normalize(mg_world_to_tangent_direction(i, v)); }
 
+// The pass's view takes offsets from the view origin (view_origin.sh); the graph's positions are absolute.
 vec3 mg_view_to_world_direction(MaterialInputs i, vec3 v) { return mul(u_invView, vec4(v, 0.0)).xyz; }
-vec3 mg_view_to_world_position(MaterialInputs i, vec3 v) { return mul(u_invView, vec4(v, 1.0)).xyz; }
+vec3 mg_view_to_world_position(MaterialInputs i, vec3 v) { return viewOffsetToWorld(mul(u_invView, vec4(v, 1.0)).xyz); }
 vec3 mg_view_to_world_normal(MaterialInputs i, vec3 v) { return normalize(mg_view_to_world_direction(i, v)); }
 vec3 mg_world_to_view_direction(MaterialInputs i, vec3 v) { return mul(u_view, vec4(v, 0.0)).xyz; }
-vec3 mg_world_to_view_position(MaterialInputs i, vec3 v) { return mul(u_view, vec4(v, 1.0)).xyz; }
+vec3 mg_world_to_view_position(MaterialInputs i, vec3 v) { return mul(u_view, vec4(worldToViewOffset(v), 1.0)).xyz; }
 vec3 mg_world_to_view_normal(MaterialInputs i, vec3 v) { return normalize(mg_world_to_view_direction(i, v)); }
 
 vec3 mg_world_to_world_direction(MaterialInputs i, vec3 v) { return v; }

@@ -159,7 +159,7 @@ vec3 forward_blurred_scene(vec2 uv, float roughness)
  */
 vec3 forward_refracted_scene(vec3 position, vec3 N, vec3 V, float ior, vec2 uv, float roughness)
 {
-	float pixel_depth = dot(position - u_camera_wpos.xyz, mg_camera_direction());
+	float pixel_depth = dot(position - mg_camera_offset(), mg_camera_direction());
 	float gap = clamp(mg_scene_texture_scene_depth(uv).x - pixel_depth, 0.0, FORWARD_REFRACTION_MAX_GAP);
 	vec3 bent = refract(-V, N, 1.0 / max(ior, 1.0));
 	vec2 shift = forward_clip_to_view_uv(mul(u_viewProj, vec4(position + bent * gap, 1.0))) -
@@ -389,7 +389,7 @@ vec4 forward_gi_reflection(vec3 position, ivec2 pixel, float roughness, float fa
 		return vec4_splat(0.0);
 	}
 	vec4 texel = texelFetch(s_fwd_gi_reflection, pixel - ivec2(u_fwd_gi_region.xy), 0);
-	float distance = length(position - u_camera_wpos.xyz);
+	float distance = length(position - mg_camera_offset());
 	bool is_front = texel.w * facing > 0.0 && abs(abs(texel.w) - distance) <= FORWARD_GI_REFLECTION_DISTANCE_TOLERANCE * distance;
 	float traced_weight = saturate((u_fwd_gi.y - roughness) * u_fwd_gi.z);
 	return is_front ? vec4(texel.rgb, traced_weight) : vec4_splat(0.0);
@@ -568,7 +568,8 @@ ForwardLight forward_light(vec3 position,
 #if FORWARD_GI
 	// The GI's light where its radiance cache has probes around the surface, the sky's elsewhere: the bounce light of
 	// the room as an opaque surface there takes it.
-	ForwardGiSh gi = forward_gi_sh(position);
+	// The radiance cache's lattice is world-locked: it takes the absolute position.
+	ForwardGiSh gi = forward_gi_sh(viewOffsetToWorld(position));
 	float gi_share = saturate(gi.coverage * 2.0);
 	irradiance = mix(irradiance, forward_gi_eval(gi, N, vec2_splat(1.0)), gi_share);
 	environment = mix(environment, forward_gi_eval(gi, R, sh_lobe_band_scale(roughness).xy), gi_share);

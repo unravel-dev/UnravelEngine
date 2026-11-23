@@ -44,7 +44,8 @@ void gizmos_renderer::draw_grid(const camera& cam,
     // grid writes no depth, so it never occludes the gizmos drawn after it.
     gfx::render_pass pass("Gizmos/Grid Pass");
     pass.bind(output.get());
-    pass.set_view_proj(cam.get_view(), cam.get_projection_unjittered());
+    // Offsets from the camera (camera::set_pass_view_proj); the shader adds the origin back for the lines.
+    cam.set_pass_view_proj(pass, cam.get_projection_unjittered());
     if(!grid_program_.program->begin())
     {
         return;
@@ -55,7 +56,7 @@ void gizmos_renderer::draw_grid(const camera& cam,
     gfx::set_uniform(grid_program_.u_params, math::vec4(grid_height, depth_test, cam.get_far_clip(), grid.opacity));
     gfx::set_uniform(grid_program_.u_depth_size,
                      math::vec4(float(depth_size.width), float(depth_size.height), 0.0f, 0.0f));
-    gfx::set_uniform(grid_program_.u_depth_view_proj, cam.get_view_projection().get_matrix());
+    gfx::set_uniform(grid_program_.u_depth_view_proj, cam.get_view_projection_relative().get_matrix());
     gfx::set_texture(grid_program_.s_depth,
                      0,
                      scene_depth,
@@ -190,13 +191,12 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
                                                const gfx::frame_buffer::ptr& selection_mask) -> bool
 {
     auto& em = ctx.get_cached<editing_manager>();
-    const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
     moved_vertex_programs_.release_unused();
 
     gfx::render_pass pass("Gizmos/Selection Mask Pass");
     pass.bind(selection_mask.get());
-    pass.set_view_proj(view, proj);
+    camera.set_pass_view_proj(pass, proj);
 
     bgfx::setViewClear(pass.id,
                        BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
@@ -312,12 +312,12 @@ void gizmos_renderer::draw_selection_wireframe_pass(rtti::context& ctx,
     }
 
     auto& em = ctx.get_cached<editing_manager>();
-    const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
 
     gfx::render_pass pass("Gizmos/Selection Wireframe Pass");
     pass.bind(obuffer.get());
-    pass.set_view_proj(view, proj);
+    // Offsets from the camera, as the scene's depth was drawn (camera::set_pass_view_proj).
+    camera.set_pass_view_proj(pass, proj);
 
     // Overlay renders on top of the color buffer using alpha blending. Depth
     // test is enabled so parts of the mesh occluded by the scene are hidden.

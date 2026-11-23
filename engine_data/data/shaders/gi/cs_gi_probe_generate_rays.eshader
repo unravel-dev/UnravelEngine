@@ -121,7 +121,7 @@ vec4 GiFootprintSample(ivec2 probe_pixel, vec3 probe_position, float probe_depth
 vec3 GiHistoryProbePosition(vec4 record)
 {
 	vec2 uv = GiPixelUv(GiProbeRecordPixel(record));
-	return clipToWorld(u_gi_prev_inv_view_proj, clipTransform(vec3(uv * 2.0 - 1.0, record.w)));
+	return GiPrevWorldFromClip(clipTransform(vec3(uv * 2.0 - 1.0, record.w)));
 }
 
 /// The incoming radiance the lighting PDF uses for one texel (pre-exposed), for a probe at @p position this frame

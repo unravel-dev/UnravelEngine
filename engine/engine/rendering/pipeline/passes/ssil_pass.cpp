@@ -593,8 +593,8 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
 
         // The TAA-unjittered previous pair, never get_prev_view_projection(): the jittered
         // prev misaligns a still camera's reprojection by the jitter delta every frame.
-        auto prev_vp = cam->get_prev_view_projection_unjittered();
-        gfx::set_uniform(temporal_program_.u_prev_view_proj, prev_vp.get_matrix());
+        // For offsets from the camera: the init and resolve passes below draw from it (camera::set_pass_view_proj).
+        gfx::set_uniform(temporal_program_.u_prev_view_proj, cam->get_prev_view_projection_from_current_unjittered());
     };
 
     // Init mode: history was just allocated -- RGBA16F contains undefined data (possibly
@@ -606,7 +606,7 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
     {
         gfx::render_pass init_pass("Temporal Init Pass");
         init_pass.bind(write_fb.get());
-        init_pass.set_view_proj(cam->get_view(), cam->get_projection());
+        cam->set_pass_view_proj(init_pass, cam->get_projection());
 
         bind_common(0.0f, g_buffer->get_texture(4));
 
@@ -622,7 +622,7 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
 
     gfx::render_pass pass("Temporal Resolve Pass");
     pass.bind(write_fb.get());
-    pass.set_view_proj(cam->get_view(), cam->get_projection());
+    cam->set_pass_view_proj(pass, cam->get_projection());
 
     bind_common(settings.enable_temporal_accumulation ? 1.0f : 0.0f, prev_depth);
 

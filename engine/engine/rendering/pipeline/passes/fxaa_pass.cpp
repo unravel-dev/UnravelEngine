@@ -14,14 +14,14 @@ auto fxaa_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto vs_clip_quad_ex = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
     auto fs_fxaa = am.get_asset<gfx::shader>("engine:/data/shaders/fxaa/fs_fxaa.eshader");
 
     // Cache uniforms before the program is created (GL >= 400 contract).
     fxaa_program_.cache_uniforms();
 
     // Create the GPU program
-    fxaa_program_.program = std::make_unique<gpu_program>(vs_clip_quad_ex, fs_fxaa);
+    fxaa_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_fxaa);
 
     return fxaa_program_.program->is_valid();
 }

@@ -9,6 +9,7 @@ SAMPLER2D(s_depth, 0);
 
 uniform vec4 u_params;
 uniform vec4 u_depth_size;
+// The jittered view-projection of the scene depth, for offsets from the view origin.
 uniform mat4 u_depth_view_proj;
 
 #define u_grid_height   u_params.x
@@ -90,11 +91,14 @@ float compute_depth_visibility(vec3 frag_pos)
 
 void main()
 {
+	// The ray's points are offsets from the view origin (view_origin.sh): the plane's height is met as one, and the
+	// lines and axes are placed on the absolute position.
 	float denom = v_far_point.y - v_near_point.y;
-	float t = (u_grid_height - v_near_point.y) / denom;
-	vec3 frag_pos = v_near_point + t * (v_far_point - v_near_point);
+	float t = (u_grid_height - u_view_origin.y - v_near_point.y) / denom;
+	vec3 frag_offset = v_near_point + t * (v_far_point - v_near_point);
+	vec3 frag_pos = viewOffsetToWorld(frag_offset);
 
-	float view_depth = abs(mul(u_view, vec4(frag_pos, 1.0)).z);
+	float view_depth = abs(mul(u_view, vec4(frag_offset, 1.0)).z);
 
 	// Smooth distance fade (smoothstep avoids the hard cutoff that caused visible edge)
 	float fading = 1.0 - smoothstep(0.1, 0.5, view_depth / u_camera_far);
@@ -108,16 +112,16 @@ void main()
 	// Branchless zero-out for behind-camera fragments
 	fading *= step(0.0, t);
 
-	fading *= mix(1.0, compute_depth_visibility(frag_pos), u_depth_test);
+	fading *= mix(1.0, compute_depth_visibility(frag_offset), u_depth_test);
 
 	// Base 1-unit grid
 	vec4 color = grid(frag_pos, 1.0, 0.3, 1.0);
 
-	// Multi-scale grids (10, 100, 1000 units)
+	// Multi-scale grids (10, 100, 1000 units), each fading with the distance from the camera, the view's origin
 	for (int i = 1; i <= 3; ++i)
 	{
 		float range = pow(10.0, float(i));
-		float dist = length(frag_pos.xz);
+		float dist = length(frag_offset.xz);
 		float scale_fade = 1.0 - smoothstep(range * 1.0, range * 25.0, dist);
 
 		vec4 sg = grid(frag_pos, range, 0.5, 1.0);

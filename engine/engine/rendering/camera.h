@@ -7,6 +7,11 @@
 #include <reflection/registration.h>
 #include <serialization/serialization.h>
 
+namespace gfx
+{
+struct render_pass;
+} // namespace gfx
+
 namespace unravel
 {
 /**
@@ -247,6 +252,8 @@ public:
      * identity, so a consumer at worst treats the frame as fresh.
      */
     auto get_prev_view() const -> const math::transform&;
+    /// The eye position the previous frame rendered from (get_position on a camera never recorded).
+    auto get_prev_position() const -> const math::vec3&;
     auto get_prev_projection() const -> const math::transform&;
     auto get_prev_projection_unjittered() const -> math::transform;
     auto get_prev_view_projection() const -> math::transform;
@@ -259,6 +266,31 @@ public:
      * rigid (lookAt), so its rotation-only form IS the relative view. Total.
      */
     auto get_prev_view_projection_relative_unjittered() const -> math::transform;
+
+    /**
+     * @brief The inverse of get_view_projection_relative, made in double so the inversion adds no rounding of its
+     * own. A pass rebuilds a pixel's offset from the camera through it (clip to offset); the camera position is then
+     * added once, where a fused absolute inverse would carry it in every element and scale its rounding with the
+     * pixel's distance.
+     */
+    auto get_inverse_view_projection_relative() const -> math::mat4;
+
+    /// The inverse of get_prev_view_projection_relative_unjittered, made in double (get_inverse_view_projection_relative).
+    auto get_prev_inverse_view_projection_relative_unjittered() const -> math::mat4;
+
+    /**
+     * @brief Sets @p pass to draw from this camera through @p projection: the rotation-only view
+     * (get_view_relative) and the camera position as the view origin (gfx::set_view_origin). The pass's shaders then
+     * work with offsets from the camera, which keep their precision wherever the camera is.
+     */
+    void set_pass_view_proj(gfx::render_pass& pass, const math::transform& projection) const;
+
+    /**
+     * @brief Last frame's TAA-unjittered view projection for positions given as offsets from this frame's camera: the
+     * previous rotation-only view and projection after the camera's move since last frame (made in double), what a
+     * pass set by set_pass_view_proj reprojects with.
+     */
+    auto get_prev_view_projection_from_current_unjittered() const -> math::mat4;
 
     /**
      * @brief Records the matrices THIS frame renders with; last frame's recording becomes
@@ -458,9 +490,16 @@ public:
     void look_at(const math::vec3& eye, const math::vec3& at, const math::vec3& up);
 
     /**
+     * @brief Sets the camera at @p eye looking along @p forward, with @p up: the view look_at builds, from the
+     * direction itself. A target computed as eye + forward rounds the direction to the coordinates' step, which far
+     * from the origin turns a smooth rotation into steps.
+     */
+    void look_along(const math::vec3& eye, const math::vec3& forward, const math::vec3& up);
+
+    /**
      * @brief Retrieves the current position of the camera.
      *
-     * @return The current camera position.
+     * @return The eye position the view was built from, exactly as given to look_at.
      */
     auto get_position() const -> const math::vec3&;
 
@@ -516,6 +555,8 @@ protected:
 
     math::transform view_relative_;
     math::transform view_inverse_relative_;
+    /// The eye position the view was built from.
+    math::vec3 position_{0.0f, 0.0f, 0.0f};
 
     /// Cached projection matrix.
     mutable math::transform projection_;
@@ -527,9 +568,11 @@ protected:
     /// per frame (preview insets, multi-view) cannot collapse the previous set onto the
     /// current one.
     math::transform prev_view_;
+    math::vec3 prev_position_{0.0f, 0.0f, 0.0f};
     math::transform prev_projection_;
     math::transform prev_projection_unjittered_;
     math::transform frame_view_;
+    math::vec3 frame_position_{0.0f, 0.0f, 0.0f};
     math::transform frame_projection_;
     math::transform frame_projection_unjittered_;
     bool prev_matrices_valid_ = false;

@@ -29,7 +29,8 @@ SAMPLER2D(s_decal_layers, 15);
 
 #if BGFX_SHADER_TYPE_FRAGMENT
 
-// The world position of the opaque surface at texel @p texel of the view, from the depth copy.
+// The position of the opaque surface at texel @p texel of the view, from the depth copy, as an offset from the view
+// origin (view_origin.sh).
 vec3 mg_decal_texel_position(ivec2 texel)
 {
 	vec2 size = vec2(textureSize(s_decal_depth, 0));
@@ -37,7 +38,7 @@ vec3 mg_decal_texel_position(ivec2 texel)
 	float device_depth = texelFetch(s_decal_depth, clamped, 0).x;
 	vec2 uv = (vec2(clamped) + vec2_splat(0.5)) / size;
 	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, device_depth));
-	return u_camera_wpos.xyz + clipToWorld(u_decal_inv_view_proj, clip);
+	return mg_camera_offset() + clipToWorld(u_decal_inv_view_proj, clip);
 }
 
 // Whether two bytes, 0 to 255 as whole numbers, share a set bit. Arithmetic, as every shading language has it.
@@ -100,7 +101,7 @@ float mg_decal_view_depth(vec2 uv)
 {
 	ivec2 size = textureSize(s_decal_depth, 0);
 	vec3 position = mg_decal_texel_position(ivec2(uv * vec2(size)));
-	return dot(position - u_camera_wpos.xyz, mg_camera_direction());
+	return dot(position - mg_camera_offset(), mg_camera_direction());
 }
 
 // Scene Texture reads of the surface the decal lies on. A read of a target the path draws into reads black.

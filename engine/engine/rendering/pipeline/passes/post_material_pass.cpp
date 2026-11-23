@@ -104,7 +104,7 @@ auto post_material_pass::run(gfx::render_view& rview,
     }
     blit.run(rview, {.input = params.color, .output = ping});
 
-    const math::mat4 inverse_view_proj = math::mat4(glm::inverse(glm::dmat4(cam.get_view_projection_relative().get_matrix())));
+    const math::mat4 inverse_view_proj = cam.get_inverse_view_projection_relative();
     const auto& black = default_textures::get().black_texture();
     const std::string pass_name = std::string("Post Materials/") + get_material_post_process_location_label(params.location);
     gfx::frame_buffer::ptr source = ping;

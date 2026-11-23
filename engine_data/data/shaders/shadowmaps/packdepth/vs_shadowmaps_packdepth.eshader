@@ -70,7 +70,8 @@ void main()
 #else
     mat4 model = u_world[0];
 #endif
-    vec4 wpos = mul(model, vec4(a_position, 1.0));
+    // An offset from the view origin (view_origin.sh).
+    vec4 wpos = vec4(mulWorldOffset(model, a_position), 1.0);
     gl_Position = mul(u_viewProj, wpos);
 #if LINEAR
     v_depth = gl_Position.z * 0.5 + 0.5;

@@ -54,6 +54,17 @@ Backends (OpenGL breaks first; the other backends hide these):
   share of the depth that grows as the near clip shrinks: a test of analytic depth against the scene's (the editor
   grid, `fs_grid.eshader`) loses there at a 1 cm near clip. A margin wide enough for it lets the grid through
   surfaces a few centimetres above the ground, so the grid keeps a tight one and relies on clip control.
+- Camera passes draw around the camera: `camera::set_pass_view_proj` sets the rotation-only view and the camera
+  position as the view origin (`gfx::set_view_origin`, per-view uniform `u_view_origin`, `view_origin.sh`; every
+  `render_pass` starts at 0). The GPU then sees offsets from the origin, never a large absolute position meeting a
+  matrix: vertex mains place a vertex with `mulWorldOffset` (rotation and scale first, then translation minus the
+  origin), positions a pass uploads (lights, probes, boxes) are offsets, world-to-something matrices fold the move in
+  double (`shadowmap_generator::submit_uniforms(stage, compare, view_origin)`, `get_world_to_map`,
+  `camera::get_prev_view_projection_from_current_unjittered`), and code that needs the absolute position (graph
+  nodes, world-locked caches, the editor grid's lines) adds the origin back (`viewOffsetToWorld`). A pass left at
+  origin 0 keeps absolute positions and still works: GI (world-locked caches), fog and post materials. Check a
+  change by moving the whole scene and the camera 10 km out and comparing captures with the unmoved ones (TAA jitter
+  off, so debug views compare too).
 - `gfx::render_pass::bind()` and `clear()` call `bgfx::touch`, which discards every uniform, texture, state and
   buffer set since the last submit: bind or clear the pass first, then set per-draw state.
 - A bgfx view runs its blits, then all its compute dispatches, then its draws; `bgfx::update` of a dynamic buffer

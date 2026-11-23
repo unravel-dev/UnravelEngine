@@ -166,8 +166,12 @@ public:
      * pass read it: (the map's rect in the shadow atlas, uv), (0 unshadowed, 1 spot, 2 point; 1 for a linear-depth map;
      * half a texel of the map in its own uv; 0), then the world -> map matrix of each map by columns (one for a spot
      * light, four for a point light's faces). A null @p shadow, or one without a tile, writes an unshadowed record.
+     * The matrices take positions as offsets from @p view_origin (gfx::set_view_origin; 0: absolute positions).
      */
-    static void pack_light_shadow(const shadow::shadowmap_generator* shadow, bool is_spot, math::vec4* record);
+    static void pack_light_shadow(const shadow::shadowmap_generator* shadow,
+                                  bool is_spot,
+                                  math::vec4* record,
+                                  const math::vec3& view_origin = math::vec3(0.0f));
     /// The map a reader may take from the atlas for @p generator's light: its tile, once this frame's casters are in it
     /// (a tile the view did not resolve may hold another light's map since the atlas last moved); null otherwise.
     static auto find_light_shadow(const shadow::shadowmap_generator& generator) -> const shadow::shadowmap_generator*;

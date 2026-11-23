@@ -50,6 +50,7 @@ struct context_data
 
     bgfx::UniformHandle u_world{bgfx::kInvalidHandle};
     bgfx::UniformHandle u_prev_world{bgfx::kInvalidHandle};
+    bgfx::UniformHandle u_view_origin{bgfx::kInvalidHandle};
     bgfx::TextureHandle fallback_texture{bgfx::kInvalidHandle};
     allocation_failure_policy allocation_policy = allocation_failure_policy::skip_with_fallback;
 
@@ -366,6 +367,7 @@ void shutdown()
         deinit_uniform_cache();
         bgfx::destroy(s_context.u_world);
         bgfx::destroy(s_context.u_prev_world);
+        bgfx::destroy(s_context.u_view_origin);
         bgfx::shutdown();
     }
     s_context = {};
@@ -498,6 +500,7 @@ bool init(bgfx::Init init_data)
     init_device_caps();
     s_context.u_world = bgfx::createUniform("u_world", bgfx::UniformType::Mat4);
     s_context.u_prev_world = bgfx::createUniform("u_prev_world", bgfx::UniformType::Mat4);
+    s_context.u_view_origin = bgfx::createUniform("u_view_origin", bgfx::UniformFreq::View, bgfx::UniformType::Vec4);
 
     bgfx::frame();
     // Initialize after the first frame so the backend has reported its GPU memory budget.
@@ -916,6 +919,16 @@ uint32_t get_render_frame()
 void set_world_transform(const void* _mtx)
 {
     bgfx::setUniform(s_context.u_world, _mtx);
+}
+
+void set_view_origin(bgfx::ViewId _id, const float* _origin)
+{
+    if(!bgfx::isValid(s_context.u_view_origin))
+    {
+        return;
+    }
+    const float origin[4] = {_origin[0], _origin[1], _origin[2], 0.0f};
+    bgfx::setViewUniform(_id, s_context.u_view_origin, origin);
 }
 
 void set_prev_world_transform(const void* _mtx)

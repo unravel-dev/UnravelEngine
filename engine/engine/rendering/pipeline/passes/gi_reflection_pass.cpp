@@ -313,10 +313,7 @@ void gi_reflection_pass::run_screen(const layer_run& layer, const frame_targets&
     gfx::set_texture(uniforms_.s_gi_prev_depth, 12, gather.prev_depth ? gather.prev_depth : black);
     set_frame_uniforms(layer, targets);
     // The hits' motion: the opaque scene's velocity buffer in either run.
-    uniforms_.motion.bind(13,
-                          gather.velocity,
-                          gather.cam->get_prev_view_projection_unjittered().get_matrix(),
-                          experiments_);
+    uniforms_.motion.bind(13, gather.velocity, *gather.cam, experiments_);
     gather.pre_exposure.bind();
     const auto groups = get_trace_groups(layer);
     gfx::dispatch(pass.id, program->native_handle(), groups.x, groups.y, 1);
@@ -397,10 +394,7 @@ void gi_reflection_pass::run_world(const layer_run& layer, const frame_targets& 
     }
     else
     {
-        uniforms_.motion.bind(11,
-                              gather.velocity,
-                              gather.cam->get_prev_view_projection_unjittered().get_matrix(),
-                              experiments_);
+        uniforms_.motion.bind(11, gather.velocity, *gather.cam, experiments_);
     }
     gfx::set_uniform(uniforms_.u_sdf_clipmap_levels, clipmap_gpu.get_level_params(), global_sdf_clipmap::level_count);
     gfx::set_uniform(uniforms_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
@@ -449,10 +443,7 @@ void gi_reflection_pass::run_temporal(const layer_run& layer, const frame_target
     gfx::set_texture(uniforms_.s_gi_normal, 13, layer.normal);
     set_frame_uniforms(layer, targets);
     // Stage 14 is free in the front variant, which reprojects by the camera.
-    uniforms_.motion.bind(14,
-                          layer.velocity,
-                          gather.cam->get_prev_view_projection_unjittered().get_matrix(),
-                          experiments_);
+    uniforms_.motion.bind(14, layer.velocity, *gather.cam, experiments_);
     gather.pre_exposure.bind(temporal_pre_exposure_stage);
     const auto groups = get_pixel_groups(layer);
     gfx::dispatch(pass.id, program->native_handle(), groups.x, groups.y, 1);

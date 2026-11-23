@@ -29,7 +29,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace unravel
 {
@@ -383,6 +385,8 @@ void calculateCascadeSplits(float* cascadeSplits, uint8_t numSplits, float nearC
 
 /// A stabilized cascade's depth centre snaps to this fraction of the shadow distance (1/16 of its 2 * far range).
 constexpr float CASCADE_DEPTH_SNAP_FRACTION = 1.0f / 8.0f;
+/// The grid, in metres, the cascades' origin snaps the camera position to (shadowmap_generator::origin_).
+constexpr double CASCADE_ORIGIN_STEP = 64.0;
 /// Render frames a caster's shadow must hold still before it joins a light's static copy: one that changed recently
 /// is expected to change again, and every caster joining or leaving renders the copy again.
 constexpr uint64_t MOVER_SETTLE_FRAMES = 30;
@@ -410,6 +414,15 @@ auto mix_floats(uint64_t key, const float* values, size_t count) -> uint64_t
 
 std::atomic<bool> map_caching_enabled{true};
 std::atomic<uint64_t> cached_maps_epoch{1};
+
+/// The world-to-map matrix @p matrix (bx layout), which takes offsets from @p matrix_origin, for offsets from
+/// @p view_origin: the move between the two origins folded in, in double, so neither large position is rounded into it.
+auto shadow_matrix_for_view_origin(const float* matrix, const math::vec3& matrix_origin, const math::vec3& view_origin)
+    -> math::mat4
+{
+    const glm::dvec3 move = glm::dvec3(view_origin) - glm::dvec3(matrix_origin);
+    return math::mat4(glm::dmat4(math::make_mat4(matrix)) * glm::translate(glm::dmat4(1.0), move));
+}
 
 } // namespace
 
@@ -1243,7 +1256,7 @@ auto shadowmap_generator::get_depth_render_program(PackDepth::Enum depth) const 
     return programs_.m_drawDepth[depth];
 }
 
-void shadowmap_generator::submit_uniforms(uint8_t stage, uint8_t compare_stage) const
+void shadowmap_generator::submit_uniforms(uint8_t stage, uint8_t compare_stage, const math::vec3& view_origin) const
 {
     if(!bgfx::isValid(tex_color_))
     {
@@ -1252,6 +1265,24 @@ void shadowmap_generator::submit_uniforms(uint8_t stage, uint8_t compare_stage) 
     // uniforms_.submitConstUniforms();
     // uniforms_.submitPerFrameUniforms();
     uniforms_.submitPerDrawUniforms();
+    // The stored matrices take offsets from origin_; the reading view's are from view_origin. A point light's face
+    // matrices follow u_lightMtx and hold no position.
+    if(view_origin != origin_)
+    {
+        if(LightType::DirectionalLight == settings_.m_lightType)
+        {
+            for(uint8_t ii = 0; ii < 4; ++ii)
+            {
+                const math::mat4 matrix = shadow_matrix_for_view_origin(shadow_map_mtx_[ii], origin_, view_origin);
+                uniforms_.submitShadowMapMtx(ii, math::value_ptr(matrix));
+            }
+        }
+        else
+        {
+            const math::mat4 matrix = shadow_matrix_for_view_origin(light_mtx_, origin_, view_origin);
+            uniforms_.submitLightMtx(math::value_ptr(matrix));
+        }
+    }
 
     // Depth maps hold raw float depth: point sampling (interpolated depth is neither of the
     // two surfaces it lies between) and clamped edges. Blurred VSM / ESM maps interpolate.
@@ -1355,10 +1386,10 @@ auto shadowmap_generator::has_linear_depth() const -> bool
     return settings_.m_depthImpl == DepthImpl::Linear;
 }
 
-auto shadowmap_generator::get_world_to_map(uint8_t face) const -> math::mat4
+auto shadowmap_generator::get_world_to_map(uint8_t face, const math::vec3& view_origin) const -> math::mat4
 {
     // The lighting pass: u_lightMtx for a spot light; u_shadowMapMtx<face> after u_lightMtx for a point light.
-    const math::mat4 light_matrix = math::make_mat4(light_mtx_);
+    const math::mat4 light_matrix = shadow_matrix_for_view_origin(light_mtx_, origin_, view_origin);
     if(settings_.m_lightType != LightType::PointLight)
     {
         return light_matrix;
@@ -1422,6 +1453,9 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     directional_light_.m_position.m_x = dir.x;
     directional_light_.m_position.m_y = dir.y;
     directional_light_.m_position.m_z = dir.z;
+
+    // A spot or point light's matrices take offsets from the light; the cascades set theirs from the camera below.
+    origin_ = pos;
 
     auto last_settings = settings_;
 
@@ -1680,9 +1714,10 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             make_light_projection(fovy, aspect, currentSmSettings->m_near, currentSmSettings->m_far, is_linear_depth);
         bx::memCopy(lightProj[ProjType::Horizontal], perspective[ProjType::Horizontal].render_proj, sizeof(lightProj[0]));
 
-        const bx::Vec3 at = bx::add(bx::load<bx::Vec3>(point_light_.m_position.m_v),
-                                    bx::load<bx::Vec3>(point_light_.m_spotDirectionInner.m_v));
-        bx::mtxLookAt(lightView[TetrahedronFaces::Green], bx::load<bx::Vec3>(point_light_.m_position.m_v), at);
+        // From the light itself (origin_), along its direction: the view holds no position.
+        bx::mtxLookAt(lightView[TetrahedronFaces::Green],
+                      bx::Vec3{0.0f, 0.0f, 0.0f},
+                      bx::load<bx::Vec3>(point_light_.m_spotDirectionInner.m_v));
     }
     else if(LightType::PointLight == settings_.m_lightType)
     {
@@ -1722,18 +1757,13 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             float mtxTmp[16];
             mtxYawPitchRoll(mtxTmp, ypr[ii][0], ypr[ii][1], ypr[ii][2]);
 
-            float tmp[3] = {
-                -bx::dot(bx::load<bx::Vec3>(point_light_.m_position.m_v), bx::load<bx::Vec3>(&mtxTmp[0])),
-                -bx::dot(bx::load<bx::Vec3>(point_light_.m_position.m_v), bx::load<bx::Vec3>(&mtxTmp[4])),
-                -bx::dot(bx::load<bx::Vec3>(point_light_.m_position.m_v), bx::load<bx::Vec3>(&mtxTmp[8])),
-            };
-
             bx::mtxTranspose(mtxYpr[ii], mtxTmp);
 
+            // From the light itself (origin_): the face's view holds no position.
             bx::memCopy(lightView[ii], mtxYpr[ii], 12 * sizeof(float));
-            lightView[ii][12] = tmp[0];
-            lightView[ii][13] = tmp[1];
-            lightView[ii][14] = tmp[2];
+            lightView[ii][12] = 0.0f;
+            lightView[ii][13] = 0.0f;
+            lightView[ii][14] = 0.0f;
             lightView[ii][15] = 1.0f;
         }
     }
@@ -1789,8 +1819,20 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
                      0.0f,
                      false);
 
-        // Get camera inverse view matrix for frustum corner calculation
-        const auto& mtxViewInv = cam.get_view_inverse();
+        // The cascades take offsets from the camera position on a grid of CASCADE_ORIGIN_STEP (origin_): small numbers
+        // anywhere in the world, and a still map keeps its matrices (and its cache key) while the camera moves within a
+        // cell. The frustum corners come from the camera-relative inverse view, moved by the camera's place in the cell.
+        const glm::dvec3 camera_position(cam.get_position());
+        origin_ = math::vec3(glm::round(camera_position / CASCADE_ORIGIN_STEP) * CASCADE_ORIGIN_STEP);
+        math::mat4 view_inverse = cam.get_view_inverse_relative().get_matrix();
+        view_inverse[3] = math::vec4(cam.get_position() - origin_, 1.0f);
+        const float* mtxViewInv = math::value_ptr(view_inverse);
+        // The origin in light space, in double: the texel and depth snapping below is done in absolute light space, so
+        // the grids stay fixed to the world wherever the origin is.
+        const double origin_light[3] = {
+            double(origin_.x) * lightView[0][0] + double(origin_.y) * lightView[0][4] + double(origin_.z) * lightView[0][8],
+            double(origin_.x) * lightView[0][1] + double(origin_.y) * lightView[0][5] + double(origin_.z) * lightView[0][9],
+            double(origin_.x) * lightView[0][2] + double(origin_.y) * lightView[0][6] + double(origin_.z) * lightView[0][10]};
 
         // Process each cascade
         const uint8_t numCorners = 8;
@@ -1816,8 +1858,9 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             // Compute frustum corners for one split in world space.
             worldSpaceFrustumCorners((float*)frustumCorners[ii], cascadeNear, cascadeFar, projWidth, projHeight, mtxViewInv);
 
-            bx::Vec3 min = {9000.0f, 9000.0f, 9000.0f};
-            bx::Vec3 max = {-9000.0f, -9000.0f, -9000.0f};
+            constexpr float largest = std::numeric_limits<float>::max();
+            bx::Vec3 min = {largest, largest, largest};
+            bx::Vec3 max = {-largest, -largest, -largest};
             float frustum_radius = 0.0f;
             
             // Calculate frustum center in world space
@@ -1878,15 +1921,15 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             float offsetx = -scalex * (minproj.x + maxproj.x) * 0.5f;
             float offsety = -scaley * (minproj.y + maxproj.y) * 0.5f;
 
-            // Apply texel snapping for stability
+            // Apply texel snapping for stability: on the texel grid of absolute light space (the offset of the origin's
+            // own light-space position removed, then put back), so the grid stays fixed to the world.
             if(settings_.m_stabilize)
             {
-                float currentShadowMapSizef = float(int16_t(current_shadow_map_size_));
-                const float halfSize = currentShadowMapSizef * 0.5f;
-                
-                // Snap to texel grid
-                offsetx = bx::round(offsetx * halfSize) / halfSize;
-                offsety = bx::round(offsety * halfSize) / halfSize;
+                const double halfSize = double(int16_t(current_shadow_map_size_)) * 0.5;
+                const double origin_offset_x = double(scalex) * origin_light[0];
+                const double origin_offset_y = double(scaley) * origin_light[1];
+                offsetx = float(std::round((double(offsetx) - origin_offset_x) * halfSize) / halfSize + origin_offset_x);
+                offsety = float(std::round((double(offsety) - origin_offset_y) * halfSize) / halfSize + origin_offset_y);
             }
 
             // Build crop matrix to adjust the base projection for this cascade
@@ -1902,8 +1945,9 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             float depthCenter = lightSpaceCenter.z;
             if(settings_.m_stabilize)
             {
-                const float depthStep = currentSmSettings->m_far * CASCADE_DEPTH_SNAP_FRACTION;
-                depthCenter = bx::round(depthCenter / depthStep) * depthStep;
+                const double depthStep = double(currentSmSettings->m_far * CASCADE_DEPTH_SNAP_FRACTION);
+                const double absolute_center = double(depthCenter) + origin_light[2];
+                depthCenter = float(std::round(absolute_center / depthStep) * depthStep - origin_light[2]);
             }
             mtxCrop[14] = -depthCenter;
 
@@ -1918,10 +1962,12 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     // the depth convention it was built with - never from lightProj, whose depth rows linear
     // depth has rescaled, and never assuming the backend's convention (the spot and the
     // stencil-packed vertical faces are built for [0, 1] depth on every backend).
+    // The casters are culled in absolute world space: the views, which take offsets from origin_, move back by it.
+    const math::mat4 from_absolute = glm::translate(math::mat4(1.0f), -origin_);
     const auto update_perspective_frustum = [&](uint8_t view, ProjType::Enum proj_type) -> void
     {
         const auto& projection = perspective[proj_type];
-        lightFrustums[view].update(math::make_mat4(lightView[view]), math::make_mat4(projection.cull_proj));
+        lightFrustums[view].update(math::make_mat4(lightView[view]) * from_absolute, math::make_mat4(projection.cull_proj));
     };
     if(LightType::SpotLight == settings_.m_lightType)
     {
@@ -1937,10 +1983,11 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     }
     else // LightType::DirectionalLight == settings.m_lightType
     {
-        lightFrustums[0].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[0]));
-        lightFrustums[1].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[1]));
-        lightFrustums[2].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[2]));
-        lightFrustums[3].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[3]));
+        const math::mat4 cascade_view = math::make_mat4(lightView[0]) * from_absolute;
+        lightFrustums[0].update(cascade_view, math::make_mat4(lightProj[0]));
+        lightFrustums[1].update(cascade_view, math::make_mat4(lightProj[1]));
+        lightFrustums[2].update(cascade_view, math::make_mat4(lightProj[2]));
+        lightFrustums[3].update(cascade_view, math::make_mat4(lightProj[3]));
     }
 
     update_bias_uniforms();
@@ -2055,11 +2102,8 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
                            mtxCropBias[settings_.m_stencilPack][biasIndex]); // mtxYprProjBias
             }
 
-            bx::mtxTranslate(mtxShadow // lightInvTranslate
-                             ,
-                             -point_light_.m_position.m_v[0],
-                             -point_light_.m_position.m_v[1],
-                             -point_light_.m_position.m_v[2]);
+            // Receivers arrive as offsets from the light (origin_): the faces' matrices take them as they are.
+            bx::mtxIdentity(mtxShadow);
         }
         else // LightType::DirectionalLight == settings.m_lightType
         {
@@ -2310,6 +2354,11 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
         bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_2_ID, lightView[0], lightProj[1]);
         bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_3_ID, lightView[0], lightProj[2]);
         bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_4_ID, lightView[0], lightProj[3]);
+        // The cascades' views take offsets from origin_ (gfx::set_view_origin).
+        gfx::set_view_origin(RENDERVIEW_SHADOWMAP_1_ID, math::value_ptr(origin_));
+        gfx::set_view_origin(RENDERVIEW_SHADOWMAP_2_ID, math::value_ptr(origin_));
+        gfx::set_view_origin(RENDERVIEW_SHADOWMAP_3_ID, math::value_ptr(origin_));
+        gfx::set_view_origin(RENDERVIEW_SHADOWMAP_4_ID, math::value_ptr(origin_));
 
         bgfx::setViewTransform(RENDERVIEW_VBLUR_0_ID, screenView, screenProj);
         bgfx::setViewTransform(RENDERVIEW_HBLUR_0_ID, screenView, screenProj);
@@ -2913,6 +2962,9 @@ auto shadowmap_generator::compute_view_settings_key(uint8_t view) const -> uint6
         is_directional ? light_proj_[view] : light_proj_[is_vertical_face ? ProjType::Vertical : ProjType::Horizontal];
     key = mix_floats(key, view_matrix, 16);
     key = mix_floats(key, proj_matrix, 16);
+    // The matrices take offsets from origin_: a light that moves keeps its view and changes its origin.
+    const float origin[3] = {origin_.x, origin_.y, origin_.z};
+    key = mix_floats(key, origin, 3);
     if(uses_atlas_)
     {
         key = mix_key(key, atlas_placement_);
@@ -3008,6 +3060,8 @@ void shadowmap_generator::set_local_light_views(const bgfx::ViewId views[5],
     {
         bgfx::setViewRect(views[1], map_x, map_y, f, f);
         bgfx::setViewTransform(views[1], light_view_[0], light_proj_[ProjType::Horizontal]);
+        // The light's views take offsets from the light (origin_, gfx::set_view_origin).
+        gfx::set_view_origin(views[1], math::value_ptr(origin_));
         bgfx::setViewFrameBuffer(views[1], target);
         return;
     }
@@ -3033,6 +3087,8 @@ void shadowmap_generator::set_local_light_views(const bgfx::ViewId views[5],
     bgfx::setViewTransform(views[4], light_view_[TetrahedronFaces::Red], light_proj_[vertical]);
     for(uint8_t ii = 1; ii < 5; ++ii)
     {
+        // The faces' views take offsets from the light (origin_, gfx::set_view_origin).
+        gfx::set_view_origin(views[ii], math::value_ptr(origin_));
         bgfx::setViewFrameBuffer(views[ii], target);
     }
 }

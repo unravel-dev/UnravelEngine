@@ -116,7 +116,8 @@ auto particle_half_res_pass::run(gfx::render_view& rview, const run_params& para
     downsample_depth(targets, params.lbuffer_depth->get_texture(1));
     gfx::render_pass pass("Particles/Half Pass");
     pass.bind(targets.get());
-    pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+    // Offsets from the camera (camera::set_pass_view_proj), as the full-resolution particles draw.
+    params.cam->set_pass_view_proj(pass, params.cam->get_projection());
     if(!params.draw_particles(pass.id))
     {
         return false;

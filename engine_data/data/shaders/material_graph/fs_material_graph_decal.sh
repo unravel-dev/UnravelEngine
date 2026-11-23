@@ -23,10 +23,12 @@ void main()
 {
 	ivec2 texel = ivec2(gl_FragCoord.xy);
 	float depth_center = mg_decal_texel_depth(texel);
+	// An offset from the view origin (view_origin.sh); the box's rotation and scale take the offset from its centre,
+	// so no absolute position meets the matrix.
 	vec3 world_position = mg_decal_texel_position(texel);
-
+	vec3 decal_center = vec3(v_decal_local_to_world0.w, v_decal_local_to_world1.w, v_decal_local_to_world2.w);
 	mat4 world_to_decal = mtxFromRows(v_decal_world_to_local0, v_decal_world_to_local1, v_decal_world_to_local2, vec4(0.0, 0.0, 0.0, 1.0));
-	vec3 decal_position = mul(world_to_decal, vec4(world_position, 1.0)).xyz;
+	vec3 decal_position = mul(world_to_decal, vec4(world_position - worldToViewOffset(decal_center), 0.0)).xyz;
 	if(any(greaterThan(abs(decal_position), vec3_splat(0.5))) || !mg_decal_receives_layers(texel, v_decal_angle.z, v_decal_angle.w))
 	{
 		discard;
@@ -37,7 +39,7 @@ void main()
 	vec3 decal_ddx = mul(world_to_decal, vec4(world_ddx, 0.0)).xyz;
 	vec3 decal_ddy = mul(world_to_decal, vec4(world_ddy, 0.0)).xyz;
 
-	vec3 view_direction = normalize(u_camera_wpos.xyz - world_position);
+	vec3 view_direction = normalize(mg_camera_offset() - world_position);
 	vec3 geometric_normal = normalize(cross(world_ddy, world_ddx));
 	if(dot(geometric_normal, view_direction) < 0.0)
 	{
@@ -72,7 +74,7 @@ void main()
 	i.uv0 = vec2(decal_position.x + 0.5, 0.5 - decal_position.y);
 	i.uv1 = i.uv0;
 	i.color0 = vec4_splat(1.0);
-	i.world_position = world_position;
+	i.world_position = viewOffsetToWorld(world_position);
 	i.vertex_normal = geometric_normal;
 	i.tangent = tangent;
 	i.bitangent = bitangent;

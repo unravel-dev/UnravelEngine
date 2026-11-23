@@ -26,10 +26,11 @@ uniform vec4 u_light_source;
 /// Contact shadows: x = minimum occluder thickness (world units), y = max distance (0 = off),
 /// z = opacity, w = temporal frame index for the dither (0 when no TAA integrates it).
 uniform vec4 u_contact_shadow;
+/// The camera as an offset from the view origin (view_origin.sh). Every position these passes read is one: the
+/// pixels', the lights', the probes' and those the shadow matrices take.
 uniform vec4 u_camera_position;
-/// The inverse of the camera-relative view-projection (the view without its translation). A pixel's offset from the
-/// camera rebuilt through it keeps its precision anywhere in the world; through the absolute u_invViewProj it is off by
-/// centimetres a few hundred metres from the origin, which depth-compared shadows read as self-shadowing.
+/// The inverse of the camera-relative view-projection (the view without its translation): a pixel's offset from the
+/// camera rebuilt through it keeps its precision anywhere in the world.
 uniform mat4 u_invViewProjRelative;
 
 #if DIRECTIONAL_LIGHT
@@ -1026,7 +1027,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     }
 #endif
 #if DIRECTIONAL_LIGHT
-    float cloud_shadow = CloudShadow(world_position, L);
+    float cloud_shadow = CloudShadow(viewOffsetToWorld(world_position), L);
     surface_shadow *= cloud_shadow;
     subsurface_shadow *= cloud_shadow;
 #endif
