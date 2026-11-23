@@ -33,8 +33,6 @@ SAMPLER3D(s_fog_volume, 2);
 #include "../pre_exposure.sh"
 #include "fog.sh"
 
-/// Device depth of the sky: the depth clear, which the sky pass draws at.
-
 void main()
 {
 	vec2 uv = gl_FragCoord.xy * u_viewTexel.xy;

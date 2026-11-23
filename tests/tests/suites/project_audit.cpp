@@ -557,6 +557,10 @@ void test_scene_rules()
           "only the profile shipping WebGL 2 reports it, and a 10000 to 1 camera is not reported");
     check(camera->where.detail == "uid-cam" && contains(camera->message, "1000000 times"),
           "the issue names the camera and the ratio");
+    audit::config no_limit;
+    no_limit.set_threshold(*audit::find_rule(audit::rules::CAMERA_DEPTH_RANGE), audit::thresholds::MAX_FAR_TO_NEAR, target_platform::web, 0);
+    check(count_rule(check_with(in, &audit::detail::check_scenes, no_limit), audit::rules::CAMERA_DEPTH_RANGE) == 0,
+          "a far to near threshold of 0 turns the check off");
 
     in.scan.ran = false;
     check(check_with(in, &audit::detail::check_scenes).empty(), "without a scan the scene rules report nothing");

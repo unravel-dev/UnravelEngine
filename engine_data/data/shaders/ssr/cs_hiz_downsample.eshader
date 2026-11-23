@@ -41,7 +41,7 @@ void main()
     ivec2 footprint = ivec2(2 + (inputSize.x & 1), 2 + (inputSize.y & 1));
     ivec2 inputCoord = coord * 2;
     
-    // Find minimum depth for conservative occlusion testing (standard depth: 0.0 = near, 1.0 = far)
+    // The nearest depth of the footprint, for conservative occlusion testing
     float nearest = DEPTH_FAR;
     for (int y = 0; y < 3; ++y)
     {

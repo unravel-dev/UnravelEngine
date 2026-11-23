@@ -312,7 +312,7 @@ auto deferred::draw_gi_reflection_layer(const camera& camera,
     pass.set_view_rect(0, 0, uint16_t(region.pixel_size.x), uint16_t(region.pixel_size.y));
     const math::mat4 projection = get_region_projection(camera.get_projection().get_matrix(), view_size, region);
     pass.set_view_proj(camera.get_view(), &projection[0][0]);
-    // Roughness 1 traces nothing where no such surface is; depth 1 reads as the sky.
+    // Roughness 1 traces nothing where no such surface is; the far-plane depth reads as the sky.
     pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000ff, gfx::camera_far_depth, 0);
     const math::vec4 layer_target(float(region.pixel_origin.x),
                                   float(region.pixel_origin.y),

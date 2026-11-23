@@ -264,7 +264,7 @@ void check_camera_depth_ranges(rule_context& context, const document_scan& scan)
         for(const auto& profile : context.get_input().profiles)
         {
             const auto limit = context.get_threshold(rules::CAMERA_DEPTH_RANGE, thresholds::MAX_FAR_TO_NEAR, profile.platform);
-            if(ratio <= double(limit) || !is_shipped_by(profile, range.document) || !ships_webgl2(profile))
+            if(limit <= 0 || ratio <= double(limit) || !is_shipped_by(profile, range.document) || !ships_webgl2(profile))
             {
                 continue;
             }

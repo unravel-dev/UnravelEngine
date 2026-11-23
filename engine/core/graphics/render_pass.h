@@ -48,9 +48,8 @@ struct render_pass
     //-----------------------------------------------------------------------------
     //  Name : clear ()
     /// <summary>
-    ///
-    ///
-    ///
+    /// Clears the pass's targets. The default depth, 1, is the far plane of a standard-depth view (shadow maps); a
+    /// camera view stores reversed depth and clears to gfx::camera_far_depth.
     /// </summary>
     //-----------------------------------------------------------------------------
     void clear(uint16_t _flags, uint32_t _rgba = 0x000000ff, float _depth = 1.0f, uint8_t _stencil = 0) const;
