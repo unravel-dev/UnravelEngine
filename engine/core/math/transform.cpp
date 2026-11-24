@@ -2,6 +2,6 @@
 
 namespace math
 {
-template class transform_t<float, defaultp>;
+template class transform_t<float, float, defaultp>;
 
 }

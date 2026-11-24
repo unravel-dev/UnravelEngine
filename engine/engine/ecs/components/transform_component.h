@@ -371,9 +371,9 @@ public:
 
     /**
      * @brief Gets the global perspective.
-     * @return A constant reference to the global perspective.
+     * @return The global perspective row; (0, 0, 0, 1) unless the transform is a projection.
      */
-    auto get_perspective_global() const noexcept -> const math::vec4&;
+    auto get_perspective_global() const noexcept -> math::vec4;
 
     /**
      * @brief Sets the global perspective.
@@ -383,9 +383,9 @@ public:
 
     /**
      * @brief Gets the local perspective.
-     * @return A constant reference to the local perspective.
+     * @return The local perspective row; (0, 0, 0, 1) unless the transform is a projection.
      */
-    auto get_perspective_local() const noexcept -> const math::vec4&;
+    auto get_perspective_local() const noexcept -> math::vec4;
 
     /**
      * @brief Sets the local perspective.

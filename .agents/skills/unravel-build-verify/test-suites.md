@@ -181,6 +181,7 @@ editor, and never under a hard timeout. Times are a full parallel run, RelWithDe
 | `binary archive` | packed lists in compiled meshes and clips, packed vectors (JSON unchanged, per-component overrides), converted documents, refused rows (either way, the list kept), rows of nothing refused at save, names ending with the rows, broken compiled files, the zero preamble, reading a document's start alone, forward-only streams, member key listing |
 | `scene groups` | additive loads, group unloads, persistent roots |
 | `transform math` | `math::transform_t` and the rotation helpers |
+| `transform parity` | `math::transform_t` against `math::transform_legacy_t` and double references: random edit sequences, matrices in, positions far from the origin, double positions (`--bench` adds timings) |
 | `curve` | `math::curve` and `math::gradient` |
 
 ## Physics, animation, audio

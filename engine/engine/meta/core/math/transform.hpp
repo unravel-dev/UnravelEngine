@@ -75,8 +75,8 @@ inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::tmat4x4<T, P>& obj)
     try_serialize(ar, ser20::make_nvp("col_3", obj[3]));
 }
 
-template<typename Archive, typename T, math::qualifier P>
-inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::transform_t<T, P>& obj)
+template<typename Archive, typename T, typename P, math::qualifier Q>
+inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::transform_t<T, P, Q>& obj)
 {
     // Seed from current values first. try_serialize may skip fields (prefab overrides);
     // on failure the locals keep the current object state so apply is a no-op for those.

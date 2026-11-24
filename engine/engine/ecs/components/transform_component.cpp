@@ -585,7 +585,7 @@ auto transform_component::get_skew_local() const noexcept -> const math::vec3&
     return get_transform_local().get_skew();
 }
 
-auto transform_component::get_perspective_local() const noexcept -> const math::vec4&
+auto transform_component::get_perspective_local() const noexcept -> math::vec4
 {
     return get_transform_local().get_perspective();
 }
@@ -638,7 +638,7 @@ auto transform_component::get_skew_global() const noexcept -> const math::vec3&
     return get_transform_global().get_skew();
 }
 
-auto transform_component::get_perspective_global() const noexcept -> const math::vec4&
+auto transform_component::get_perspective_global() const noexcept -> math::vec4
 {
     return get_transform_global().get_perspective();
 }
@@ -691,7 +691,7 @@ void transform_component::set_skew_local(const math::vec3& skew) noexcept
 
 void transform_component::set_perspective_global(const math::vec4& perspective) noexcept
 {
-    const auto& this_perspective = get_perspective_global();
+    const math::vec4 this_perspective = get_perspective_global();
     if(math::all(math::epsilonEqual(this_perspective, perspective, math::epsilon<float>())))
     {
         return;
