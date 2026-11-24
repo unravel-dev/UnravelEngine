@@ -759,12 +759,27 @@ struct transform_snapshot
     math::vec3 position{};
     math::vec3 rotation_euler{};
     math::vec3 scale{1.0f, 1.0f, 1.0f};
+    math::vec3 skew{0.0f, 0.0f, 0.0f};
     bool has_position{false};
     bool has_rotation{false};
     bool has_scale{false};
+    bool has_skew{false};
+
+    auto sets_anything() const noexcept -> bool
+    {
+        return has_position || has_rotation || has_scale || has_skew;
+    }
 };
 
-/// Reads position, rotation_euler and scale; false with `error` when one is given but is not [x,y,z] of finite numbers.
+/// The JSON schema of the pose channels a transform_snapshot reads, as properties of an item object.
+inline constexpr const char* k_transform_snapshot_properties =
+    R"json("position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},)json"
+    R"json("rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},)json"
+    R"json("scale":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},)json"
+    R"json("skew":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"The Inspector's Skew, a shear before scale: [0] moves y by z, [1] moves x by z, [2] moves x by y; [0,0,0] is none"})json";
+
+/// Reads position, rotation_euler, scale and skew; false with `error` when one is given but is not [x,y,z] of finite
+/// numbers.
 inline auto read_transform_snapshot(const simdjson::dom::object& obj, transform_snapshot& out, std::string& error) -> bool
 {
     const auto read_channel = [&](const char* key, math::vec3& value, bool& is_set) -> bool
@@ -779,7 +794,7 @@ inline auto read_transform_snapshot(const simdjson::dom::object& obj, transform_
     };
     return read_channel("position", out.position, out.has_position) &&
            read_channel("rotation_euler", out.rotation_euler, out.has_rotation) &&
-           read_channel("scale", out.scale, out.has_scale);
+           read_channel("scale", out.scale, out.has_scale) && read_channel("skew", out.skew, out.has_skew);
 }
 
 inline void apply_pose_direct(entt::handle entity, const transform_snapshot& pose, bool is_local)
@@ -803,13 +818,17 @@ inline void apply_pose_direct(entt::handle entity, const transform_snapshot& pos
         {
             transform.set_scale_local(pose.scale);
         }
-        if(pose.has_position || pose.has_rotation || pose.has_scale)
+        if(pose.has_skew)
+        {
+            transform.set_skew_local(pose.skew);
+        }
+        if(pose.sets_anything())
         {
             prefab_override_context::mark_transform_as_changed(entity,
                                                               pose.has_position,
                                                               pose.has_rotation,
                                                               pose.has_scale,
-                                                              false);
+                                                              pose.has_skew);
         }
         return;
     }
@@ -825,13 +844,17 @@ inline void apply_pose_direct(entt::handle entity, const transform_snapshot& pos
     {
         transform.set_scale_global(pose.scale);
     }
-    if(pose.has_position || pose.has_rotation || pose.has_scale)
+    if(pose.has_skew)
+    {
+        transform.set_skew_global(pose.skew);
+    }
+    if(pose.sets_anything())
     {
         prefab_override_context::mark_transform_global_as_changed(entity,
                                                                  pose.has_position,
                                                                  pose.has_rotation,
                                                                  pose.has_scale,
-                                                                 false);
+                                                                 pose.has_skew);
     }
 }
 

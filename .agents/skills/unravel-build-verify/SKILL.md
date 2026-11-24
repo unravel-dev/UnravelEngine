@@ -140,7 +140,8 @@ Build and check a change:
 
 Reference files:
 
-- [test-suites.md](test-suites.md) - runner options and every suite with what it covers
+- [test-suites.md](test-suites.md) - runner options, every suite with what it covers, and the
+  visual tests in `tests/visual/`
 - [players-and-ci.md](players-and-ci.md) - player templates, the browser page's Node tests,
   workflows, release packages
 - [dependencies.md](dependencies.md) - first-party library suites, bgfx pin moves and patches
@@ -152,6 +153,7 @@ Reference files:
 | Changed | Build | Check |
 |---------|-------|-------|
 | engine code | `engine` and its users (`editor`, `game`, `tests`) | the area's suites |
+| `math::transform`, or how draws take a world matrix | `editor`, `engine_data` | `python tests/visual/transform_skew.py` |
 | editor code | `editor`; `tests` when `editor/core/` changed | the area's suites, a clean editor start |
 | a new `.cpp` or `.h` | re-configure, then RelWithDebInfo as well | the unity batches compile |
 | `engine_data/`, `editor_data/` | `engine_data` / `editor_data` | the editor imports them without errors |

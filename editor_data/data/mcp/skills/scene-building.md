@@ -28,6 +28,12 @@ on it.
   and scale in WORLD space and position_local, rotation_euler_local and
   scale_local relative to the parent. Pass a local value back only with
   space:"local".
+- skew [x, y, z] is the Inspector's Skew, a shear applied before scale: x
+  moves points along y by their z, y along x by their z, z along x by their y.
+  scene_set_transforms_batch and scene_create_batch take it like scale, in
+  either space; reads add skew and skew_local when the entity has any. A
+  rotated child under a non-uniformly scaled parent gets a world skew without
+  one being set.
 - Recipe: create a parent entity at the area's world position, then create
   children with space:"local" poses. When the parent is rotated, always set
   the child's rotation_euler explicitly in local space - omitting it keeps a

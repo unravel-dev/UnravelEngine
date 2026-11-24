@@ -48,6 +48,26 @@ auto entity_parent_id(entt::handle entity) -> std::string
     return {};
 }
 
+/// `,"skew":[...],"skew_local":[...]` when the world or local transform is skewed; empty otherwise, as most are.
+auto skew_pose_fields(const transform_component& transform) -> std::string
+{
+    const auto& global = transform.get_transform_global();
+    const auto& local = transform.get_transform_local();
+    if(global.is_skew_zero() && local.is_skew_zero())
+    {
+        return {};
+    }
+    const auto& skew_world = global.get_skew();
+    const auto& skew_local = local.get_skew();
+    return fmt::format(R"(,"skew":[{:.6g},{:.6g},{:.6g}],"skew_local":[{:.6g},{:.6g},{:.6g}])",
+                       skew_world.x,
+                       skew_world.y,
+                       skew_world.z,
+                       skew_local.x,
+                       skew_local.y,
+                       skew_local.z);
+}
+
 } // namespace
 
 auto find_entity_by_id(scene& scn, const std::string& id) -> entt::handle
@@ -189,6 +209,7 @@ auto entity_to_pose_json(entt::handle entity) -> std::string
     math::vec3 position_local{0.0f};
     math::vec3 rotation_local{0.0f};
     math::vec3 scale_local{1.0f};
+    std::string skew_fields;
     if(auto* transform = entity.try_get<transform_component>())
     {
         active = transform->is_active();
@@ -199,9 +220,10 @@ auto entity_to_pose_json(entt::handle entity) -> std::string
         rotation_local = transform->get_rotation_euler_local();
         scale_local = transform->get_scale_local();
         parent_id = entity_parent_id(entity);
+        skew_fields = skew_pose_fields(*transform);
     }
     return fmt::format(
-        R"({{"id":{},"name":{},"tag":{},"active":{},"parent_id":{},"position":[{:.6g},{:.6g},{:.6g}],"rotation_euler":[{:.6g},{:.6g},{:.6g}],"scale":[{:.6g},{:.6g},{:.6g}],"position_local":[{:.6g},{:.6g},{:.6g}],"rotation_euler_local":[{:.6g},{:.6g},{:.6g}],"scale_local":[{:.6g},{:.6g},{:.6g}]}})",
+        R"({{"id":{},"name":{},"tag":{},"active":{},"parent_id":{},"position":[{:.6g},{:.6g},{:.6g}],"rotation_euler":[{:.6g},{:.6g},{:.6g}],"scale":[{:.6g},{:.6g},{:.6g}],"position_local":[{:.6g},{:.6g},{:.6g}],"rotation_euler_local":[{:.6g},{:.6g},{:.6g}],"scale_local":[{:.6g},{:.6g},{:.6g}]{}}})",
         make_json_string(entity_id_string(entity)),
         make_json_string(name),
         make_json_string(tag),
@@ -224,7 +246,8 @@ auto entity_to_pose_json(entt::handle entity) -> std::string
         rotation_local.z,
         scale_local.x,
         scale_local.y,
-        scale_local.z);
+        scale_local.z,
+        skew_fields);
 }
 
 auto entity_hierarchy_node_json(entt::handle entity,

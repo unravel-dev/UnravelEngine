@@ -18,6 +18,7 @@ the browser page's Node tests are in [players-and-ci.md](players-and-ci.md).
 - Input and UI
 - Threading and profiler
 - Agent docs
+- Visual tests
 - Adding a suite
 - Writing checks
 - CTest
@@ -221,6 +222,27 @@ editor, and never under a hard timeout. Times are a full parallel run, RelWithDe
 `agent docs` checks that every backticked repository path and relative link in `AGENTS.md`
 files and `.agents/` exists, that nothing names a file under the tasks folder, that the text
 is ASCII, and that each skill's frontmatter names its folder.
+
+## Visual tests
+
+Scripts in `tests/visual/` render scenes in an editor and compare captures. They are not suites
+of the runner and run by hand (Python 3, standard library). Each starts an editor of its own on
+`--port` (never another session's) with a fresh project in its output folder,
+`<bin>/test_results/visual/<test>/`, builds its scene over MCP and writes `report.txt` and image
+sheets there. Build `editor` and `engine_data` of the tree first, and run nothing else from that
+`bin` meanwhile: editors started from one `bin` share its shader cache. Exit code 0 when every
+check passes, 1 when one fails, 2 when the test could not run.
+
+| Script | Covers |
+|--------|--------|
+| `transform_skew.py` | meshes under skewed, sheared and mirrored transforms against twins with the whole transform baked into their vertices and normals, in the G-buffer normals, the lit image without GI and the lit image with GI; a rigid case sets the floor and a control case with a small skew error must fail |
+
+```bash
+python tests/visual/transform_skew.py --config RelWithDebInfo --port 27419
+```
+
+`tests/visual/visual_check.py` holds what the scripts share: the editor session, MCP calls, PNG
+files and image comparison.
 
 ## Adding a suite
 

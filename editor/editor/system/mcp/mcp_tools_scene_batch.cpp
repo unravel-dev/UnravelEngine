@@ -161,10 +161,12 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
         {.name = "scene_set_transforms_batch",
          .description =
              "Set transforms on many entities in one undoable action. Each item: entity_id, optional "
-             "space/position/rotation_euler/scale." +
+             "space/position/rotation_euler/scale/skew." +
              std::string(k_play_edit_note),
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"space":{"type":"string","enum":["world","local"]},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"scale":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["entity_id"]}}},"required":["items"]})json",
+             std::string(
+                 R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"entity_id":{"type":"string"},"space":{"type":"string","enum":["world","local"]},)json") +
+             k_transform_snapshot_properties + R"json(},"required":["entity_id"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -215,18 +217,20 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                  {
                      return {.text = entity_id + ": " + error, .is_error = true};
                  }
-                 if(!e.pose.has_position && !e.pose.has_rotation && !e.pose.has_scale)
+                 if(!e.pose.sets_anything())
                  {
-                     return {.text = "Item sets nothing (pass position, rotation_euler and/or scale): " + entity_id,
+                     return {.text = "Item sets nothing (pass position, rotation_euler, scale and/or skew): " + entity_id,
                              .is_error = true};
                  }
                  const auto& t = entity.get<transform_component>();
                  e.old_local.position = t.get_position_local();
                  e.old_local.rotation_euler = t.get_rotation_euler_local();
                  e.old_local.scale = t.get_scale_local();
+                 e.old_local.skew = t.get_skew_local();
                  e.old_local.has_position = e.pose.has_position;
                  e.old_local.has_rotation = e.pose.has_rotation;
                  e.old_local.has_scale = e.pose.has_scale;
+                 e.old_local.has_skew = e.pose.has_skew;
                  entries.push_back(e);
              }
              if(entries.empty())

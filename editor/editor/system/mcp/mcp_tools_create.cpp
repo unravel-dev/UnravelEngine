@@ -371,14 +371,13 @@ auto create_schema() -> std::string
     {
         return strings_to_json_array(names);
     };
-    const std::string vec3 = R"({"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3})";
     return fmt::format(
         R"json({{"type":"object","properties":{{"items":{{"type":"array","items":{{"type":"object","properties":{{)json"
         R"json("kind":{{"type":"string","enum":{}}},)json"
         R"json("name":{{"type":"string","description":"Entity name; default the name the Create menu gives"}},)json"
         R"json("parent_id":{{"type":"string"}},)json"
-        R"json("space":{{"type":"string","enum":["world","local"],"description":"Space of position/rotation_euler/scale; default world"}},)json"
-        R"json("position":{},"rotation_euler":{},"scale":{},)json"
+        R"json("space":{{"type":"string","enum":["world","local"],"description":"Space of position/rotation_euler/scale/skew; default world"}},)json"
+        R"json({},)json"
         R"json("primitive":{{"type":"string","description":"kind primitive: embedded mesh name (assets_list_embedded_primitives)"}},)json"
         R"json("asset":{{"type":"string","description":"kind mesh / prefab: asset key or uid"}},)json"
         R"json("light_type":{{"type":"string","enum":{},"description":"kind light; default point"}},)json"
@@ -387,9 +386,7 @@ auto create_schema() -> std::string
         R"json("material_index":{{"type":"integer","minimum":0,"maximum":{}}})json"
         R"json(}},"required":["kind"]}}}}}},"required":["items"]}})json",
         enum_json(create_kind_names()),
-        vec3,
-        vec3,
-        vec3,
+        k_transform_snapshot_properties,
         enum_json(meta_enum_names(entt::resolve<light_type>())),
         enum_json(meta_enum_names(entt::resolve<probe_type>())),
         k_max_material_slots - 1);
