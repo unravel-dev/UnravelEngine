@@ -145,8 +145,9 @@ struct asset_handle
     }
 
     /**
-     * @brief Conversion operator to bool.
-     * @return True if the handle references an asset (loaded or deferred).
+     * @brief Conversion operator to bool: is_valid().
+     * @return True if the handle has a load (loaded, loading or deferred). A handle of an asset whose compiled file
+     * does not exist yet names the asset (uid(), id()) but has no load until its compile reloads it: false.
      */
     operator bool() const
     {

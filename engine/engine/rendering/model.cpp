@@ -314,13 +314,16 @@ auto model::apply_default_materials(asset_manager& am, bool wait) -> bool
         const auto index = static_cast<uint32_t>(i);
         // set_lod fills every new slot with the default material, so that one counts as no choice.
         const auto current = get_shared_material(index);
-        if(current && current != default_material())
+        if(!current.uid().is_nil() && current != default_material())
         {
             continue;
         }
-        if(auto mat_asset = am.get_asset<material>(material_uids[i]))
+        // A material the mesh's import wrote is compiled by a job of its own, which may finish after the mesh loads:
+        // its handle has no load until then. The handle goes in all the same, and the compile's reload fills it.
+        auto mat_asset = am.get_asset<material>(material_uids[i]);
+        if(!mat_asset.uid().is_nil())
         {
-            set_shared_material(mat_asset, index);
+            set_shared_material(std::move(mat_asset), index);
         }
     }
     default_materials_pending_ = false;

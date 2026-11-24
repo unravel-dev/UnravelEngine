@@ -478,6 +478,8 @@ public:
     /**
      * @brief Fills the slots that have no material of their own - empty, or still holding the
      * default_material() set_lod fills new slots with - with LOD 0's default (imported) materials.
+     * Waits for no material: one that is not compiled yet goes in as its handle, which its compile
+     * fills, and the slot draws nothing until then.
      * @param am Resolves the material assets.
      * @param wait Waits for LOD 0 to finish loading when true; otherwise only a loaded LOD 0 counts.
      * @return False when LOD 0 is not loaded (still loading, or not compiled yet): nothing changed.

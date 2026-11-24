@@ -20,7 +20,9 @@
  *   - two models in one folder with a same-named material at the same index write two materials with two ids,
  *     also when both used to share one file under the earlier name;
  *   - a texture a model embeds, extracted by the model's first import, gets an id there, and the default material
- *     binds it by that id, as every reimport does.
+ *     binds it by that id, as every reimport does;
+ *   - a model made from a mesh whose default material is not compiled yet takes that material's handle into the slot,
+ *     and the reload its compile triggers reaches the slot.
  *
  * Every run writes into a fresh folder under app:/generated_assets and nothing is deleted.
  */
@@ -33,8 +35,10 @@
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/meta/rendering/material.hpp>
+#include <engine/meta/rendering/mesh.hpp>
 #include <engine/rendering/material_graph/standard_material.h>
 #include <engine/rendering/mesh.h>
+#include <engine/rendering/model.h>
 #include <filesystem/file_fingerprint.h>
 
 #include <chrono>
@@ -437,6 +441,46 @@ void test_embedded_texture_binding(asset_manager& am, const fs::path& run_root)
     check(read_text(material) == material_text, "a reimport binds the texture as the first import did");
 }
 
+/// The mesh @p model compiled to, built in system memory only and registered under the model's key.
+auto load_compiled_model(asset_manager& am, const fs::path& model) -> asset_handle<mesh>
+{
+    const fs::path compiled = model.parent_path() / "compiled" / (model.filename().string() + ".asset");
+    mesh::load_data data;
+    load_from_file_bin(compiled.string(), data);
+    auto made = std::make_shared<mesh>();
+    if(!made->load_mesh(std::move(data), false))
+    {
+        return {};
+    }
+    return am.get_asset_from_instance<mesh>(fs::convert_to_protocol(model).generic_string(), made);
+}
+
+void test_default_material_not_compiled_yet(asset_manager& am, const fs::path& run_root)
+{
+    // The import writes the material's source and registers its id; the material compiles in a job of its own,
+    // which here never runs, as when a model is made right after the import.
+    const fs::path model = run_root / "uncompiled_material" / "Crate.gltf";
+    write_model(model, 0.4f, 0.5f, 0.6f);
+    write_model_meta(am, model);
+    check(compile_model(am, model), "the model compiles");
+    const auto material = get_material_path(model);
+    const auto material_uid = load_meta(material).uid;
+    const auto mesh_handle = load_compiled_model(am, model);
+    require(static_cast<bool>(mesh_handle), "the compiled mesh loads");
+
+    unravel::model mdl;
+    mdl.set_lod(mesh_handle, 0);
+    check(mdl.apply_default_materials(am, true), "the default materials apply once the mesh is loaded");
+    const auto slot = mdl.get_shared_material(0);
+    check(slot.uid() == material_uid, "the slot holds the default material, not compiled yet");
+    check(!slot.is_valid(), "the material has no load until it is compiled");
+
+    // The compiled-asset watcher reloads a material when its compile writes it.
+    am.get_asset<unravel::material>(fs::convert_to_protocol(material).generic_string(), load_flags::reload,
+                                    load_mode::deferred);
+    check(mdl.get_shared_material(0).is_valid(), "the reload after the compile reaches the model's slot");
+}
+
 void run_generated_assets_suite(rtti::context& ctx)
 {
     auto& am = ctx.get_cached<asset_manager>();
@@ -449,6 +493,7 @@ void run_generated_assets_suite(rtti::context& ctx)
     RUN_CASE(test_embedded_texture_binding(am, run_root));
     RUN_CASE(test_older_engine_material(am, run_root));
     RUN_CASE(test_former_texture_outputs(am, run_root));
+    RUN_CASE(test_default_material_not_compiled_yet(am, run_root));
 }
 
 } // namespace
