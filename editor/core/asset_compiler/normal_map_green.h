@@ -37,6 +37,8 @@ struct normal_green_reading
     normal_green direction{normal_green::unknown};
     /// How well the map's two cross slopes agree, from -1 to 1: positive for green up, negative for green down.
     float score{};
+    /// Whether the map has slopes at all. A flat map has none, and compiles to the same texels either way.
+    bool has_detail{false};
 };
 
 /**
@@ -136,12 +138,36 @@ auto find_normal_green(const fs::path& source_file, const normal_map_coverage* c
  */
 auto get_stated_normal_y_inversion(const texture_importer_meta& importer, const fs::path& source_file) -> hpp::optional<bool>;
 
+/// What a model import learns of a normal map on Auto that its materials bind.
+struct normal_map_evidence
+{
+    /// What the texture compile makes of the map on its own: the direction its name states, else the one its
+    /// texels read whole.
+    normal_green compiled{normal_green::unknown};
+    /// What the import knows of the map: the direction its name states, else the one of the texels the model draws
+    /// where its UVs tell them, else the one the texels read whole.
+    normal_green known{normal_green::unknown};
+    /// Whether the map has slopes to turn over. A flat map compiles to the same texels either way, and so does a
+    /// file that does not load.
+    bool has_detail{true};
+};
+
+/// The evidence for the map imported from `source_file`, which the model draws through `coverage`. The file is
+/// decoded once, and not at all when its name states the convention.
+auto read_normal_map_evidence(const fs::path& source_file, const normal_map_coverage& coverage) -> normal_map_evidence;
+
 /**
- * @brief The Normal Y a model import records for a normal map on Auto that its meshes draw: the direction of the
- * texels they draw, where reading the whole map, as the texture compile does, would compile it the other way.
- * Unknown, which records nothing, when both compile it alike, when the file's name states the convention, and
- * when `coverage` does not tell which texels are drawn.
+ * @brief The direction the normal maps of one model agree on: the one at least three in four of the maps that tell
+ * a direction have. Unknown when fewer agree or none tells. A model's maps mostly come from one tool.
  */
-auto find_normal_green_to_record(const fs::path& source_file, const normal_map_coverage& coverage) -> normal_green;
+auto find_common_normal_green(const std::vector<normal_map_evidence>& maps) -> normal_green;
+
+/**
+ * @brief The Normal Y a model import records for a map, given the direction its model's maps agree on. The map is
+ * to compile by what the import knows of it, or, where it tells nothing (detail that runs one way, detail too
+ * weak to read), by `common`. Unknown, which records nothing and leaves the map on Auto, when the texture compile
+ * does that on its own, and for a flat map: only a map the compile would compile the other way gets Up or Down.
+ */
+auto find_normal_green_to_record(const normal_map_evidence& map, normal_green common) -> normal_green;
 
 } // namespace unravel::asset_compiler

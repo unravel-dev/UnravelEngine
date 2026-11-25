@@ -14,7 +14,10 @@
  *   - a mesh import leaves a normal map on Auto, which the texture compile reads, and records Up or Down only
  *     where the texels its meshes draw read differently from the whole map; a Normal Y someone chose stays, and
  *     the asset database takes the settings the import wrote;
- *   - glTF and OBJ files read by the importer: their UVs select the map's texels from the top of the image.
+ *   - the direction a model's maps agree on, which a map that tells none takes;
+ *   - glTF and OBJ files read by the importer: their UVs select the map's texels from the top of the image;
+ *   - the bitangent of every mesh points down the image, which is what makes the shaders read green as up: a file's
+ *     own tangents, tangents computed for a file without them, and the built-in shapes.
  *
  * Opt-in: UNRAVEL_NORMAL_MAP_CORPUS=<list> reads every file of a list, one "<label><tab><path>" a line, and prints
  * its direction, score and time, to compare the test against maps whose convention is known.
@@ -32,6 +35,7 @@
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/rendering/mesh.h>
+#include <engine/rendering/mesh_shape.h>
 #include <graphics/vertex_decl.h>
 
 #include <assimp/material.h>
@@ -430,15 +434,19 @@ void test_import_records_normal_y(rtti::context& ctx)
         }
     }
 
-    enum : unsigned int { DOWN, LISTED, PADDED, PADDED_ALONE, NAMED, CHOSEN, RETYPED, FLAT_DRAWN, MAP_COUNT };
+    // Two green-up maps beside the green-down ones: this model's maps agree on no direction, so each map is
+    // decided by itself.
+    const auto up = make_surface_normal_map({.is_green_up = true});
+    enum : unsigned int { DOWN, LISTED, PADDED, PADDED_ALONE, NAMED, CHOSEN, RETYPED, FLAT_DRAWN, UP_A, UP_B, MAP_COUNT };
     struct map_case
     {
         const char* name;
         const std::vector<std::uint8_t>* texels;
     };
-    const map_case maps[MAP_COUNT] = {{"down.png", &down},           {"listed.png", &down},  {"padded.png", &padded},
+    const map_case maps[MAP_COUNT] = {{"down.png", &down},           {"listed.png", &down},      {"padded.png", &padded},
                                       {"padded_alone.png", &padded}, {"padded_nor_gl.png", &padded},
-                                      {"chosen.png", &padded},       {"retyped.png", &padded}, {"flat_drawn.png", &flat_left}};
+                                      {"chosen.png", &padded},       {"retyped.png", &padded},   {"flat_drawn.png", &flat_left},
+                                      {"up_a.png", &up},             {"up_b.png", &up}};
     for(const auto& map : maps)
     {
         require(write_rgba_png(folder / map.name, *map.texels, MAP_SIDE, MAP_SIDE), "the test maps are written");
@@ -463,8 +471,8 @@ void test_import_records_normal_y(rtti::context& ctx)
         const aiString path(maps[i].name);
         scene.mMaterials[i]->AddProperty(&path, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, 0));
     }
-    // Meshes draw the padded maps with the part that holds the surface, and the last map with its flat quarter.
-    // Nothing draws down.png, listed.png and padded_alone.png.
+    // Meshes draw the padded maps with the part that holds the surface, and flat_drawn.png with its flat quarter.
+    // Nothing draws the other maps.
     const unsigned int drawn_by_surface[] = {PADDED, NAMED, CHOSEN, RETYPED};
     scene.mNumMeshes = static_cast<unsigned int>(std::size(drawn_by_surface)) + 1;
     scene.mMeshes = new aiMesh*[scene.mNumMeshes];
@@ -506,6 +514,149 @@ void test_import_records_normal_y(rtti::context& ctx)
     for(const auto& map : maps)
     {
         am.remove_asset_info_for_key(folder_key + "/" + map.name);
+    }
+    fs::remove_all(folder, ec);
+}
+
+void test_common_direction()
+{
+    using ac::normal_map_evidence;
+    const normal_map_evidence down{normal_green::down, normal_green::down};
+    const normal_map_evidence up{normal_green::up, normal_green::up};
+    const normal_map_evidence silent{};
+    check(ac::find_common_normal_green({down, down, down, up}) == normal_green::down,
+          "three in four of a model's maps that tell a direction make it the model's");
+    check(ac::find_common_normal_green({down, down, up}) == normal_green::unknown, "two in three do not");
+    check(ac::find_common_normal_green({up, up, up, silent, silent}) == normal_green::up, "maps that tell nothing do not count");
+    check(ac::find_common_normal_green({down, silent}) == normal_green::down, "one map that tells is enough");
+    check(ac::find_common_normal_green({silent, silent}) == normal_green::unknown && ac::find_common_normal_green({}) == normal_green::unknown,
+          "maps that tell nothing agree on nothing");
+
+    check(ac::find_normal_green_to_record(silent, normal_green::down) == normal_green::down,
+          "a map that tells nothing gets Down when its model's maps are green down");
+    check(ac::find_normal_green_to_record(silent, normal_green::up) == normal_green::unknown &&
+              ac::find_normal_green_to_record(silent, normal_green::unknown) == normal_green::unknown,
+          "and stays on Auto when they are green up or do not agree: the compile leaves it as it is");
+    const normal_map_evidence flat{normal_green::unknown, normal_green::unknown, false};
+    check(ac::find_normal_green_to_record(flat, normal_green::down) == normal_green::unknown,
+          "a flat map stays on Auto in any model: it has nothing to turn over");
+    check(ac::find_normal_green_to_record(down, normal_green::up) == normal_green::unknown &&
+              ac::find_normal_green_to_record(up, normal_green::down) == normal_green::unknown,
+          "a map that tells its direction stays on Auto whatever the others say: the compile reads the same");
+    const normal_map_evidence down_where_drawn{normal_green::unknown, normal_green::down};
+    const normal_map_evidence down_where_not_drawn{normal_green::down, normal_green::unknown};
+    check(ac::find_normal_green_to_record(down_where_drawn, normal_green::unknown) == normal_green::down,
+          "a map that reads green down only by the texels its model draws gets Down");
+    check(ac::find_normal_green_to_record(down_where_not_drawn, normal_green::unknown) == normal_green::up,
+          "a map that reads green down only where nothing draws it gets Up");
+    check(ac::find_normal_green_to_record(down_where_not_drawn, normal_green::down) == normal_green::unknown,
+          "unless its model's maps are green down: then the compile's reading stands");
+}
+
+/// A scene with one material for each of `maps`, which binds it as its normal map.
+auto make_scene_binding(const std::vector<std::string>& maps) -> std::unique_ptr<aiScene>
+{
+    auto scene = std::make_unique<aiScene>();
+    scene->mNumMaterials = static_cast<unsigned int>(maps.size());
+    scene->mMaterials = new aiMaterial*[maps.size()];
+    for(std::size_t i = 0; i < maps.size(); ++i)
+    {
+        scene->mMaterials[i] = new aiMaterial();
+        const aiString path(maps[i]);
+        scene->mMaterials[i]->AddProperty(&path, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, 0));
+    }
+    return scene;
+}
+
+void test_import_follows_the_models_maps(rtti::context& ctx)
+{
+    auto& am = ctx.get_cached<unravel::asset_manager>();
+    const std::string folder_key = "app:/data/normal_green_common";
+    const fs::path folder = fs::resolve_protocol(folder_key);
+    fs::error_code ec;
+    fs::remove_all(folder, ec);
+
+    const auto down = make_surface_normal_map({.is_green_up = false});
+    const auto up = make_surface_normal_map({.is_green_up = true});
+    const auto ridges = make_surface_normal_map({.has_two_axes = false});
+    // A green-down surface whose left quarter is flat, which is the part its model draws.
+    constexpr float FLAT_SHARE = 0.25f;
+    auto flat_left = down;
+    for(std::uint32_t row = 0; row < MAP_SIDE; ++row)
+    {
+        for(std::uint32_t column = 0; column < MAP_SIDE / 4; ++column)
+        {
+            std::uint8_t* texel = flat_left.data() + (std::size_t(row) * MAP_SIDE + column) * 4;
+            texel[0] = 128;
+            texel[1] = 128;
+            texel[2] = 255;
+        }
+    }
+
+    std::vector<std::uint8_t> flat(std::size_t(MAP_SIDE) * MAP_SIDE * 4, 255);
+    for(std::size_t i = 0; i < flat.size(); i += 4)
+    {
+        flat[i] = 128;
+        flat[i + 1] = 128;
+    }
+
+    // Each model: three maps that tell their direction, one whose detail runs one way, one that reads green down
+    // only where the model does not draw it, and a flat one.
+    enum : unsigned int { FIRST, SECOND, THIRD, RIDGES, FLAT_DRAWN, FLAT, MAP_COUNT };
+    struct model_case
+    {
+        const char* name;
+        const std::vector<std::uint8_t>* telling;
+    };
+    const model_case models[] = {{"down", &down}, {"up", &up}};
+    std::vector<std::string> written;
+    const auto import_model_of = [&](const model_case& model)
+    {
+        const std::string prefix = std::string(model.name) + "_";
+        const std::vector<std::string> names = {prefix + "first.png",  prefix + "second.png",     prefix + "third.png",
+                                                prefix + "ridges.png", prefix + "flat_drawn.png", prefix + "flat.png"};
+        const std::vector<std::uint8_t>* texels[MAP_COUNT] = {model.telling, model.telling, model.telling,
+                                                              &ridges,       &flat_left,    &flat};
+        for(unsigned int map = 0; map < MAP_COUNT; ++map)
+        {
+            require(write_rgba_png(folder / names[map], *texels[map], MAP_SIDE, MAP_SIDE), "the test maps are written");
+            written.push_back(names[map]);
+        }
+        auto scene = make_scene_binding(names);
+        scene->mNumMeshes = 1;
+        scene->mMeshes = new aiMesh*[1];
+        scene->mMeshes[0] = make_grid_mesh(FLAT_DRAWN, 0.0f, 0.0f, FLAT_SHARE, 1.0f);
+        std::vector<unravel::importer::imported_material> materials;
+        std::vector<unravel::importer::imported_texture> textures;
+        unravel::importer::mesh_import::process_materials(am, folder / (prefix + "model.gltf"), folder, scene.get(), materials, textures);
+        return names;
+    };
+    const auto is_normal_map_with = [&](const std::string& map, normal_direction normal_y)
+    {
+        const auto settings = read_texture_settings(folder / map);
+        return settings && settings->type == texture_importer_meta::texture_type::normal_map && settings->normal_y == normal_y;
+    };
+
+    const auto green_down = import_model_of(models[0]);
+    check(is_normal_map_with(green_down[FIRST], normal_direction::automatic) &&
+              is_normal_map_with(green_down[SECOND], normal_direction::automatic) &&
+              is_normal_map_with(green_down[THIRD], normal_direction::automatic),
+          "the maps of a model that tell their direction stay on Auto");
+    check(is_normal_map_with(green_down[RIDGES], normal_direction::down),
+          "a map that tells nothing gets Down in a model whose other maps are green down");
+    check(is_normal_map_with(green_down[FLAT_DRAWN], normal_direction::automatic),
+          "and a map that reads green down where the model does not draw it stays on Auto there: the compile turns it over");
+    check(is_normal_map_with(green_down[FLAT], normal_direction::automatic), "a flat map stays on Auto: it has nothing to turn over");
+
+    const auto green_up = import_model_of(models[1]);
+    check(is_normal_map_with(green_up[RIDGES], normal_direction::automatic),
+          "a map that tells nothing stays on Auto in a model whose other maps are green up");
+    check(is_normal_map_with(green_up[FLAT_DRAWN], normal_direction::up),
+          "and the map that reads green down where the model does not draw it gets Up there");
+
+    for(const auto& map : written)
+    {
+        am.remove_asset_info_for_key(folder_key + "/" + map);
     }
     fs::remove_all(folder, ec);
 }
@@ -561,19 +712,45 @@ auto encode_base64(const std::vector<std::uint8_t>& bytes) -> std::string
     return out;
 }
 
+/// How write_grid_gltf shapes the grid and what it states of it.
+struct gltf_grid_options
+{
+    /// The file states its tangents, as glTF defines them: along u, with the bitangent up the image.
+    bool has_tangents = false;
+    /// The angle, in radians, the surface turns through from u = 0 to u = 1; a flat grid at zero. An importer
+    /// drops tangents that are all one vector, so a file that states them bends.
+    float bend = 0.0f;
+};
+
 /// Writes the grid as a glTF file whose one material binds `normal_map`. glTF measures v from the top.
-void write_grid_gltf(const fs::path& file, const uv_grid& grid, const std::string& normal_map)
+void write_grid_gltf(const fs::path& file, const uv_grid& grid, const std::string& normal_map, const gltf_grid_options& options = {})
 {
     const std::size_t vertices = grid.uvs.size() / 2;
     std::vector<float> positions;
     std::vector<float> normals;
-    float lowest = 0.0f;
+    std::vector<float> tangents;
+    float lowest[3] = {0.0f, 0.0f, 0.0f};
+    float highest[3] = {0.0f, 0.0f, 0.0f};
     for(std::size_t i = 0; i < vertices; ++i)
     {
-        positions.insert(positions.end(), {grid.uvs[i * 2], -grid.uvs[i * 2 + 1], 0.0f});
-        normals.insert(normals.end(), {0.0f, 0.0f, 1.0f});
-        lowest = std::min(lowest, -grid.uvs[i * 2 + 1]);
+        const float u = grid.uvs[i * 2];
+        const float angle = options.bend * u;
+        const float position[3] = {options.bend > 0.0f ? std::sin(angle) / options.bend : u,
+                                   -grid.uvs[i * 2 + 1],
+                                   options.bend > 0.0f ? (std::cos(angle) - 1.0f) / options.bend : 0.0f};
+        positions.insert(positions.end(), position, position + 3);
+        normals.insert(normals.end(), {std::sin(angle), 0.0f, std::cos(angle)});
+        tangents.insert(tangents.end(), {std::cos(angle), 0.0f, -std::sin(angle), 1.0f});
+        for(std::size_t axis = 0; axis < 3; ++axis)
+        {
+            lowest[axis] = std::min(lowest[axis], position[axis]);
+            highest[axis] = std::max(highest[axis], position[axis]);
+        }
     }
+    const auto list = [](const float* values)
+    {
+        return "[" + std::to_string(values[0]) + "," + std::to_string(values[1]) + "," + std::to_string(values[2]) + "]";
+    };
     std::vector<std::uint8_t> buffer;
     std::string views;
     const auto append = [&](const void* data, std::size_t bytes)
@@ -587,18 +764,20 @@ void write_grid_gltf(const fs::path& file, const uv_grid& grid, const std::strin
     append(normals.data(), normals.size() * sizeof(float));
     append(grid.uvs.data(), grid.uvs.size() * sizeof(float));
     append(grid.indices.data(), grid.indices.size() * sizeof(std::uint32_t));
+    append(tangents.data(), tangents.size() * sizeof(float));
 
     const std::string count = std::to_string(vertices);
     std::string json = "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],";
-    json += "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"NORMAL\":1,\"TEXCOORD_0\":2},\"indices\":3,"
-            "\"material\":0}]}],";
+    json += std::string("\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"NORMAL\":1,\"TEXCOORD_0\":2") +
+            (options.has_tangents ? ",\"TANGENT\":4" : "") + "},\"indices\":3,\"material\":0}]}],";
     json += "\"materials\":[{\"name\":\"Grid\",\"normalTexture\":{\"index\":0}}],\"textures\":[{\"source\":0}],";
     json += "\"images\":[{\"uri\":\"" + normal_map + "\"}],";
     json += "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":" + count +
-            ",\"type\":\"VEC3\",\"min\":[0," + std::to_string(lowest) + ",0],\"max\":[1,0,0]},";
+            ",\"type\":\"VEC3\",\"min\":" + list(lowest) + ",\"max\":" + list(highest) + "},";
     json += "{\"bufferView\":1,\"componentType\":5126,\"count\":" + count + ",\"type\":\"VEC3\"},";
     json += "{\"bufferView\":2,\"componentType\":5126,\"count\":" + count + ",\"type\":\"VEC2\"},";
-    json += "{\"bufferView\":3,\"componentType\":5125,\"count\":" + std::to_string(grid.indices.size()) + ",\"type\":\"SCALAR\"}],";
+    json += "{\"bufferView\":3,\"componentType\":5125,\"count\":" + std::to_string(grid.indices.size()) + ",\"type\":\"SCALAR\"},";
+    json += "{\"bufferView\":4,\"componentType\":5126,\"count\":" + count + ",\"type\":\"VEC4\"}],";
     json += "\"bufferViews\":[" + views + "],";
     json += "\"buffers\":[{\"byteLength\":" + std::to_string(buffer.size()) + ",\"uri\":\"data:application/octet-stream;base64," +
             encode_base64(buffer) + "\"}]}";
@@ -635,14 +814,100 @@ void write_grid_obj(const fs::path& file, const uv_grid& grid, const std::string
     }
 }
 
-auto import_model(unravel::asset_manager& am, const fs::path& file) -> bool
+auto import_model(unravel::asset_manager& am, const fs::path& file, unravel::mesh::load_data& data) -> bool
 {
-    unravel::mesh::load_data data;
     data.vertex_format = gfx::mesh_vertex::get_layout();
     std::vector<unravel::animation_clip> clips;
     std::vector<unravel::importer::imported_material> materials;
     std::vector<unravel::importer::imported_texture> textures;
     return unravel::importer::load_mesh_data_from_file(am, file, unravel::mesh_importer_meta{}, data, clips, materials, textures);
+}
+
+auto import_model(unravel::asset_manager& am, const fs::path& file) -> bool
+{
+    unravel::mesh::load_data data;
+    return import_model(am, file, data);
+}
+
+/// How the bitangents of `data` lie to the direction its surface runs in as v grows, down the image: +1 when
+/// every triangle's bitangent points that way, -1 when every one points up the image. A triangle counts by its
+/// area.
+auto measure_bitangents_down_the_image(const unravel::mesh::load_data& data) -> float
+{
+    const auto read = [&](bgfx::Attrib::Enum attribute, std::uint32_t vertex)
+    {
+        float value[4] = {};
+        bgfx::vertexUnpack(value, attribute, data.vertex_format, data.vertex_data.data(), vertex);
+        return math::vec3(value[0], value[1], value[2]);
+    };
+    float along = 0.0f;
+    float total = 0.0f;
+    for(const auto& triangle : data.triangle_data)
+    {
+        const auto a = triangle.indices[0];
+        const auto b = triangle.indices[1];
+        const auto c = triangle.indices[2];
+        const math::vec3 p = read(bgfx::Attrib::Position, b) - read(bgfx::Attrib::Position, a);
+        const math::vec3 q = read(bgfx::Attrib::Position, c) - read(bgfx::Attrib::Position, a);
+        const math::vec3 s = read(bgfx::Attrib::TexCoord0, b) - read(bgfx::Attrib::TexCoord0, a);
+        const math::vec3 t = read(bgfx::Attrib::TexCoord0, c) - read(bgfx::Attrib::TexCoord0, a);
+        const float determinant = s.x * t.y - t.x * s.y;
+        const float area = math::length(math::cross(p, q));
+        if(std::abs(determinant) < 1e-12f || area < 1e-12f)
+        {
+            continue;
+        }
+        const math::vec3 down_the_image = math::normalize((q * s.x - p * t.x) / determinant);
+        const math::vec3 bitangent = math::normalize(read(bgfx::Attrib::Bitangent, a) + read(bgfx::Attrib::Bitangent, b) +
+                                                     read(bgfx::Attrib::Bitangent, c));
+        along += area * math::dot(down_the_image, bitangent);
+        total += area;
+    }
+    return total > 0.0f ? along / total : 0.0f;
+}
+
+void test_imported_bitangents(rtti::context& ctx)
+{
+    auto& am = ctx.get_cached<unravel::asset_manager>();
+    const std::string folder_key = "app:/data/normal_green_frames";
+    const fs::path folder = fs::resolve_protocol(folder_key);
+    fs::error_code ec;
+    fs::remove_all(folder, ec);
+
+    const char* const map = "frames.png";
+    const auto texels = make_surface_normal_map({.width = MAP_SIDE, .height = MAP_SIDE, .is_green_up = true});
+    require(write_rgba_png(folder / map, texels, MAP_SIDE, MAP_SIDE), "the map is written");
+    const auto grid = make_uv_grid(0.0f, 1.0f);
+    write_grid_gltf(folder / "stated.gltf", grid, map, {.has_tangents = true, .bend = 1.0f});
+    write_grid_gltf(folder / "computed.gltf", grid, map, {.has_tangents = false, .bend = 1.0f});
+    write_grid_obj(folder / "computed.obj", grid, map);
+
+    unravel::mesh::load_data stated;
+    unravel::mesh::load_data computed;
+    unravel::mesh::load_data computed_obj;
+    require(import_model(am, folder / "stated.gltf", stated) && import_model(am, folder / "computed.gltf", computed) &&
+                import_model(am, folder / "computed.obj", computed_obj),
+            "the three models import");
+    // The shaders turn the sampled Y around and add it along the bitangent, so green points up the image only on a
+    // mesh whose bitangent points down it. A mesh whose bitangent pointed the other way would be lit from the
+    // wrong side by every normal map.
+    check_near(measure_bitangents_down_the_image(stated), 1.0f, 0.01f, "a glTF file's own tangents give a bitangent down the image");
+    check_near(measure_bitangents_down_the_image(computed), 1.0f, 0.01f, "tangents computed for a glTF file give the same bitangent");
+    check_near(measure_bitangents_down_the_image(computed_obj), 1.0f, 0.01f, "and so do tangents computed for an OBJ file");
+
+    for(const auto kind : {unravel::mesh_shape_kind::plane, unravel::mesh_shape_kind::cube, unravel::mesh_shape_kind::sphere,
+                           unravel::mesh_shape_kind::cylinder, unravel::mesh_shape_kind::torus})
+    {
+        unravel::mesh_shape shape;
+        shape.kind = kind;
+        unravel::mesh::load_data built;
+        require(unravel::build_shape_load_data(shape, built), "the shape is built");
+        check(measure_bitangents_down_the_image(built) > 0.99f,
+              "the built-in " + std::string(unravel::get_shape_kind_name(kind)) + " has the same bitangent");
+    }
+
+    am.remove_asset_info_for_key(folder_key + "/" + map);
+    fs::remove_all(folder, ec);
 }
 
 void test_imported_uvs_select_texels(rtti::context& ctx)
@@ -739,7 +1004,10 @@ void run_normal_map_green_suite(rtti::context& ctx)
     RUN_CASE(test_files(temp));
     RUN_CASE(test_normal_y_setting(temp / "setting"));
     RUN_CASE(test_import_records_normal_y(ctx));
+    RUN_CASE(test_common_direction());
+    RUN_CASE(test_import_follows_the_models_maps(ctx));
     RUN_CASE(test_imported_uvs_select_texels(ctx));
+    RUN_CASE(test_imported_bitangents(ctx));
     RUN_CASE(test_corpus());
     fs::remove_all(temp, ec);
 }

@@ -20,10 +20,16 @@ Format-specific contracts of the texture and mesh compiles. General compile rule
   The engine loader drops the tag of a format without a view and samples it raw, which reads too light,
   and never fails the texture.
 - The shaders read a normal map with green pointing up the image (`NORMAL_MAP_Y_UP`,
-  `engine_data/data/shaders/shaderlib.sh`): the importer's left-handed conversion leaves the bitangent
-  pointing down the image, so the sampled Y is negated before Z is rebuilt, the same for BC5, ASTC and
-  RGBA8. A green-down (DirectX) source compiles with its Y turned over. The source's format does not
-  decide which a file is: glTF files with green-down maps exist, and packs mix both.
+  `engine_data/data/shaders/shaderlib.sh`): they negate the sampled Y before Z is rebuilt and add it
+  along the mesh's bitangent, the same for BC5, ASTC and RGBA8. That reads green as up only where the
+  bitangent points along growing v, down the image, so every mesh has it that way: a file's own
+  tangents and the built-in shapes come out so, and the importer turns the bitangents Assimp computes
+  for a mesh without its own, which point against it (`get_bitangent_side`,
+  `mesh_import_geometry.cpp`). A mesh with the bitangent the other way is lit from the wrong side by
+  every normal map: check a change to either half on a rendered surface, with a model that has
+  tangents and one that has none.
+- A green-down (DirectX) source compiles with its Y turned over. The source's format does not decide
+  which a file is: glTF files with green-down maps exist, and packs mix both.
 - `texture_importer_meta::normal_y` is Auto, Up or Down. The texture compile resolves Auto every time
   it compiles a normal map (`load_normal_map_to_invert`, `asset_compiler.cpp`): a convention word in
   the file's name first (`_nor_gl`, `NormalDX`), else a test on the texels that answers unknown
@@ -40,9 +46,16 @@ Format-specific contracts of the texture and mesh compiles. General compile rule
   importer has the UVs: it marks a `normal_map_coverage` (the cells of a 128 x 128 grid in which the
   first-UV vertices of the meshes that bind the map lie) and, where the drawn texels read differently
   from the whole map, writes Up or Down into the `.meta` (`find_normal_y_to_record`), which the
-  compile follows. Every other map stays on Auto and is not decoded at import. A map with vertices
-  outside the UV square repeats and has no padding; one whose vertices mark under a tenth of the grid
-  tells too little. A Normal Y someone chose is never changed by an import.
+  compile follows. A map with vertices outside the UV square repeats and has no padding; one whose
+  vertices mark under a tenth of the grid tells too little.
+- Some maps cannot tell their direction at all: with detail that runs one way (planks, brushed
+  metal, fabric) green up and green down are both a surface, a groove or a ridge. Such a map takes
+  the direction its model's other maps agree on (`find_common_normal_green`: three in four of those
+  that tell), since a model's maps mostly come from one tool, and the import writes Down for it when
+  that is green down. A flat map is left alone. So the import decodes every map on Auto whose name
+  states nothing, once, on the thread pool (2.5 s for the 132 maps of a large scene), and still
+  writes only what the compile would not find: every other map stays on Auto. A Normal Y someone
+  chose is never changed by an import.
 - The project audit's `texture.normal_green_down` rule reads the compiled file, without a mesh, and
   reports a normal map that still reads green down: an Up or Down that states the wrong direction,
   or a map Auto could not tell.

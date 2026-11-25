@@ -76,7 +76,7 @@ struct material_import_context
     texture_job_store* job_store;
     /// Collect phase only: every normal map a material asks for.
     std::vector<normal_map_request>* normal_map_requests;
-    /// Bind phase only: the Normal Y to record for the maps the meshes decide (find_normal_y_to_record).
+    /// Bind phase only: the Normal Y to record for the maps the import decides (find_normal_y_to_record).
     const recorded_normal_y* normal_y_to_record;
 };
 
@@ -185,14 +185,30 @@ auto mark_normal_map_coverage(const aiScene* scene, const std::vector<auto_norma
     return coverage;
 }
 
+/// How a log line names the direction a model's normal maps agree on.
+auto describe_common_direction(asset_compiler::normal_green direction) -> const char*
+{
+    switch(direction)
+    {
+        case asset_compiler::normal_green::down:
+            return "green down";
+        case asset_compiler::normal_green::up:
+            return "green up";
+        case asset_compiler::normal_green::unknown:
+        default:
+            return "no direction";
+    }
+}
+
 /**
  * @brief The Normal Y this import records for the normal maps on Auto that its materials ask for.
  *
- * The texture compile reads a map on Auto whole and turns a green-down one over. It has no mesh, so a map that is
- * mostly padding around its UV islands can read differently whole than by the texels the model draws. The import
- * has the UVs: where the two differ it records the direction of the drawn texels
- * (asset_compiler::find_normal_green_to_record), and the compile follows the recorded value. Every other map stays
- * on Auto and is not read here. The maps that are read are read on the thread pool.
+ * The texture compile reads a map on Auto whole and turns a green-down one over. It has no mesh and no other map
+ * to go by. The import has both: the UVs, by which a map that is mostly padding around its UV islands reads
+ * differently than whole, and the model's other maps, whose common direction a map that tells none takes (a flat
+ * map, detail that runs one way). It records Up or Down only for a map the compile would compile the other way
+ * (asset_compiler::find_normal_green_to_record); every other map stays on Auto. The maps are read on the thread
+ * pool, each decoded once, and not at all when its name states the convention.
  */
 auto find_normal_y_to_record(const aiScene* scene,
                              const std::vector<normal_map_request>& requests,
@@ -205,34 +221,32 @@ auto find_normal_y_to_record(const aiScene* scene,
         return {};
     }
 
-    APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Mesh Importer: Read the normal maps the meshes decide");
+    APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Mesh Importer: Read the normal maps on Auto");
     const auto coverage = mark_normal_map_coverage(scene, maps);
-    std::vector<asset_compiler::normal_green> directions(maps.size(), asset_compiler::normal_green::unknown);
+    std::vector<asset_compiler::normal_map_evidence> evidence(maps.size());
     poolstl::for_each_par_if(maps.size() > 1,
                              poolstl::iota_iter<size_t>(0),
                              poolstl::iota_iter<size_t>(maps.size()),
                              [&](const size_t index)
                              {
-                                 directions[index] =
-                                     asset_compiler::find_normal_green_to_record(maps[index].file, coverage[index]);
+                                 evidence[index] = asset_compiler::read_normal_map_evidence(maps[index].file, coverage[index]);
                              });
+    const auto common = asset_compiler::find_common_normal_green(evidence);
 
     recorded_normal_y recorded;
-    size_t read = 0;
     for(size_t index = 0; index < maps.size(); ++index)
     {
-        read += coverage[index].is_usable() ? 1 : 0;
-        if(directions[index] != asset_compiler::normal_green::unknown)
+        const auto direction = asset_compiler::find_normal_green_to_record(evidence[index], common);
+        if(direction != asset_compiler::normal_green::unknown)
         {
             recorded.emplace(maps[index].file.generic_string(),
-                             directions[index] == asset_compiler::normal_green::down
-                                 ? texture_importer_meta::normal_direction::down
-                                 : texture_importer_meta::normal_direction::up);
+                             direction == asset_compiler::normal_green::down ? texture_importer_meta::normal_direction::down
+                                                                             : texture_importer_meta::normal_direction::up);
         }
     }
-    APPLOG_TRACE("Mesh Importer: {} of the {} normal maps on Auto have UV islands to read by, and {} read differently by them.",
-                 read,
+    APPLOG_TRACE("Mesh Importer: the {} normal maps on Auto agree on {}, and {} get a Normal Y the compile would not find.",
                  maps.size(),
+                 describe_common_direction(common),
                  recorded.size());
     return recorded;
 }

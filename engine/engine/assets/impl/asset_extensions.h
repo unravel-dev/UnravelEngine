@@ -305,11 +305,13 @@ inline auto get_format_version<unravel::mesh>() -> uint64_t
     //     or white, its second UV set or a copy of the first; the mesh records which channels the file had.
     // 31: the mesh keeps its morph targets (blend shapes): names, default weights and sparse position and normal
     //     deltas of the vertices they move, which the skin split copies with their vertices.
+    // 32: every imported mesh's bitangent points along growing v. The tangents Assimp computes for a mesh without
+    //     its own pointed against it, which read a normal map's green channel the other way round on that mesh.
     //
     // NOTE: the compiled asset is a function of the BAKE ALGORITHM, not only of the source
     // mesh. Any change to mesh_sdf_baker that alters its output needs a bump here, or existing
     // projects silently keep the field produced by the previous code. The same holds for the card builder.
-    return 31;
+    return 32;
 }
 
 template<>

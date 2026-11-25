@@ -46,6 +46,8 @@ constexpr std::size_t GREEN_MIN_SCALE_CELLS = 256;
 constexpr float GREEN_MIN_MARKED_SHARE = 0.10f;
 /// The largest share of a model's vertices outside the UV square for the map to count as not repeating.
 constexpr float GREEN_MAX_OUTSIDE_SHARE = 0.01f;
+/// The share of a model's maps that tell a direction which must tell the same one for the model's maps to agree.
+constexpr float GREEN_MIN_COMMON_SHARE = 0.75f;
 /// A correlation closer to zero than this has no sign.
 constexpr float GREEN_MIN_SIGNED = 0.02f;
 /// The share of the voting regions that must read the direction the whole map reads.
@@ -710,7 +712,9 @@ auto read_normal_green(const std::uint8_t* rgba,
         return {};
     }
     const auto* drawn_parts = coverage != nullptr && coverage->is_usable() ? coverage : nullptr;
-    return judge_green_evidence(gather_green_evidence(std::move(vectors), drawn_parts));
+    auto reading = judge_green_evidence(gather_green_evidence(std::move(vectors), drawn_parts));
+    reading.has_detail = true;
+    return reading;
 }
 
 auto read_normal_green(const bimg::ImageContainer& image,
@@ -821,26 +825,68 @@ auto get_stated_normal_y_inversion(const texture_importer_meta& importer, const 
     return named == normal_green::down;
 }
 
-auto find_normal_green_to_record(const fs::path& source_file, const normal_map_coverage& coverage) -> normal_green
+auto read_normal_map_evidence(const fs::path& source_file, const normal_map_coverage& coverage) -> normal_map_evidence
 {
-    if(!coverage.is_usable() || get_named_normal_green(source_file) != normal_green::unknown)
+    const auto named = get_named_normal_green(source_file);
+    if(named != normal_green::unknown)
     {
-        return normal_green::unknown;
+        return {named, named};
     }
+    normal_map_evidence evidence;
     bimg::ImageContainer* image = imageLoad(bx::FilePath(source_file.string().c_str()));
     if(image == nullptr)
     {
-        return normal_green::unknown;
+        evidence.has_detail = false;
+        return evidence;
     }
-    const bool is_whole_down = read_normal_green(*image).direction == normal_green::down;
-    const bool is_drawn_down =
-        read_normal_green(*image, gfx::normal_map_channels::xyz, &coverage).direction == normal_green::down;
+    const auto whole = read_normal_green(*image);
+    evidence.compiled = whole.direction;
+    evidence.has_detail = whole.has_detail;
+    evidence.known = coverage.is_usable() ? read_normal_green(*image, gfx::normal_map_channels::xyz, &coverage).direction
+                                          : evidence.compiled;
     bimg::imageFree(image);
-    if(is_whole_down == is_drawn_down)
+    return evidence;
+}
+
+auto find_common_normal_green(const std::vector<normal_map_evidence>& maps) -> normal_green
+{
+    const auto count = [&maps](normal_green direction)
+    {
+        return std::count_if(maps.begin(),
+                             maps.end(),
+                             [direction](const normal_map_evidence& map)
+                             {
+                                 return map.known == direction;
+                             });
+    };
+    const float down = float(count(normal_green::down));
+    const float up = float(count(normal_green::up));
+    const float needed = (down + up) * GREEN_MIN_COMMON_SHARE;
+    if(down > 0.0f && down >= needed)
+    {
+        return normal_green::down;
+    }
+    if(up > 0.0f && up >= needed)
+    {
+        return normal_green::up;
+    }
+    return normal_green::unknown;
+}
+
+auto find_normal_green_to_record(const normal_map_evidence& map, normal_green common) -> normal_green
+{
+    if(!map.has_detail)
     {
         return normal_green::unknown;
     }
-    return is_drawn_down ? normal_green::down : normal_green::up;
+    const auto wanted = map.known != normal_green::unknown ? map.known : common;
+    const bool is_wanted_down = wanted == normal_green::down;
+    const bool is_compiled_down = map.compiled == normal_green::down;
+    if(is_wanted_down == is_compiled_down)
+    {
+        return normal_green::unknown;
+    }
+    return is_wanted_down ? normal_green::down : normal_green::up;
 }
 
 } // namespace unravel::asset_compiler

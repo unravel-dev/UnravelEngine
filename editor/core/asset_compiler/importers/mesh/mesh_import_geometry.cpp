@@ -76,7 +76,8 @@ auto get_vertex_color(const aiMesh* mesh, size_t i) -> math::vec4
     return math::clamp(math::vec4(color.r, color.g, color.b, color.a), math::vec4(0.0f), math::vec4(1.0f));
 }
 
-void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
+/// Appends @p mesh's vertices. @p bitangent_side (get_bitangent_side) turns its bitangents to point along growing v.
+void process_vertices(aiMesh* mesh, float bitangent_side, mesh::load_data& load_data)
 {
     auto& submesh = load_data.submeshes.back();
 
@@ -195,6 +196,7 @@ void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
             if(mesh->HasTangentsAndBitangents())
             {
                 std::memcpy(math::value_ptr(bitangent), &mesh->mBitangents[i], sizeof(aiVector3D));
+                bitangent *= bitangent_side;
             }
             else
             {
@@ -396,6 +398,50 @@ auto make_stable_submesh_id(const char* name, const mesh::load_data& load_data) 
     return hash;
 }
 
+/**
+ * @brief Which way @p mesh's bitangents lie to the direction its surface runs in as v grows: 1 when they point that
+ * way, -1 when they point against it. Every triangle counts by its area.
+ *
+ * The shaders add a normal map's Y along the bitangent, so every mesh needs the same direction for it: along
+ * growing v, down the image, as a file's own tangents and the built-in shapes have it. The tangents Assimp computes
+ * for a mesh without its own point against it, which read a normal map's green channel the other way round.
+ */
+auto get_bitangent_side(const aiMesh* mesh) -> float
+{
+    if(!mesh->HasTangentsAndBitangents() || !mesh->HasTextureCoords(0) || !mesh->HasPositions())
+    {
+        return 1.0f;
+    }
+    double along_growing_v = 0.0;
+    for(unsigned int f = 0; f < mesh->mNumFaces; ++f)
+    {
+        const aiFace& face = mesh->mFaces[f];
+        if(face.mNumIndices != 3 || !has_valid_corners(face, mesh))
+        {
+            continue;
+        }
+        const unsigned int a = face.mIndices[0];
+        const unsigned int b = face.mIndices[1];
+        const unsigned int c = face.mIndices[2];
+        const aiVector3D p = mesh->mVertices[b] - mesh->mVertices[a];
+        const aiVector3D q = mesh->mVertices[c] - mesh->mVertices[a];
+        const aiVector3D s = mesh->mTextureCoords[0][b] - mesh->mTextureCoords[0][a];
+        const aiVector3D t = mesh->mTextureCoords[0][c] - mesh->mTextureCoords[0][a];
+        const float determinant = s.x * t.y - t.x * s.y;
+        // The direction the surface runs in as v grows, at a length that falls with the triangle's UV area.
+        const aiVector3D growing_v = (q * s.x - p * t.x) * (determinant < 0.0f ? -1.0f : 1.0f);
+        const float length = growing_v.Length();
+        if(determinant == 0.0f || length <= 0.0f)
+        {
+            continue;
+        }
+        const float area = (p ^ q).Length();
+        const aiVector3D bitangent = mesh->mBitangents[a] + mesh->mBitangents[b] + mesh->mBitangents[c];
+        along_growing_v += double(area) * double((growing_v / length) * bitangent);
+    }
+    return along_growing_v < 0.0 ? -1.0f : 1.0f;
+}
+
 void process_mesh(aiMesh* mesh, mesh::load_data& load_data)
 {
     load_data.submeshes.emplace_back();
@@ -410,7 +456,7 @@ void process_mesh(aiMesh* mesh, mesh::load_data& load_data)
 
     submesh.face_count = process_faces(mesh, submesh.vertex_start, load_data);
     process_bones(mesh, submesh.vertex_start, load_data);
-    process_vertices(mesh, load_data);
+    process_vertices(mesh, get_bitangent_side(mesh), load_data);
 }
 
 void process_node(const aiScene* scene,

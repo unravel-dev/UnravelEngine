@@ -107,7 +107,9 @@ inside the project).
   Wall_NormalDX.jpg) or its texels each time the texture compiles, "up" and
   "down" state it. Leave it on automatic unless a surface is lit wrongly. A
   model import sets up or down itself only for a map that reads differently by
-  the texels the model draws than whole. audit_run reports a normal map that
+  the texels the model draws than whole, and for a map that cannot tell its
+  direction (detail that runs one way), which takes the one the model's other
+  normal maps agree on. audit_run reports a normal map that
   still reads green down once compiled (rule texture.normal_green_down), and
   audit_fix sets its normal_y.
 

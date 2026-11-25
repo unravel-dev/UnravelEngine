@@ -143,12 +143,12 @@ REFLECT(texture_importer_meta)
         .data<texture_importer_meta::normal_direction::up>("up"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "up"},
-            entt::attribute{"pretty_name", "Up (OpenGL)"},
+            entt::attribute{"pretty_name", "Up"},
         })
         .data<texture_importer_meta::normal_direction::down>("down"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "down"},
-            entt::attribute{"pretty_name", "Down (DirectX)"},
+            entt::attribute{"pretty_name", "Down"},
         });
 
     // Register texture_importer_meta::compression_quality enum with entt
