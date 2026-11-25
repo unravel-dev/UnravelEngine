@@ -56,6 +56,12 @@ Compile and recompile:
   syncer rewrites a changed file's `.meta` unless that `.meta` changed in the same watcher batch
   (`fs::syncer` passes those entries to the callbacks), so a file arriving with its `.meta` compiles
   once. The first listing writes only missing or re-ided `.meta` files.
+- Each `.meta` write asks for a compile, and a compile reads the settings when it starts. The watcher
+  starts every compile through `asset_compiler::compile_gate` (`editor/core/asset_compiler/compile_gate.h`):
+  while a file compiles, a request for it starts nothing and makes that compile run once more when it is
+  done. Without it two compiles of one file overlap and the slower one wins, whichever started first: a
+  texture's first compile as a color texture finished after, and wrote over, its compile as the normal
+  map a model import had made of it. A new place that starts a compile goes through the gate too.
 - Multi-file sets (a `.gltf` with its `.bin` and textures) are written under
   `fs::watcher::scoped_pause`, as `editor_actions::import_files` does, so no compile sees half a set.
 - A compiled file is current while its manifest (`<compiled>.manifest`) matches: the fingerprint of

@@ -562,13 +562,14 @@ auto watch_assets_depenencies(rtti::context& ctx, const fs::path& dir, const fs:
 template<typename T>
 static void add_to_syncer(rtti::context& ctx,
                           fs::syncer& syncer,
+                          asset_compiler::compile_gate& gate,
                           const fs::syncer::on_entry_removed_t& on_removed,
                           const fs::syncer::on_entry_renamed_t& on_renamed)
 {
     auto& ts = ctx.get_cached<threader>();
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto on_modified = [&ts, &am](const std::string& ext,
+    auto on_modified = [&ts, &am, &gate](const std::string& ext,
                                   const auto& ref_path,
                                   const auto& synced_paths,
                                   bool is_initial_listing,
@@ -588,14 +589,20 @@ static void add_to_syncer(rtti::context& ctx,
             {
                 auto job_name = get_job_name<T>();
                 auto task = ts.pool->schedule(tpp::job_desc{job_name, key},
-                                              [&am, ref_path, output, job_name]()
+                                              [&am, &gate, ref_path, output, job_name]()
                                               {
-                                                  APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", job_name, output.string()));
                                                   // A compile can hold every thread it parallelises over for minutes
                                                   // (a mesh's distance-field bake), so it runs its loops on the
                                                   // background pool, never on the one the frame's loops wait for.
                                                   const poolstl::background_scope background;
-                                                  asset_compiler::compile<T>(am, ref_path, output);
+                                                  // While the file compiles, this request only makes that compile
+                                                  // run again when it is done (asset_compiler::compile_gate).
+                                                  gate.run(output.string(),
+                                                           [&]
+                                                           {
+                                                               APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", job_name, output.string()));
+                                                               asset_compiler::compile<T>(am, ref_path, output);
+                                                           });
                                               });
             }
         }
@@ -647,13 +654,14 @@ static void watch_synced(rtti::context& ctx, std::vector<uint64_t>& watchers, co
 template<>
 void add_to_syncer<gfx::shader>(rtti::context& ctx,
                                 fs::syncer& syncer,
+                                asset_compiler::compile_gate& gate,
                                 const fs::syncer::on_entry_removed_t& on_removed,
                                 const fs::syncer::on_entry_renamed_t& on_renamed)
 {
     auto& ts = ctx.get_cached<threader>();
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto on_modified = [&ts, &am](const std::string& ext,
+    auto on_modified = [&ts, &am, &gate](const std::string& ext,
                                   const auto& ref_path,
                                   const auto& synced_paths,
                                   bool is_initial_listing,
@@ -691,11 +699,14 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
                 auto job_name = fmt::format("{} ({})", get_job_name<gfx::shader>(), extension);
                 auto task = ts.pool->schedule(tpp::job_desc{job_name, key},
                                               priority,
-                                              [&am, ref_path, output, job_name]()
+                                              [&am, &gate, ref_path, output, job_name]()
                                               {
-                                                //   APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", job_name, output.string()));
                                                   const poolstl::background_scope background;
-                                                  asset_compiler::compile<gfx::shader>(am, ref_path, output);
+                                                  gate.run(output.string(),
+                                                           [&]
+                                                           {
+                                                               asset_compiler::compile<gfx::shader>(am, ref_path, output);
+                                                           });
                                               });
             }
         }
@@ -971,20 +982,20 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
         }
     };
 
-    add_to_syncer<gfx::texture>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<gfx::shader>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<mesh>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<material>(ctx, syncer, remove_graph_material_shaders_too(on_removed), rename_graph_material_shaders_too(on_renamed));
-    add_to_syncer<animation_clip>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<prefab>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<scene_prefab>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<physics_material>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<animation_controller>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<audio_clip>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<font>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<script>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<ui_tree>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<style_sheet>(ctx, syncer, on_removed, on_renamed);
+    add_to_syncer<gfx::texture>(ctx, syncer, compile_gate_, on_removed, on_renamed);
+    add_to_syncer<gfx::shader>(ctx, syncer, compile_gate_, on_removed, on_renamed);
+    add_to_syncer<mesh>(ctx, syncer, compile_gate_, on_removed, on_renamed);
+    add_to_syncer<material>(ctx, syncer, compile_gate_, remove_graph_material_shaders_too(on_removed), rename_graph_material_shaders_too(on_renamed));
+    add_to_syncer<animation_clip>(ctx, syncer, compile_gate_, on_removed, on_renamed);
+    add_to_syncer<prefab>(ctx, syncer, compile_gate_, on_removed, on_renamed);
+    add_to_syncer<scene_prefab>(ctx, syncer, compile_gate_, on_removed, on_renamed);
+    add_to_syncer<physics_material>(ctx, syncer, compile_gate_, on_removed, on_renamed);
+    add_to_syncer<animation_controller>(ctx, syncer, compile_gate_, on_removed, on_renamed);
+    add_to_syncer<audio_clip>(ctx, syncer, compile_gate_, on_removed, on_renamed);
+    add_to_syncer<font>(ctx, syncer, compile_gate_, on_removed, on_renamed);
+    add_to_syncer<script>(ctx, syncer, compile_gate_, on_removed, on_renamed);
+    add_to_syncer<ui_tree>(ctx, syncer, compile_gate_, on_removed, on_renamed);
+    add_to_syncer<style_sheet>(ctx, syncer, compile_gate_, on_removed, on_renamed);
 
     auto on_sync_progress = [on_progress](size_t completed, size_t total, const std::string& current_entry)
     {

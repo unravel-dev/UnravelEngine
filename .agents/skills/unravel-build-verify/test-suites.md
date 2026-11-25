@@ -144,6 +144,7 @@ editor, and never under a hard timeout. Times are a full parallel run, RelWithDe
 | `asset packs` | pack write, mount, read, patches, damaged packs, the compression wrapper |
 | `asset references` | the reference scan a deploy walks scenes with |
 | `generated assets` | files an import writes beside its source (a model's default materials) |
+| `compile gate` | compiles of one compiled file never run together; a request during a compile makes it run again |
 | `audio clip encoding` | compiled clips keep the source codec; the deploy's asset index filter |
 | `mesh import heuristics` | the importer's deductions on synthetic Assimp data |
 | `vertex attributes` | the mesh vertex's colour and second UV set: layout, import defaults, the recorded channels, shapes |

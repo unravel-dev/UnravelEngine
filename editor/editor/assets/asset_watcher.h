@@ -1,4 +1,5 @@
 #pragma once
+#include <asset_compiler/compile_gate.h>
 #include <context/context.hpp>
 #include <filesystem/syncer.h>
 #include <ospp/event.h>
@@ -68,6 +69,10 @@ private:
 
     std::mutex recreate_meta_files_queue_mutex_{};
     std::map<std::string, bool> recreate_meta_files_queue_{};
+
+    /// Every compile the watcher starts goes through it, so compiles of one compiled file never run together and
+    /// one that started with older settings cannot write over a newer one.
+    asset_compiler::compile_gate compile_gate_{};
 
 };
 } // namespace unravel
