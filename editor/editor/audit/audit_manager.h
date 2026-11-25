@@ -137,6 +137,15 @@ public:
      * @return False with `error` set when the issue has no fix, or the fix could not be applied.
      */
     auto apply_fix(rtti::context& ctx, const std::string& issue_id, std::string& error) -> bool;
+    /// The ids of the last report's issues of the rule whose fix can still be applied: they have one, it was not
+    /// applied since the last run, and the issue is not ignored.
+    auto get_fixable_issues(const std::string& rule_id) const -> std::vector<std::string>;
+    /**
+     * @brief Applies the fix of every issue of the rule that get_fixable_issues lists, stopping at the first that
+     * cannot be applied.
+     * @return How many fixes were applied; `error` says why it stopped early.
+     */
+    auto apply_rule_fixes(rtti::context& ctx, const std::string& rule_id, std::string& error) -> std::size_t;
     /// Whether the issue's fix was applied since the last run; the next run confirms it.
     auto is_fixed(const std::string& issue_id) const -> bool;
 

@@ -2,6 +2,7 @@
 #include "asset_dependencies.h"
 #include "audio_compression.h"
 #include "eshader_file.h"
+#include "normal_map_green.h"
 #include "texture_target.h"
 #include "vorbis_encoder.h"
 #include <engine/assets/impl/asset_reader.h>
@@ -690,21 +691,45 @@ auto select_normal_map_format(const input_texture_info& input, const texture_com
     }
 }
 
+/**
+ * @brief The image of a texture that compiles with its Y turned over, loaded to be turned; null for one that
+ * compiles as it is. The settings and the file's name decide it where they can
+ * (get_stated_normal_y_inversion); a normal map on Auto whose name states nothing is loaded and read, and is
+ * turned over when its green channel points down.
+ */
+auto load_normal_map_to_invert(const fs::path& input_path, const texture_importer_meta& importer) -> bimg::ImageContainer*
+{
+    const auto stated = get_stated_normal_y_inversion(importer, input_path);
+    if(stated && !*stated)
+    {
+        return nullptr;
+    }
+    bimg::ImageContainer* image = imageLoad(bx::FilePath(input_path.string().c_str()));
+    if(nullptr == image)
+    {
+        if(stated)
+        {
+            APPLOG_ERROR("Failed to load texture for normal Y bake: {0}", input_path.string());
+        }
+        return nullptr;
+    }
+    if(!stated && read_normal_green(*image).direction != normal_green::down)
+    {
+        bimg::imageFree(image);
+        return nullptr;
+    }
+    return image;
+}
+
 auto bake_normal_map_input_if_needed(const fs::path& input_path,
                                      const texture_importer_meta& importer,
                                      fs::path& temp_baked_path) -> fs::path
 {
     temp_baked_path.clear();
 
-    if(!importer.invert_normal_y)
-    {
-        return input_path;
-    }
-
-    bimg::ImageContainer* image = imageLoad(bx::FilePath(input_path.string().c_str()));
+    bimg::ImageContainer* image = load_normal_map_to_invert(input_path, importer);
     if(nullptr == image)
     {
-        APPLOG_ERROR("Failed to load texture for normal Y bake: {0}", input_path.string());
         return input_path;
     }
 

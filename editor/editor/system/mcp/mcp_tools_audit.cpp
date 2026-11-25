@@ -589,6 +589,33 @@ auto handle_audit_fix(rtti::context& ctx, const simdjson::dom::object& args) -> 
     {
         return {.text = error, .is_error = true};
     }
+    std::string rule;
+    read_string(args, "rule", rule);
+    if(!rule.empty())
+    {
+        if(args["ids"].error() == simdjson::SUCCESS)
+        {
+            return {.text = "Give ids or rule, not both.", .is_error = true};
+        }
+        if(audit::find_rule(rule) == nullptr)
+        {
+            return {.text = "No rule has this id; audit_get_rules lists them.", .is_error = true};
+        }
+        const auto fixable = manager->get_fixable_issues(rule).size();
+        const auto applied = manager->apply_rule_fixes(ctx, rule, error);
+        if(applied != fixable)
+        {
+            return {.text = fmt::format(R"({{"applied_count":{},"fixable":{},"error":{}}})", applied, fixable, make_json_string(error)),
+                    .is_error = true};
+        }
+        return {.text = fmt::format(
+                    R"({{"applied_count":{},"note":"Run audit_run again to confirm the fixes; assets whose import settings changed compile first."}})",
+                    applied)};
+    }
+    if(args["ids"].error() != simdjson::SUCCESS)
+    {
+        return {.text = "Give ids, the issues to fix, or rule, to fix every issue of a rule.", .is_error = true};
+    }
     std::vector<std::string> ids;
     if(!read_string_array(args, "ids", ids, error) || ids.empty())
     {
@@ -732,12 +759,14 @@ void register_audit_tools(mcp_tool_registry& registry)
         {.name = "audit_fix",
          .description =
              "Applies the fix of audit issues by id (audit_get gives ids and fix labels), as the Project Audit window's "
-             "fix button does: import settings are written to the asset's .meta file as the inspector's Apply writes "
-             "them and the asset compiles again; profile settings and content rules change as Project Settings and the "
-             "Deploy window change them. Every id is checked first: an unknown id or an issue without a fix refuses the "
-             "call and nothing changes. Refused while the game plays or a deploy runs. Run audit_run again to confirm.",
+             "fix button does, or of every issue of one rule that has a fix and is not ignored (rule), as its Fix All "
+             "button does: import settings are written to the asset's .meta file as the inspector's Apply writes them "
+             "and the asset compiles again; profile settings and content rules change as Project Settings and the "
+             "Deploy window change them. Give ids or rule, not both. Every id is checked first: an unknown id or an "
+             "issue without a fix refuses the call and nothing changes. Refused while the game plays or a deploy runs. "
+             "Run audit_run again to confirm.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"ids":{"type":"array","minItems":1,"items":{"type":"string"},"description":"Issue ids from audit_get"}},"required":["ids"]})json",
+             R"json({"type":"object","properties":{"ids":{"type":"array","minItems":1,"items":{"type":"string"},"description":"Issue ids from audit_get"},"rule":{"type":"string","description":"A rule id (audit_get_rules): fixes every issue of the rule that has a fix"}}})json",
          .handler = &handle_audit_fix,
          .effect = tool_effect::destructive,
          .writes_project_files = true});

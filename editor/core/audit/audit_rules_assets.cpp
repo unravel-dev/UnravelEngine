@@ -216,6 +216,31 @@ void check_texture_mips(rule_context& context,
     context.add(std::move(item));
 }
 
+void check_normal_map_green(rule_context& context,
+                            const asset_record& asset,
+                            const texture_importer_meta& importer,
+                            const texture_facts& facts)
+{
+    if(importer.type != texture_importer_meta::texture_type::normal_map ||
+       facts.normal_green != asset_compiler::normal_green::down)
+    {
+        return;
+    }
+    using direction = texture_importer_meta::normal_direction;
+    const char* message = "Its green channel points down, and Auto could not tell that from the file.";
+    if(importer.normal_y == direction::down)
+    {
+        message = "Its green channel points up in the file, and Normal Y is set to Down, which turns it over.";
+    }
+    else if(importer.normal_y == direction::up)
+    {
+        message = "Its green channel points down, and Normal Y is set to Up, which keeps it so.";
+    }
+    auto item = context.make(rules::NORMAL_MAP_GREEN_DOWN, make_asset_subject(asset), message);
+    item.fix = importer.normal_y == direction::down ? fixes::SET_NORMAL_Y_UP : fixes::SET_NORMAL_Y_DOWN;
+    context.add(std::move(item));
+}
+
 void check_textures(rule_context& context)
 {
     const auto& in = context.get_input();
@@ -233,6 +258,7 @@ void check_textures(rule_context& context)
             context.count_unread();
             continue;
         }
+        check_normal_map_green(context, asset, *importer, *asset.facts.texture);
         const auto editor_max =
             get_size_pixels(asset_compiler::resolve_texture_parameters(*importer, in.editor_texture_target).max_size);
         for(const auto& profile : in.profiles)

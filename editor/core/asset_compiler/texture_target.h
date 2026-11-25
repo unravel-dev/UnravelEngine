@@ -45,6 +45,9 @@ struct texture_compile_parameters
     texture_compression_family family{texture_compression_family::bc};
     texture_importer_meta::texture_size max_size{texture_importer_meta::texture_size::size_2048};
     texture_importer_meta::compression_quality compression{texture_importer_meta::compression_quality::normal_quality};
+    /// Whether the compile reads which way the texture's green channel points and turns a green-down map over: a
+    /// normal map whose Normal Y is Auto.
+    bool reads_normal_y{false};
 
     friend auto operator==(const texture_compile_parameters& lhs, const texture_compile_parameters& rhs) -> bool = default;
 };
@@ -85,7 +88,8 @@ auto select_srgb_format(bgfx::TextureFormat::Enum format, texture_compression_fa
 /**
  * @brief The parameters as a manifest records them, with the texture compiler's version, such as
  * "v2/astc/compression_3/size_6": a compiled texture whose manifest records other parameters is compiled
- * again.
+ * again. A texture whose normal Y is read ends in the version of that reading ("/normal_y_1"), so a change to
+ * the reading compiles those textures again and no others.
  */
 auto to_string(const texture_compile_parameters& parameters) -> std::string;
 

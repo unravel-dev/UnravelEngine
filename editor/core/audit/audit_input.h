@@ -2,6 +2,7 @@
 
 #include "audit_types.h"
 
+#include <asset_compiler/normal_map_green.h>
 #include <asset_compiler/texture_target.h>
 #include <deploy/content.h>
 #include <deploy/deploy_report.h>
@@ -22,7 +23,7 @@
 namespace unravel::audit
 {
 
-/// A compiled texture as its container's header describes it.
+/// A compiled texture as its container's header describes it, and what a normal map's texels say.
 struct texture_facts
 {
     std::uint32_t width{};
@@ -33,6 +34,9 @@ struct texture_facts
     bool is_compressed{false};
     /// Bits a texel takes; for a block format, the average.
     std::uint32_t bits_per_pixel{};
+    /// For a texture imported as a normal map: which way its green channel points as compiled, where its source's
+    /// name or the compiled texels tell.
+    asset_compiler::normal_green normal_green{asset_compiler::normal_green::unknown};
 };
 
 /// A compiled audio clip as it decodes.

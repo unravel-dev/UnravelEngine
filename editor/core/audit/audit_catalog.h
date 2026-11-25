@@ -31,6 +31,7 @@ constexpr const char* COMPILE_WARNING = "script.compile_warning";
 constexpr const char* TEXTURE_UNCOMPRESSED = "texture.uncompressed";
 constexpr const char* TEXTURE_OVERSIZED = "texture.oversized";
 constexpr const char* TEXTURE_NO_MIPS = "texture.no_mips";
+constexpr const char* NORMAL_MAP_GREEN_DOWN = "texture.normal_green_down";
 constexpr const char* AUDIO_LARGE_DECODED = "audio.large_decoded";
 constexpr const char* AUDIO_UNCOMPRESSED = "audio.uncompressed";
 constexpr const char* MESH_NO_LODS = "mesh.no_lods";
@@ -84,6 +85,10 @@ constexpr const char* COMPRESS_TEXTURE = "texture.compress";
 /// Sets the texture's largest size on the issue's platforms to the rule's threshold.
 constexpr const char* LIMIT_TEXTURE_SIZE = "texture.limit_size";
 constexpr const char* GENERATE_MIPS = "texture.generate_mips";
+/// Sets the normal map's Normal Y to Down, so it compiles turned over.
+constexpr const char* SET_NORMAL_Y_DOWN = "texture.normal_y_down";
+/// Sets the normal map's Normal Y to Up, so it compiles as it is.
+constexpr const char* SET_NORMAL_Y_UP = "texture.normal_y_up";
 /// Sets the clip's compression on the issue's platforms to Normal.
 constexpr const char* COMPRESS_AUDIO = "audio.compress";
 constexpr const char* FORCE_MONO = "audio.force_mono";

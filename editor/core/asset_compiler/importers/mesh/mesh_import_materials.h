@@ -23,6 +23,11 @@ namespace mesh_import
  * conversions), which then run in parallel; the second binds the produced files and the scalar
  * properties. Embedded textures no material referenced are extracted last. @p textures receives the
  * sorted manifest of everything produced.
+ *
+ * Binding tags each texture's import settings that are still automatic with the color space and type its slot
+ * needs. A normal map stays on Normal Y Auto, which the texture compile reads from the file. Only where the texels
+ * the meshes draw read differently from the whole map does the import write Up or Down
+ * (asset_compiler::find_normal_green_to_record).
  */
 void process_materials(asset_manager& am,
                        const fs::path& filename,

@@ -190,7 +190,9 @@ silently reads zero.
 - audit_fix applies an issue's fix (fix_label says what it changes): import
   settings change as the inspector's Apply changes them and the asset compiles
   again; profile settings and content rules change as Project Settings and the
-  Deploy window change them. Run audit_run again to confirm the fix.
+  Deploy window change them. {"ids":[...]} fixes the issues named,
+  {"rule":"texture.uncompressed"} every issue of that rule that has a fix and
+  is not ignored. Run audit_run again to confirm the fix.
 - audit_ignore keeps an issue on purpose, with the reason, and audit_set_rules
   turns rules off or sets their thresholds per platform (audit_get_rules lists
   them). Both write settings/audit.cfg, which the project shares in version

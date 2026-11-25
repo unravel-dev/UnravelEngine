@@ -127,6 +127,19 @@ auto fix_texture(rtti::context& ctx, const audit::issue& item, const audit::conf
                                                                importer.generate_mipmaps = true;
                                                            });
     }
+    if(item.fix == audit::fixes::SET_NORMAL_Y_DOWN || item.fix == audit::fixes::SET_NORMAL_Y_UP)
+    {
+        return edit_import_settings<texture_importer_meta>(ctx,
+                                                           item.where.key,
+                                                           error,
+                                                           [&item](texture_importer_meta& importer)
+                                                           {
+                                                               using direction = texture_importer_meta::normal_direction;
+                                                               importer.normal_y = item.fix == audit::fixes::SET_NORMAL_Y_DOWN
+                                                                                       ? direction::down
+                                                                                       : direction::up;
+                                                           });
+    }
     if(platforms.empty())
     {
         error = "The issue names no profile that still exists.";
@@ -249,7 +262,8 @@ auto fix_content_rule(rtti::context& ctx, const audit::issue& item, std::string&
 auto apply_audit_fix(rtti::context& ctx, const audit::issue& item, const audit::config& settings, std::string& error) -> bool
 {
     const auto& fix = item.fix;
-    if(fix == audit::fixes::COMPRESS_TEXTURE || fix == audit::fixes::LIMIT_TEXTURE_SIZE || fix == audit::fixes::GENERATE_MIPS)
+    if(fix == audit::fixes::COMPRESS_TEXTURE || fix == audit::fixes::LIMIT_TEXTURE_SIZE ||
+       fix == audit::fixes::GENERATE_MIPS || fix == audit::fixes::SET_NORMAL_Y_DOWN || fix == audit::fixes::SET_NORMAL_Y_UP)
     {
         return fix_texture(ctx, item, settings, error);
     }

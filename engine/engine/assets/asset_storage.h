@@ -73,6 +73,18 @@ struct texture_importer_meta : crtp_meta_type<texture_importer_meta, asset_impor
         linear,
     };
 
+    /// Which way the green channel (Y) of a normal map points. The shaders read a normal map with green pointing
+    /// up the image, so the compile turns a green-down map over.
+    enum class normal_direction
+    {
+        /// The compile reads the direction from the file: a convention its name states, else its texels.
+        automatic,
+        /// Up the image (OpenGL, glTF): compiled as it is.
+        up,
+        /// Down the image (DirectX): compiled with Y turned over.
+        down,
+    };
+
     enum class compression_quality
     {
         project_default,
@@ -112,8 +124,8 @@ struct texture_importer_meta : crtp_meta_type<texture_importer_meta, asset_impor
     }
     color_space colorspace{color_space::automatic};
     bool generate_mipmaps{true};
-    /// Bake OpenGL/DirectX normal Y difference into texels at compile (normal_map type only).
-    bool invert_normal_y{false};
+    /// For a normal map: the direction of its green channel, which the compile bakes into the texels.
+    normal_direction normal_y{normal_direction::automatic};
 
     struct quality_meta
     {

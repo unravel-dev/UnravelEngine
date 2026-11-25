@@ -1269,7 +1269,19 @@ void editor_actions::recompile_shaders(const std::string& group)
 
 auto editor_actions::save_import_settings(const std::string& key, const asset_meta& meta) -> bool
 {
-    return asset_writer::atomic_save_to_file(asset_writer::resolve_meta_file_for_key(key).string(), meta);
+    if(!asset_writer::atomic_save_to_file(asset_writer::resolve_meta_file_for_key(key).string(), meta))
+    {
+        return false;
+    }
+    // The watcher reads a .meta again only when its source changes, so the database takes the settings here: a
+    // caller that edited a copy of them leaves the inspector, the tools and the audit reading what was saved.
+    auto& am = engine::context().get_cached<asset_manager>();
+    const auto entry = am.get_metadata_for_key(key);
+    if(!entry.location.empty())
+    {
+        am.add_asset_info_for_key(entry.location, meta, true);
+    }
+    return true;
 }
 
 auto editor_actions::save_entity_as_prefab(rtti::context& ctx,

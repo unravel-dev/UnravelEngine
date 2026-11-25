@@ -364,6 +364,42 @@ auto audit_manager::apply_fix(rtti::context& ctx, const std::string& issue_id, s
     return true;
 }
 
+auto audit_manager::get_fixable_issues(const std::string& rule_id) const -> std::vector<std::string>
+{
+    std::vector<std::string> ids;
+    if(!report_)
+    {
+        return ids;
+    }
+    for(const auto& item : report_->issues)
+    {
+        if(item.rule != rule_id || item.fix.empty() || item.is_ignored)
+        {
+            continue;
+        }
+        auto id = item.get_id();
+        if(!is_fixed(id))
+        {
+            ids.push_back(std::move(id));
+        }
+    }
+    return ids;
+}
+
+auto audit_manager::apply_rule_fixes(rtti::context& ctx, const std::string& rule_id, std::string& error) -> std::size_t
+{
+    std::size_t applied = 0;
+    for(const auto& id : get_fixable_issues(rule_id))
+    {
+        if(!apply_fix(ctx, id, error))
+        {
+            break;
+        }
+        ++applied;
+    }
+    return applied;
+}
+
 auto audit_manager::is_fixed(const std::string& issue_id) const -> bool
 {
     return fixed_.count(issue_id) > 0;

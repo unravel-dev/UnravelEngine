@@ -67,7 +67,7 @@ inside the project).
 ## Import settings
 
 - assets_get_import_settings_batch {"keys":[...]} reads what the inspector's Import tab
-  edits: textures (type, colorspace, generate_mipmaps, invert_normal_y,
+  edits: textures (type, colorspace, generate_mipmaps, normal_y,
   quality.max_size, quality.compression, and platforms.desktop /
   platforms.android: is_overridden with the quality that platform compiles
   with instead), meshes (model, sdf, cards, animations, materials), animations
@@ -100,6 +100,16 @@ inside the project).
 - The engine's and the editor's assets follow a new project's defaults, never
   the project's. Use compression "none" for UI atlases and pixel art that must
   stay exact, colorspace "srgb" for color maps, "linear" for data maps.
+- A normal map is read with its green channel pointing up the image (the
+  OpenGL and glTF convention), and a map made for DirectX, whose green points
+  down, compiles turned over. normal_y says which the file is: "automatic"
+  (the default) reads it from the file's name (wall_nor_gl.png,
+  Wall_NormalDX.jpg) or its texels each time the texture compiles, "up" and
+  "down" state it. Leave it on automatic unless a surface is lit wrongly. A
+  model import sets up or down itself only for a map that reads differently by
+  the texels the model draws than whole. audit_run reports a normal map that
+  still reads green down once compiled (rule texture.normal_green_down), and
+  audit_fix sets its normal_y.
 
 ## Meshes for the global illumination
 

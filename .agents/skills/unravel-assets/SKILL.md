@@ -37,6 +37,12 @@ Ids and `.meta`:
   file (`asset_manager::resolve_key`).
 - Code that moves a loaded asset calls `am.rename_asset<T>(old_key, new_key)` right after the move:
   the watcher may report the move as a delete, which unloads the asset from every user.
+- The inspector, the MCP tools and the project audit read import settings from the asset database,
+  and the watcher reads a `.meta` into it only when the source file changes. Code that writes import
+  settings to a `.meta` gives them to the database too: `editor_actions::save_import_settings` does
+  it for editor code, and the mesh importer's texture tagging calls
+  `asset_manager::add_asset_info_for_path`. A write that skips it compiles the asset right while the
+  editor shows the old settings until it restarts, and the next Apply writes those back.
 - A deployed game has no `.meta`: its asset index holds each asset's location and what the runtime
   reads of its import settings, a record each importer declares (`get_shipped_info`, such as
   `texture_shipped_info`). Runtime code reads import settings only through
@@ -232,7 +238,8 @@ distance fields and cards like any model.
 - Suites (`unravel-tests --suite "<name>"`, runner and trees: `unravel-build-verify`):
   `asset handle`, `asset writer`, `asset references`, `asset packs`, `generated assets`,
   `fs syncer`, `fs watcher`, `mesh shapes`, `mesh import heuristics`, `mesh skinning`,
-  `settings profiles` (texture formats per target), `audio clip encoding`, `content packages`.
+  `settings profiles` (texture formats per target), `normal map green`, `audio clip encoding`,
+  `content packages`.
 - Build `engine` and `editor` (the compiler is editor code), and `tests` when a suite changed.
 - Smoke in an editor: import through `assets_import_batch`, wait for the ready state, reimport after a
   `.meta` edit, then open a saved scene that uses the asset in a fresh editor process.

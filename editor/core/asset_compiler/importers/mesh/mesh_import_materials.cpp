@@ -5,6 +5,8 @@
 #include "mesh_import_paths.h"
 #include "mesh_import_texture_jobs.h"
 
+#include <asset_compiler/normal_map_green.h>
+
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_writer.h>
 
@@ -13,6 +15,7 @@
 #include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/material_graph/standard_material.h>
 
+#include <concurrency/parallel.h>
 #include <graphics/utils/bgfx_utils.h>
 #include <logging/logging.h>
 #include <math/math.h>
@@ -22,7 +25,9 @@
 #include <assimp/scene.h>
 
 #include <array>
+#include <chrono>
 #include <hpp/optional.hpp>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace unravel
@@ -42,6 +47,23 @@ enum class material_import_phase
     bind
 };
 
+/// The Normal Y an import records for the normal maps its meshes draw, by the map's absolute path.
+using recorded_normal_y = std::unordered_map<std::string, texture_importer_meta::normal_direction>;
+
+/// A normal map a material asks for, as it asks for it.
+struct normal_map_request
+{
+    imported_texture texture;
+    const aiMaterial* material{};
+};
+
+/// A normal map whose Normal Y is Auto, with the materials that bind it.
+struct auto_normal_map
+{
+    fs::path file;
+    std::vector<const aiMaterial*> materials;
+};
+
 struct material_import_context
 {
     material_import_phase phase;
@@ -52,28 +74,189 @@ struct material_import_context
     texture_catalog& catalog;
     /// Collect phase only.
     texture_job_store* job_store;
+    /// Collect phase only: every normal map a material asks for.
+    std::vector<normal_map_request>* normal_map_requests;
+    /// Bind phase only: the Normal Y to record for the maps the meshes decide (find_normal_y_to_record).
+    const recorded_normal_y* normal_y_to_record;
 };
+
+/// The .meta of the texture at `absolute`.
+auto get_texture_meta_path(const fs::path& absolute) -> fs::path
+{
+    fs::path meta_path = fs::convert_to_protocol(absolute);
+    meta_path = fs::resolve_protocol(fs::replace(meta_path, ex::get_data_directory(), ex::get_meta_directory()));
+    meta_path += ".meta";
+    return meta_path;
+}
+
+/**
+ * @brief Whether the texture at `absolute` is, once this import has tagged it, a normal map whose Normal Y is
+ * Auto: it has no import settings yet, or they leave Normal Y on Auto and its type automatic or a normal map. A
+ * Normal Y someone chose is never read again.
+ */
+auto is_normal_map_on_auto(const fs::path& absolute) -> bool
+{
+    asset_meta meta;
+    load_from_file(get_texture_meta_path(absolute).string(), meta);
+    if(meta.importer == nullptr)
+    {
+        return true;
+    }
+    const auto importer = safe_pointer_cast<texture_importer_meta>(meta.importer);
+    return importer && importer->normal_y == texture_importer_meta::normal_direction::automatic &&
+           importer->type != texture_importer_meta::texture_type::equirect;
+}
+
+/// The normal maps among `requests` whose Normal Y is Auto, each once, with the materials that bind it.
+auto find_normal_maps_on_auto(const std::vector<normal_map_request>& requests,
+                              const texture_catalog& catalog,
+                              const fs::path& output_dir) -> std::vector<auto_normal_map>
+{
+    constexpr size_t NOT_ON_AUTO = size_t(-1);
+    std::vector<auto_normal_map> maps;
+    // Each file seen, with its place in `maps` when it is on Auto.
+    std::unordered_map<std::string, size_t> seen;
+    for(const auto& request : requests)
+    {
+        imported_texture texture = request.texture;
+        if(!catalog.resolve(texture))
+        {
+            continue;
+        }
+        const auto absolute = resolve_texture_on_disk(output_dir, normalize_assimp_path(texture.name));
+        if(!absolute)
+        {
+            continue;
+        }
+        const auto [entry, is_new] = seen.emplace(absolute->generic_string(), NOT_ON_AUTO);
+        if(is_new && is_normal_map_on_auto(*absolute))
+        {
+            entry->second = maps.size();
+            maps.push_back({*absolute, {}});
+        }
+        if(entry->second != NOT_ON_AUTO)
+        {
+            maps[entry->second].materials.push_back(request.material);
+        }
+    }
+    return maps;
+}
+
+/**
+ * @brief For each map, the parts of it the model draws: the cells of the first UV set's vertices of the meshes
+ * whose material binds it, in one pass over the scene's meshes. Padding a baker painted around the UV islands lies
+ * outside them, and it is no surface to read a direction from.
+ */
+auto mark_normal_map_coverage(const aiScene* scene, const std::vector<auto_normal_map>& maps)
+    -> std::vector<asset_compiler::normal_map_coverage>
+{
+    APPLOG_TRACE_PERF_NAMED(std::chrono::microseconds, "Mesh Importer: Mark the texels the normal maps are drawn with");
+    std::vector<asset_compiler::normal_map_coverage> coverage(maps.size());
+    std::unordered_map<const aiMaterial*, size_t> map_of_material;
+    for(size_t map = 0; map < maps.size(); ++map)
+    {
+        for(const aiMaterial* material : maps[map].materials)
+        {
+            map_of_material.emplace(material, map);
+        }
+    }
+    size_t vertices = 0;
+    for(unsigned int i = 0; i < scene->mNumMeshes; ++i)
+    {
+        const aiMesh* mesh = scene->mMeshes[i];
+        if(mesh->mMaterialIndex >= scene->mNumMaterials || !mesh->HasTextureCoords(0))
+        {
+            continue;
+        }
+        const auto found = map_of_material.find(scene->mMaterials[mesh->mMaterialIndex]);
+        if(found == map_of_material.end())
+        {
+            continue;
+        }
+        auto& cells = coverage[found->second];
+        for(unsigned int vertex = 0; vertex < mesh->mNumVertices; ++vertex)
+        {
+            const aiVector3D& uv = mesh->mTextureCoords[0][vertex];
+            cells.add_vertex(uv.x, uv.y);
+        }
+        vertices += mesh->mNumVertices;
+    }
+    APPLOG_TRACE("Mesh Importer: {} vertices bind the {} normal maps.", vertices, maps.size());
+    return coverage;
+}
+
+/**
+ * @brief The Normal Y this import records for the normal maps on Auto that its materials ask for.
+ *
+ * The texture compile reads a map on Auto whole and turns a green-down one over. It has no mesh, so a map that is
+ * mostly padding around its UV islands can read differently whole than by the texels the model draws. The import
+ * has the UVs: where the two differ it records the direction of the drawn texels
+ * (asset_compiler::find_normal_green_to_record), and the compile follows the recorded value. Every other map stays
+ * on Auto and is not read here. The maps that are read are read on the thread pool.
+ */
+auto find_normal_y_to_record(const aiScene* scene,
+                             const std::vector<normal_map_request>& requests,
+                             const texture_catalog& catalog,
+                             const fs::path& output_dir) -> recorded_normal_y
+{
+    const auto maps = find_normal_maps_on_auto(requests, catalog, output_dir);
+    if(maps.empty())
+    {
+        return {};
+    }
+
+    APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Mesh Importer: Read the normal maps the meshes decide");
+    const auto coverage = mark_normal_map_coverage(scene, maps);
+    std::vector<asset_compiler::normal_green> directions(maps.size(), asset_compiler::normal_green::unknown);
+    poolstl::for_each_par_if(maps.size() > 1,
+                             poolstl::iota_iter<size_t>(0),
+                             poolstl::iota_iter<size_t>(maps.size()),
+                             [&](const size_t index)
+                             {
+                                 directions[index] =
+                                     asset_compiler::find_normal_green_to_record(maps[index].file, coverage[index]);
+                             });
+
+    recorded_normal_y recorded;
+    size_t read = 0;
+    for(size_t index = 0; index < maps.size(); ++index)
+    {
+        read += coverage[index].is_usable() ? 1 : 0;
+        if(directions[index] != asset_compiler::normal_green::unknown)
+        {
+            recorded.emplace(maps[index].file.generic_string(),
+                             directions[index] == asset_compiler::normal_green::down
+                                 ? texture_importer_meta::normal_direction::down
+                                 : texture_importer_meta::normal_direction::up);
+        }
+    }
+    APPLOG_TRACE("Mesh Importer: {} of the {} normal maps on Auto have UV islands to read by, and {} read differently by them.",
+                 read,
+                 maps.size(),
+                 recorded.size());
+    return recorded;
+}
 
 // Writes/updates the texture's .meta so the asset compiler knows the authored
 // color space of the texels bound to this material slot (base color/emissive are
 // sRGB-encoded; normal/metal/rough/AO are linear data), and the type of a normal
 // map, which compiles to two channels. An explicit user setting wins: only a
 // meta still at `automatic` is tagged, and the file is rewritten only when
-// something actually changed.
+// something actually changed; the asset database takes the same settings. A normal
+// map whose Normal Y is Auto takes the direction `normal_y_to_record` holds for it.
 void tag_texture_colorspace(asset_manager& am,
                             const fs::path& output_dir,
                             const std::string& relative,
                             texture_importer_meta::color_space colorspace,
-                            texture_importer_meta::texture_type type)
+                            texture_importer_meta::texture_type type,
+                            const recorded_normal_y* normal_y_to_record)
 {
     const auto absolute = resolve_texture_on_disk(output_dir, normalize_assimp_path(relative));
     if(!absolute)
     {
         return;
     }
-    fs::path meta_path = fs::convert_to_protocol(*absolute);
-    meta_path = fs::resolve_protocol(fs::replace(meta_path, ex::get_data_directory(), ex::get_meta_directory()));
-    meta_path += ".meta";
+    const fs::path meta_path = get_texture_meta_path(*absolute);
 
     asset_meta meta;
     load_from_file(meta_path.string(), meta);
@@ -102,6 +285,21 @@ void tag_texture_colorspace(asset_manager& am,
         importer->type = type;
         changed = true;
     }
+    if(normal_y_to_record != nullptr && importer->type == texture_importer_meta::texture_type::normal_map &&
+       importer->normal_y == texture_importer_meta::normal_direction::automatic)
+    {
+        const auto recorded = normal_y_to_record->find(absolute->generic_string());
+        if(recorded != normal_y_to_record->end())
+        {
+            importer->normal_y = recorded->second;
+            changed = true;
+            APPLOG_INFO("Mesh Importer: The texels the model draws of the normal map '{}' point their green channel {}, "
+                        "unlike the map read whole, so its Normal Y is set to {}.",
+                        relative,
+                        recorded->second == texture_importer_meta::normal_direction::down ? "down" : "up",
+                        recorded->second == texture_importer_meta::normal_direction::down ? "Down" : "Up");
+        }
+    }
     if(meta.uid.is_nil())
     {
         // A texture this import just wrote has no .meta yet. It takes the id the database holds for its path, else a
@@ -110,13 +308,15 @@ void tag_texture_colorspace(asset_manager& am,
         const asset_meta generated = am.generate_metadata(fs::convert_to_protocol(*absolute));
         meta.uid = generated.uid;
         meta.type = generated.type;
-        meta.uid = am.add_asset_info_for_path(*absolute, meta, true);
         changed = true;
     }
     if(!changed)
     {
         return;
     }
+    // The database holds the settings the inspector, the tools and the audit read, and the watcher reads a .meta
+    // again only when its source changes, so the database takes the tagged settings here.
+    meta.uid = am.add_asset_info_for_path(*absolute, meta, true);
     fs::error_code err;
     asset_writer::atomic_write_file(meta_path,
                                     [&](const fs::path& temp)
@@ -556,7 +756,7 @@ private:
             APPLOG_WARNING("Mesh Importer: Could not bind {} texture '{}'", label, relative);
             return std::nullopt;
         }
-        tag_texture_colorspace(ctx_.am, ctx_.output_dir, relative, colorspace, type);
+        tag_texture_colorspace(ctx_.am, ctx_.output_dir, relative, colorspace, type, ctx_.normal_y_to_record);
         return ctx_.am.get_asset<gfx::texture>(*key, load_flags::standard, load_mode::deferred);
     }
 
@@ -699,6 +899,10 @@ private:
         const texture_slot_candidate* hit = resolve_first(candidates, texture);
         if(hit)
         {
+            if(is_collecting())
+            {
+                ctx_.normal_map_requests->push_back({texture, material_});
+            }
             process_texture(texture);
             if(is_binding())
             {
@@ -946,6 +1150,7 @@ void process_materials(asset_manager& am,
     texture_catalog catalog;
     std::unordered_set<int> consumed_embedded;
     std::vector<imported_texture> collect_scratch;
+    std::vector<normal_map_request> normal_map_requests;
 
     const material_import_context collect_ctx{material_import_phase::collect,
                                               am,
@@ -953,7 +1158,9 @@ void process_materials(asset_manager& am,
                                               output_dir,
                                               scene,
                                               catalog,
-                                              &job_store};
+                                              &job_store,
+                                              &normal_map_requests,
+                                              nullptr};
 
     APPLOG_TRACE("Mesh Importer: Collecting texture import jobs for {} materials ...", scene->mNumMaterials);
     for(size_t i = 0; i < scene->mNumMaterials; ++i)
@@ -969,13 +1176,17 @@ void process_materials(asset_manager& am,
     catalog.append_to_manifest(textures);
     sort_imported_textures(textures);
 
+    const recorded_normal_y normal_y_to_record = find_normal_y_to_record(scene, normal_map_requests, catalog, output_dir);
+
     const material_import_context bind_ctx{material_import_phase::bind,
                                            am,
                                            filename,
                                            output_dir,
                                            scene,
                                            catalog,
-                                           nullptr};
+                                           nullptr,
+                                           nullptr,
+                                           &normal_y_to_record};
 
     APPLOG_TRACE("Mesh Importer: Binding {} materials to textures ...", scene->mNumMaterials);
     // The glTF specification makes a primitive's COLOR_0 multiply its base colour; FBX and OBJ colours are often masks

@@ -204,8 +204,9 @@ struct editor_actions
     /// Recompiles the audio clips in @p group whose manifest records other compile parameters than they resolve to
     /// now: after the project's audio default changed, the ones it reaches.
     static void recompile_outdated_audio_clips(const std::string& group);
-    /// Writes an asset's import settings (@p meta, the asset database's entry) to the .meta file beside
-    /// the asset @p key names; the asset watcher then imports the asset again with them.
+    /// Writes an asset's import settings (@p meta: the asset database's entry, or an edited copy of it) to the
+    /// .meta file beside the asset @p key names and gives them to the asset database; the asset watcher then
+    /// imports the asset again with them.
     static auto save_import_settings(const std::string& key, const asset_meta& meta) -> bool;
 
     /**

@@ -231,6 +231,23 @@ auto make_rules() -> std::vector<rule>
                     "Turn on Generate Mipmaps in its import settings, unless the material draws it at its own size.",
                     {},
                     false});
+    list.push_back({rules::NORMAL_MAP_GREEN_DOWN,
+                    "Normal Map Green Channel Inverted",
+                    severity::warning,
+                    to_mask(area::quality),
+                    rule_source::assets,
+                    "A normal map whose green channel points down the image as the game reads it. The engine reads "
+                    "normal maps with green pointing up, as OpenGL and glTF define them, and compiles a map made for "
+                    "DirectX turned over. Normal Y in the import settings says which the file is: Auto reads it from "
+                    "the file's name (wall_nor_gl.png, Wall_NormalDX.jpg) or its texels, Up and Down state it. A map "
+                    "that still reads green down once compiled has a Normal Y that states the wrong direction, or is "
+                    "one Auto could not tell from the file. Read the wrong way, the surface is lit as if its bumps "
+                    "were dents along one direction. A map is reported only when its texels leave little doubt.",
+                    "Set Normal Y in the texture's import settings as the issue says. Ignore the issue when the "
+                    "surface is lit correctly in the scene: a map put together from several sources can read either "
+                    "way.",
+                    {},
+                    false});
     list.push_back({rules::AUDIO_LARGE_DECODED,
                     "Large Decoded Audio Clip",
                     severity::warning,
@@ -561,6 +578,14 @@ auto get_fix_label(const std::string& fix_id) -> const char*
     if(fix_id == fixes::GENERATE_MIPS)
     {
         return "Generate mipmaps";
+    }
+    if(fix_id == fixes::SET_NORMAL_Y_DOWN)
+    {
+        return "Set Normal Y to Down";
+    }
+    if(fix_id == fixes::SET_NORMAL_Y_UP)
+    {
+        return "Set Normal Y to Up";
     }
     if(fix_id == fixes::COMPRESS_AUDIO)
     {

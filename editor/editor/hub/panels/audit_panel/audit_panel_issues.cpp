@@ -729,7 +729,42 @@ void audit_panel::draw_issue_advice(rtti::context& ctx, const audit::issue& item
             set_message(is_applied ? std::string("The fix was applied. Run the audit again to confirm it.") : error, !is_applied);
         }
     }
+    draw_fix_all_button(ctx, item, !is_fixed && !item.fix.empty());
     end_callout();
+}
+
+void audit_panel::draw_fix_all_button(rtti::context& ctx, const audit::issue& item, bool is_beside_own_fix)
+{
+    using namespace audit_issues_detail;
+    auto& manager = ctx.get_cached<audit_manager>();
+    const auto fixable = manager.get_fixable_issues(item.rule).size();
+    // The button is for the rule's other issues: one whose only fixable issue is this one has its own button.
+    const bool is_own_fix_counted = is_beside_own_fix && !item.is_ignored;
+    if(fixable <= (is_own_fix_counted ? 1u : 0u))
+    {
+        return;
+    }
+    if(is_beside_own_fix)
+    {
+        ImGui::SameLine();
+    }
+    else
+    {
+        ImGui::Spacing();
+    }
+    const std::string label = fmt::format("{} Fix All {}", ICON_MDI_WRENCH_OUTLINE, fixable);
+    if(draw_primary_button(label.c_str(),
+                           "Apply the fix of every issue of this rule that has one. Each issue gets its own fix, as its "
+                           "own button applies it.",
+                           !manager.is_running()))
+    {
+        std::string error;
+        const auto applied = manager.apply_rule_fixes(ctx, item.rule, error);
+        const bool is_complete = applied == fixable;
+        set_message(is_complete ? fmt::format("{} fixes were applied. Run the audit again to confirm them.", applied)
+                                : fmt::format("{} of {} fixes were applied. {}", applied, fixable, error),
+                    !is_complete);
+    }
 }
 
 void audit_panel::draw_issue_facts(rtti::context& ctx, const audit::issue& item)

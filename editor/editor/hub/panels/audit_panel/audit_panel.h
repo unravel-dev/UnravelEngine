@@ -76,6 +76,9 @@ private:
     void draw_issue_details(rtti::context& ctx, const audit::report& report);
     void draw_issue_header(rtti::context& ctx, const audit::issue& item);
     void draw_issue_advice(rtti::context& ctx, const audit::issue& item);
+    /// The button that applies the fix of every issue of the selected issue's rule, drawn while the rule has
+    /// fixable issues beside this one. `is_beside_own_fix`: the issue's own fix button is on the same line.
+    void draw_fix_all_button(rtti::context& ctx, const audit::issue& item, bool is_beside_own_fix);
     void draw_issue_facts(rtti::context& ctx, const audit::issue& item);
     void draw_issue_why(const audit::rule& owner);
     void draw_ignore_popup(rtti::context& ctx, const audit::issue& item);

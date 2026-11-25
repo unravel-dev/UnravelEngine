@@ -547,7 +547,7 @@ auto inspect_platform_quality_tab(rtti::context& ctx,
 auto inspect_texture_import_settings(rtti::context& ctx, texture_importer_meta& importer) -> inspect_result
 {
     inspect_result result =
-        inspect_import_properties(ctx, importer, {"type"_hs, "colorspace"_hs, "generate_mipmaps"_hs, "invert_normal_y"_hs});
+        inspect_import_properties(ctx, importer, {"type"_hs, "colorspace"_hs, "generate_mipmaps"_hs, "normal_y"_hs});
     ImGui::SeparatorText("Quality");
     if(!ImGui::BeginTabBar("##texture_quality"))
     {

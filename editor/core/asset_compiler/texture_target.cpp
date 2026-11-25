@@ -16,6 +16,9 @@ namespace
 /// Raised when a change to the texture compiler (texturec, the format choice) changes what a texture
 /// compiles to with the same parameters, so that every compiled texture is compiled again.
 constexpr int TEXTURE_COMPILER_VERSION = 5;
+/// Raised when the reading of a normal map's green direction (normal_map_green.h) changes what a normal map on
+/// Auto compiles to, so that those textures alone are compiled again.
+constexpr int NORMAL_Y_READING_VERSION = 1;
 /// What a texture compiles with when neither it nor the target sets a value.
 constexpr auto FALLBACK_MAX_SIZE = texture_importer_meta::texture_size::size_2048;
 constexpr auto FALLBACK_COMPRESSION = texture_importer_meta::compression_quality::normal_quality;
@@ -107,6 +110,8 @@ auto resolve_texture_parameters(const texture_importer_meta& importer, const tex
     {
         parameters.family = texture_compression_family::bc;
     }
+    parameters.reads_normal_y = importer.type == texture_importer_meta::texture_type::normal_map &&
+                                importer.normal_y == texture_importer_meta::normal_direction::automatic;
     return parameters;
 }
 
@@ -184,11 +189,16 @@ auto select_srgb_format(bgfx::TextureFormat::Enum format, texture_compression_fa
 
 auto to_string(const texture_compile_parameters& parameters) -> std::string
 {
-    return fmt::format("v{}/{}/compression_{}/size_{}",
-                       TEXTURE_COMPILER_VERSION,
-                       get_family_name(parameters.family),
-                       static_cast<int>(parameters.compression),
-                       static_cast<int>(parameters.max_size));
+    auto text = fmt::format("v{}/{}/compression_{}/size_{}",
+                            TEXTURE_COMPILER_VERSION,
+                            get_family_name(parameters.family),
+                            static_cast<int>(parameters.compression),
+                            static_cast<int>(parameters.max_size));
+    if(parameters.reads_normal_y)
+    {
+        text += fmt::format("/normal_y_{}", NORMAL_Y_READING_VERSION);
+    }
+    return text;
 }
 
 void set_editor_texture_target(const texture_target& target)

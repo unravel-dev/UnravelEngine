@@ -129,6 +129,28 @@ REFLECT(texture_importer_meta)
             entt::attribute{"pretty_name", "Linear (Data)"},
         });
 
+    entt::meta_factory<texture_importer_meta::normal_direction>{}
+        .type("normal_direction"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "normal_direction"},
+            entt::attribute{"pretty_name", "Normal Direction"},
+        })
+        .data<texture_importer_meta::normal_direction::automatic>("automatic"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "automatic"},
+            entt::attribute{"pretty_name", "Auto"},
+        })
+        .data<texture_importer_meta::normal_direction::up>("up"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "up"},
+            entt::attribute{"pretty_name", "Up (OpenGL)"},
+        })
+        .data<texture_importer_meta::normal_direction::down>("down"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "down"},
+            entt::attribute{"pretty_name", "Down (DirectX)"},
+        });
+
     // Register texture_importer_meta::compression_quality enum with entt
     entt::meta_factory<texture_importer_meta::compression_quality>{}
         .type("compression_quality"_hs)
@@ -238,10 +260,14 @@ REFLECT(texture_importer_meta)
             entt::attribute{"name", "generate_mipmaps"},
             entt::attribute{"pretty_name", "Generate Mipmaps"},
         })
-        .data<&texture_importer_meta::invert_normal_y>("invert_normal_y"_hs)
+        .data<&texture_importer_meta::normal_y>("normal_y"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "invert_normal_y"},
-            entt::attribute{"pretty_name", "Invert Normal Y (Bake)"},
+            entt::attribute{"name", "normal_y"},
+            entt::attribute{"pretty_name", "Normal Y"},
+            entt::attribute{"tooltip",
+                            "For a normal map: which way its green channel points. The engine reads normal maps with "
+                            "green pointing up, and a map whose green points down is compiled turned over. Auto reads "
+                            "the direction from the file's name or its texels."},
         })
         .data<&texture_importer_meta::quality>("quality"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -310,7 +336,7 @@ SAVE(texture_importer_meta)
     try_save(ar, ser20::make_nvp("type", obj.type));
     try_save(ar, ser20::make_nvp("colorspace", obj.colorspace));
     try_save(ar, ser20::make_nvp("generate_mipmaps", obj.generate_mipmaps));
-    try_save(ar, ser20::make_nvp("invert_normal_y", obj.invert_normal_y));
+    try_save(ar, ser20::make_nvp("normal_y", obj.normal_y));
     try_save(ar, ser20::make_nvp("quality", obj.quality));
     try_save(ar, ser20::make_nvp("platforms", obj.platforms));
 }
@@ -323,7 +349,13 @@ LOAD(texture_importer_meta)
     try_load(ar, ser20::make_nvp("type", obj.type));
     try_load(ar, ser20::make_nvp("colorspace", obj.colorspace));
     try_load(ar, ser20::make_nvp("generate_mipmaps", obj.generate_mipmaps));
-    try_load(ar, ser20::make_nvp("invert_normal_y", obj.invert_normal_y));
+    // Settings saved with the Invert Normal Y checkbox: checked was a green-down map, unchecked said nothing.
+    bool is_inverted = false;
+    if(try_load(ar, ser20::make_nvp("invert_normal_y", is_inverted)) && is_inverted)
+    {
+        obj.normal_y = texture_importer_meta::normal_direction::down;
+    }
+    try_load(ar, ser20::make_nvp("normal_y", obj.normal_y));
     try_load(ar, ser20::make_nvp("quality", obj.quality));
     try_load(ar, ser20::make_nvp("platforms", obj.platforms));
 }

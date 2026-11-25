@@ -5,6 +5,8 @@
  *   - reports: written and read back alike, a newer version refused, CSV fields quoted, two reports compared;
  *   - asset rules: an uncompressed texture's size, a texture over the platform's side, a large decoded clip, a mesh
  *     without LODs, duplicate files, each only for the profiles that ship the asset and over their thresholds;
+ *   - normal maps: a compiled map's green direction read from its texels or its source's name, and the issue and
+ *     fix for one that points down;
  *   - settings rules: a phone or browser profile costlier than its platform's start, a high physics rate; one issue
  *     for profiles that find the same, profiles joined;
  *   - scene rules: missing references named by entity, components a profile's limits turn off;
@@ -14,7 +16,10 @@
  */
 
 #include "../tests.h"
+#include "normal_map_fixture.h"
 
+#include <asset_compiler/normal_map_green.h>
+#include <asset_compiler/texture_target.h>
 #include <audit/audit_catalog.h>
 #include <audit/audit_code.h>
 #include <audit/audit_config.h>
@@ -25,6 +30,8 @@
 #include <deploy/deploy_report.h>
 #include <deploy/profile.h>
 #include <dotnetpp/dotnet_jit.h>
+#include <engine/meta/assets/asset_database.hpp>
+#include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <filesystem/filesystem.h>
 #include <subprocess/subprocess.hpp>
@@ -313,6 +320,143 @@ void test_texture_rules()
     settings.set_rule_enabled(audit::rules::TEXTURE_UNCOMPRESSED, false);
     check(count_rule(check_with(in, &audit::detail::check_assets, settings), audit::rules::TEXTURE_UNCOMPRESSED) == 0,
           "a disabled rule reports nothing");
+}
+
+/// A texture imported as a normal map, with the green direction the run read from its compiled file.
+auto make_normal_map(const std::string& key,
+                     unravel::asset_compiler::normal_green green,
+                     unravel::texture_importer_meta::normal_direction normal_y) -> audit::asset_record
+{
+    auto asset = make_texture(key, 1024, true);
+    auto importer = std::make_shared<unravel::texture_importer_meta>();
+    importer->type = unravel::texture_importer_meta::texture_type::normal_map;
+    importer->normal_y = normal_y;
+    asset.importer = importer;
+    asset.facts.texture->normal_green = green;
+    return asset;
+}
+
+void test_normal_map_green_rule()
+{
+    using unravel::asset_compiler::normal_green;
+    using normal_direction = unravel::texture_importer_meta::normal_direction;
+    audit::input in;
+    in.assets.push_back(make_normal_map("app:/data/untold.png", normal_green::down, normal_direction::automatic));
+    in.assets.push_back(make_normal_map("app:/data/turned_down.png", normal_green::down, normal_direction::down));
+    in.assets.push_back(make_normal_map("app:/data/kept_down.png", normal_green::down, normal_direction::up));
+    in.assets.push_back(make_normal_map("app:/data/up.png", normal_green::up, normal_direction::automatic));
+    in.assets.push_back(make_normal_map("app:/data/flat.png", normal_green::unknown, normal_direction::automatic));
+    // A color texture is not judged, whatever was read of it.
+    in.assets.push_back(make_texture("app:/data/color.png", 1024, true));
+    in.assets.back().facts.texture->normal_green = normal_green::down;
+    const auto issues = check_with(in, &audit::detail::check_assets);
+
+    check_eq(count_rule(issues, audit::rules::NORMAL_MAP_GREEN_DOWN), 3, "only normal maps that read green down once compiled are reported");
+    for(const auto& item : issues)
+    {
+        if(item.rule != audit::rules::NORMAL_MAP_GREEN_DOWN)
+        {
+            continue;
+        }
+        if(item.where.key == "app:/data/untold.png")
+        {
+            check(item.fix == audit::fixes::SET_NORMAL_Y_DOWN && contains(item.message, "Auto could not tell"),
+                  "a map Auto could not read offers Down: " + item.message);
+        }
+        else if(item.where.key == "app:/data/kept_down.png")
+        {
+            check(item.fix == audit::fixes::SET_NORMAL_Y_DOWN && contains(item.message, "set to Up"),
+                  "a green-down map set to Up offers Down: " + item.message);
+        }
+        else
+        {
+            check(item.where.key == "app:/data/turned_down.png" && item.fix == audit::fixes::SET_NORMAL_Y_UP,
+                  "a green-up map that Down turns over offers Up: " + item.where.key);
+        }
+    }
+    check(std::string(audit::get_fix_label(audit::fixes::SET_NORMAL_Y_DOWN)) != audit::get_fix_label(audit::fixes::SET_NORMAL_Y_UP) &&
+              audit::get_fix_label(audit::fixes::SET_NORMAL_Y_UP)[0] != '\0',
+          "each of the two fixes has its own label");
+
+    audit::config settings;
+    settings.set_rule_enabled(audit::rules::NORMAL_MAP_GREEN_DOWN, false);
+    check(count_rule(check_with(in, &audit::detail::check_assets, settings), audit::rules::NORMAL_MAP_GREEN_DOWN) == 0,
+          "the rule can be turned off");
+}
+
+void test_normal_map_green_facts(const fs::path& folder)
+{
+    using unravel::asset_compiler::normal_green;
+    using normal_direction = unravel::texture_importer_meta::normal_direction;
+    require_tool("texturec");
+    const std::string source_folder_key = "app:/data/audit_green";
+    const fs::path source_folder = fs::resolve_protocol(source_folder_key);
+    const fs::path source = source_folder / "bumps.png";
+    fs::error_code ec;
+    fs::remove_all(source_folder, ec);
+    constexpr std::uint32_t SIDE = 512;
+    require(write_rgba_png(source, make_surface_normal_map({.is_green_up = false}), SIDE, SIDE), "the green-down map is written");
+
+    const auto write_settings = [&](normal_direction normal_y)
+    {
+        unravel::asset_meta meta;
+        meta.uid = hpp::uuid::from_string("70000000-0000-4000-8000-000000000002").value();
+        meta.type = ".png";
+        auto importer = std::make_shared<unravel::texture_importer_meta>();
+        importer->type = unravel::texture_importer_meta::texture_type::normal_map;
+        importer->normal_y = normal_y;
+        meta.importer = importer;
+        unravel::save_to_file(source.string() + ".meta", meta);
+        return importer;
+    };
+    const fs::path compiled = folder / "bumps.png.asset";
+    const auto read_compiled = [&](normal_direction normal_y) -> hpp::optional<audit::texture_facts>
+    {
+        audit::asset_record asset;
+        asset.key = source_folder_key + "/bumps.png";
+        asset.source_file = source;
+        asset.importer = write_settings(normal_y);
+        asset.compiled_files = {compiled};
+        if(!unravel::asset_compiler::compile_texture_for_target(asset.key, compiled, {}))
+        {
+            return hpp::nullopt;
+        }
+        return audit::read_asset_facts(asset, nullptr).texture;
+    };
+
+    const auto on_auto = read_compiled(normal_direction::automatic);
+    require(on_auto.has_value(), "the normal map compiles and its facts are read");
+    check(on_auto->normal_green == normal_green::up, "a green-down map on Auto compiles turned over and reads green up: " + on_auto->format);
+    const auto on_up = read_compiled(normal_direction::up);
+    require(on_up.has_value(), "the normal map compiles with Normal Y Up");
+    check(on_up->normal_green == normal_green::down, "set to Up it compiles as it is and reads green down: " + on_up->format);
+    const auto on_down = read_compiled(normal_direction::down);
+    require(on_down.has_value(), "the normal map compiles with Normal Y Down");
+    check(on_down->normal_green == normal_green::up, "set to Down it compiles turned over and reads green up: " + on_down->format);
+
+    // A source whose name states the convention is not read: the compiled file here still holds green-up texels.
+    audit::asset_record named;
+    named.key = source_folder_key + "/wall_nor_gl.png";
+    named.source_file = source_folder / "wall_nor_gl.png";
+    auto named_settings = std::make_shared<unravel::texture_importer_meta>();
+    named_settings->type = unravel::texture_importer_meta::texture_type::normal_map;
+    named_settings->normal_y = normal_direction::down;
+    named.importer = named_settings;
+    named.compiled_files = {compiled};
+    const auto named_facts = audit::read_asset_facts(named, nullptr).texture;
+    check(named_facts.has_value() && named_facts->normal_green == normal_green::down,
+          "a map named green up that Down turns over reads green down");
+    named_settings->normal_y = normal_direction::automatic;
+    const auto named_auto_facts = audit::read_asset_facts(named, nullptr).texture;
+    check(named_auto_facts.has_value() && named_auto_facts->normal_green == normal_green::up,
+          "and on Auto, which goes by its name, it reads green up");
+
+    // A texture that is no normal map is not read at all.
+    audit::asset_record color = named;
+    color.importer = std::make_shared<unravel::texture_importer_meta>();
+    const auto color_facts = audit::read_asset_facts(color, nullptr).texture;
+    check(color_facts.has_value() && color_facts->normal_green == normal_green::unknown, "a color texture has no green direction");
+    fs::remove_all(source_folder, ec);
 }
 
 void test_audio_and_mesh_rules()
@@ -1119,6 +1263,8 @@ void run_project_audit_suite(rtti::context& ctx)
         RUN_CASE(test_report_round_trip());
         RUN_CASE(test_texture_facts_from_compiled_file());
         RUN_CASE(test_texture_rules());
+        RUN_CASE(test_normal_map_green_rule());
+        RUN_CASE(test_normal_map_green_facts(temp / "green"));
         RUN_CASE(test_audio_and_mesh_rules());
         RUN_CASE(test_heavy_morph_rule());
         RUN_CASE(test_duplicate_files(temp / "duplicates"));

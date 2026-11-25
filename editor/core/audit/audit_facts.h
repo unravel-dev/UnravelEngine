@@ -34,8 +34,9 @@ private:
 };
 
 /**
- * @brief Reads what the rules need from an asset's compiled file: a texture's container header, a clip decoded
- * as the game decodes it, a mesh's counts. Nothing for other assets or an asset not compiled yet. Any thread.
+ * @brief Reads what the rules need from an asset's compiled file: a texture's container header and a normal map's
+ * green direction, a clip decoded as the game decodes it, a mesh's counts. Nothing for other assets or an asset not
+ * compiled yet. Any thread.
  */
 auto read_asset_facts(const asset_record& asset, facts_cache* cache) -> asset_facts;
 

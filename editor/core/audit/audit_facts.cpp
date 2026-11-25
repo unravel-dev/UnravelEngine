@@ -72,6 +72,20 @@ auto read_texture_facts(const fs::path& file) -> hpp::optional<texture_facts>
     return facts;
 }
 
+/// Which way a compiled normal map's green channel points: what its source's name states, turned over when its
+/// Normal Y made the compile turn it, else what the compiled texels say.
+auto find_compiled_normal_green(const asset_record& asset, const texture_importer_meta& importer, const fs::path& file)
+    -> asset_compiler::normal_green
+{
+    const auto named = asset_compiler::get_named_normal_green(asset.source_file);
+    const auto is_turned = asset_compiler::get_stated_normal_y_inversion(importer, asset.source_file);
+    if(named != asset_compiler::normal_green::unknown && is_turned)
+    {
+        return *is_turned ? asset_compiler::invert_normal_green(named) : named;
+    }
+    return asset_compiler::read_compiled_normal_green(file).direction;
+}
+
 auto read_audio_facts(const fs::path& file) -> hpp::optional<audio_facts>
 {
     encoded_sound encoded;
@@ -130,9 +144,13 @@ auto read_facts_of(const asset_record& asset, const fs::path& file) -> asset_fac
     {
         return facts;
     }
-    if(asset.importer->is<texture_importer_meta>())
+    if(const auto* texture = asset.importer->safe_cast<texture_importer_meta>())
     {
         facts.texture = read_texture_facts(file);
+        if(facts.texture && texture->type == texture_importer_meta::texture_type::normal_map)
+        {
+            facts.texture->normal_green = find_compiled_normal_green(asset, *texture, file);
+        }
     }
     else if(asset.importer->is<audio_importer_meta>())
     {
