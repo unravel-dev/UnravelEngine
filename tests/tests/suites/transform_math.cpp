@@ -199,6 +199,35 @@ void test_normal_branch_consistency()
     check_near(back, v, 1e-3f, "inverse_transform_normal inverts transform_normal (skewed matrix)");
 }
 
+void test_vectors_ignore_the_position()
+{
+    std::printf("vectors ignore the position\n");
+
+    // Rotation and per-axis scale (the component path of the inverse).
+    math::transform t;
+    t.set_position({10.0f, 20.0f, 30.0f});
+    t.set_rotation_euler_degrees({0.0f, 90.0f, 0.0f});
+    t.set_scale(2.0f, 3.0f, 4.0f);
+    const math::vec3 v{1.0f, 1.0f, 1.0f};
+    const math::vec3 out = t.transform_vector(v);
+    check_near(out, math::mat3{t.get_matrix()} * v, 1e-5f, "transform_vector applies rotation and scale only");
+    check_near(out, t.transform_coord(v) - t.transform_coord(math::vec3{0.0f}), 1e-4f,
+               "transform_vector is the difference of two transformed points");
+    check_near(t.inverse_transform_vector(out), v, 1e-5f, "inverse_transform_vector inverts transform_vector");
+
+    // Skewed matrix (the matrix path of the inverse).
+    math::mat4 shear{1.0f};
+    shear[1][0] = 0.35f;
+    math::mat4 m = math::mat4_cast(math::quat(math::radians(math::vec3{20.0f, 30.0f, 40.0f}))) * shear *
+                   math::scale(math::mat4{1.0f}, math::vec3{1.0f, 2.0f, 3.0f});
+    m[3] = math::vec4{-5.0f, 7.0f, 11.0f, 1.0f};
+    const math::transform ts{m};
+    const math::vec3 w{0.3f, -0.7f, 0.2f};
+    const math::vec3 skewed = ts.transform_vector(w);
+    check_near(skewed, math::mat3{m} * w, 1e-5f, "skewed transform_vector applies the linear part only");
+    check_near(ts.inverse_transform_vector(skewed), w, 1e-4f, "inverse_transform_vector inverts a skewed matrix");
+}
+
 void test_rotate_axis_axis_handling()
 {
     std::printf("rotate_axis axis handling\n");
@@ -1486,6 +1515,7 @@ void run_transform_math_suite(rtti::context& /*ctx*/)
         RUN_CASE(test_euler_hint_restore_after_decompose());
         RUN_CASE(test_normals_under_negative_uniform_scale());
         RUN_CASE(test_normal_branch_consistency());
+        RUN_CASE(test_vectors_ignore_the_position());
         RUN_CASE(test_rotate_axis_axis_handling());
         RUN_CASE(test_perspective_divide_guard());
         RUN_CASE(test_compare_honors_tolerance());

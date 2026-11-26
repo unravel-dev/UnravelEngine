@@ -518,6 +518,10 @@ public:
     auto inverse_transform_coord(const position_t& v) const noexcept -> position_t;
     auto transform_normal(const vec3_t& v) const noexcept -> vec3_t;
     auto inverse_transform_normal(const vec3_t& v) const noexcept -> vec3_t;
+    /// @p v as a vector (an offset between two points): rotation, scale and skew apply, the position does not.
+    auto transform_vector(const vec3_t& v) const noexcept -> vec3_t;
+    /// The vector that transform_vector maps to @p v.
+    auto inverse_transform_vector(const vec3_t& v) const noexcept -> vec3_t;
 
     auto transform_coord(const vec2_t& v) const noexcept -> vec2_t
         requires k_matrix_holds_position
@@ -1708,6 +1712,26 @@ TRANSFORM_NOINLINE auto transform_t<T, P, Q>::inverse_transform_normal_general(c
         result *= sqrt(input_len2 / result_len2);
     }
     return result;
+}
+
+template<typename T, typename P, precision Q>
+inline auto transform_t<T, P, Q>::transform_vector(const vec3_t& v) const noexcept -> vec3_t
+{
+    // Through the matrix, as transform_coord, so a vector lands where the difference of two points would.
+    ensure_matrix();
+    return transform_kernels::vec3_of(matrix_[0] * v.x + matrix_[1] * v.y + matrix_[2] * v.z);
+}
+
+template<typename T, typename P, precision Q>
+inline auto transform_t<T, P, Q>::inverse_transform_vector(const vec3_t& v) const noexcept -> vec3_t
+{
+    if(!(flags_ & k_position_path_blocked_any_scale))
+    {
+        const vec3_t inv_scale = T(1) / floored_scale();
+        return transform_kernels::rotate<T>(transform_kernels::conjugate(rotation_), v) * inv_scale;
+    }
+    ensure_matrix();
+    return glm::inverse(mat3_t(matrix_)) * v;
 }
 
 template<typename T, typename P, precision Q>

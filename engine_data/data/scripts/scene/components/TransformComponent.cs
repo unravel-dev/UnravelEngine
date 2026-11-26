@@ -448,7 +448,26 @@ namespace Unravel.Core
 
 
         /// <summary>
-        /// Transforms vector from local space to world space.
+        /// Transforms a point from local space to world space: position, rotation and scale apply.
+        /// </summary>
+        /// <param name="point">The point to transform.</param>
+        public Vector3 TransformPoint(Vector3 point)
+        {
+            return internal_m2n_transform_point_global(owner, point);
+        }
+
+        /// <summary>
+        /// Transforms a point from world space to local space: the inverse of TransformPoint.
+        /// </summary>
+        /// <param name="point">The point to transform.</param>
+        public Vector3 InverseTransformPoint(Vector3 point)
+        {
+            return internal_m2n_inverse_transform_point_global(owner, point);
+        }
+
+        /// <summary>
+        /// Transforms a vector from local space to world space: rotation and scale apply, the position does not.
+        /// Use TransformPoint for a point.
         /// </summary>
         /// <param name="vector">The vector to transform.</param>
         public Vector3 TransformVector(Vector3 vector)
@@ -457,7 +476,8 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Transforms vector from world space to local space.
+        /// Transforms a vector from world space to local space: the inverse of TransformVector, without the position.
+        /// Use InverseTransformPoint for a point.
         /// </summary>
         /// <param name="vector">The vector to transform.</param>
         public Vector3 InverseTransformVector(Vector3 vector)
@@ -576,6 +596,12 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_look_at(Entity eid, Vector3 point, Vector3 up);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector3 internal_m2n_transform_point_global(Entity eid, Vector3 point);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector3 internal_m2n_inverse_transform_point_global(Entity eid, Vector3 point);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern Vector3 internal_m2n_transform_vector_global(Entity eid, Vector3 vector);

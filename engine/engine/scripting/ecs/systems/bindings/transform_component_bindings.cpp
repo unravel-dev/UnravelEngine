@@ -207,23 +207,45 @@ void internal_m2n_rotate_axis_global(entt::entity id, float degrees, const math:
     }
 }
 
-auto internal_m2n_transform_vector_global(entt::entity id, const math::vec3& coord) -> math::vec3
+auto internal_m2n_transform_point_global(entt::entity id, const math::vec3& point) -> math::vec3
 {
     if(auto comp = safe_get_component<transform_component>(id))
     {
         const auto& global = comp->get_transform_global();
-        return global.transform_coord(coord);
+        return global.transform_coord(point);
     }
 
     return {};
 }
 
-auto internal_m2n_inverse_transform_vector_global(entt::entity id, const math::vec3& coord) -> math::vec3
+auto internal_m2n_inverse_transform_point_global(entt::entity id, const math::vec3& point) -> math::vec3
 {
     if(auto comp = safe_get_component<transform_component>(id))
     {
         const auto& global = comp->get_transform_global();
-        return global.inverse_transform_coord(coord);
+        return global.inverse_transform_coord(point);
+    }
+
+    return {};
+}
+
+auto internal_m2n_transform_vector_global(entt::entity id, const math::vec3& vector) -> math::vec3
+{
+    if(auto comp = safe_get_component<transform_component>(id))
+    {
+        const auto& global = comp->get_transform_global();
+        return global.transform_vector(vector);
+    }
+
+    return {};
+}
+
+auto internal_m2n_inverse_transform_vector_global(entt::entity id, const math::vec3& vector) -> math::vec3
+{
+    if(auto comp = safe_get_component<transform_component>(id))
+    {
+        const auto& global = comp->get_transform_global();
+        return global.inverse_transform_vector(vector);
     }
 
     return {};
@@ -481,6 +503,10 @@ void register_transform_component_script_bindings()
     // Other
     reg.add_internal_call("internal_m2n_rotate_axis_global", script_internal_call(internal_m2n_rotate_axis_global));
     reg.add_internal_call("internal_m2n_look_at", script_internal_call(internal_m2n_look_at));
+    reg.add_internal_call("internal_m2n_transform_point_global",
+                            script_internal_call(internal_m2n_transform_point_global));
+    reg.add_internal_call("internal_m2n_inverse_transform_point_global",
+                            script_internal_call(internal_m2n_inverse_transform_point_global));
     reg.add_internal_call("internal_m2n_transform_vector_global",
                             script_internal_call(internal_m2n_transform_vector_global));
     reg.add_internal_call("internal_m2n_inverse_transform_vector_global",
