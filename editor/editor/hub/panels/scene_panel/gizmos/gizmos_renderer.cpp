@@ -78,7 +78,9 @@ void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::hand
     const auto& rview = camera_comp.get_render_view();
     const auto& camera = camera_comp.get_camera();
     const auto& view = camera.get_view();
-    const auto& proj = camera.get_projection();
+    // Unjittered: the overlay is not resolved by TAA, so a jittered projection shakes every gizmo and icon by the
+    // frame's subpixel offset.
+    const auto& proj = camera.get_projection_unjittered();
     const auto& obuffer = rview.fbo_get("OBUFFER_DEPTH");
     auto size = obuffer->get_size();
 

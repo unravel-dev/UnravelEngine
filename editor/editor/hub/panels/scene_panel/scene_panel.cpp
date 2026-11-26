@@ -722,7 +722,7 @@ auto handle_component_bounds_manipulation(entt::handle active_selection,
     math::mat4 output = model_tr;
 
     int movetype = ImGuizmo::Manipulate(camera.get_view(),
-                                        camera.get_projection(),
+                                        camera.get_projection_unjittered(),
                                         ImGuizmo::BOUNDS,
                                         em.mode,
                                         math::value_ptr(output),
@@ -980,7 +980,7 @@ auto handle_standard_gizmo_manipulation(entt::handle active_selection,
     ImGuizmo::AllowAxisFlip(false);
 
     int movetype = ImGuizmo::Manipulate(camera.get_view(),
-                                        camera.get_projection(),
+                                        camera.get_projection_unjittered(),
                                         em.operation,
                                         em.mode,
                                         math::value_ptr(output),
