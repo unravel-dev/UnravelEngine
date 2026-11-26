@@ -38,6 +38,10 @@ to measure, and the timing setups. GI and shader measuring add their own traps
 - Compare two builds interleaved: keep both binaries and alternate them in one loop, for
   example `cp unravel-tests.exe tests-a.exe`, rebuild, then run a, b, a, b. Device runs use
   ABBA order.
+- Editors of two build trees each keep the window layout of their own bin (`<bin>/imgui.ini`),
+  so their Game views can render a different number of pixels. Before an editor A/B, copy one
+  tree's `imgui.ini` into the other (keep the original to put back) and record the view size
+  with every reading (`viewport_capture_game` returns it).
 - When a result resists explanation after two or three targeted experiments, rebuild the
   baseline and measure it again. If it moved, every comparison against it is void.
 - Fixtures that take tens of milliseconds are dominated by pool dispatch and drift most;
