@@ -91,7 +91,7 @@ auto hit_json(const scene_ray_hit& hit) -> std::string
     return fmt::format(R"({{"entity_id":{},"name":{},"point":{},"normal":{},"distance":{:.6g},"submesh":{}}})",
                        make_json_string(entity_id_string(hit.entity)),
                        make_json_string(tag != nullptr ? tag->name : std::string{}),
-                       vec3_to_json(hit.point),
+                       position_to_json(hit.point),
                        vec3_to_json(hit.normal),
                        hit.distance,
                        hit.submesh_index);
@@ -297,7 +297,7 @@ void register_spatial_tools(mcp_tool_registry& registry)
                                         i == 0 ? "" : ",",
                                         make_json_string(entity_id_string(decals[i])),
                                         make_json_string(placement.name),
-                                        vec3_to_json(placement.point),
+                                        position_to_json(placement.point),
                                         vec3_to_json(math::normalize(placement.normal)),
                                         comp.size.x,
                                         comp.size.y,
@@ -351,7 +351,7 @@ void register_spatial_tools(mcp_tool_registry& registry)
                  hits_json += (i > 0 ? "," : "") + hit_json(hits[i]);
              }
              return {.text = fmt::format(R"({{"ray":{{"origin":{},"direction":{}}},"hits":[{}],"count":{},"more":{}}})",
-                                         vec3_to_json(ray.origin),
+                                         position_to_json(ray.origin),
                                          vec3_to_json(ray.direction),
                                          hits_json,
                                          count,

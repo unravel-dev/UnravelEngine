@@ -543,7 +543,7 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
              }
              return {.text = fmt::format(R"({{"count":{},"bounds":{},"unmeasured":{}}})",
                                          entities.size(),
-                                         bounds ? bbox_to_json(*bounds) : std::string("null"),
+                                         bounds ? world_bbox_to_json(*bounds) : std::string("null"),
                                          strings_to_json_array(unmeasured)),
                      .is_error = false};
          },

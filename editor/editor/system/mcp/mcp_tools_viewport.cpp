@@ -118,7 +118,7 @@ auto camera_to_json(entt::handle camera) -> std::string
     auto& cc = camera.get<camera_component>();
     return fmt::format(
         R"({{"position":{},"rotation_euler":{},"forward":{},"up":{},"fov":{:.6g},"ortho_size":{:.6g}}})",
-        vec3_to_json(tc.get_position_global()),
+        position_to_json(tc.get_position_global()),
         vec3_to_json(tc.get_rotation_euler_global()),
         vec3_to_json(tc.get_z_axis_global()),
         vec3_to_json(tc.get_y_axis_global()),
@@ -606,7 +606,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
                                            static_cast<float>(yaw),
                                            static_cast<float>(pitch),
                                            has_distance ? hpp::optional<float>(static_cast<float>(distance)) : std::nullopt);
-             return {.text = fmt::format(R"({{"ok":true,"pivot":{},"camera":{}}})", vec3_to_json(pivot), camera_to_json(camera))};
+             return {.text = fmt::format(R"({{"ok":true,"pivot":{},"camera":{}}})", position_to_json(pivot), camera_to_json(camera))};
          },
          .mutates_scene = false});
 

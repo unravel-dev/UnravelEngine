@@ -274,6 +274,13 @@ inline auto vec3_to_json(const math::vec3& v) -> std::string
     return fmt::format("[{:.6g},{:.6g},{:.6g}]", v.x, v.y, v.z);
 }
 
+/// A world position as JSON with every digit its floats hold (shortest round trip): six significant digits round a
+/// position a few kilometers out to centimeters, and a position read and written back would move.
+inline auto position_to_json(const math::vec3& p) -> std::string
+{
+    return fmt::format("[{},{},{}]", p.x, p.y, p.z);
+}
+
 inline auto color_to_json(const math::color& c) -> std::string
 {
     const math::vec4 v = c;
@@ -899,6 +906,19 @@ inline auto ends_with_ci(hpp::string_view value, hpp::string_view suffix) -> boo
     }
     const auto v = value.substr(value.size() - suffix.size());
     return to_lower_ascii(std::string(v)) == to_lower_ascii(std::string(suffix));
+}
+
+/// World bounds as JSON: corners and center with every digit (position_to_json), extents as sizes.
+inline auto world_bbox_to_json(const math::bbox& bounds) -> std::string
+{
+    const auto extents = bounds.get_extents();
+    return fmt::format(R"({{"min":{},"max":{},"center":{},"extents":[{:.6g},{:.6g},{:.6g}]}})",
+                       position_to_json(bounds.min),
+                       position_to_json(bounds.max),
+                       position_to_json(bounds.get_center()),
+                       extents.x,
+                       extents.y,
+                       extents.z);
 }
 
 inline auto bbox_to_json(const math::bbox& bounds) -> std::string

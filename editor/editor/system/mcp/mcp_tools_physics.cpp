@@ -111,9 +111,9 @@ auto ragdoll_body_pose_to_json(const ragdoll_body_runtime& body, const std::stri
         make_json_string(bone_name),
         bool_to_json(body.simulated),
         body.weight,
-        body.has_physics_pose ? vec3_to_json(body.world.get_position()) : "null",
-        body.has_physics_pose ? vec3_to_json(interpolated.position) : "null",
-        transform != nullptr ? vec3_to_json(transform->get_position_global()) : "null",
+        body.has_physics_pose ? position_to_json(body.world.get_position()) : "null",
+        body.has_physics_pose ? position_to_json(interpolated.position) : "null",
+        transform != nullptr ? position_to_json(transform->get_position_global()) : "null",
         can_compare ? fmt::format("{:.1f}", get_turn_degrees(transform->get_rotation_global(), interpolated.rotation))
                     : "null",
         math::length(body.linear_velocity));
@@ -156,7 +156,7 @@ auto ragdoll_to_json(entt::handle entity, const ragdoll_component& ragdoll, bool
                        ragdoll.get_average_speed(),
                        ragdoll.get_rest_time(),
                        bool_to_json(ragdoll.is_face_up()),
-                       vec3_to_json(ragdoll.get_root_pose().get_position()),
+                       position_to_json(ragdoll.get_root_pose().get_position()),
                        with_bodies ? R"(,"body_poses":)" + ragdoll_bodies_to_json(ragdoll) : std::string{});
 }
 
