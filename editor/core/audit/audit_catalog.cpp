@@ -107,6 +107,23 @@ auto make_rules() -> std::vector<rule>
                       "Cameras whose far clip divided by their near clip is over this are reported.",
                       {100000, 100000, 100000}}},
                     true});
+    list.push_back({rules::FAR_FROM_ORIGIN,
+                    "Content Far from the World Origin",
+                    severity::warning,
+                    to_mask(area::quality),
+                    rule_source::scenes,
+                    "A scene or prefab places an entity far from the world origin along an axis. Positions are floats, "
+                    "whose steps grow with the coordinate: about half a millimeter at 8 km, a millimeter at 16 km "
+                    "and 8 millimeters at 100 km. Objects there jitter up close, and physics, animation and shadows "
+                    "lose precision.",
+                    "Keep the playable area within 8 km of the world origin on each axis: center a large world on "
+                    "the origin.",
+                    {{thresholds::MAX_COORDINATE,
+                      "Largest coordinate",
+                      "meters",
+                      "Entities with an x, y or z coordinate farther than this from 0 are reported.",
+                      {8000, 8000, 8000}}},
+                    true});
     list.push_back({rules::DEPLOY_PROBLEM,
                     "Profile Cannot Deploy",
                     severity::error,

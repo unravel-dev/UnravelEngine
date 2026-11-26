@@ -191,6 +191,16 @@ struct camera_depth_range
     float far_clip{};
 };
 
+/// The entity of a scene or prefab with the largest coordinate.
+struct far_content
+{
+    std::string document;
+    std::string entity_id;
+    std::string entity_path;
+    /// The entity's largest world coordinate, in meters from 0 (the one that sets its float precision).
+    double coordinate{};
+};
+
 /// A document that cannot be read, and why.
 struct document_problem
 {
@@ -209,6 +219,8 @@ struct document_scan
     std::vector<feature_use> features;
     std::vector<audio_source_use> audio_sources;
     std::vector<camera_depth_range> cameras;
+    /// Each scene's and prefab's entity with the largest coordinate.
+    std::vector<far_content> far_entities;
     std::vector<document_problem> unreadable;
     /// Each invalid controller's key and its problems.
     std::vector<std::pair<std::string, std::vector<std::string>>> controllers;

@@ -8,6 +8,8 @@
 #include <hpp/uuid.hpp>
 #include <logging/logging.h>
 
+#include <cmath>
+#include <limits>
 #include <map>
 #include <unordered_set>
 
@@ -282,6 +284,41 @@ void check_camera_depth_ranges(rule_context& context, const document_scan& scan)
     }
 }
 
+/// The step between neighbouring float values at @p coordinate meters, in millimeters.
+auto get_float_step_mm(double coordinate) -> double
+{
+    const float value = float(coordinate);
+    return double(std::nextafter(value, std::numeric_limits<float>::max()) - value) * 1000.0;
+}
+
+void check_far_content(rule_context& context, const document_scan& scan)
+{
+    for(const auto& content : scan.far_entities)
+    {
+        // One issue per entity: the precision is the engine's, the same for every profile shipping the document.
+        auto item = context.make(rules::FAR_FROM_ORIGIN,
+                                 make_document_subject(content.document, content.entity_id, content.entity_path),
+                                 fmt::format("The entity is {:.1f} km from the world origin along an axis, where a "
+                                             "float position moves in steps of {:.1f} mm.",
+                                             content.coordinate / 1000.0,
+                                             get_float_step_mm(content.coordinate)));
+        item.discriminator = content.entity_id;
+        for(const auto& profile : context.get_input().profiles)
+        {
+            const auto limit =
+                context.get_threshold(rules::FAR_FROM_ORIGIN, thresholds::MAX_COORDINATE, profile.platform);
+            if(limit > 0 && content.coordinate > double(limit) && is_shipped_by(profile, content.document))
+            {
+                item.profiles.push_back(profile.name);
+            }
+        }
+        if(!item.profiles.empty())
+        {
+            context.add(std::move(item));
+        }
+    }
+}
+
 void check_stereo_spatial(rule_context& context, const document_scan& scan)
 {
     const auto& in = context.get_input();
@@ -333,6 +370,7 @@ void check_scenes(rule_context& context)
     check_scene_color_reads(context, scan);
     check_stereo_spatial(context, scan);
     check_camera_depth_ranges(context, scan);
+    check_far_content(context, scan);
 }
 
 } // namespace unravel::audit::detail

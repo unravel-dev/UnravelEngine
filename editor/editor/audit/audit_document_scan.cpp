@@ -33,6 +33,7 @@
 #include <string_utils/utils.h>
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -307,6 +308,30 @@ void add_camera_depth_ranges(entt::registry& registry, const std::string& docume
     }
 }
 
+/// The document's entity with the largest coordinate: float precision follows the size of each coordinate, not the
+/// distance.
+void add_far_content(entt::registry& registry, const std::string& document, audit::document_scan& out)
+{
+    audit::far_content farthest{document};
+    for(const auto entity : registry.view<transform_component>())
+    {
+        const entt::handle handle(registry, entity);
+        const auto& position = handle.get<transform_component>().get_position_global();
+        const double coordinate =
+            std::max({std::abs(double(position.x)), std::abs(double(position.y)), std::abs(double(position.z))});
+        if(coordinate > farthest.coordinate)
+        {
+            farthest.entity_id = audit_entity_uid(handle);
+            farthest.entity_path = make_audit_entity_path(handle);
+            farthest.coordinate = coordinate;
+        }
+    }
+    if(farthest.coordinate > 0.0)
+    {
+        out.far_entities.push_back(std::move(farthest));
+    }
+}
+
 auto get_compiled_file(const std::string& key, const fs::path& project_root) -> fs::path
 {
     const auto files = deployment::get_compiled_paths(key, project_root);
@@ -364,6 +389,7 @@ void audit_document_scanner::scan_entities(rtti::context& ctx, const audit_docum
     add_feature_uses(registry, document.key, out);
     add_audio_sources(registry, document.key, out);
     add_camera_depth_ranges(registry, document.key, out);
+    add_far_content(registry, document.key, out);
     scratch.unload();
 }
 

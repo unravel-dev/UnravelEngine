@@ -706,6 +706,18 @@ void test_scene_rules()
     check(count_rule(check_with(in, &audit::detail::check_scenes, no_limit), audit::rules::CAMERA_DEPTH_RANGE) == 0,
           "a far to near threshold of 0 turns the check off");
 
+    in.scan.far_entities.push_back({"app:/data/Main.spfb", "uid-far", "Root/Outpost", 25000.0});
+    in.scan.far_entities.push_back({"app:/data/Main.spfb", "uid-near", "Root/Camp", 900.0});
+    const auto far_issues = check_with(in, &audit::detail::check_scenes);
+    const auto* outpost = find_rule_issue(far_issues, audit::rules::FAR_FROM_ORIGIN);
+    require(outpost != nullptr, "an entity 25 km from the origin along an axis is reported");
+    check(count_rule(far_issues, audit::rules::FAR_FROM_ORIGIN) == 1 && outpost->where.detail == "uid-far" &&
+              outpost->profiles.size() == 3 && contains(outpost->message, "25.0 km") &&
+              contains(outpost->message, "2.0 mm"),
+          "the far entity alone is reported, once for every profile shipping it, with its coordinate and the float "
+          "step");
+    in.scan.far_entities.clear();
+
     in.scan.ran = false;
     check(check_with(in, &audit::detail::check_scenes).empty(), "without a scan the scene rules report nothing");
 }

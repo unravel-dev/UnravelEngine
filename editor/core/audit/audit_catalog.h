@@ -20,6 +20,7 @@ constexpr const char* FEATURE_OFF = "scene.feature_off";
 constexpr const char* SCENE_COLOR_OFF = "material.scene_color_off";
 constexpr const char* STEREO_SPATIAL = "audio.stereo_spatial";
 constexpr const char* CAMERA_DEPTH_RANGE = "scene.camera_depth_range";
+constexpr const char* FAR_FROM_ORIGIN = "scene.far_from_origin";
 constexpr const char* DEPLOY_PROBLEM = "deploy.problem";
 constexpr const char* MISSING_SCENE = "content.missing_scene";
 constexpr const char* EXCLUDED_BUT_USED = "content.excluded_but_used";
@@ -75,6 +76,7 @@ constexpr const char* MIN_FILE_BYTES = "min_file_bytes";
 constexpr const char* MAX_RATE = "max_rate";
 constexpr const char* MIN_GROWTH_BYTES = "min_growth_bytes";
 constexpr const char* MAX_FAR_TO_NEAR = "max_far_to_near";
+constexpr const char* MAX_COORDINATE = "max_coordinate";
 } // namespace thresholds
 
 /// Fix ids: what the editor can change to resolve an issue.
