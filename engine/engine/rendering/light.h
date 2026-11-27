@@ -411,7 +411,7 @@ struct light
         /// surface it entered (the per-step depth travel is a floor), so this only has to
         /// cover occluders the ray crosses sideways. Small values keep the side halo of
         /// objects invisible; the shadow map covers what is missed.
-        float thickness{0.03f};
+        float occluder_thickness{0.03f};
         /// Distance from the camera in world units where contact shadows end (fading out over
         /// the outer part). Zero = unlimited.
         float max_distance{50.0f};

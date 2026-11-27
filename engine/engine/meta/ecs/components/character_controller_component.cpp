@@ -164,7 +164,8 @@ LOAD(character_controller_component)
     {
         obj.set_height(height);
     }
-    math::vec3 center{};
+    // Read over the live center: a load that lists one of its axes keeps the others.
+    math::vec3 center = obj.get_center();
     if(try_load(ar, ser20::make_nvp("center", center)))
     {
         obj.set_center(center);

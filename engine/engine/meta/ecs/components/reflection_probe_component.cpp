@@ -131,7 +131,8 @@ LOAD(reflection_probe_component)
         obj.set_update_interval(update_interval);
     }
 
-    reflection_probe probe;
+    // Read over the live probe: a load that lists some of its members (one axis of the extents) keeps the others.
+    reflection_probe probe = obj.get_probe();
     if(try_load(ar, ser20::make_nvp("probe", probe)))
     {
         obj.set_probe(probe);

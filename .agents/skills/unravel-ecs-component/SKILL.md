@@ -28,16 +28,43 @@ inspectors and undo to `unravel-editor-panel`.
   menu and the MCP component tools). Core components the user cannot add (id, tag, layer,
   transform, prefab links) stay out of the last one.
 - `SAVE` / `LOAD` write every field with `try_save` / `try_load` under the exact name the
-  field is reflected with (`entt::attribute{"name", ...}`): prefab overrides point at fields by
-  that name. An empty body saves nothing; nothing is serialized from reflection on its own.
+  field is reflected with (`entt::attribute{"name", ...}`), at the same nesting (a reflected
+  group is a node of that name): a prefab override and an edit of several entities point at a
+  value by its Inspector row, whose path is those names. A value saved under another name or
+  at another level loses its override at the next resync and is never marked as differing.
+  The case "every writable row of a component a user can add is saved under the name the row
+  has" (suite `ecs serialization`) checks every addable component. An empty body saves
+  nothing; nothing is serialized from reflection on its own.
+- A value is saved by the type that owns it, in that type's node (user rule): the camera
+  saves its projection settings, a shadow filter its offsets. When a row's path and the saved
+  path differ, move the row, not the value: reflect it on the owning type and expose that
+  object on the component as a `flattable` property with a setter (`camera` on
+  `camera_component`, `light` on `light_component`), so the Inspector lists the rows as the
+  component's own and their paths go through the owner's node. A prefab statement recorded at
+  the row's earlier path is read inside the member (`get_current_component_path` in
+  `engine/engine/meta/ecs/components/prefab_component.cpp`), and MCP answers a call that names
+  the row on the component with its spelling inside the member.
+- A key a document held before a rename is read with
+  `try_load_former(ar, name, ser20::make_nvp(former_key, value))`
+  (`engine/core/serialization/serialization.h`): the value is read under the path of the
+  property it now is, so an override on the row also holds against a file not saved since
+  (the layer rows in `engine/engine/meta/ecs/components/camera_component.cpp`).
 - A load under a path filter (prefab replay, editing several entities) leaves out the list
   elements it does not list: the engine's vector loads for `iarchive_associative_t`
   (`associative_archive.h`) and `iarchive_binary_t` (`binary_archive.h`) step the reader over
   them. ser20's own load leaves them unread, which shifts every later element onto the skipped
   one's data; keep those headers included where vectors load from documents.
-- A `LOAD` that reads a list into a local and hands it to a setter starts the local from the
-  component (`auto shapes = obj.get_shapes();`): from an empty one, every element a filtered
-  load leaves out comes back as a default.
+- A `std::array` member has no count, so a document holds it as an object with members
+  `value0`, `value1`, ... The engine's array saves and loads in the same two headers give each
+  element that name, so its path is `channels/value0/keys[1]`; ser20's own read them in order
+  with no path, and a filter that lists an element finds nothing.
+- A `LOAD` that reads a list, vector, color, range or struct into a local and hands it to a
+  setter starts the local from the component (`auto shapes = obj.get_shapes();`,
+  `math::vec3 anchor = obj.get_anchor();`): from an empty one, every element or member a
+  filtered load leaves out comes back as a default (an edit of X carried to another entity
+  resets its Y and Z). A value read only to decide whether the rest loads (`settings_version`)
+  is read under `serialization::path_context_pause`: a filter that leaves it out would
+  otherwise drop the whole load.
 - Instantiate both archives: `SAVE_INSTANTIATE` for `ser20::oarchive_associative_t` and
   `ser20::oarchive_binary_t`, `LOAD_INSTANTIATE` for `ser20::iarchive_associative_t` and
   `ser20::iarchive_binary_t`. The binary archive (`serialization/binary_archive.h`) writes the

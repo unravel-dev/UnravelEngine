@@ -633,6 +633,25 @@ inline auto try_load(Archive& ar,
     return try_serialize(ar, std::forward<ser20::NameValuePair<T>>(t), loc);
 }
 
+/**
+ * @brief try_load of a member that a document written before a rename holds under another key, read as the
+ *        property now saved as name.
+ *
+ * The path filter in force is asked about name, and what the member holds is read below that path: a statement
+ * about the property (a prefab override, a listed path) covers its former key too.
+ */
+template<typename Archive, typename T>
+inline auto try_load_former(Archive& ar,
+                            const char* name,
+                            ser20::NameValuePair<T>&& former,
+                            const hpp::source_location& loc = hpp::source_location::current()) -> bool
+{
+    const serialization::path_segment_guard property(name);
+    // The former key takes no segment of its own: the property's is already there.
+    const serialization::path_skip_segment_guard former_key(true);
+    return try_load(ar, std::forward<ser20::NameValuePair<T>>(former), loc);
+}
+
 
 template<typename Archive, typename F>
 inline auto try_serialize(Archive& ar,
@@ -661,4 +680,26 @@ inline auto try_save(Archive& ar,
 {
     return try_serialize(ar, name, std::forward<F>(save_callback), loc);
 }
+
+namespace serialization
+{
+/**
+ * @brief Saves or loads the elements of a fixed array, each as the member the document archives name it.
+ *
+ * A std::array has no count, so in a document it is an object whose members are value0, value1, ... in order.
+ * An element saved or loaded under that name has a path of its own ("channels/value0"): a path filter in force
+ * keeps or leaves out each element, and an element it leaves out stays as it is. The engine's fixed array saves
+ * and loads of both document archives (associative_archive.h, binary_archive.h) go through here.
+ */
+template<typename Archive, typename Array>
+void serialize_array_elements(Archive& ar, Array& array)
+{
+    std::size_t index = 0;
+    for(auto& element : array)
+    {
+        const std::string name = "value" + std::to_string(index++);
+        try_serialize(ar, ser20::make_nvp(name.c_str(), element));
+    }
+}
+} // namespace serialization
 

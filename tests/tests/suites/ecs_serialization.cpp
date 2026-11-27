@@ -28,6 +28,9 @@
 #include "../tests.h"
 #include <engine/animation/ecs/components/animation_component.h>
 #include <engine/animation/ecs/components/ik_components.h>
+#include <engine/audio/ecs/components/audio_source_component.h>
+#include <engine/physics/ecs/components/character_controller_component.h>
+#include <engine/physics/ecs/components/joint_component.h>
 #include <engine/physics/ecs/components/physics_component.h>
 #include <engine/physics/ecs/components/ragdoll_component.h>
 #include <engine/ecs/components/id_component.h>
@@ -35,7 +38,10 @@
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/test_component.h>
 #include <engine/ecs/components/transform_component.h>
+#include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/ecs/components/reflection_probe_component.h>
+#include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/ecs/components/volume_component.h>
 #include <engine/rendering/particles/ps/particle_system_soa.h>
 #include <graphics/graphics.h>
@@ -44,8 +50,10 @@
 #include <engine/ecs/scene.h>
 #include <engine/engine.h>
 #include <engine/threading/threader.h>
+#include <engine/meta/ecs/components/all_components.h>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/meta/rendering/light.hpp>
+#include <engine/meta/rendering/reflection_probe.hpp>
 
 #include <logging/logging.h>
 #include <serialization/associative_archive.h>
@@ -988,6 +996,242 @@ void test_list_loads_keep_the_elements_they_leave_out()
           "retarget pose offsets: the listed offset is the document's, the other stays");
 }
 
+void test_value_loads_keep_the_members_they_leave_out()
+{
+    begin_test("a load that lists one member of a component's vector or struct keeps the members it leaves out");
+
+    scene scn("scn");
+    auto source = scn.create_entity("source");
+    auto target = scn.create_entity("target");
+    constexpr float tolerance = 1e-4f;
+
+    reflection_probe source_probe;
+    source_probe.intensity = 2.0f;
+    source_probe.box_data.extents = {1.0f, 2.0f, 3.0f};
+    source_probe.box_data.transition_distance = 0.5f;
+    reflection_probe target_probe;
+    target_probe.intensity = 0.5f;
+    target_probe.box_data.extents = {7.0f, 8.0f, 9.0f};
+    target_probe.box_data.transition_distance = 4.0f;
+    source.emplace<reflection_probe_component>().set_probe(source_probe);
+    target.emplace<reflection_probe_component>().set_probe(target_probe);
+    load_component_paths<reflection_probe_component>(source, target, {"probe/box_data/extents/x"});
+    const auto& probe = target.get<reflection_probe_component>().get_probe();
+    check_near(probe.box_data.extents, {1.0f, 8.0f, 9.0f}, "probe extents: the listed axis is the document's, the others stay");
+    test::check_near(probe.intensity, 0.5f, tolerance, "probe: its intensity stays");
+    test::check_near(probe.box_data.transition_distance, 4.0f, tolerance, "probe: its transition distance stays");
+
+    auto& source_joint = source.emplace<joint_component>();
+    source_joint.set_anchor({1.0f, 2.0f, 3.0f});
+    source_joint.set_connected_anchor({4.0f, 5.0f, 6.0f});
+    joint_limits source_limits;
+    source_limits.lower = -10.0f;
+    source_limits.upper = 10.0f;
+    source_joint.set_limits(source_limits);
+    auto& target_joint = target.emplace<joint_component>();
+    target_joint.set_anchor({7.0f, 8.0f, 9.0f});
+    target_joint.set_connected_anchor({-1.0f, -2.0f, -3.0f});
+    joint_limits target_limits;
+    target_limits.lower = -30.0f;
+    target_limits.upper = 30.0f;
+    target_joint.set_limits(target_limits);
+    load_component_paths<joint_component>(source, target, {"anchor/y", "connected_anchor/z", "limits/upper"});
+    const auto& joint = target.get<joint_component>();
+    check_near(joint.get_anchor(), {7.0f, 2.0f, 9.0f}, "joint anchor: the listed axis is the document's, the others stay");
+    check_near(joint.get_connected_anchor(), {-1.0f, -2.0f, 6.0f}, "joint connected anchor: the same");
+    test::check_near(joint.get_limits().upper, 10.0f, tolerance, "joint limits: the listed limit is the document's");
+    test::check_near(joint.get_limits().lower, -30.0f, tolerance, "joint limits: the other stays");
+
+    auto& source_body = source.emplace<physics_component>();
+    source_body.set_freeze_position({true, false, false});
+    source_body.set_surface_velocity({1.0f, 2.0f, 3.0f});
+    auto& target_body = target.emplace<physics_component>();
+    target_body.set_freeze_position({false, true, true});
+    target_body.set_surface_velocity({7.0f, 8.0f, 9.0f});
+    load_component_paths<physics_component>(source, target, {"freeze_position/x", "surface_velocity/z"});
+    const auto& body = target.get<physics_component>();
+    check(body.get_freeze_position() == math::bvec3(true, true, true),
+          "physics frozen axes: the listed axis is the document's, the others stay");
+    check_near(body.get_surface_velocity(), {7.0f, 8.0f, 3.0f}, "physics surface velocity: the same");
+
+    source.emplace<character_controller_component>().set_center({1.0f, 2.0f, 3.0f});
+    target.emplace<character_controller_component>().set_center({7.0f, 8.0f, 9.0f});
+    load_component_paths<character_controller_component>(source, target, {"center/y"});
+    check_near(target.get<character_controller_component>().get_center(),
+               {7.0f, 2.0f, 9.0f},
+               "character controller center: the listed axis is the document's, the others stay");
+
+    ragdoll_drive source_drive;
+    source_drive.local_frequency = 2.0f;
+    source_drive.world_max_force = 100.0f;
+    ragdoll_drive target_drive;
+    target_drive.local_frequency = 9.0f;
+    target_drive.world_max_force = 900.0f;
+    source.emplace<ragdoll_component>().set_drive(source_drive);
+    target.emplace<ragdoll_component>().set_drive(target_drive);
+    load_component_paths<ragdoll_component>(source, target, {"drive/local_frequency"});
+    const auto& drive = target.get<ragdoll_component>().get_drive();
+    test::check_near(drive.local_frequency, 2.0f, tolerance, "ragdoll drive: the listed member is the document's");
+    test::check_near(drive.world_max_force, 900.0f, tolerance, "ragdoll drive: the others stay");
+
+    source.emplace<audio_source_component>().set_range(frange_t(1.0f, 20.0f));
+    target.emplace<audio_source_component>().set_range(frange_t(3.0f, 50.0f));
+    load_component_paths<audio_source_component>(source, target, {"range/min"});
+    const auto& range = target.get<audio_source_component>().get_range();
+    test::check_near(range.min, 1.0f, tolerance, "audio range: the listed end is the document's");
+    test::check_near(range.max, 50.0f, tolerance, "audio range: the other stays");
+
+    source.emplace<skylight_component>().set_irradiance_tint(math::color(0.1f, 0.2f, 0.3f, 1.0f));
+    target.emplace<skylight_component>().set_irradiance_tint(math::color(0.7f, 0.8f, 0.9f, 1.0f));
+    load_component_paths<skylight_component>(source, target, {"irradiance_tint/g"});
+    const auto& tint = target.get<skylight_component>().get_irradiance_tint().value;
+    check_near(math::vec3(tint), {0.7f, 0.2f, 0.9f}, "skylight tint: the listed channel is the document's, the others stay");
+
+    auto& source_exposure = source.emplace<auto_exposure_component>();
+    source_exposure.settings.compensation = 2.0f;
+    source_exposure.settings.compensation_curve.add_point(-2.0f, -6.0f);
+    source_exposure.settings.compensation_curve.add_point(0.0f, 0.0f);
+    auto& target_exposure = target.emplace<auto_exposure_component>();
+    target_exposure.settings.compensation = -1.0f;
+    target_exposure.settings.compensation_curve.add_point(1.0f, -4.0f);
+    target_exposure.settings.compensation_curve.add_point(3.0f, 2.0f);
+    // The document names a curve's channels value0, value1, ...: a fixed array has no size, so it is an object.
+    load_component_paths<auto_exposure_component>(
+        source,
+        target,
+        {"settings/compensation", "settings/compensation_curve/channels/value0/keys[1]/value"});
+    const auto& exposure = target.get<auto_exposure_component>().settings;
+    const auto keys = exposure.compensation_curve.get_channel(0).get_keys();
+    test::check_near(exposure.compensation, 2.0f, tolerance, "exposure settings: a listed setting is the document's");
+    check_eq(keys.size(), 2, "exposure curve: it keeps its keys");
+    if(keys.size() == 2)
+    {
+        test::check_near(keys[1].value, 0.0f, tolerance, "exposure curve: the listed key's value is the document's");
+        test::check_near(keys[1].position, 2.0f, tolerance, "exposure curve: that key's position stays");
+        test::check_near(keys[0].value, 1.0f, tolerance, "exposure curve: the key the load leaves out stays");
+        test::check_near(keys[0].position, -4.0f, tolerance, "exposure curve: with its position");
+    }
+}
+
+/// Loads the probe a document holds under "probe" over @p probe; with @p paths, only those of it.
+auto load_probe_document(const std::string& document, reflection_probe& probe, const serialization::path_set& paths = {})
+    -> bool
+{
+    std::stringstream stream(document);
+    ser20::iarchive_associative_t ar(stream);
+    if(paths.empty())
+    {
+        return try_load(ar, ser20::make_nvp("probe", probe));
+    }
+    const serialization::scoped_path_filter filter("probe", paths);
+    return try_load(ar, ser20::make_nvp("probe", probe));
+}
+
+void test_probe_shape_values_are_saved_under_their_reflected_names()
+{
+    begin_test("a reflection probe's box and sphere values are saved under box_data and sphere_data; documents that "
+               "hold them beside the type still load");
+
+    constexpr float tolerance = 1e-4f;
+    reflection_probe saved_box;
+    saved_box.intensity = 2.0f;
+    saved_box.box_data.extents = {1.0f, 2.0f, 3.0f};
+    saved_box.box_data.transition_distance = 0.5f;
+    std::stringstream stream;
+    {
+        ser20::oarchive_associative_t ar(stream);
+        try_save(ar, ser20::make_nvp("probe", saved_box));
+    }
+    const std::string document = stream.str();
+    check(document.find("\"box_data\"") != std::string::npos, "a box probe's document has a box_data node");
+    check(document.find("\"sphere_data\"") == std::string::npos, "and no sphere_data node");
+    reflection_probe loaded_box;
+    check(load_probe_document(document, loaded_box), "the box probe loads");
+    check_near(loaded_box.box_data.extents, {1.0f, 2.0f, 3.0f}, "its extents round-trip");
+    test::check_near(loaded_box.box_data.transition_distance, 0.5f, tolerance, "its transition distance round-trips");
+
+    reflection_probe saved_sphere;
+    saved_sphere.type = probe_type::sphere;
+    saved_sphere.sphere_data.range = 12.0f;
+    std::stringstream sphere_stream;
+    {
+        ser20::oarchive_associative_t ar(sphere_stream);
+        try_save(ar, ser20::make_nvp("probe", saved_sphere));
+    }
+    check(sphere_stream.str().find("\"sphere_data\"") != std::string::npos, "a sphere probe's document has a sphere_data node");
+    reflection_probe loaded_sphere;
+    check(load_probe_document(sphere_stream.str(), loaded_sphere), "the sphere probe loads");
+    check(loaded_sphere.type == probe_type::sphere, "its type round-trips");
+    test::check_near(loaded_sphere.sphere_data.range, 12.0f, tolerance, "its range round-trips");
+
+    const std::string flat_box =
+        R"({"probe": {"type": 0, "method": 1, "intensity": 3.0, "extents": {"x": 4.0, "y": 5.0, "z": 6.0}, "transition_distance": 0.25}})";
+    reflection_probe from_flat_box;
+    check(load_probe_document(flat_box, from_flat_box), "a box probe with its values beside the type loads");
+    check(from_flat_box.method == reflect_method::static_only, "it keeps its method");
+    test::check_near(from_flat_box.intensity, 3.0f, tolerance, "it keeps its intensity");
+    check_near(from_flat_box.box_data.extents, {4.0f, 5.0f, 6.0f}, "it keeps its extents");
+    test::check_near(from_flat_box.box_data.transition_distance, 0.25f, tolerance, "it keeps its transition distance");
+
+    reflection_probe from_flat_sphere;
+    check(load_probe_document(R"({"probe": {"type": 1, "range": 9.0}})", from_flat_sphere),
+          "a sphere probe with its range beside the type loads");
+    test::check_near(from_flat_sphere.sphere_data.range, 9.0f, tolerance, "it keeps its range");
+
+    // The values beside the type are read under the path the node gives them.
+    reflection_probe partly;
+    partly.box_data.extents = {7.0f, 8.0f, 9.0f};
+    partly.box_data.transition_distance = 2.0f;
+    load_probe_document(flat_box, partly, {"box_data/extents/y"});
+    check_near(partly.box_data.extents, {7.0f, 5.0f, 9.0f}, "a load that lists one axis of such a document takes that axis alone");
+    test::check_near(partly.box_data.transition_distance, 2.0f, tolerance, "and leaves the transition distance");
+}
+
+void test_text_loads_keep_the_members_they_leave_out()
+{
+    begin_test("a load that lists one member of a text's style or area keeps the members it leaves out");
+
+    // A text builds its buffers on the device: the runner starts none.
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    if(!gfx::init(init))
+    {
+        check(false, "bgfx initialises on the Noop renderer");
+        gfx::shutdown();
+        return;
+    }
+    {
+        scene scn("scn");
+        auto source = scn.create_entity("source");
+        auto target = scn.create_entity("target");
+        constexpr float tolerance = 1e-4f;
+
+        text_style source_style;
+        source_style.opacity = 0.25f;
+        source_style.outline_width = 1.0f;
+        text_style target_style;
+        target_style.opacity = 0.75f;
+        target_style.outline_width = 3.0f;
+        auto& source_text = source.emplace<text_component>();
+        source_text.set_style(source_style);
+        source_text.set_area(fsize_t(10.0f, 20.0f));
+        source_text.set_auto_size_range(urange32_t(8, 16));
+        auto& target_text = target.emplace<text_component>();
+        target_text.set_style(target_style);
+        target_text.set_area(fsize_t(30.0f, 40.0f));
+        target_text.set_auto_size_range(urange32_t(20, 60));
+        load_component_paths<text_component>(source, target, {"style/opacity", "area/width", "auto_size_range/max"});
+        const auto& text = target.get<text_component>();
+        test::check_near(text.get_style().opacity, 0.25f, tolerance, "text style: the listed member is the document's");
+        test::check_near(text.get_style().outline_width, 3.0f, tolerance, "text style: the others stay");
+        test::check_near(text.get_area().width, 10.0f, tolerance, "text area: the listed side is the document's");
+        test::check_near(text.get_area().height, 40.0f, tolerance, "text area: the other stays");
+        check_eq(text.get_auto_size_range().max, 16, "text size range: the listed end is the document's");
+        check_eq(text.get_auto_size_range().min, 20, "text size range: the other stays");
+    }
+    gfx::shutdown();
+}
+
 void test_filtered_list_load_steps_over_skipped_elements()
 {
     begin_test("a load that leaves out list elements reads each listed element from its own place in the document");
@@ -1892,6 +2136,707 @@ void test_resync_honours_particle_emitter_field_overrides()
     }
     ps_soa::shutdown();
     gfx::shutdown();
+}
+
+/// The override path is the one the inspector records for the probe's Extents row: the reflected names.
+void test_resync_honours_reflection_probe_shape_overrides()
+{
+    begin_test("resync keeps a reflection probe's overridden extents and lets its other values follow the prefab");
+
+    prefab_fixture fix;
+    fix.source = build_sample_tree(fix.authoring);
+    auto source_child = find_child_by_name(fix.source, "child_a");
+    reflection_probe authored;
+    authored.box_data.extents = {2.0f, 2.0f, 2.0f};
+    source_child.emplace<reflection_probe_component>().set_probe(authored);
+    fix.asset = make_prefab_from(fix.source, "test:/tree.pfb");
+    fix.instance = fix.world.instantiate(fix.asset, false);
+    auto instance_child = fix.instance ? find_child_by_name(fix.instance, "child_a") : entt::handle{};
+    check(instance_child && instance_child.all_of<reflection_probe_component>(), "the instance has the probe");
+    if(!instance_child || !instance_child.all_of<reflection_probe_component>())
+    {
+        return;
+    }
+
+    reflection_probe local = instance_child.get<reflection_probe_component>().get_probe();
+    local.box_data.extents = {7.0f, 8.0f, 9.0f};
+    instance_child.get<reflection_probe_component>().set_probe(local);
+    fix.instance.get<prefab_component>().add_override(prefab_uid_of(instance_child),
+                                                      "reflection_probe_component/probe/box_data/extents");
+
+    // Meanwhile the prefab's author changes the extents, the transition distance and the intensity.
+    authored.box_data.extents = {4.0f, 4.0f, 4.0f};
+    authored.box_data.transition_distance = 3.0f;
+    authored.intensity = 2.5f;
+    source_child.get<reflection_probe_component>().set_probe(authored);
+
+    fix.republish_and_sync();
+
+    auto after = find_child_by_name(fix.instance, "child_a");
+    check(after && after.all_of<reflection_probe_component>(), "the probe is still there after the resync");
+    if(after && after.all_of<reflection_probe_component>())
+    {
+        constexpr float tolerance = 1e-4f;
+        const auto& probe = after.get<reflection_probe_component>().get_probe();
+        check_near(probe.box_data.extents, {7.0f, 8.0f, 9.0f}, "the overridden extents survive");
+        test::check_near(probe.box_data.transition_distance, 3.0f, tolerance, "the transition distance follows the prefab");
+        test::check_near(probe.intensity, 2.5f, tolerance, "the intensity follows the prefab");
+    }
+}
+
+
+/// A device for the cases whose components build resources on one when they are made: a camera its render
+/// pipeline, a text its buffers. The runner starts none. The textures loaded on the device are unloaded before it
+/// shuts down; what a case makes on it is declared after it, so it goes first.
+struct test_device
+{
+    bool is_up{};
+
+    test_device()
+    {
+        bgfx::Init init;
+        init.type = bgfx::RendererType::Noop;
+        is_up = gfx::init(init);
+        check(is_up, "bgfx initialises on the Noop renderer");
+    }
+
+    ~test_device()
+    {
+        if(is_up)
+        {
+            auto& assets = engine::context().get_cached<asset_manager>();
+            for(const auto& texture : assets.get_assets<gfx::texture>())
+            {
+                if(texture.is_ready())
+                {
+                    assets.unload_asset<gfx::texture>(texture.id());
+                }
+            }
+        }
+        gfx::shutdown();
+    }
+
+    test_device(const test_device&) = delete;
+    auto operator=(const test_device&) -> test_device& = delete;
+};
+
+/// Adds to @p out the writable rows under @p object whose path names no node of the saved document that has the
+/// leaf paths @p leaves. A row is a reflected property the Inspector lets a user edit; a group of rows is walked
+/// into as the Inspector walks into it.
+void collect_rows_without_document_nodes(entt::meta_any& object,
+                                         const std::string& parent,
+                                         const serialization::path_set& leaves,
+                                         std::set<std::string>& out)
+{
+    for(auto [id, prop] : object.type().data())
+    {
+        const std::string name = entt::get_name(prop);
+        if(name.empty() || prop.is_const() || !entt::is_property_visible(object, prop))
+        {
+            continue;
+        }
+        const std::string path = parent.empty() ? name : parent + "/" + name;
+        if(!serialization::is_path_related(path, leaves))
+        {
+            out.insert(path);
+            continue;
+        }
+        if(leaves.count(path) > 0)
+        {
+            continue;
+        }
+        auto value = prop.get(object);
+        const auto type = value ? value.type() : entt::meta_type{};
+        const bool is_group = type && !type.is_enum() && !type.is_arithmetic() && !type.is_sequence_container() &&
+                              !type.is_associative_container();
+        if(is_group)
+        {
+            collect_rows_without_document_nodes(value, path, leaves, out);
+        }
+    }
+}
+
+/// Checks that every writable row of @p entity's Component names a node of the component's saved document.
+/// @p state says which rows the component shows (its defaults, a light type, a shadow filter).
+template<typename Component>
+void check_rows_name_document_nodes(entt::handle entity, const std::string& state)
+{
+    if constexpr(!std::is_empty_v<Component>)
+    {
+        const auto type = entt::resolve<Component>();
+        const std::string name = entt::get_name(type) + " (" + state + ")";
+        std::stringstream saved;
+        type.invoke("component_save"_hs, {}, entity, entt::forward_as_meta(saved));
+        serialization::path_set leaves;
+        if(!serialization::get_leaf_paths(saved.str(), "component", leaves))
+        {
+            check(false, name + " saves a document");
+            return;
+        }
+        auto object = entt::forward_as_meta(entity.get<Component>());
+        std::set<std::string> unsaved;
+        collect_rows_without_document_nodes(object, {}, leaves, unsaved);
+        std::string listed;
+        for(const auto& path : unsaved)
+        {
+            listed += (listed.empty() ? "" : ", ") + path;
+        }
+        check(unsaved.empty(),
+              name + ": every row names a node of the saved document" + (listed.empty() ? "" : "; these do not: " + listed));
+    }
+}
+
+template<typename... Components>
+void add_components(entt::handle entity, std::tuple<Components...>*)
+{
+    (entity.get_or_emplace<Components>(), ...);
+}
+
+template<typename... Components>
+void check_rows_name_document_nodes(entt::handle entity, const std::string& state, std::tuple<Components...>*)
+{
+    (check_rows_name_document_nodes<Components>(entity, state), ...);
+}
+
+/// A prefab override and an edit of several entities name a value by its Inspector row, and the row's path is made of
+/// reflected names. A value saved under another name is then never found: the override is lost at the next resync
+/// and the row is not marked when the selection's values differ.
+void test_reflected_rows_are_saved_under_their_names()
+{
+    begin_test("every writable row of a component a user can add is saved under the name the row has");
+
+    const test_device device;
+    if(!device.is_up)
+    {
+        return;
+    }
+    ps_soa::init(16);
+    {
+        auto* const components = static_cast<all_addable_components*>(nullptr);
+        scene scn("scn");
+        auto entity = scn.create_entity("rows");
+        add_components(entity, components);
+        check_rows_name_document_nodes(entity, "defaults", components);
+
+        // The rows a component shows follow its settings: each light type with each shadow filter, the other
+        // projection of a camera, the other shape of a reflection probe.
+        const std::pair<light_type, const char*> light_types[] = {{light_type::spot, "spot"},
+                                                                  {light_type::point, "point"},
+                                                                  {light_type::directional, "directional"}};
+        const std::pair<sm_impl, const char*> shadow_filters[] = {{sm_impl::hard, "hard"},
+                                                                  {sm_impl::pcf, "pcf"},
+                                                                  {sm_impl::pcss, "pcss"},
+                                                                  {sm_impl::vsm, "vsm"},
+                                                                  {sm_impl::esm, "esm"}};
+        for(const auto& [type, type_name] : light_types)
+        {
+            for(const auto& [filter, filter_name] : shadow_filters)
+            {
+                light shown = entity.get<light_component>().get_light();
+                shown.type = type;
+                shown.casts_shadows = true;
+                shown.shadow_params.type = filter;
+                shown.contact_shadow.enabled = true;
+                entity.get<light_component>().set_light(shown);
+                check_rows_name_document_nodes<light_component>(entity, std::string(type_name) + ", " + filter_name);
+            }
+        }
+        entity.get<camera_component>().set_projection_mode(projection_mode::orthographic);
+        check_rows_name_document_nodes<camera_component>(entity, "orthographic");
+        reflection_probe sphere = entity.get<reflection_probe_component>().get_probe();
+        sphere.type = probe_type::sphere;
+        entity.get<reflection_probe_component>().set_probe(sphere);
+        check_rows_name_document_nodes<reflection_probe_component>(entity, "sphere");
+    }
+    ps_soa::shutdown();
+}
+
+/// The override paths are the ones the Inspector records for the rows: reflected names from the component down.
+void test_resync_honours_camera_and_light_row_overrides()
+{
+    begin_test("resync keeps the camera and light values overridden at their Inspector rows and lets the others "
+               "follow the prefab");
+
+    const test_device device;
+    if(!device.is_up)
+    {
+        return;
+    }
+    prefab_fixture fix;
+    fix.source = build_sample_tree(fix.authoring);
+    auto source_child = find_child_by_name(fix.source, "child_a");
+    auto& source_camera = source_child.emplace<camera_component>();
+    source_camera.set_fov(60.0f);
+    source_camera.set_near_clip(0.5f);
+    source_camera.set_render_include_mask(layer_mask{1});
+    light authored;
+    authored.type = light_type::directional;
+    authored.intensity = 1.0f;
+    authored.shadow_params.type = sm_impl::pcf;
+    authored.shadow_params.bias = 1.0f;
+    authored.shadow_params.slope_bias = 1.0f;
+    authored.shadow_params.pcf.x_offset = 1.0f;
+    authored.shadow_params.pcf.y_offset = 1.0f;
+    authored.directional_shadow_params.num_splits = 4;
+    authored.directional_shadow_params.split_distribution = 0.8f;
+    authored.contact_shadow.thickness = 0.1f;
+    source_child.emplace<light_component>().set_light(authored);
+    fix.asset = make_prefab_from(fix.source, "test:/tree.pfb");
+    fix.instance = fix.world.instantiate(fix.asset, false);
+    auto instance_child = fix.instance ? find_child_by_name(fix.instance, "child_a") : entt::handle{};
+    const bool has_both = instance_child && instance_child.all_of<camera_component, light_component>();
+    check(has_both, "the instance has the camera and the light");
+    if(has_both)
+    {
+        const auto uid = prefab_uid_of(instance_child);
+        auto& instance_prefab = fix.instance.get<prefab_component>();
+        auto& instance_camera = instance_child.get<camera_component>();
+        instance_camera.set_fov(30.0f);
+        instance_camera.set_render_include_mask(layer_mask{4});
+        instance_prefab.add_override(uid, "camera_component/camera/field_of_view");
+        instance_prefab.add_override(uid, "camera_component/include_layers");
+        light local = instance_child.get<light_component>().get_light();
+        local.shadow_params.bias = 5.0f;
+        local.shadow_params.pcf.x_offset = 2.5f;
+        local.directional_shadow_params.num_splits = 2;
+        local.contact_shadow.thickness = 0.7f;
+        instance_child.get<light_component>().set_light(local);
+        instance_prefab.add_override(uid, "light_component/light/shadow_params/depth_bias_texels");
+        instance_prefab.add_override(uid, "light_component/light/shadow_params/pcf/x_offset");
+        instance_prefab.add_override(uid, "light_component/light/directional_shadow_params/splits");
+        instance_prefab.add_override(uid, "light_component/light/contact_shadow/occluder_thickness");
+
+        // Meanwhile the prefab's author changes the overridden values and their neighbours.
+        source_camera.set_fov(90.0f);
+        source_camera.set_near_clip(0.25f);
+        source_camera.set_render_include_mask(layer_mask{2});
+        source_camera.set_render_exclude_mask(layer_mask{8});
+        authored.shadow_params.bias = 2.0f;
+        authored.shadow_params.slope_bias = 4.0f;
+        authored.shadow_params.pcf.x_offset = 1.5f;
+        authored.shadow_params.pcf.y_offset = 3.0f;
+        authored.directional_shadow_params.num_splits = 3;
+        authored.directional_shadow_params.split_distribution = 0.5f;
+        authored.contact_shadow.thickness = 0.2f;
+        authored.contact_shadow.opacity = 0.4f;
+        source_child.get<light_component>().set_light(authored);
+
+        fix.republish_and_sync();
+
+        auto after = find_child_by_name(fix.instance, "child_a");
+        if(after && after.all_of<camera_component, light_component>())
+        {
+            constexpr float tolerance = 1e-4f;
+            const auto& camera = after.get<camera_component>();
+            test::check_near(camera.get_fov(), 30.0f, tolerance, "camera: the overridden field of view survives");
+            test::check_near(camera.get_near_clip(), 0.25f, tolerance, "camera: the near clip follows the prefab");
+            check_eq(camera.get_render_include_mask().mask, 4, "camera: the overridden include layers survive");
+            check_eq(camera.get_render_exclude_mask().mask, 8, "camera: the exclude layers follow the prefab");
+            const auto& lit = after.get<light_component>().get_light();
+            const auto& shadows = lit.shadow_params;
+            test::check_near(shadows.bias, 5.0f, tolerance, "light: the overridden depth bias survives");
+            test::check_near(shadows.slope_bias, 4.0f, tolerance, "light: the slope bias follows the prefab");
+            test::check_near(shadows.pcf.x_offset, 2.5f, tolerance, "light: the overridden filter offset survives");
+            test::check_near(shadows.pcf.y_offset, 3.0f, tolerance, "light: the other offset follows the prefab");
+            check_eq(lit.directional_shadow_params.num_splits, 2, "light: the overridden cascade count survives");
+            test::check_near(lit.directional_shadow_params.split_distribution,
+                             0.5f,
+                             tolerance,
+                             "light: the cascade distribution follows the prefab");
+            test::check_near(lit.contact_shadow.thickness, 0.7f, tolerance, "light: the overridden thickness survives");
+            test::check_near(lit.contact_shadow.opacity, 0.4f, tolerance, "light: the contact opacity follows the prefab");
+        }
+        else
+        {
+            check(false, "the camera and the light are still there after the resync");
+        }
+    }
+}
+
+/// @p document, minified, with the object saved under @p key replaced by @p object: how a file reads that holds
+/// the object in an earlier layout.
+auto replace_json_object(const std::string& document, const std::string& key, const std::string& object) -> std::string
+{
+    const std::string opening = "\"" + key + "\":{";
+    const auto start = document.find(opening);
+    if(start == std::string::npos)
+    {
+        return document;
+    }
+    size_t depth = 0;
+    size_t end = start + opening.size() - 1;
+    for(; end < document.size(); ++end)
+    {
+        if(document[end] == '{')
+        {
+            ++depth;
+        }
+        else if(document[end] == '}' && --depth == 0)
+        {
+            break;
+        }
+    }
+    return document.substr(0, start) + "\"" + key + "\":" + object + document.substr(end + 1);
+}
+
+/// The prefab asset of @p root with each object named in @p objects written as given.
+auto make_prefab_with_objects(entt::const_handle root,
+                              const std::string& id,
+                              const std::vector<std::pair<std::string, std::string>>& objects) -> asset_handle<prefab>
+{
+    const auto bytes = serialize_as_prefab(root, id);
+    auto compiled = minify_json(std::string(bytes.begin(), bytes.end()));
+    for(const auto& [key, object] : objects)
+    {
+        const auto replaced = replace_json_object(compiled, key, object);
+        check(replaced != compiled, "the prefab document holds " + key);
+        compiled = replaced;
+    }
+    return make_prefab_asset(std::vector<uint8_t>(compiled.begin(), compiled.end()), id);
+}
+
+/// A camera component as documents held it before its layer rows were saved under their names: the layers as
+/// render_include_layers and render_exclude_layers.
+constexpr const char* CAMERA_COMPONENT_WITH_FORMER_LAYER_KEYS =
+    R"({"camera":{"projection_mode":1,"field_of_view":90.0,"near_clip":0.25,"far_clip":750.0,)"
+    R"("viewport_position":{"x":0,"y":0},"viewport_size":{"width":320,"height":200},"orthographic_size":7.5,)"
+    R"("aspect_ratio":1.6,"aspect_locked":false,"frustum_locked":false},)"
+    R"("render_include_layers":{"mask":2},"render_exclude_layers":{"mask":8}})";
+
+/// A directional light with the PCF filter as documents held it before: the filter's settings beside the filter
+/// type, the cascade settings as num_splits and split_distribution.
+constexpr const char* LIGHT_WITH_FILTER_SETTINGS_BESIDE_THE_TYPE =
+    R"({"type":2,"intensity":2.0,"casts_shadows":true,)"
+    R"("shadow_params":{"type":1,"depth_bias_texels":2.0,"slope_bias_texels":4.0,"pcf_x_offset":1.5,"pcf_y_offset":3.0},)"
+    R"("contact_shadow":{"enabled":true,"occluder_thickness":0.2},)"
+    R"("directional_shadow_params":{"num_splits":3,"split_distribution":0.5,"stabilize":false}})";
+
+/// Loads the document @p json holds under "component" into @p entity's Component, as JSON or converted to a binary
+/// document; with @p paths, only those of it.
+template<typename Component>
+auto load_component_document(entt::handle entity,
+                             const std::string& json,
+                             bool as_binary,
+                             const serialization::path_set& paths = {}) -> bool
+{
+    std::vector<uint8_t> bytes(json.begin(), json.end());
+    if(as_binary)
+    {
+        std::string error;
+        bytes = serialization::json_to_binary_document(json, error);
+        if(bytes.empty())
+        {
+            check(false, "the document converts to a binary document: " + error);
+            return false;
+        }
+    }
+    const auto load = [&](auto& ar)
+    {
+        return try_load(ar, ser20::make_nvp("component", entity.get<Component>()));
+    };
+    if(paths.empty())
+    {
+        return serialization::read_document(bytes.data(), bytes.size(), load);
+    }
+    const serialization::scoped_path_filter filter("component", paths);
+    return serialization::read_document(bytes.data(), bytes.size(), load);
+}
+
+void test_camera_and_light_documents_in_earlier_layouts_load()
+{
+    begin_test("a camera with its layers under their former keys and a light with its filter settings beside the "
+               "type still load, whole and by row");
+
+    const test_device device;
+    if(!device.is_up)
+    {
+        return;
+    }
+    constexpr float tolerance = 1e-4f;
+    const std::string camera_document =
+        std::string(R"({"component":)") + CAMERA_COMPONENT_WITH_FORMER_LAYER_KEYS + "}";
+    const std::string light_document = std::string(R"({"component":{"enabled":true,"light":)") +
+                                       LIGHT_WITH_FILTER_SETTINGS_BESIDE_THE_TYPE + "}}";
+    for(const bool as_binary : {false, true})
+    {
+        const std::string format = as_binary ? "binary: " : "JSON: ";
+        scene scn("scn");
+        auto whole = scn.create_entity("whole");
+        whole.emplace<camera_component>();
+        check(load_component_document<camera_component>(whole, camera_document, as_binary), format + "the camera loads");
+        const auto& camera = whole.get<camera_component>();
+        check(camera.get_projection_mode() == projection_mode::orthographic, format + "camera: it keeps its projection");
+        test::check_near(camera.get_fov(), 90.0f, tolerance, format + "camera: it keeps its field of view");
+        test::check_near(camera.get_ortho_size(), 7.5f, tolerance, format + "camera: it keeps its orthographic size");
+        test::check_near(camera.get_near_clip(), 0.25f, tolerance, format + "camera: it keeps its near clip");
+        test::check_near(camera.get_far_clip(), 750.0f, tolerance, format + "camera: it keeps its far clip");
+        check_eq(camera.get_render_include_mask().mask, 2, format + "camera: it keeps its include layers");
+        check_eq(camera.get_render_exclude_mask().mask, 8, format + "camera: it keeps its exclude layers");
+        check_eq(camera.get_viewport_size().width, 320, format + "camera: it keeps its viewport size");
+
+        // The rows are read under their own paths: the camera's inside its node, a layer row under the name it
+        // has now.
+        auto by_row = scn.create_entity("by row");
+        auto& partly = by_row.emplace<camera_component>();
+        partly.set_fov(40.0f);
+        partly.set_near_clip(1.0f);
+        partly.set_far_clip(500.0f);
+        partly.set_render_include_mask(layer_mask{16});
+        load_component_document<camera_component>(by_row,
+                                                  camera_document,
+                                                  as_binary,
+                                                  {"camera/near_clip", "include_layers"});
+        test::check_near(partly.get_near_clip(), 0.25f, tolerance, format + "camera: a listed row takes the document's value");
+        check_eq(partly.get_render_include_mask().mask, 2, format + "camera: and so does a listed layer row");
+        test::check_near(partly.get_fov(), 40.0f, tolerance, format + "camera: a row the load leaves out stays");
+        test::check_near(partly.get_far_clip(), 500.0f, tolerance, format + "camera: and so does another");
+
+        whole.emplace<light_component>();
+        check(load_component_document<light_component>(whole, light_document, as_binary), format + "the light loads");
+        const auto& lit = whole.get<light_component>().get_light();
+        check(lit.type == light_type::directional, format + "light: it keeps its type");
+        test::check_near(lit.shadow_params.bias, 2.0f, tolerance, format + "light: it keeps its depth bias");
+        test::check_near(lit.shadow_params.pcf.x_offset, 1.5f, tolerance, format + "light: it keeps its filter's x offset");
+        test::check_near(lit.shadow_params.pcf.y_offset, 3.0f, tolerance, format + "light: it keeps its filter's y offset");
+        check_eq(lit.directional_shadow_params.num_splits, 3, format + "light: it keeps its cascade count");
+        test::check_near(lit.directional_shadow_params.split_distribution,
+                         0.5f,
+                         tolerance,
+                         format + "light: it keeps its cascade distribution");
+        check(!lit.directional_shadow_params.stabilize, format + "light: it keeps its stabilize setting");
+        test::check_near(lit.contact_shadow.thickness, 0.2f, tolerance, format + "light: it keeps its contact thickness");
+
+        light kept;
+        kept.type = light_type::directional;
+        kept.shadow_params.type = sm_impl::pcf;
+        kept.shadow_params.pcf.x_offset = 2.5f;
+        kept.shadow_params.pcf.y_offset = 2.5f;
+        kept.directional_shadow_params.num_splits = 1;
+        kept.directional_shadow_params.split_distribution = 0.9f;
+        by_row.emplace<light_component>().set_light(kept);
+        load_component_document<light_component>(by_row,
+                                                 light_document,
+                                                 as_binary,
+                                                 {"light/shadow_params/pcf/y_offset", "light/directional_shadow_params/splits"});
+        const auto& partly_lit = by_row.get<light_component>().get_light();
+        test::check_near(partly_lit.shadow_params.pcf.y_offset,
+                         3.0f,
+                         tolerance,
+                         format + "light: a listed filter setting takes the document's value");
+        test::check_near(partly_lit.shadow_params.pcf.x_offset, 2.5f, tolerance, format + "light: the other stays");
+        check_eq(partly_lit.directional_shadow_params.num_splits, 3, format + "light: a listed cascade setting takes the document's value");
+        test::check_near(partly_lit.directional_shadow_params.split_distribution,
+                         0.9f,
+                         tolerance,
+                         format + "light: the other stays");
+    }
+
+    const auto camera_type = entt::resolve<camera>();
+    check_eq(entt::get_name(entt::find_renamed_property(camera_type, "near_clip_distance")),
+             "near_clip",
+             "the near clip row answers to the name it had before");
+    check_eq(entt::get_name(entt::find_renamed_property(camera_type, "far_clip_distance")),
+             "far_clip",
+             "the far clip row answers to the name it had before");
+    const auto filter_type = entt::resolve<light::shadowmap_params>();
+    const auto contact_type = entt::resolve<light::contact_shadow_params>();
+    check_eq(entt::get_name(entt::find_renamed_property(filter_type, "bias")),
+             "depth_bias_texels",
+             "the depth bias row answers to the name it had before");
+    check_eq(entt::get_name(entt::find_renamed_property(contact_type, "thickness")),
+             "occluder_thickness",
+             "the contact thickness row answers to the name it had before");
+}
+
+/// The Inspector and the tools edit a nested row by reading the object that owns it, setting the row on that copy
+/// and writing the copy back through the property that holds it.
+void test_camera_settings_are_rows_of_its_camera()
+{
+    begin_test("a camera component's projection settings are rows of its camera, written back through the component");
+
+    const test_device device;
+    if(!device.is_up)
+    {
+        return;
+    }
+    scene scn("scn");
+    auto entity = scn.create_entity("camera");
+    auto& component = entity.emplace<camera_component>();
+    auto object = entt::forward_as_meta(component);
+    const auto camera_row = entt::resolve<camera_component>().data("camera"_hs);
+    const auto field_of_view_row = entt::resolve<camera>().data("field_of_view"_hs);
+    const bool has_rows = camera_row && field_of_view_row;
+    check(has_rows, "the component has a camera row and the camera a field of view row");
+    if(has_rows)
+    {
+        check(entt::is_property_flattable(object, camera_row), "the camera's rows join the component's own");
+        auto edited = camera_row.get(object);
+        check(field_of_view_row.set(edited, 35.0f), "the field of view is set on the camera");
+        check(camera_row.set(object, edited), "the edited camera goes back through the component");
+        test::check_near(component.get_fov(), 35.0f, 1e-4f, "the component's camera has the edited field of view");
+    }
+}
+
+/// An Inspector edit records the path of its row. A row that has since become a row of a flattened member (a
+/// camera's projection settings were once reflected on the camera component itself) is found inside that member.
+void test_statements_follow_rows_into_a_flattened_member()
+{
+    begin_test("an override recorded at a row that is now a row of the component's camera is read at the camera's "
+               "path");
+
+    const auto uid = generate_uuid();
+    const std::set<std::string> current_paths = {"camera_component/camera/field_of_view",
+                                                 "camera_component/camera/near_clip",
+                                                 "camera_component/include_layers",
+                                                 "light_component/light/shadow_params/pcf/x_offset"};
+    prefab_statements recorded;
+    for(const auto& current_path : current_paths)
+    {
+        recorded.add_override({}, uid, current_path, current_path);
+    }
+    std::stringstream stream;
+    {
+        ser20::oarchive_associative_t ar(stream);
+        try_save(ar, ser20::make_nvp("statements", recorded));
+    }
+
+    // The same statements as an editor recorded them while the projection settings were the component's own rows.
+    std::string document = stream.str();
+    const auto record_as = [&](const std::string& current_path, const std::string& recorded_path)
+    {
+        const std::string quoted = "\"" + current_path + "\"";
+        const auto at = document.find(quoted);
+        check(at != std::string::npos, "the document states " + current_path);
+        if(at != std::string::npos)
+        {
+            document.replace(at, quoted.size(), "\"" + recorded_path + "\"");
+        }
+    };
+    record_as("camera_component/camera/field_of_view", "camera_component/field_of_view");
+    record_as("camera_component/camera/near_clip", "camera_component/near_clip_distance");
+
+    prefab_statements loaded;
+    const std::vector<uint8_t> bytes(document.begin(), document.end());
+    const bool is_loaded = serialization::read_document(bytes.data(),
+                                                        bytes.size(),
+                                                        [&](auto& ar)
+                                                        {
+                                                            return try_load(ar, ser20::make_nvp("statements", loaded));
+                                                        });
+    check(is_loaded, "the statements load");
+    std::set<std::string> loaded_paths;
+    for(const auto& statement : loaded.overrides)
+    {
+        loaded_paths.insert(statement.component_path);
+    }
+    check(loaded_paths == current_paths,
+          "each statement names its row as the component has it now: the camera's rows inside the camera, the "
+          "others where they were");
+}
+
+void test_resync_honours_row_overrides_against_a_prefab_in_an_earlier_layout()
+{
+    begin_test("resync keeps values overridden at their rows when the prefab document holds them in an earlier "
+               "layout, and reads the others from it");
+
+    const test_device device;
+    if(!device.is_up)
+    {
+        return;
+    }
+    prefab_fixture fix;
+    fix.source = build_sample_tree(fix.authoring);
+    auto source_child = find_child_by_name(fix.source, "child_a");
+    source_child.emplace<camera_component>().set_fov(60.0f);
+    light authored;
+    authored.type = light_type::directional;
+    authored.shadow_params.type = sm_impl::pcf;
+    source_child.emplace<light_component>().set_light(authored);
+    fix.asset = make_prefab_from(fix.source, "test:/tree.pfb");
+    fix.instance = fix.world.instantiate(fix.asset, false);
+    auto instance_child = fix.instance ? find_child_by_name(fix.instance, "child_a") : entt::handle{};
+    const bool has_both = instance_child && instance_child.all_of<camera_component, light_component>();
+    check(has_both, "the instance has the camera and the light");
+    if(has_both)
+    {
+        const auto uid = prefab_uid_of(instance_child);
+        auto& instance_prefab = fix.instance.get<prefab_component>();
+        instance_child.get<camera_component>().set_fov(30.0f);
+        instance_prefab.add_override(uid, "camera_component/camera/field_of_view");
+        light local = instance_child.get<light_component>().get_light();
+        local.shadow_params.pcf.x_offset = 2.5f;
+        local.directional_shadow_params.num_splits = 2;
+        instance_child.get<light_component>().set_light(local);
+        instance_prefab.add_override(uid, "light_component/light/shadow_params/pcf/x_offset");
+        instance_prefab.add_override(uid, "light_component/light/directional_shadow_params/splits");
+
+        const std::string light_component_object =
+            std::string(R"({"enabled":true,"light":)") + LIGHT_WITH_FILTER_SETTINGS_BESIDE_THE_TYPE + "}";
+        fix.asset = make_prefab_with_objects(fix.source,
+                                             "test:/tree.pfb",
+                                             {{"camera_component", CAMERA_COMPONENT_WITH_FORMER_LAYER_KEYS},
+                                              {"light_component", light_component_object}});
+        sync_prefab_instance_with(fix.instance, fix.asset);
+
+        auto after = find_child_by_name(fix.instance, "child_a");
+        if(after && after.all_of<camera_component, light_component>())
+        {
+            constexpr float tolerance = 1e-4f;
+            const auto& camera = after.get<camera_component>();
+            test::check_near(camera.get_fov(), 30.0f, tolerance, "camera: the overridden field of view survives");
+            test::check_near(camera.get_near_clip(), 0.25f, tolerance, "camera: the near clip is the document's");
+            test::check_near(camera.get_far_clip(), 750.0f, tolerance, "camera: the far clip is the document's");
+            check_eq(camera.get_render_include_mask().mask, 2, "camera: the include layers are the document's");
+            const auto& lit = after.get<light_component>().get_light();
+            test::check_near(lit.shadow_params.pcf.x_offset, 2.5f, tolerance, "light: the overridden filter offset survives");
+            test::check_near(lit.shadow_params.pcf.y_offset, 3.0f, tolerance, "light: the other offset is the document's");
+            check_eq(lit.directional_shadow_params.num_splits, 2, "light: the overridden cascade count survives");
+            test::check_near(lit.directional_shadow_params.split_distribution,
+                             0.5f,
+                             tolerance,
+                             "light: the cascade distribution is the document's");
+            test::check_near(lit.shadow_params.bias, 2.0f, tolerance, "light: the depth bias is the document's");
+        }
+        else
+        {
+            check(false, "the camera and the light are still there after the resync");
+        }
+    }
+}
+
+void test_text_kerning_and_outline_width_are_saved()
+{
+    begin_test("a text's kerning switch and outline width survive a save and a load");
+
+    const test_device device;
+    if(!device.is_up)
+    {
+        return;
+    }
+    scene scn("scn");
+    auto source = scn.create_entity("source");
+    auto target = scn.create_entity("target");
+    text_style outlined;
+    outlined.outline_width = 1.25f;
+    auto& source_text = source.emplace<text_component>();
+    source_text.set_style(outlined);
+    source_text.set_apply_kerning(false);
+    auto& target_text = target.emplace<text_component>();
+
+    const auto type = entt::resolve<text_component>();
+    std::stringstream saved;
+    check(type.invoke("component_save"_hs, {}, source, entt::forward_as_meta(saved)).cast<bool>(), "the text saves");
+    std::stringstream stream(saved.str());
+    check(type.invoke("component_load"_hs, {}, target, entt::forward_as_meta(stream)).cast<bool>(), "the text loads");
+    test::check_near(target_text.get_style().outline_width, 1.25f, 1e-4f, "the outline width is the saved one");
+    check(!target_text.get_apply_kerning(), "the kerning switch is the saved one");
+
+    // A document written before the two were saved leaves them as the text has them.
+    std::stringstream earlier(R"({"component":{"text":"kept","style":{"opacity":0.5}}})");
+    check(type.invoke("component_load"_hs, {}, target, entt::forward_as_meta(earlier)).cast<bool>(),
+          "a text document without them loads");
+    test::check_near(target_text.get_style().outline_width, 1.25f, 1e-4f, "the outline width stays");
+    check(!target_text.get_apply_kerning(), "the kerning switch stays");
 }
 
 void test_resync_root_position_and_rotation_are_implicit_overrides()
@@ -7559,6 +8504,14 @@ void run_ecs_serialization_cases()
         RUN_CASE(test_component_load_honours_a_path_filter());
         RUN_CASE(test_filtered_list_load_steps_over_skipped_elements());
         RUN_CASE(test_list_loads_keep_the_elements_they_leave_out());
+        RUN_CASE(test_value_loads_keep_the_members_they_leave_out());
+        RUN_CASE(test_text_loads_keep_the_members_they_leave_out());
+        RUN_CASE(test_probe_shape_values_are_saved_under_their_reflected_names());
+        RUN_CASE(test_reflected_rows_are_saved_under_their_names());
+        RUN_CASE(test_camera_and_light_documents_in_earlier_layouts_load());
+        RUN_CASE(test_camera_settings_are_rows_of_its_camera());
+        RUN_CASE(test_statements_follow_rows_into_a_flattened_member());
+        RUN_CASE(test_text_kerning_and_outline_width_are_saved());
         RUN_CASE(test_portable_copy_loads_into_another_registry());
         RUN_CASE(test_portable_copy_into_the_same_scene());
         RUN_CASE(test_portable_copy_links_between_its_roots());
@@ -7581,6 +8534,9 @@ void run_ecs_serialization_cases()
         RUN_CASE(test_resync_honours_a_property_override());
         RUN_CASE(test_resync_honours_particle_emitter_overrides());
         RUN_CASE(test_resync_honours_particle_emitter_field_overrides());
+        RUN_CASE(test_resync_honours_reflection_probe_shape_overrides());
+        RUN_CASE(test_resync_honours_camera_and_light_row_overrides());
+        RUN_CASE(test_resync_honours_row_overrides_against_a_prefab_in_an_earlier_layout());
         RUN_CASE(test_resync_root_position_and_rotation_are_implicit_overrides());
         RUN_CASE(test_resync_root_scale_follows_the_prefab());
         RUN_CASE(test_resync_root_scale_survives_when_overridden());

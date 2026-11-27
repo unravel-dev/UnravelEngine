@@ -549,27 +549,30 @@ REFLECT(light)
             entt::attribute{"pretty_name", "Resolution"},
             entt::attribute{"tooltip", "Shadowmap resolution."},
         })
-        .data<&light::shadowmap_params::bias>("bias"_hs)
+        .data<&light::shadowmap_params::bias>("depth_bias_texels"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "bias"},
+            entt::attribute{"name", "depth_bias_texels"},
+            entt::attribute{"former_name", "bias"},
             entt::attribute{"pretty_name", "Depth Bias"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 10.0f},
             entt::attribute{"step", 0.01f},
             entt::attribute{"tooltip", "Constant receiver depth bias, in shadow-map texels."},
         })
-        .data<&light::shadowmap_params::slope_bias>("slope_bias"_hs)
+        .data<&light::shadowmap_params::slope_bias>("slope_bias_texels"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "slope_bias"},
+            entt::attribute{"name", "slope_bias_texels"},
+            entt::attribute{"former_name", "slope_bias"},
             entt::attribute{"pretty_name", "Slope Bias"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 10.0f},
             entt::attribute{"step", 0.01f},
             entt::attribute{"tooltip", "Slope-scaled depth bias, in shadow-map texels per unit slope toward the light."},
         })
-        .data<&light::shadowmap_params::normal_bias>("normal_bias"_hs)
+        .data<&light::shadowmap_params::normal_bias>("normal_bias_texels"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "normal_bias"},
+            entt::attribute{"name", "normal_bias_texels"},
+            entt::attribute{"former_name", "normal_bias"},
             entt::attribute{"pretty_name", "Normal Bias"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 10.0f},
@@ -668,9 +671,10 @@ REFLECT(light)
             entt::attribute{"tooltip", "Ray length in world units along the light. Longer rays catch occluders farther from the contact. Near the camera the ray is shortened to a bounded number of pixels."},
             entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
         })
-        .data<&light::contact_shadow_params::thickness>("thickness"_hs)
+        .data<&light::contact_shadow_params::occluder_thickness>("occluder_thickness"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "thickness"},
+            entt::attribute{"name", "occluder_thickness"},
+            entt::attribute{"former_name", "thickness"},
             entt::attribute{"pretty_name", "Occluder Thickness"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
@@ -862,8 +866,8 @@ SAVE_INSTANTIATE(light::point, ser20::oarchive_binary_t);
 
 SAVE(light::directional_shadowmap_params)
 {
-    try_save(ar, ser20::make_nvp("num_splits", obj.num_splits));
-    try_save(ar, ser20::make_nvp("split_distribution", obj.split_distribution));
+    try_save(ar, ser20::make_nvp("splits", obj.num_splits));
+    try_save(ar, ser20::make_nvp("distribution", obj.split_distribution));
     try_save(ar, ser20::make_nvp("stabilize", obj.stabilize));
 }
 SAVE_INSTANTIATE(light::directional_shadowmap_params, ser20::oarchive_associative_t);
@@ -874,6 +878,40 @@ SAVE(light::directional)
 }
 SAVE_INSTANTIATE(light::directional, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(light::directional, ser20::oarchive_binary_t);
+
+SERIALIZE_INLINE(light::shadowmap_params::hard_impl_params)
+{
+}
+
+SERIALIZE_INLINE(light::shadowmap_params::pcf_impl_params)
+{
+    try_serialize(ar, ser20::make_nvp("x_offset", obj.x_offset));
+    try_serialize(ar, ser20::make_nvp("y_offset", obj.y_offset));
+}
+
+SERIALIZE_INLINE(light::shadowmap_params::pcss_impl_params)
+{
+    try_serialize(ar, ser20::make_nvp("penumbra_x_offset", obj.penumbra_x_offset));
+    try_serialize(ar, ser20::make_nvp("penumbra_y_offset", obj.penumbra_y_offset));
+}
+
+SERIALIZE_INLINE(light::shadowmap_params::vsm_impl_params)
+{
+    try_serialize(ar, ser20::make_nvp("min_variance", obj.min_variance));
+    try_serialize(ar, ser20::make_nvp("depth_multiplier", obj.depth_multiplier));
+    try_serialize(ar, ser20::make_nvp("do_blur", obj.do_blur));
+    try_serialize(ar, ser20::make_nvp("blur_x_offset", obj.blur_x_offset));
+    try_serialize(ar, ser20::make_nvp("blur_y_offset", obj.blur_y_offset));
+}
+
+SERIALIZE_INLINE(light::shadowmap_params::esm_impl_params)
+{
+    try_serialize(ar, ser20::make_nvp("hardness", obj.hardness));
+    try_serialize(ar, ser20::make_nvp("depth_multiplier", obj.depth_multiplier));
+    try_serialize(ar, ser20::make_nvp("do_blur", obj.do_blur));
+    try_serialize(ar, ser20::make_nvp("blur_x_offset", obj.blur_x_offset));
+    try_serialize(ar, ser20::make_nvp("blur_y_offset", obj.blur_y_offset));
+}
 
 SAVE(light::shadowmap_params)
 {
@@ -887,39 +925,23 @@ SAVE(light::shadowmap_params)
     try_save(ar, ser20::make_nvp("far_plane", obj.far_plane));
     try_save(ar, ser20::make_nvp("show_coverage", obj.show_coverage));
 
-    // Serialize union members based on type
+    // The settings of the filter in use, as the group the Inspector shows for it.
     switch(obj.type)
     {
         case sm_impl::hard:
-            // Hard shadows don't have parameters
+            try_save(ar, ser20::make_nvp("hard", obj.hard));
             break;
         case sm_impl::pcf:
-            try_save(ar, ser20::make_nvp("pcf_x_offset", obj.pcf.x_offset));
-            try_save(ar, ser20::make_nvp("pcf_y_offset", obj.pcf.y_offset));
+            try_save(ar, ser20::make_nvp("pcf", obj.pcf));
             break;
         case sm_impl::pcss:
-            try_save(ar, ser20::make_nvp("pcss_penumbra_x_offset", obj.pcss.penumbra_x_offset));
-            try_save(ar, ser20::make_nvp("pcss_penumbra_y_offset", obj.pcss.penumbra_y_offset));
+            try_save(ar, ser20::make_nvp("pcss", obj.pcss));
             break;
         case sm_impl::vsm:
-            try_save(ar, ser20::make_nvp("vsm_min_variance", obj.vsm.min_variance));
-            try_save(ar, ser20::make_nvp("vsm_depth_multiplier", obj.vsm.depth_multiplier));
-            try_save(ar, ser20::make_nvp("vsm_do_blur", obj.vsm.do_blur));
-            if(obj.vsm.do_blur)
-            {
-                try_save(ar, ser20::make_nvp("vsm_blur_x_offset", obj.vsm.blur_x_offset));
-                try_save(ar, ser20::make_nvp("vsm_blur_y_offset", obj.vsm.blur_y_offset));
-            }
+            try_save(ar, ser20::make_nvp("vsm", obj.vsm));
             break;
         case sm_impl::esm:
-            try_save(ar, ser20::make_nvp("esm_hardness", obj.esm.hardness));
-            try_save(ar, ser20::make_nvp("esm_depth_multiplier", obj.esm.depth_multiplier));
-            try_save(ar, ser20::make_nvp("esm_do_blur", obj.esm.do_blur));
-            if(obj.esm.do_blur)
-            {
-                try_save(ar, ser20::make_nvp("esm_blur_x_offset", obj.esm.blur_x_offset));
-                try_save(ar, ser20::make_nvp("esm_blur_y_offset", obj.esm.blur_y_offset));
-            }
+            try_save(ar, ser20::make_nvp("esm", obj.esm));
             break;
         default:
             break;
@@ -934,7 +956,7 @@ SAVE(light::contact_shadow_params)
 {
     try_save(ar, ser20::make_nvp("enabled", obj.enabled));
     try_save(ar, ser20::make_nvp("ray_length", obj.ray_length));
-    try_save(ar, ser20::make_nvp("occluder_thickness", obj.thickness));
+    try_save(ar, ser20::make_nvp("occluder_thickness", obj.occluder_thickness));
     try_save(ar, ser20::make_nvp("max_distance", obj.max_distance));
     try_save(ar, ser20::make_nvp("opacity", obj.opacity));
 }
@@ -1009,8 +1031,11 @@ LOAD_INSTANTIATE(light::point, ser20::oarchive_binary_t);
 
 LOAD(light::directional_shadowmap_params)
 {
-    try_load(ar, ser20::make_nvp("num_splits", obj.num_splits));
-    try_load(ar, ser20::make_nvp("split_distribution", obj.split_distribution));
+    // Documents that hold the cascade settings under the keys they had before.
+    try_load_former(ar, "splits", ser20::make_nvp("num_splits", obj.num_splits));
+    try_load_former(ar, "distribution", ser20::make_nvp("split_distribution", obj.split_distribution));
+    try_load(ar, ser20::make_nvp("splits", obj.num_splits));
+    try_load(ar, ser20::make_nvp("distribution", obj.split_distribution));
     try_load(ar, ser20::make_nvp("stabilize", obj.stabilize));
 }
 LOAD_INSTANTIATE(light::directional_shadowmap_params, ser20::oarchive_associative_t);
@@ -1021,6 +1046,49 @@ LOAD(light::directional)
 }
 LOAD_INSTANTIATE(light::directional, ser20::oarchive_associative_t);
 LOAD_INSTANTIATE(light::directional, ser20::oarchive_binary_t);
+
+namespace
+{
+// Documents that hold a filter's settings beside the filter type, each key starting with the filter's name. They
+// are read under the paths the filter's group gives them, so a statement about a setting covers them too.
+template<typename Archive>
+void load_pcf_beside_type(Archive& ar, light::shadowmap_params::pcf_impl_params& pcf)
+{
+    const serialization::path_segment_guard group("pcf");
+    try_load_former(ar, "x_offset", ser20::make_nvp("pcf_x_offset", pcf.x_offset));
+    try_load_former(ar, "y_offset", ser20::make_nvp("pcf_y_offset", pcf.y_offset));
+}
+
+template<typename Archive>
+void load_pcss_beside_type(Archive& ar, light::shadowmap_params::pcss_impl_params& pcss)
+{
+    const serialization::path_segment_guard group("pcss");
+    try_load_former(ar, "penumbra_x_offset", ser20::make_nvp("pcss_penumbra_x_offset", pcss.penumbra_x_offset));
+    try_load_former(ar, "penumbra_y_offset", ser20::make_nvp("pcss_penumbra_y_offset", pcss.penumbra_y_offset));
+}
+
+template<typename Archive>
+void load_vsm_beside_type(Archive& ar, light::shadowmap_params::vsm_impl_params& vsm)
+{
+    const serialization::path_segment_guard group("vsm");
+    try_load_former(ar, "min_variance", ser20::make_nvp("vsm_min_variance", vsm.min_variance));
+    try_load_former(ar, "depth_multiplier", ser20::make_nvp("vsm_depth_multiplier", vsm.depth_multiplier));
+    try_load_former(ar, "do_blur", ser20::make_nvp("vsm_do_blur", vsm.do_blur));
+    try_load_former(ar, "blur_x_offset", ser20::make_nvp("vsm_blur_x_offset", vsm.blur_x_offset));
+    try_load_former(ar, "blur_y_offset", ser20::make_nvp("vsm_blur_y_offset", vsm.blur_y_offset));
+}
+
+template<typename Archive>
+void load_esm_beside_type(Archive& ar, light::shadowmap_params::esm_impl_params& esm)
+{
+    const serialization::path_segment_guard group("esm");
+    try_load_former(ar, "hardness", ser20::make_nvp("esm_hardness", esm.hardness));
+    try_load_former(ar, "depth_multiplier", ser20::make_nvp("esm_depth_multiplier", esm.depth_multiplier));
+    try_load_former(ar, "do_blur", ser20::make_nvp("esm_do_blur", esm.do_blur));
+    try_load_former(ar, "blur_x_offset", ser20::make_nvp("esm_blur_x_offset", esm.blur_x_offset));
+    try_load_former(ar, "blur_y_offset", ser20::make_nvp("esm_blur_y_offset", esm.blur_y_offset));
+}
+} // namespace
 
 LOAD(light::shadowmap_params)
 {
@@ -1037,42 +1105,37 @@ LOAD(light::shadowmap_params)
     try_load(ar, ser20::make_nvp("far_plane", obj.far_plane));
     try_load(ar, ser20::make_nvp("show_coverage", obj.show_coverage));
 
-    // Initialize union based on type
+    // The settings of the filter in use: its group, or the keys beside the type in a document without groups.
     switch(obj.type)
     {
         case sm_impl::hard:
-            // Hard shadows don't have parameters
+            try_load(ar, ser20::make_nvp("hard", obj.hard));
             break;
         case sm_impl::pcf:
-            try_load(ar, ser20::make_nvp("pcf_x_offset", obj.pcf.x_offset));
-            try_load(ar, ser20::make_nvp("pcf_y_offset", obj.pcf.y_offset));
+            if(!try_load(ar, ser20::make_nvp("pcf", obj.pcf)))
+            {
+                load_pcf_beside_type(ar, obj.pcf);
+            }
             break;
         case sm_impl::pcss:
-            try_load(ar, ser20::make_nvp("pcss_penumbra_x_offset", obj.pcss.penumbra_x_offset));
-            try_load(ar, ser20::make_nvp("pcss_penumbra_y_offset", obj.pcss.penumbra_y_offset));
+            if(!try_load(ar, ser20::make_nvp("pcss", obj.pcss)))
+            {
+                load_pcss_beside_type(ar, obj.pcss);
+            }
             break;
         case sm_impl::vsm:
-            try_load(ar, ser20::make_nvp("vsm_min_variance", obj.vsm.min_variance));
-            try_load(ar, ser20::make_nvp("vsm_depth_multiplier", obj.vsm.depth_multiplier));
-            try_load(ar, ser20::make_nvp("vsm_do_blur", obj.vsm.do_blur));
-            if(obj.vsm.do_blur)
+            if(!try_load(ar, ser20::make_nvp("vsm", obj.vsm)))
             {
-                try_load(ar, ser20::make_nvp("vsm_blur_x_offset", obj.vsm.blur_x_offset));
-                try_load(ar, ser20::make_nvp("vsm_blur_y_offset", obj.vsm.blur_y_offset));
+                load_vsm_beside_type(ar, obj.vsm);
             }
             break;
         case sm_impl::esm:
-            try_load(ar, ser20::make_nvp("esm_hardness", obj.esm.hardness));
-            try_load(ar, ser20::make_nvp("esm_depth_multiplier", obj.esm.depth_multiplier));
-            try_load(ar, ser20::make_nvp("esm_do_blur", obj.esm.do_blur));
-            if(obj.esm.do_blur)
+            if(!try_load(ar, ser20::make_nvp("esm", obj.esm)))
             {
-                try_load(ar, ser20::make_nvp("esm_blur_x_offset", obj.esm.blur_x_offset));
-                try_load(ar, ser20::make_nvp("esm_blur_y_offset", obj.esm.blur_y_offset));
+                load_esm_beside_type(ar, obj.esm);
             }
             break;
         default:
-            // Default to PCF if type is unknown
             break;
     }
 }
@@ -1083,7 +1146,7 @@ LOAD(light::contact_shadow_params)
 {
     try_load(ar, ser20::make_nvp("enabled", obj.enabled));
     try_load(ar, ser20::make_nvp("ray_length", obj.ray_length));
-    try_load(ar, ser20::make_nvp("occluder_thickness", obj.thickness));
+    try_load(ar, ser20::make_nvp("occluder_thickness", obj.occluder_thickness));
     try_load(ar, ser20::make_nvp("max_distance", obj.max_distance));
     try_load(ar, ser20::make_nvp("opacity", obj.opacity));
 }

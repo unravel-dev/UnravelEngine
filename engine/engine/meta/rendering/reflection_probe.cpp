@@ -191,6 +191,42 @@ REFLECT(reflection_probe)
         });
 }
 
+SERIALIZE_INLINE(reflection_probe::box)
+{
+    try_serialize(ar, ser20::make_nvp("extents", obj.extents));
+    try_serialize(ar, ser20::make_nvp("transition_distance", obj.transition_distance));
+}
+
+SERIALIZE_INLINE(reflection_probe::sphere)
+{
+    try_serialize(ar, ser20::make_nvp("range", obj.range));
+}
+
+namespace
+{
+/// The node of a probe's shape values in its document, named as the shape is reflected.
+constexpr ser20::literal_name PROBE_BOX_NODE{"box_data"};
+constexpr ser20::literal_name PROBE_SPHERE_NODE{"sphere_data"};
+
+/// Loads a box's values from a document that holds them beside the probe's type, without a node of their own.
+/// They are read under the path the node gives them, so a path filter in force treats them as it treats the node.
+template<typename Archive>
+void load_box_beside_type(Archive& ar, reflection_probe::box& box)
+{
+    const serialization::path_segment_guard node(PROBE_BOX_NODE.text);
+    try_load(ar, ser20::make_nvp("extents", box.extents));
+    try_load(ar, ser20::make_nvp("transition_distance", box.transition_distance));
+}
+
+/// Loads a sphere's values from a document that holds them beside the probe's type (see load_box_beside_type).
+template<typename Archive>
+void load_sphere_beside_type(Archive& ar, reflection_probe::sphere& sphere)
+{
+    const serialization::path_segment_guard node(PROBE_SPHERE_NODE.text);
+    try_load(ar, ser20::make_nvp("range", sphere.range));
+}
+} // namespace
+
 SAVE(reflection_probe)
 {
     try_save(ar, ser20::make_nvp("type", obj.type));
@@ -198,12 +234,11 @@ SAVE(reflection_probe)
     try_save(ar, ser20::make_nvp("intensity", obj.intensity));
     if(obj.type == probe_type::box)
     {
-        try_save(ar, ser20::make_nvp("extents", obj.box_data.extents));
-        try_save(ar, ser20::make_nvp("transition_distance", obj.box_data.transition_distance));
+        try_save(ar, ser20::make_nvp(PROBE_BOX_NODE, obj.box_data));
     }
     else
     {
-        try_save(ar, ser20::make_nvp("range", obj.sphere_data.range));
+        try_save(ar, ser20::make_nvp(PROBE_SPHERE_NODE, obj.sphere_data));
     }
 }
 SAVE_INSTANTIATE(reflection_probe, ser20::oarchive_associative_t);
@@ -216,12 +251,14 @@ LOAD(reflection_probe)
     try_load(ar, ser20::make_nvp("intensity", obj.intensity));
     if(obj.type == probe_type::box)
     {
-        try_load(ar, ser20::make_nvp("extents", obj.box_data.extents));
-        try_load(ar, ser20::make_nvp("transition_distance", obj.box_data.transition_distance));
+        if(!try_load(ar, ser20::make_nvp(PROBE_BOX_NODE, obj.box_data)))
+        {
+            load_box_beside_type(ar, obj.box_data);
+        }
     }
-    else
+    else if(!try_load(ar, ser20::make_nvp(PROBE_SPHERE_NODE, obj.sphere_data)))
     {
-        try_load(ar, ser20::make_nvp("range", obj.sphere_data.range));
+        load_sphere_beside_type(ar, obj.sphere_data);
     }
 }
 LOAD_INSTANTIATE(reflection_probe, ser20::iarchive_associative_t);

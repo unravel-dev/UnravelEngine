@@ -87,6 +87,12 @@ public:
     auto get_camera() const -> const camera&;
 
     /**
+     * @brief Sets the camera object: its projection settings and its view state.
+     * @param[in] cam The camera to copy.
+     */
+    void set_camera(const camera& cam);
+
+    /**
      * @brief Updates the camera with the given transform.
      * @param[in] t The transform to update the camera with.
      */

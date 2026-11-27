@@ -48,7 +48,44 @@ SAVE_INLINE(prefab_property_override_data)
 
 namespace
 {
-/// "component/property..." with a property recorded under its former name renamed to its current one.
+/// The property @p type reflects as @p name.
+auto find_statement_property(const entt::meta_type& type, const std::string& name) -> entt::meta_data
+{
+    for(auto [id, prop] : type.data())
+    {
+        if(entt::get_name(prop) == name)
+        {
+            return prop;
+        }
+    }
+    return {};
+}
+
+/// "member/row" when @p name is, or was before a rename, a row of an object @p type holds as a flattable property,
+/// whose rows are listed as the type's own; empty when no such member has it.
+auto find_flattened_member_row(const entt::meta_type& type, const std::string& name) -> std::string
+{
+    for(auto [id, member] : type.data())
+    {
+        if(!entt::is_property_flattable(entt::meta_any{}, member))
+        {
+            continue;
+        }
+        auto row = find_statement_property(member.type(), name);
+        if(!row)
+        {
+            row = entt::find_renamed_property(member.type(), name);
+        }
+        if(row)
+        {
+            return entt::get_name(member) + "/" + entt::get_name(row);
+        }
+    }
+    return {};
+}
+
+/// "component/property..." as the component names the property now: one recorded under its former name is renamed,
+/// and one that has become a row of a flattened member is read inside that member.
 auto get_current_component_path(const std::string& component_path) -> std::string
 {
     const auto component_end = component_path.find('/');
@@ -58,15 +95,23 @@ auto get_current_component_path(const std::string& component_path) -> std::strin
     }
     const auto property_end = component_path.find_first_of("/[", component_end + 1);
     const auto component = hpp::string_view(component_path).substr(0, component_end);
-    const auto property = hpp::string_view(component_path).substr(component_end + 1, property_end - component_end - 1);
+    const std::string property(hpp::string_view(component_path).substr(component_end + 1, property_end - component_end - 1));
     const auto type = entt::resolve(entt::hashed_string::value(component.data(), component.size()));
-    const auto renamed = type ? entt::find_renamed_property(type, std::string(property)) : entt::meta_data{};
-    if(!renamed)
+    if(!type)
     {
         return component_path;
     }
     const auto rest = property_end == std::string::npos ? std::string() : component_path.substr(property_end);
-    return std::string(component) + "/" + entt::get_name(renamed) + rest;
+    if(const auto renamed = entt::find_renamed_property(type, property))
+    {
+        return std::string(component) + "/" + entt::get_name(renamed) + rest;
+    }
+    if(find_statement_property(type, property))
+    {
+        return component_path;
+    }
+    const auto member_row = find_flattened_member_row(type, property);
+    return member_row.empty() ? component_path : std::string(component) + "/" + member_row + rest;
 }
 } // namespace
 

@@ -7,6 +7,7 @@
 #include <hpp/source_location.hpp>
 #include <ser20/types/vector.hpp>
 
+#include <array>
 #include <istream>
 #include <ostream>
 #include <type_traits>
@@ -112,6 +113,27 @@ inline void SER20_LOAD_FUNCTION_NAME(iarchive_binary_t& ar, std::vector<T, A>& v
 
     serialization::size_for_elements(vector, count, ar.remainingBytes());
     serialization::load_vector_elements(ar, vector, count);
+}
+
+/**
+ * @brief Saves a fixed array to a binary document element by element, each under the name the archive gives it
+ *        (serialization::serialize_array_elements), so every element has a path of its own. The document is the
+ *        one ser20's own save writes. Chosen over ser20's save for this archive as the more specialized one; arrays
+ *        of numbers keep ser20's.
+ */
+template<class T, std::size_t N>
+inline void SER20_SAVE_FUNCTION_NAME(oarchive_binary_t& ar, const std::array<T, N>& array)
+    requires(!std::is_arithmetic_v<T>)
+{
+    serialization::serialize_array_elements(ar, array);
+}
+
+/// Loads a fixed array from a binary document as the save above writes it: each element by its name.
+template<class T, std::size_t N>
+inline void SER20_LOAD_FUNCTION_NAME(iarchive_binary_t& ar, std::array<T, N>& array)
+    requires(!std::is_arithmetic_v<T>)
+{
+    serialization::serialize_array_elements(ar, array);
 }
 
 // A packed list is one value of its own type, not a node of the element type: no node around it.

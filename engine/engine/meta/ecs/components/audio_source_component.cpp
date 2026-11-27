@@ -193,7 +193,8 @@ LOAD(audio_source_component)
         obj.set_volume_rolloff(volume_rolloff);
     }
 
-    frange_t range;
+    // Read over the live range: a load that lists one of its ends keeps the other.
+    frange_t range = obj.get_range();
     if(try_load(ar, ser20::make_nvp("range", range)))
     {
         obj.set_range(range);

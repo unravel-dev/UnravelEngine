@@ -82,7 +82,8 @@ inline void SAVE_FUNCTION_NAME(Archive& ar, const math::curve_channel& obj)
 template<typename Archive>
 inline void LOAD_FUNCTION_NAME(Archive& ar, math::curve_channel& obj)
 {
-    math::curve_channel::keys_t keys;
+    // Read over the live keys: a load that lists some of them, or some of their members, keeps the others.
+    math::curve_channel::keys_t keys = obj.get_keys();
     if(try_load(ar, ser20::make_nvp("keys", keys)))
     {
         obj.set_keys(std::move(keys));
@@ -103,7 +104,7 @@ inline void LOAD_FUNCTION_NAME(Archive& ar, math::curve<T>& obj)
 {
     bool linked = true;
     try_load(ar, ser20::make_nvp("linked", linked));
-    typename math::curve<T>::channels_t channels;
+    typename math::curve<T>::channels_t channels = obj.get_channels();
     if(try_load(ar, ser20::make_nvp("channels", channels)))
     {
         obj.set_channels(channels);

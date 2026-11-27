@@ -2,6 +2,8 @@
 #include "cereal_optional_nvp.h"
 #include "serialization.h"
 
+#include <array>
+
 
 #define SER20_ASSOCIATIVE_ARCHIVE_XML 0
 #define SER20_ASSOCIATIVE_ARCHIVE_SIMDJSON 1
@@ -217,5 +219,26 @@ inline void SER20_LOAD_FUNCTION_NAME(iarchive_associative_t& ar, std::vector<T, 
     ar(make_size_tag(size));
     vector.resize(static_cast<std::size_t>(size));
     serialization::load_vector_elements(ar, vector, vector.size());
+}
+
+/**
+ * @brief Saves a fixed array to an associative document element by element, each under the name the archive gives
+ *        it (serialization::serialize_array_elements), so every element has a path of its own. The document is the
+ *        one ser20's own save writes. Chosen over ser20's save for this archive as the more specialized one; arrays
+ *        of numbers keep ser20's.
+ */
+template<class T, std::size_t N>
+inline void SER20_SAVE_FUNCTION_NAME(oarchive_associative_t& ar, const std::array<T, N>& array)
+    requires(!std::is_arithmetic_v<T>)
+{
+    serialization::serialize_array_elements(ar, array);
+}
+
+/// Loads a fixed array from an associative document as the save above writes it: each element by its name.
+template<class T, std::size_t N>
+inline void SER20_LOAD_FUNCTION_NAME(iarchive_associative_t& ar, std::array<T, N>& array)
+    requires(!std::is_arithmetic_v<T>)
+{
+    serialization::serialize_array_elements(ar, array);
 }
 } // namespace ser20

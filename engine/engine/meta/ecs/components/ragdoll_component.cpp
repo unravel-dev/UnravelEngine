@@ -473,7 +473,8 @@ LOAD(ragdoll_component)
     {
         obj.set_exclude_layers(exclude_layers);
     }
-    ragdoll_drive drive;
+    // Read over the live drive: a load that lists some of its members keeps the others.
+    ragdoll_drive drive = obj.get_drive();
     if(try_load(ar, ser20::make_nvp("drive", drive)))
     {
         obj.set_drive(drive);

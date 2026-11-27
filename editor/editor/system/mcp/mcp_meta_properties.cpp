@@ -1433,6 +1433,31 @@ auto is_unchanged(rtti::context& ctx,
     return incoming_json && *incoming_json == *current_json;
 }
 
+/// How a call should spell @p key when it is a property of a nested object whose rows the Inspector lists as
+/// @p object's own, by its name or the one it had before ("camera.field_of_view"); empty when there is none.
+auto find_in_flattened_objects(const entt::meta_any& object, const std::string& key) -> std::string
+{
+    std::string spelled;
+    for_each_meta_property(object.type(),
+                           [&](const entt::meta_data& owner)
+                           {
+                               if(!spelled.empty() || !entt::is_property_flattable(object, owner))
+                               {
+                                   return;
+                               }
+                               auto prop = find_meta_property(owner.type(), key);
+                               if(!prop)
+                               {
+                                   prop = entt::find_renamed_property(owner.type(), key);
+                               }
+                               if(prop)
+                               {
+                                   spelled = entt::get_name(owner) + "." + entt::get_name(prop);
+                               }
+                           });
+    return spelled;
+}
+
 /**
  * @brief Writes each of @p properties through its reflected setter.
  *
@@ -1462,6 +1487,12 @@ void write_properties(rtti::context& ctx,
             if(const auto renamed = entt::find_renamed_property(type, key))
             {
                 fail("renamed " + entt::get_name(renamed));
+                continue;
+            }
+            const auto spelled = prop ? std::string{} : find_in_flattened_objects(object, key);
+            if(!spelled.empty())
+            {
+                fail("set " + path + spelled + " instead");
                 continue;
             }
             result.unknown.push_back(key_path);

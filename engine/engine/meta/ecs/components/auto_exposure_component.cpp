@@ -229,7 +229,11 @@ LOAD_INLINE(auto_exposure_pass::settings)
     // Settings saved by an earlier exposure model (no version, or an older one) were tuned for
     // different metering and defaults; they are ignored so the scene picks up the current ones.
     std::uint32_t version = 0;
-    try_load(ar, ser20::make_nvp("settings_version", version));
+    {
+        // The version decides whether the rest is read, so a load that lists some of the settings still reads it.
+        const serialization::path_context_pause unfiltered;
+        try_load(ar, ser20::make_nvp("settings_version", version));
+    }
     if(version != auto_exposure_pass::settings_version)
     {
         return;

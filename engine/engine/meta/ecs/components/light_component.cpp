@@ -617,7 +617,8 @@ LOAD(skylight_component)
         obj.set_irradiance_intensity(irradiance_intensity);
     }
 
-    math::color irradiance_tint;
+    // Read over the live tint: a load that lists one of its channels keeps the others.
+    math::color irradiance_tint = obj.get_irradiance_tint();
     if(try_load(ar, ser20::make_nvp("irradiance_tint", irradiance_tint)))
     {
         obj.set_irradiance_tint(irradiance_tint);

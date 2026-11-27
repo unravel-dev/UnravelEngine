@@ -43,10 +43,11 @@ writes go through the component's own setters.
 Light has enabled and a nested light object: color, intensity,
 indirect_intensity, type (directional | point | spot), casts_shadows,
 source_radius / source_length, point_data {range}, spot_data {range,
-inner_angle, outer_angle}, shadow_params {type, resolution, bias, normal_bias,
-slope_bias, near_plane, far_plane, pcf / pcss / vsm / esm settings},
-directional_shadow_params {splits, distribution, stabilize} and contact_shadow
-{enabled, ray_length, thickness, max_distance, opacity}. Example:
+inner_angle, outer_angle}, shadow_params {type, resolution, depth_bias_texels,
+normal_bias_texels, slope_bias_texels, near_plane, far_plane, pcf / pcss / vsm /
+esm settings}, directional_shadow_params {splits, distribution, stabilize} and
+contact_shadow {enabled, ray_length, occluder_thickness, max_distance, opacity}.
+The three biases are in shadow-map texels. Example:
 {"light":{"type":"spot","intensity":15,"spot_data":{"range":10,"outer_angle":45,"inner_angle":22}}}.
 
 enabled false switches a light off without deactivating its entity: no direct
@@ -490,8 +491,9 @@ a viewer standing on -Z reads it; rotate the entity 180 in yaw for viewers on
 - Post effects (Bloom, GTAO, SSR, Temporal AA, Auto Exposure, Global
   Illumination, ...) have enabled and a nested settings object, as the
   Inspector groups them: {"settings":{"intensity":0.8}}.
-- Camera: field_of_view, near_clip_distance, far_clip_distance,
-  projection_mode, orthographic_size, include_layers / exclude_layers.
+- Camera: camera {projection_mode, field_of_view, orthographic_size, near_clip,
+  far_clip}, include_layers / exclude_layers. The projection settings are
+  inside camera: {"camera":{"field_of_view":50}}.
 - Audio Source: clip, volume, pitch, loop, range [min,max], bus, priority,
   spatial; is_playing (read-only) tells whether it holds a voice in play mode.
 

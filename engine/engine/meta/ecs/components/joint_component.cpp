@@ -513,12 +513,14 @@ LOAD(joint_component)
     entt::handle body_b;
     load_entity_reference(ar, "body_b", body_b);
     obj.set_body_b(body_b);
-    math::vec3 anchor{0.0f};
+    // Vectors and structs are read over the live values: a load that lists some of their members (one axis of the
+    // anchor) keeps the others.
+    math::vec3 anchor = obj.get_anchor();
     if(try_load(ar, ser20::make_nvp("anchor", anchor)))
     {
         obj.set_anchor(anchor);
     }
-    math::vec3 axis_rotation{0.0f};
+    math::vec3 axis_rotation = obj.get_axis_rotation();
     if(try_load(ar, ser20::make_nvp("axis_rotation", axis_rotation)))
     {
         obj.set_axis_rotation(axis_rotation);
@@ -528,22 +530,22 @@ LOAD(joint_component)
     {
         obj.set_collide_connected(collide_connected);
     }
-    joint_limits limits;
+    joint_limits limits = obj.get_limits();
     if(try_load(ar, ser20::make_nvp("limits", limits)))
     {
         obj.set_limits(limits);
     }
-    joint_spring spring;
+    joint_spring spring = obj.get_spring();
     if(try_load(ar, ser20::make_nvp("spring", spring)))
     {
         obj.set_spring(spring);
     }
-    joint_motor motor;
+    joint_motor motor = obj.get_motor();
     if(try_load(ar, ser20::make_nvp("motor", motor)))
     {
         obj.set_motor(motor);
     }
-    joint_steering steering;
+    joint_steering steering = obj.get_steering();
     if(try_load(ar, ser20::make_nvp("steering", steering)))
     {
         obj.set_steering(steering);
@@ -558,7 +560,7 @@ LOAD(joint_component)
     {
         obj.set_distance(distance);
     }
-    math::vec3 connected_anchor{0.0f};
+    math::vec3 connected_anchor = obj.get_connected_anchor();
     if(try_load(ar, ser20::make_nvp("connected_anchor", connected_anchor)))
     {
         obj.set_connected_anchor(connected_anchor);

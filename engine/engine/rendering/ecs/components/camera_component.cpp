@@ -121,6 +121,11 @@ auto camera_component::get_camera() const -> const camera&
     return pipeline_camera_.get_camera();
 }
 
+void camera_component::set_camera(const camera& cam)
+{
+    pipeline_camera_.get_camera() = cam;
+}
+
 auto camera_component::get_render_include_mask() const -> layer_mask
 {
     return render_include_mask_;

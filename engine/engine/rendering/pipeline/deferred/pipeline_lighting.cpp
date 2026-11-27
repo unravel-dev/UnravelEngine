@@ -769,7 +769,7 @@ void deferred::submit_light(const light& light,
     // The dither advances only while TAA integrates it (aa_data.x is the temporal frame
     // index, 0 without TAA); wrapped so the noise offsets stay in float range.
     const float contact_frame = std::fmod(camera.get_aa_data().x, float(ANONYMOUS::contact_shadow_dither_frames));
-    const float contact_shadow_uniform[4] = {light.contact_shadow.thickness,
+    const float contact_shadow_uniform[4] = {light.contact_shadow.occluder_thickness,
                                              light.contact_shadow.max_distance,
                                              light.contact_shadow.opacity,
                                              contact_frame};

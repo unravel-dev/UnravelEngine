@@ -652,13 +652,14 @@ LOAD(physics_component)
         obj.set_collision_exclude_mask(exclude_layers);
     }
 
-    math::bvec3 freeze_position{};
+    // Vectors are read over the live values: a load that lists one of their axes keeps the others.
+    math::bvec3 freeze_position = obj.get_freeze_position();
     if(try_load(ar, ser20::make_nvp("freeze_position", freeze_position)))
     {
         obj.set_freeze_position(freeze_position);
     }
 
-    math::bvec3 freeze_rotation{};
+    math::bvec3 freeze_rotation = obj.get_freeze_rotation();
     if(try_load(ar, ser20::make_nvp("freeze_rotation", freeze_rotation)))
     {
         obj.set_freeze_rotation(freeze_rotation);
@@ -702,7 +703,7 @@ LOAD(physics_component)
     {
         obj.set_can_sleep(can_sleep);
     }
-    math::vec3 surface_velocity{0.0f};
+    math::vec3 surface_velocity = obj.get_surface_velocity();
     if(try_load(ar, ser20::make_nvp("surface_velocity", surface_velocity)))
     {
         obj.set_surface_velocity(surface_velocity);

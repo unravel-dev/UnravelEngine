@@ -276,7 +276,7 @@ REFLECT(text_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "area"},
             entt::attribute{"pretty_name", "Area"},
-            entt::attribute{"tooltip", "Bounds (width × height)."},
+            entt::attribute{"tooltip", "Bounds (width x height)."},
         })
         .data<&text_component::set_style, &text_component::get_style>("style"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -296,6 +296,7 @@ SERIALIZE_INLINE(text_style)
     try_serialize(ar, ser20::make_nvp("underline_color", obj.underline_color));
     try_serialize(ar, ser20::make_nvp("strike_color", obj.strike_color));
     try_serialize(ar, ser20::make_nvp("outline_color", obj.outline_color));
+    try_serialize(ar, ser20::make_nvp("outline_width", obj.outline_width));
     try_serialize(ar, ser20::make_nvp("shadow_color", obj.shadow_color));
     try_serialize(ar, ser20::make_nvp("shadow_softener", obj.shadow_softener));
     try_serialize(ar, ser20::make_nvp("shadow_offsets", obj.shadow_offsets));
@@ -314,6 +315,7 @@ SAVE(text_component)
     try_save(ar, ser20::make_nvp("overflow", obj.get_overflow_type()));
     try_save(ar, ser20::make_nvp("area", obj.get_area()));
     try_save(ar, ser20::make_nvp("buffer_type", obj.get_buffer_type()));
+    try_save(ar, ser20::make_nvp("apply_kerning", obj.get_apply_kerning()));
     try_save(ar, ser20::make_nvp("style", obj.get_style()));
 }
 SAVE_INSTANTIATE(text_component, ser20::oarchive_associative_t);
@@ -351,7 +353,9 @@ LOAD(text_component)
         obj.set_auto_size(auto_sz);
     }
 
-    urange32_t auto_range;
+    // Ranges, sizes and the style are read over the live values: a load that lists some of their members keeps the
+    // others.
+    urange32_t auto_range = obj.get_auto_size_range();
     if(try_load(ar, ser20::make_nvp("auto_size_range", auto_range)))
     {
         obj.set_auto_size_range(auto_range);
@@ -369,7 +373,7 @@ LOAD(text_component)
         obj.set_overflow_type(ov);
     }
 
-    fsize_t area{};
+    fsize_t area = obj.get_area();
     if(try_load(ar, ser20::make_nvp("area", area)))
     {
         obj.set_area(area);
@@ -381,7 +385,13 @@ LOAD(text_component)
         obj.set_buffer_type(bt);
     }
 
-    text_style style;
+    bool apply_kerning = obj.get_apply_kerning();
+    if(try_load(ar, ser20::make_nvp("apply_kerning", apply_kerning)))
+    {
+        obj.set_apply_kerning(apply_kerning);
+    }
+
+    text_style style = obj.get_style();
     if(try_load(ar, ser20::make_nvp("style", style)))
     {
         obj.set_style(style);
