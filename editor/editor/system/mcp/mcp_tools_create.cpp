@@ -76,7 +76,7 @@ auto enum_pretty_name(const entt::meta_any& value) -> std::string
     return {};
 }
 
-const std::array<create_kind, 12> k_create_kinds{{
+const std::array<create_kind, 14> k_create_kinds{{
     {"empty",
      create_input::none,
      [](rtti::context&, scene& scn, const create_item&)
@@ -139,6 +139,18 @@ const std::array<create_kind, 12> k_create_kinds{{
      [](rtti::context& ctx, scene& scn, const create_item&)
      {
          return defaults::create_particle_emitter_entity(ctx, scn, "Particle Emitter");
+     }},
+    {"line",
+     create_input::none,
+     [](rtti::context& ctx, scene& scn, const create_item&)
+     {
+         return defaults::create_line_entity(ctx, scn, "Line");
+     }},
+    {"trail",
+     create_input::none,
+     [](rtti::context& ctx, scene& scn, const create_item&)
+     {
+         return defaults::create_trail_entity(ctx, scn, "Trail");
      }},
     {"text",
      create_input::none,
@@ -214,7 +226,10 @@ auto check_kind_fields(const simdjson::dom::object& obj, const create_kind& kind
     if(!obj["material"].get(material) && kind.input != create_input::primitive &&
        std::string(kind.name) != "mesh")
     {
-        error = std::string("material applies to kinds primitive and mesh, not ") + kind.name;
+        const std::string name = kind.name;
+        const bool is_strip = name == "line" || name == "trail";
+        error = "material applies to kinds primitive and mesh, not " + name +
+                (is_strip ? ", whose material is its component's material property" : "");
         return false;
     }
     return true;

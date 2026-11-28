@@ -69,6 +69,16 @@ inline constexpr const char* STANDARD_MATERIAL_KEY = "engine:/data/materials/sta
 /// What a model draws with where its material is missing: a purple, glowing Standard material.
 inline constexpr const char* FALLBACK_MATERIAL_KEY = "engine:/data/materials/fallback.mat";
 
+/// What the key of every Standard particle material starts with: the file names add what the material draws
+/// ("_additive", "_lit": get_particle_material_key in rendering/material_graph/particle_material.h).
+inline constexpr const char* PARTICLE_MATERIAL_KEY_PREFIX = "engine:/data/materials/particles/particle";
+
+/// The material a new particle emitter's sprites, trails and ribbons draw with: the Translucent, unlit Standard
+/// particle material.
+inline constexpr const char* DEFAULT_PARTICLE_MATERIAL_KEY = "engine:/data/materials/particles/particle.mat";
+/// The material a Line or a Trail draws without one of its own (make_strip_material_graph).
+inline constexpr const char* STRIP_MATERIAL_KEY = "engine:/data/materials/strip.mat";
+
 /// How the default materials' keys were spelled while they were made at startup. Keys in that spelling still load
 /// them.
 inline constexpr const char* EMBEDDED_STANDARD_MATERIAL_KEY = "engine:/embedded/standard";

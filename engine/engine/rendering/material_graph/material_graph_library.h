@@ -110,6 +110,9 @@ enum class material_node_code : uint8_t
     custom,
     /// A texture of the material read along the three world axes, blended by the normal.
     triplanar_sample,
+    /// A texture sheet of the material read at a frame and, while a blend toward the next frame is in progress, at that
+    /// one too (mg_flipbook).
+    flipbook_sample,
     /// A material function's input: what the caller links into its pin, else its default (material_graph.h).
     function_input,
     /// A material function's output: its input passed on to the caller's pin.
@@ -143,6 +146,7 @@ inline constexpr const char* MATERIAL_TEXTURE_ADDRESS_SETTING = "address";
 inline constexpr const char* MATERIAL_TEXTURE_ADDRESS_TEXTURE = "texture";
 inline constexpr const char* MATERIAL_TEXTURE_FILTER_SETTING = "filter";
 inline constexpr const char* MATERIAL_TEXTURE_FILTER_ANISOTROPIC = "anisotropic";
+inline constexpr const char* MATERIAL_TEXTURE_FILTER_TRILINEAR = "trilinear";
 /// A sample's mip: "auto", "bias" or "level", by its Mip input.
 inline constexpr const char* MATERIAL_TEXTURE_MIP_MODE_SETTING = "mip_mode";
 

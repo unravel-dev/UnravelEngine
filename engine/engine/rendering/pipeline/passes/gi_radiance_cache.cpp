@@ -13,6 +13,7 @@
 #include <logging/logging.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <initializer_list>
 
@@ -224,15 +225,154 @@ void gi_radiance_cache::release_resources()
     final_atlas_.reset();
 }
 
+namespace
+{
+/// A lattice cube of a clipmap, by the probe at its low corner: probes sit on the multiples of the cell size, and a
+/// lookup inside the cube interpolates the eight at its corners.
+using rc_lattice_cube = std::array<int64_t, 3>;
+
+/// The cell size of @p clipmap as place_clipmaps snaps the grid by it.
+auto get_rc_snap_cell_size(uint32_t clipmap) -> double
+{
+    return 2.0 * double(GI_RADIANCE_CACHE_EXTENT) / double(grid) * double(1u << clipmap);
+}
+
+/// The lattice cube of @p clipmap that holds @p position. A position past any world stays a countable cube.
+auto get_rc_lattice_cube(const math::vec3& position, uint32_t clipmap) -> rc_lattice_cube
+{
+    constexpr double farthest_cube = 1.0e15;
+    const double cell = get_rc_snap_cell_size(clipmap);
+    const auto get_cube = [&](float along)
+    {
+        return int64_t(std::clamp(std::floor(double(along) / cell), -farthest_cube, farthest_cube));
+    };
+    return {get_cube(position.x), get_cube(position.y), get_cube(position.z)};
+}
+
+/// The first and last lattice cube along an axis that a clipmap covers when the camera is in cube @p camera_cube of
+/// it: the grid holds the probes from half a grid below the camera's cube, and a cube needs the probe after its own
+/// too (GiRcClipmapOf).
+auto get_rc_first_covered_cube(int64_t camera_cube) -> int64_t
+{
+    return camera_cube - int64_t(grid) / 2;
+}
+
+auto get_rc_last_covered_cube(int64_t camera_cube) -> int64_t
+{
+    return camera_cube + int64_t(grid) / 2 - 2;
+}
+
+/// Whether a lookup inside @p cube reads its clipmap's probes, with the camera in @p camera_cube of that clipmap.
+auto is_rc_cube_covered(const rc_lattice_cube& cube, const rc_lattice_cube& camera_cube) -> bool
+{
+    for(size_t axis = 0; axis < cube.size(); ++axis)
+    {
+        if(cube[axis] < get_rc_first_covered_cube(camera_cube[axis]) || cube[axis] > get_rc_last_covered_cube(camera_cube[axis]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// The middle of @p cube of @p clipmap, with the clipmap @p marked_clipmap whose probes a point there marks as w
+/// (make_volume_points).
+auto get_rc_cube_middle(const rc_lattice_cube& cube, uint32_t clipmap, uint32_t marked_clipmap) -> math::vec4
+{
+    const double cell = get_rc_snap_cell_size(clipmap);
+    return math::vec4(float((double(cube[0]) + 0.5) * cell),
+                      float((double(cube[1]) + 0.5) * cell),
+                      float((double(cube[2]) + 0.5) * cell),
+                      float(marked_clipmap));
+}
+
+/**
+ * @brief A point inside @p cube of @p clipmap that a lookup reads in that clipmap: the middle of the cube in the
+ * finest clipmap, and in the others the middle of an eighth of it that the finer clipmap does not cover, the camera in
+ * @p finer_camera_cube of that one (a point the finer one covers would mark the finer one's probes). False when the
+ * finer clipmap covers the whole cube: no lookup inside reads this one.
+ */
+auto find_rc_volume_point(const rc_lattice_cube& cube, uint32_t clipmap, const rc_lattice_cube& finer_camera_cube, math::vec4& point) -> bool
+{
+    if(clipmap == 0)
+    {
+        point = get_rc_cube_middle(cube, 0, 0);
+        return true;
+    }
+    for(int64_t eighth = 0; eighth < 8; ++eighth)
+    {
+        const rc_lattice_cube finer = {2 * cube[0] + (eighth & 1), 2 * cube[1] + ((eighth >> 1) & 1), 2 * cube[2] + (eighth >> 2)};
+        if(!is_rc_cube_covered(finer, finer_camera_cube))
+        {
+            point = get_rc_cube_middle(finer, clipmap - 1, clipmap);
+            return true;
+        }
+    }
+    return false;
+}
+} // namespace
+
+void gi_radiance_cache::volume_marks::clear()
+{
+    marked_.clear();
+}
+
+auto gi_radiance_cache::volume_marks::collect_new_probes(const math::vec4& point) -> bool
+{
+    // The point sits well inside its cube of the clipmap it marks (make_volume_points).
+    const auto clipmap = uint32_t(point.w);
+    const rc_lattice_cube cube = get_rc_lattice_cube(math::vec3(point), clipmap);
+    bool has_new = false;
+    for(int64_t corner = 0; corner < 8; ++corner)
+    {
+        const probe marked = {int64_t(clipmap), cube[0] + (corner & 1), cube[1] + ((corner >> 1) & 1), cube[2] + (corner >> 2)};
+        if(!std::binary_search(marked_.begin(), marked_.end(), marked))
+        {
+            fresh_.push_back(marked);
+            has_new = true;
+        }
+    }
+    return has_new;
+}
+
+auto gi_radiance_cache::volume_marks::add(const std::vector<math::vec4>& candidates,
+                                          size_t max_points,
+                                          size_t max_probes,
+                                          std::vector<math::vec4>& points) -> bool
+{
+    const size_t first_point = points.size();
+    fresh_.clear();
+    for(const auto& candidate : candidates)
+    {
+        if(collect_new_probes(candidate))
+        {
+            points.push_back(candidate);
+        }
+    }
+    // Neighbouring cubes of the box share corners.
+    std::sort(fresh_.begin(), fresh_.end());
+    fresh_.erase(std::unique(fresh_.begin(), fresh_.end()), fresh_.end());
+    if(points.size() - first_point > max_points || marked_.size() + fresh_.size() > max_probes)
+    {
+        points.resize(first_point);
+        return false;
+    }
+    merged_.resize(marked_.size() + fresh_.size());
+    std::merge(marked_.begin(), marked_.end(), fresh_.begin(), fresh_.end(), merged_.begin());
+    marked_.swap(merged_);
+    return true;
+}
+
 auto gi_radiance_cache::get_cell_size(uint32_t clipmap) -> float
 {
-    return 2.0f * float(GI_RADIANCE_CACHE_EXTENT) / float(grid) * float(1u << clipmap);
+    return float(get_rc_snap_cell_size(clipmap));
 }
 
 auto gi_radiance_cache::get_reach(uint32_t clipmap) -> float
 {
-    // A lookup's lattice stays half a cell inside the grid, which sits up to a cell off the camera after snapping.
-    return (0.5f * float(grid) + 0.5f) * get_cell_size(clipmap);
+    // The grid holds the probes from half a grid below the camera's lattice cube, and the camera sits up to a cell
+    // into that cube: a lookup reads the clipmap up to half a grid and a cell away on that side.
+    return (0.5f * float(grid) + 1.0f) * get_cell_size(clipmap);
 }
 
 auto gi_radiance_cache::get_inner_reach(uint32_t clipmap) -> float
@@ -294,14 +434,58 @@ auto gi_radiance_cache::make_surface_points(const math::bbox& bounds,
     return true;
 }
 
+auto gi_radiance_cache::make_volume_points(const math::bbox& bounds, const math::vec3& eye, size_t budget, std::vector<math::vec4>& points)
+    -> bool
+{
+    for(uint32_t clipmap = 0; clipmap < clipmaps; ++clipmap)
+    {
+        // The lattice cubes of this clipmap that the box reaches and the clipmap covers.
+        const rc_lattice_cube camera_cube = get_rc_lattice_cube(eye, clipmap);
+        const rc_lattice_cube finer_camera_cube = clipmap > 0 ? get_rc_lattice_cube(eye, clipmap - 1) : rc_lattice_cube{};
+        rc_lattice_cube first = get_rc_lattice_cube(bounds.min, clipmap);
+        rc_lattice_cube last = get_rc_lattice_cube(bounds.max, clipmap);
+        uint64_t cube_count = 1;
+        for(size_t axis = 0; axis < first.size(); ++axis)
+        {
+            first[axis] = std::max(first[axis], get_rc_first_covered_cube(camera_cube[axis]));
+            last[axis] = std::min(last[axis], get_rc_last_covered_cube(camera_cube[axis]));
+            cube_count *= uint64_t(std::max<int64_t>(last[axis] - first[axis] + 1, 0));
+        }
+        // Every cube of the finest clipmap takes a point: a box of more cubes than the budget is refused unwalked.
+        if(clipmap == 0 && points.size() + cube_count > budget)
+        {
+            return false;
+        }
+        for(int64_t z = first[2]; z <= last[2]; ++z)
+        {
+            for(int64_t y = first[1]; y <= last[1]; ++y)
+            {
+                for(int64_t x = first[0]; x <= last[0]; ++x)
+                {
+                    math::vec4 point;
+                    if(!find_rc_volume_point({x, y, z}, clipmap, finer_camera_cube, point))
+                    {
+                        continue;
+                    }
+                    if(points.size() >= budget)
+                    {
+                        return false;
+                    }
+                    points.push_back(point);
+                }
+            }
+        }
+    }
+    return true;
+}
+
 void gi_radiance_cache::place_clipmaps(const math::vec3& camera)
 {
     prev_clipmaps_ = clipmaps_;
-    const double cell_0 = 2.0 * double(GI_RADIANCE_CACHE_EXTENT) / double(grid);
     const double half_grid = 0.5 * double(grid);
     for(uint32_t clipmap = 0; clipmap < clipmaps; ++clipmap)
     {
-        const double cell = cell_0 * double(1u << clipmap);
+        const double cell = get_rc_snap_cell_size(clipmap);
         for(int axis = 0; axis < 3; ++axis)
         {
             // Probes sit on multiples of the cell: the lattice point nearest below the camera is cell 24.

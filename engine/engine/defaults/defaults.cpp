@@ -28,7 +28,11 @@
 #include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
+#include <engine/rendering/dynamic_geometry/dynamic_geometry_draw.h>
+#include <engine/rendering/ecs/components/line_component.h>
+#include <engine/rendering/ecs/components/trail_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/dynamic_geometry/dynamic_renderer.h>
 #include <engine/rendering/default_textures.h>
 #include <engine/rendering/ecs/components/volume_component.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
@@ -584,6 +588,13 @@ void calc_bounds_global_impl(math::bbox& bounds, entt::handle entity, int depth)
         }
     }
 
+    // Lines and trails give their bounds in the world.
+    if(const math::bbox drawn = get_dynamic_renderer_bounds(entity); drawn.is_populated())
+    {
+        bounds.add_point(drawn.min);
+        bounds.add_point(drawn.max);
+    }
+
     if(auto* tc = entity.try_get<text_component>())
     {
         auto b = tc->get_render_bounds();
@@ -731,6 +742,8 @@ auto defaults::deinit(rtti::context& ctx) -> bool
     font::default_regular() = {};
     material::default_color_map() = {};
     material::default_normal_map() = {};
+    particle_emitter_component::default_material() = {};
+    dynamic_renderer::default_strip_material() = {};
     default_textures::get().clear();
     shadow::shadow_atlas::get().clear();
     return true;
@@ -750,6 +763,8 @@ auto defaults::init_assets(rtti::context& ctx) -> bool
     // scenes that name them by id still find them.
     model::default_material() = manager.get_asset<material>(STANDARD_MATERIAL_KEY);
     model::fallback_material() = manager.get_asset<material>(FALLBACK_MATERIAL_KEY);
+    particle_emitter_component::default_material() = manager.get_asset<material>(DEFAULT_PARTICLE_MATERIAL_KEY);
+    dynamic_renderer::default_strip_material() = manager.get_asset<material>(STRIP_MATERIAL_KEY);
 
     default_textures::get().generate();
 
@@ -978,19 +993,55 @@ auto get_decal_material_aspect(const asset_handle<material>& decal_material) -> 
     }
     return 1.0f;
 }
+
+/// A Decal entity named @p name with @p decal_material, the engine's Default Decal when empty, at the component's own
+/// size. It waits for no asset.
+auto make_decal_entity(rtti::context& ctx, scene& scn, const std::string& name, const asset_handle<material>& decal_material)
+    -> entt::handle
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    auto object = scn.create_entity(name);
+    object.emplace<decal_component>().set_material(decal_material ? decal_material
+                                                                  : am.get_asset<material>(DEFAULT_DECAL_MATERIAL_KEY));
+    return object;
+}
 } // namespace
 
 auto defaults::create_decal_entity(rtti::context& ctx, scene& scn, const std::string& name, const asset_handle<material>& decal_material)
     -> entt::handle
 {
-    auto& am = ctx.get_cached<asset_manager>();
-    const auto chosen = decal_material ? decal_material : am.get_asset<material>(DEFAULT_DECAL_MATERIAL_KEY);
-    auto object = scn.create_entity(name);
-    auto& decal = object.emplace<decal_component>();
-    decal.set_material(chosen);
-    const float aspect = std::clamp(get_decal_material_aspect(chosen), 0.05f, 20.0f);
+    auto object = make_decal_entity(ctx, scn, name, decal_material);
+    auto& decal = object.get<decal_component>();
+    const float aspect = std::clamp(get_decal_material_aspect(decal.get_material()), 0.05f, 20.0f);
     decal.resize(aspect >= 1.0f ? math::vec2(aspect, 1.0f) : math::vec2(1.0f, 1.0f / aspect));
     return object;
+}
+
+auto defaults::spawn_transient_decal(rtti::context& ctx,
+                                     scene& scn,
+                                     const asset_handle<material>& decal_material,
+                                     const math::vec3& point,
+                                     const math::vec3& normal,
+                                     const math::vec2& size,
+                                     float roll_degrees,
+                                     float lifetime,
+                                     float fade_out,
+                                     entt::handle parent) -> entt::handle
+{
+    // Its size is given: the material's texture, whose aspect sizes a decal placed by hand, is not waited for.
+    auto decal = make_decal_entity(ctx, scn, "Decal", decal_material);
+    auto& comp = decal.get<decal_component>();
+    comp.resize(size);
+    comp.lifetime = std::max(lifetime, 0.0f);
+    comp.fade_out = std::max(fade_out, 0.0f);
+    comp.remove_after_fade = lifetime > 0.0f;
+    comp.is_transient = true;
+    place_decal_on_surface(decal, point, normal, roll_degrees);
+    if(parent)
+    {
+        decal.get<transform_component>().set_parent(parent, true);
+    }
+    return decal;
 }
 
 void defaults::place_decal_on_surface(entt::handle decal, const math::vec3& point, const math::vec3& normal, float roll_degrees)
@@ -1099,6 +1150,20 @@ auto defaults::create_text_entity(rtti::context& ctx, scene& scn, const std::str
     auto& text = object.emplace<text_component>();
     text.set_text("Hello World!");
 
+    return object;
+}
+
+auto defaults::create_line_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle
+{
+    auto object = scn.create_entity(name);
+    object.emplace<line_component>();
+    return object;
+}
+
+auto defaults::create_trail_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle
+{
+    auto object = scn.create_entity(name);
+    object.emplace<trail_component>();
     return object;
 }
 

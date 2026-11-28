@@ -9,6 +9,8 @@
 #include <engine/rendering/light.h>
 #include <engine/rendering/shadow.h>
 #include <engine/rendering/batch_collector.h>
+#include <engine/rendering/dynamic_geometry/dynamic_geometry.h>
+#include <engine/rendering/dynamic_geometry/dynamic_renderer.h>
 #include <engine/rendering/instanced_mesh_source.h>
 #include <engine/rendering/material_graph/graph_material_programs.h>
 #include <hpp/optional.hpp>
@@ -563,18 +565,124 @@ private:
     /// Adds the points of a model with @p bounds to translucent_gi_points_, coarser when it is too large for its share:
     /// false, adding none, when they do not fit.
     auto add_translucent_gi_points(const math::bbox& bounds, const math::vec3& eye) -> bool;
-    /// The world points the radiance cache keeps probes around for the run's lit see-through surfaces that read it, the
-    /// models nearest @p eye first, each whole or not at all (translucent_gi_points_, gi_run_params::surface_points);
-    /// null when none does.
+    /// Adds the points of an emitter whose particles fill @p bounds (gi_radiance_cache::make_volume_points), leaving
+    /// out the ones whose probes the run's other emitters mark already: false, adding none, when the box has none, has
+    /// more than max_gi_points_per_model, or what it adds passes the frame's points or the emitters' probes
+    /// (max_particle_gi_probes).
+    auto add_particle_gi_points(const math::bbox& bounds, const math::vec3& eye) -> bool;
+    /// The world points the radiance cache keeps probes around for what the run draws outside the G-buffer and lights
+    /// with it: its lit see-through models, the nearest to @p eye first, each whole or not at all, then its particle
+    /// emitters (collect_particle_gi_points). In translucent_gi_points_ (gi_run_params::surface_points); null when
+    /// there is none.
     auto collect_translucent_gi_points(const math::vec3& eye) -> const std::vector<math::vec4>*;
-    /// The most points one model marks (gi_radiance_cache::make_surface_points' budget).
+    /// Adds the points of the run's particle emitters whose Ambient Light is Global Illumination, the nearest to
+    /// @p eye first, each whole or not at all, from what the models left, and names the ones that fit to the particle
+    /// pass (set_particle_gi_emitters).
+    void collect_particle_gi_points(const math::vec3& eye);
+    /// The most points one model or emitter marks (gi_radiance_cache::make_surface_points' budget).
     static constexpr size_t max_gi_points_per_model = 1024;
+    /// The most probes a run's emitters mark together: an eighth of the cache's pool, so the probes that light
+    /// particles in mid-air stay a small part of what the screen's own probes read.
+    static constexpr size_t max_particle_gi_probes = size_t(gi::GI_RADIANCE_CACHE_MAX_PROBES) / 8;
     /// Where the composite of the run's Order Independent surfaces sorts, seen from @p eye: the lowest Sort Priority of
     /// their models, and the distance to the middle of the box around them all.
     auto get_order_independent_key(const math::vec3& eye) const -> translucent_mesh_list::key;
     /// The reflection probe a translucent surface at @p position reflects: the smallest local probe holding it, else the
     /// view's environment probe, else none. A probe capture's surfaces reflect none, so no probe reads itself.
     auto find_forward_probe(const run_context& run, const math::vec3& position) const -> forward_probe;
+    struct geom_program;
+    /**
+     * @brief Draws the geometry set for the next draw as the surface of forward material @p graph into @p view: picks
+     * the variant (the GI's light and its traced reflections where the caller found them usable, the Order Independent
+     * sums), binds the material's values and its light, and submits with the blend its Blend Mode gives, both faces
+     * of a two-sided surface and its depth first where it has a prepass.
+     * @return How many draws it made: none, the draw's bindings discarded by @p discard, while the material's
+     * shader is not compiled.
+     */
+    auto submit_forward_surface(bgfx::ViewId view,
+                                const graph_material& graph,
+                                geom_program& prog,
+                                const math::bbox& bounds,
+                                const forward_probe& probe,
+                                bool uses_gi_reflections,
+                                bool uses_gi,
+                                bool order_independent,
+                                uint8_t discard) -> uint32_t;
+
+    /// Geometry a camera run draws for its lines and trails: what the renderers that bind one draw put into
+    /// the G-buffer, or what one renderer draws in the translucency pass, placed relative to dynamic_origin_.
+    struct dynamic_draw
+    {
+        /// Keeps the material alive for the run.
+        std::shared_ptr<material> material;
+        const graph_material* graph = nullptr;
+        /// dynamic_renderer::get_draw_hash of the renderer that opened the draw.
+        uint64_t draw_hash = 0;
+        dynamic_geometry geometry;
+        math::bbox world_bounds;
+        int32_t sort_priority = 0;
+    };
+    /// The casting lines and trails that bind one draw and stand in one cell of the world, built for the
+    /// frame's camera: one caster of the frame's shadow maps, which draw it from one copy in the frame's transient
+    /// buffers.
+    struct dynamic_shadow_caster final : shadow_geometry_source
+    {
+        [[nodiscard]] auto bind_shadow_geometry() const -> bool override;
+        [[nodiscard]] auto get_shadow_material() const -> const material& override;
+        [[nodiscard]] auto get_shadow_key() const -> uint64_t override;
+
+        /// Keeps the material alive for the frame.
+        std::shared_ptr<material> drawn;
+        const graph_material* graph = nullptr;
+        uint64_t draw_hash = 0;
+        dynamic_geometry geometry;
+        /// The point the geometry is placed relative to.
+        math::vec3 origin{0.0f, 0.0f, 0.0f};
+        uint64_t key = 0;
+        /// The geometry's transient copy and the render frame it was made in: it is gone with that frame.
+        mutable bgfx::TransientVertexBuffer vertices{};
+        mutable bgfx::TransientIndexBuffer indices{};
+        mutable uint32_t uploaded_frame = UINT32_MAX;
+    };
+    /// Builds the frame's casting lines and trails for the camera of @p run and adds their casters to
+    /// instance_source_casters_. After gather_instance_sources, which empties that list. Nothing is built for a run
+    /// without shadows or a scene without a light that casts them.
+    void gather_dynamic_shadow_casters(const run_context& run);
+    /// The caster the geometry of @p renderer goes into; null when the renderer casts nothing (Casts Shadow off, a
+    /// material that casts none, a layer the run leaves out).
+    auto begin_dynamic_shadow_caster(const run_context& run,
+                                     entt::entity entity,
+                                     dynamic_renderer& renderer,
+                                     const asset_handle<material>& fallback,
+                                     const math::bbox& world_bounds) -> dynamic_shadow_caster*;
+    /// The caster of what @p renderer draws in the cell @p world_bounds stands in; a new one when there is none.
+    auto find_dynamic_shadow_caster(const dynamic_renderer& renderer, const math::bbox& world_bounds) -> dynamic_shadow_caster&;
+    /// A camera run's lines and trails in view, built for its camera: dynamic_opaque_ by what they bind and
+    /// dynamic_forward_ by renderer. A probe capture draws none: it would keep one moment of what moves.
+    void collect_dynamic_geometry(const run_context& run);
+    /// Lets go of the materials of the first @p count entries of @p draws and empties the count.
+    static void release_dynamic_draws(std::vector<dynamic_draw>& draws, size_t& count);
+    /// The next entry of @p draws, emptied and set to what @p renderer draws; the list grows when it has none left.
+    static auto acquire_dynamic_draw(std::vector<dynamic_draw>& draws, size_t& count, const dynamic_renderer& renderer) -> dynamic_draw&;
+    /// The G-buffer draw of what @p renderer draws; a new one when none binds the same.
+    auto find_dynamic_opaque_draw(const dynamic_renderer& renderer) -> dynamic_draw&;
+    /// The draw the geometry of @p renderer goes into: its material's G-buffer draw, or an entry of its own in the
+    /// translucency pass; null when it is out of view, on no rendered layer, or has no material to draw with yet. An
+    /// unset material, and one of another domain, draws @p fallback.
+    auto begin_dynamic_draw(const run_context& run,
+                            entt::entity entity,
+                            dynamic_renderer& renderer,
+                            const asset_handle<material>& fallback,
+                            const math::bbox& world_bounds) -> dynamic_draw*;
+    /// After a renderer built into @p draw, which held @p index_count_before indices: counts it and grows the draw's
+    /// box by @p world_bounds, or, when it built nothing, takes back the translucency entry opened for it.
+    void end_dynamic_draw(dynamic_draw& draw, uint32_t index_count_before, const math::bbox& world_bounds);
+    /// Whether the run has a G-buffer draw of lines or trails with anything in it.
+    auto has_dynamic_opaque_geometry() const -> bool;
+    /// Draws dynamic_opaque_ into the G-buffer @p pass binds.
+    void submit_dynamic_geometry(gfx::render_pass& pass, const camera& camera);
+    /// Draws entry @p index of dynamic_forward_ into @p view of the translucency pass.
+    void draw_translucent_dynamic(bgfx::ViewId view, size_t index, const run_context& run);
     /// A camera run's lit scene into its output: post-processing, overlays, the upscale of a scaled run, and the depth
     /// next frame reads.
     void finish_camera_image(const run_context& run, const lit_scene& lit);
@@ -1234,12 +1342,34 @@ private:
     /// translucent_models_ reflects (collect_translucent_draws).
     std::vector<entt::entity> translucent_probes_;
     std::vector<forward_probe> translucent_model_probes_;
+    /// The run's draws of lines and trails (collect_dynamic_geometry): the lists keep their entries' memory
+    /// between frames, and the counts say how many this run uses. The probe each forward one reflects, and the point
+    /// their geometry is placed relative to.
+    std::vector<dynamic_draw> dynamic_opaque_;
+    std::vector<dynamic_draw> dynamic_forward_;
+    size_t dynamic_opaque_count_ = 0;
+    size_t dynamic_forward_count_ = 0;
+    std::vector<forward_probe> dynamic_forward_probes_;
+    math::vec3 dynamic_origin_{0.0f, 0.0f, 0.0f};
+    /// The entry of dynamic_opaque_ by the draw hash that opened it, while the run collects.
+    std::unordered_map<uint64_t, size_t> dynamic_opaque_lookup_;
+    /// The camera frame's casters of lines and trails (gather_dynamic_shadow_casters): the entries keep
+    /// their place and their memory between frames, and the count says how many this frame uses. The lookup finds
+    /// one by its draw hash and cell while the frame gathers.
+    std::vector<std::unique_ptr<dynamic_shadow_caster>> dynamic_shadow_casters_;
+    size_t dynamic_shadow_caster_count_ = 0;
+    std::unordered_map<uint64_t, size_t> dynamic_shadow_lookup_;
     /// collect_translucent_gi_points' points, kept for the GI's frame; which of translucent_models_ they mark (1); and
     /// its scratch lists.
     std::vector<math::vec4> translucent_gi_points_;
     std::vector<char> translucent_gi_marked_;
     std::vector<std::pair<float, size_t>> translucent_gi_order_;
     std::vector<math::vec4> translucent_gi_model_points_;
+    /// The run's emitters that ask for the GI's light, the ones of them whose points fit, and the probes those mark
+    /// together: emitters that overlap mark the same probes, which are counted once.
+    std::vector<particle_gi_emitter> particle_gi_candidates_;
+    std::vector<ps_soa::emitter_handle> particle_gi_marked_;
+    gi_radiance_cache::volume_marks particle_gi_marks_;
     /// The front layer's traced reflections this run (run_gi_reflection_layer), with the roughness they end at; null
     /// when none ran.
     gfx::texture::ptr gi_front_reflection_;

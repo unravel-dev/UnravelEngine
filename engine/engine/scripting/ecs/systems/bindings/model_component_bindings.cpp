@@ -1,5 +1,6 @@
 #include "script_glue_common.h"
 #include "script_bindings.h"
+#include "dynamic_renderer_script_helpers.h"
 #include "material_script_helpers.h"
 
 #include "../script_interop.h"
@@ -7,6 +8,9 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/decal_component.h>
+#include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/ecs/components/line_component.h>
+#include <engine/rendering/ecs/components/trail_component.h>
 #include <engine/rendering/ecs/components/post_process_material_component.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/rendering/material_graph/graph_material.h>
@@ -213,10 +217,16 @@ constexpr uint32_t DECAL_MATERIAL_INSTANCE_SLOT = 0xFFFFFFFFu;
 /// (PostProcessMaterialComponent.GetInstance). Mirrors PostProcessMaterialComponent.InstanceSlotBase.
 constexpr uint32_t POST_PROCESS_MATERIAL_INSTANCE_SLOT_BASE = 0xFF000000u;
 
-/// Whether @p slot names a post-process material entry rather than a model slot or a decal.
+/// The slot a particle emitter's MaterialInstance passes (ParticleEmitterComponent.materialInstance): an emitter has
+/// one instance, of its material. Mirrors MaterialInstance.ParticleEmitterSlot in MaterialInstance.cs.
+constexpr uint32_t PARTICLE_EMITTER_MATERIAL_INSTANCE_SLOT = 0xFFFFFFFEu;
+
+/// Whether @p slot names a post-process material entry rather than a model slot or the one instance of another
+/// renderer.
 auto is_post_process_entry_slot(uint32_t slot) -> bool
 {
-    return slot >= POST_PROCESS_MATERIAL_INSTANCE_SLOT_BASE && slot != DECAL_MATERIAL_INSTANCE_SLOT;
+    return slot >= POST_PROCESS_MATERIAL_INSTANCE_SLOT_BASE && slot != DECAL_MATERIAL_INSTANCE_SLOT &&
+           slot != PARTICLE_EMITTER_MATERIAL_INSTANCE_SLOT && !is_dynamic_renderer_slot(slot);
 }
 
 /// The post-process material entry of entity @p id that @p slot names, or null.
@@ -228,8 +238,9 @@ auto find_post_process_entry_of_slot(entt::entity id, uint32_t slot) -> post_pro
 }
 
 /// The material instance a script's MaterialInstance stands for: model @p id's of slot @p slot, decal @p id's for
-/// DECAL_MATERIAL_INSTANCE_SLOT, or the material instance of no renderer @p slot when @p id is none
-/// (is_standalone_instance). Null when it is gone.
+/// DECAL_MATERIAL_INSTANCE_SLOT, particle emitter @p id's for PARTICLE_EMITTER_MATERIAL_INSTANCE_SLOT, the Line's or
+/// the Trail's of @p id for their slots (is_dynamic_renderer_slot), or the material instance of no renderer @p slot
+/// when @p id is none (is_standalone_instance). Null when it is gone.
 auto find_instance(entt::entity id, uint32_t slot) -> const material_instance*
 {
     if(is_standalone_instance(id))
@@ -241,6 +252,16 @@ auto find_instance(entt::entity id, uint32_t slot) -> const material_instance*
     {
         auto decal = safe_get_component<decal_component>(id);
         return decal ? &decal->get_material_instance() : nullptr;
+    }
+    if(slot == PARTICLE_EMITTER_MATERIAL_INSTANCE_SLOT)
+    {
+        const particle_emitter_component* emitter = safe_get_component<particle_emitter_component>(id);
+        return emitter ? &emitter->get_material_instance() : nullptr;
+    }
+    if(is_dynamic_renderer_slot(slot))
+    {
+        const dynamic_renderer* renderer = find_dynamic_renderer(id, slot);
+        return renderer ? &renderer->get_material_instance() : nullptr;
     }
     if(is_post_process_entry_slot(slot))
     {
@@ -274,6 +295,28 @@ void change_instance(entt::entity id, uint32_t slot, StandaloneChange&& change_s
             auto instance = decal->get_material_instance();
             change_standalone(instance);
             decal->set_material_instance(instance);
+        }
+        return;
+    }
+    if(slot == PARTICLE_EMITTER_MATERIAL_INSTANCE_SLOT)
+    {
+        // Through the component, which resolves the instance its draws read and gives it to its meshes.
+        if(auto emitter = safe_get_component<particle_emitter_component>(id))
+        {
+            material_instance instance = emitter->get_material_instance();
+            change_standalone(instance);
+            emitter->set_material_instance(instance);
+        }
+        return;
+    }
+    if(is_dynamic_renderer_slot(slot))
+    {
+        // Through the renderer, which resolves the instance its draws read.
+        if(auto* renderer = find_dynamic_renderer(id, slot))
+        {
+            material_instance instance = renderer->get_material_instance();
+            change_standalone(instance);
+            renderer->set_material_instance(instance);
         }
         return;
     }

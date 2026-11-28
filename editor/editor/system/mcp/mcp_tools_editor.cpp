@@ -18,6 +18,7 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/ecs_utils.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/ecs/systems/particle_system.h>
 #include <engine/rendering/render_feature_support.h>
 #include <engine/rendering/renderer.h>
 #include <engine/scripting/ecs/systems/script_system.h>
@@ -152,12 +153,13 @@ auto pipeline_stats_json(const rendering::pipeline_stats& stats) -> std::string
 {
     return fmt::format(
         R"({{"models":{},"submeshes":{},"skinned_models":{},"skinned_submeshes":{},"translucent_models":{},)"
-        R"("translucent_submeshes":{},"shadow_models":{},)"
+        R"("translucent_submeshes":{},"lines_trails":{{"drawn":{},"draws":{}}},"shadow_models":{},)"
         R"("shadow_submeshes":{},"lights":{},"shadow_lights":{},"shadow_maps":{{"rendered":{},"reused":{},"restored":{}}},)"
         R"("gi":{{"cards":{},"captures":{},"material_changes":{},"direct_dirty_pages":{},"pages_used":{},)"
         R"("direct_invalidated":{}}},)"
         R"("particle_emitters":{{"active":{},"simulated":{},)"
-        R"("drawn":{},"skipped":{}}},"particles":{{"active":{},"simulated":{},"drawn":{},"skipped":{}}},)"
+        R"("drawn":{},"skipped":{},"lit_by_gi":{}}},"particles":{{"active":{},"simulated":{},"drawn":{},"skipped":{},)"
+        R"("scene_collision_tested":{}}},)"
         R"("particle_batches":{},"decals":{{"drawn":{},"draws":{},"decal_buffers":{}}},"post_process_material_passes":{}}})",
         stats.drawn_models,
         stats.drawn_static_submeshes,
@@ -165,6 +167,8 @@ auto pipeline_stats_json(const rendering::pipeline_stats& stats) -> std::string
         stats.drawn_skinned_submeshes,
         stats.drawn_translucent_models,
         stats.drawn_translucent_submeshes,
+        stats.drawn_dynamic_renderers,
+        stats.drawn_dynamic_batches,
         stats.drawn_models_for_shadows + stats.drawn_skinned_models_for_shadows,
         stats.drawn_submeshes_for_shadows + stats.drawn_skinned_submeshes_for_shadows,
         stats.drawn_lights,
@@ -182,10 +186,12 @@ auto pipeline_stats_json(const rendering::pipeline_stats& stats) -> std::string
         stats.simulated_particle_emitters,
         stats.drawn_particle_emitters,
         stats.skipped_particle_emitters,
+        stats.gi_lit_particle_emitters,
         stats.active_particles,
         stats.simulated_particles,
         stats.drawn_particles,
         stats.skipped_particles,
+        stats.scene_collision_particles,
         stats.drawn_particles_batches,
         stats.drawn_decals,
         stats.decal_draws,
@@ -247,12 +253,14 @@ auto frame_stats_json(rtti::context& ctx) -> std::string
                            scene_camera.get<camera_component>().get_pipeline_data().get_pipeline()->get_stats())
                      : std::string("null");
     auto* scn = ctx.get_cached<editing_manager>().get_active_scene(ctx);
+    const particle_collision_stats particle_collision = ctx.get_cached<particle_system>().get_collision_stats();
     return fmt::format(
         R"({{"frame":{{"fps":{:.1f},"frame_ms":{:.2f},"cpu_submit_ms":{:.2f},"gpu_ms":{:.2f},"gpu_latency_frames":{}}},)"
         R"("draw":{{"triangles":{},"draw_calls":{},"compute_calls":{},"blit_calls":{},"render_passes":{}}},)"
         R"("memory":{{"gpu_used_bytes":{},"gpu_max_bytes":{},"texture_bytes":{},"render_target_bytes":{}}},)"
         R"("resources":{{"shaders":{},"programs":{},"max_programs":{},"textures":{},"max_textures":{}}},)"
-        R"("paging":{},"entities":{},"play_phase":{},"scene_view":{},"game":{}}})",
+        R"("paging":{},"particle_collision":{{"casts":{},"hits":{},"waiting":{}}},"entities":{},"play_phase":{},)"
+        R"("scene_view":{},"game":{}}})",
         fps,
         fps > 0.0f ? static_cast<float>(k_milliseconds_per_second) / fps : 0.0f,
         cpu_ms,
@@ -273,6 +281,9 @@ auto frame_stats_json(rtti::context& ctx) -> std::string
         stats->numTextures,
         bgfx::getCaps()->limits.maxTextures,
         paging_stats_json(),
+        particle_collision.casts,
+        particle_collision.hits,
+        particle_collision.waiting,
         scn != nullptr && scn->registry ? count_live_entities(*scn->registry) : 0,
         make_json_string(play_phase_from_ctx(ctx)),
         scene_view_json,
@@ -1264,7 +1275,8 @@ void register_editor_tools(mcp_tool_registry& registry)
              "draw calls without the editor UI, GPU memory, the shaders, programs and textures alive (bgfx holds at "
              "most max_programs and max_textures), GPU paging (budget, resources resident, reduced to their mip "
              "tails or evicted, and the textures waiting to sharpen), live entities, and per view (scene_view, game) the "
-             "models, lights, shadow casters, particles and decals drawn and the post-process material passes run. Last frame's values; with vsync on, times "
+             "models, lights, shadow casters, particles, decals and lines_trails (the ones in view and the draws "
+             "they took) drawn and the post-process material passes run. Last frame's values; with vsync on, times "
              "include waiting for the display.",
          .input_schema_json = empty_object_schema(),
          .handler =

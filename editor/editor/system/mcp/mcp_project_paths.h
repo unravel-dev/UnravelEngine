@@ -56,7 +56,8 @@ auto to_readable_file_key(const std::string& input,
 
 /**
  * @brief Refuses a write to an asset that lives outside the project's data folder, such as an
- *        engine or editor asset every project shares.
+ *        engine or editor asset every project shares (asset_actions::is_project_asset, the rule
+ *        the Inspector and the asset windows follow).
  * @param key The asset's key, as its handle reports it.
  */
 auto require_project_data_asset(const std::string& key, std::string& error) -> bool;

@@ -492,6 +492,20 @@ REFLECT_INLINE(settings::graphics_settings::particle_settings)
             entt::attribute{"name", "max_lighting"},
             entt::attribute{"pretty_name", "Max Lighting"},
             entt::attribute{"tooltip", "The most expensive lighting mode particles use. Volumetric: surface-lit particles light as volumetric (no per-pixel sun). Unlit: lit particles draw unlit."},
+        })
+        .data<&settings::graphics_settings::particle_settings::max_collision_casts>("max_collision_casts"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_collision_casts"},
+            entt::attribute{"pretty_name", "Max Collision Casts"},
+            entt::attribute{"tooltip", "The most casts a frame spends on particles that collide with physics colliders. Particles past it are swept in later frames, so their contacts come late."},
+            entt::attribute{"min", 1},
+            entt::attribute{"max", 65536},
+        })
+        .data<&settings::graphics_settings::particle_settings::scene_collision>("scene_collision"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "scene_collision"},
+            entt::attribute{"pretty_name", "Scene Collision"},
+            entt::attribute{"tooltip", "What the particles of emitters that collide with Scene Surfaces touch. Depth Buffer: what the camera sees, so nothing behind a surface or off screen. Distance Field: the global illumination's distance field where a view has one, which also holds surfaces off screen but rounds off detail smaller than its voxels. Off: they pass through everything. Every camera that shows the particles tests them against what it sees, and every camera shows the result."},
         });
 }
 
@@ -504,6 +518,8 @@ SAVE_INLINE(settings::graphics_settings::particle_settings)
     try_save(ar, ser20::make_nvp("max_drawn_particles", obj.max_drawn_particles));
     try_save(ar, ser20::make_nvp("max_particles_scale", obj.max_particles_scale));
     try_save(ar, ser20::make_nvp("max_lighting", obj.max_lighting));
+    try_save(ar, ser20::make_nvp("max_collision_casts", obj.max_collision_casts));
+    try_save(ar, ser20::make_nvp("scene_collision", obj.scene_collision));
 }
 
 LOAD_INLINE(settings::graphics_settings::particle_settings)
@@ -515,6 +531,8 @@ LOAD_INLINE(settings::graphics_settings::particle_settings)
     try_load(ar, ser20::make_nvp("max_drawn_particles", obj.max_drawn_particles));
     try_load(ar, ser20::make_nvp("max_particles_scale", obj.max_particles_scale));
     try_load(ar, ser20::make_nvp("max_lighting", obj.max_lighting));
+    try_load(ar, ser20::make_nvp("max_collision_casts", obj.max_collision_casts));
+    try_load(ar, ser20::make_nvp("scene_collision", obj.scene_collision));
 }
 
 REFLECT_INLINE(anti_aliasing_limit)

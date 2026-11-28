@@ -22,6 +22,36 @@ namespace unravel::asset_actions
 {
 
 /**
+ * @brief Whether the asset @p key names belongs to the open project: a key under app:/data. Only those are edited.
+ *        What the engine and the editor ship (engine:/..., editor:/...) is shared by every project and replaced by
+ *        an update, so the Inspector, the asset windows and the MCP tools show it and never write it.
+ */
+auto is_project_asset(const std::string& key) -> bool;
+
+/// Who ships the asset @p key names, for a sentence about it: "the engine", or "the editor" for anything else that
+/// is not the project's. Empty for a project asset.
+auto get_asset_shipper(const std::string& key) -> std::string;
+
+/// Why the asset @p key names is not edited, as one sentence: "standard.mat ships with the engine, so it is not
+/// changed here." Empty for a project asset.
+auto get_shipped_asset_note(const std::string& key) -> std::string;
+
+/// Why a copy of the asset @p key names would not work on its own, as one sentence; empty when it would. A shader
+/// reads the files beside it, and a copied script defines its types a second time.
+auto find_project_copy_obstacle(const std::string& key) -> std::string;
+
+/**
+ * @brief Copies the asset file at @p key to @p absolute_path in the project's data folder, with its import
+ *        settings under an id of the copy's own. The asset watcher imports the copy like any new file.
+ * @return The copy's key; empty with @p error set when @p absolute_path is outside the project's data folder or
+ *         taken, the asset does not work as a copy (find_project_copy_obstacle), or the file cannot be copied.
+ */
+auto copy_asset_into_project(rtti::context& ctx,
+                             const std::string& key,
+                             const fs::path& absolute_path,
+                             std::string* error = nullptr) -> std::string;
+
+/**
  * @brief Creates a physics material asset with default values at `absolute_path` and saves it.
  *        The content browser's Create menu and MCP both create materials through this.
  * @return The new asset's handle; empty when it could not be saved.
@@ -58,8 +88,9 @@ auto create_material_function(const fs::path& absolute_path, const material_grap
 
 /**
  * @brief Creates a graph material made of @p graph at `absolute_path` and saves it. Its compile writes the shader the
- *        graph generates into the compiled cache, beside the compiled material.
- * @return The new asset's handle; empty when it could not be saved.
+ *        graph generates into the compiled cache, beside the compiled material. A material already at that path
+ *        keeps its asset and takes the graph (save_material_graph).
+ * @return The asset's handle; empty when it could not be saved.
  */
 auto create_material_graph(rtti::context& ctx, const fs::path& absolute_path, const material_graph& graph)
     -> asset_handle<material>;
@@ -69,7 +100,7 @@ auto create_material_graph(rtti::context& ctx, const fs::path& absolute_path, co
  *        graph and shader until the recompile the save starts reloads both together. The Material Graph window
  *        follows the reload.
  * @return The material written: a copy of the loaded asset, or a new one while it is not loaded; null when the asset
- *         is not a graph material or could not be saved.
+ *         is not a graph material, is not the project's (is_project_asset) or could not be saved.
  */
 auto save_material_graph(rtti::context& ctx, const asset_handle<material>& asset, const material_graph& graph)
     -> std::shared_ptr<material>;

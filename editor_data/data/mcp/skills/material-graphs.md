@@ -94,9 +94,54 @@ result to go back.
   refract is the lit scene, GI included). Their graphs read at most 7 textures
   (13 unlit), one fewer for each scene read.
   Older files' translucent "on" loads as dithered. The GI lets light through
-  every see-through mode. Only Model components draw them: mesh particles and
-  scripted instanced draws (Graphics.DrawMeshInstanced) draw such a material as
-  the opaque stand-in.
+  every see-through mode. Model, Line and Trail components draw them:
+  mesh particles and scripted instanced draws (Graphics.DrawMeshInstanced)
+  draw such a material as the opaque stand-in.
+- On a Line or a Trail any Surface material draws, no setting needed. Vertex
+  Color is the strip's Color Over Length (multiply it in for it to show; the
+  audit reports a colour the material does not read, and a strip whose
+  material is no Surface material). Texture Coordinate runs
+  U across a strip and V along it (as its UV Mode says; a trail's V is 0 at
+  the entity), around a tube in U. The Material Graph window's examples Line
+  Laser, Line Rope and Trail Sword Arc are starting points.
+- particle_use "on" (translucency pass): Particle Emitters can draw the
+  material on their sprites, trails and ribbons (a Particle Emitter's
+  render_material). The compile result then says "particle_use":true and
+  "particle_max_textures": a particle draw leaves a lit graph 4 textures and
+  an unlit one 7, one fewer when it reads the scene's colour. On a particle
+  Vertex Color is the particle's colour with its opacity in alpha (multiply
+  it in for the emitter's Color to show), Texture Coordinate the quad's own
+  0..1, Object Position the particle's centre; World Position Offset and
+  Vertex Interpolators do nothing. Flipbook Sample reads a texture sheet at
+  the emitter's frame (and the next one while frames blend); Particle Data
+  gives age, life 0..1, a random number and speed; Particle Custom Data the
+  emitter's custom_data_x / custom_data_y curves; Particle Erosion dissolves
+  an alpha by the emitter's erosion_over_life; Particle Sub UV and Particle
+  Frame Blend give the sheet frame's coordinates and blend. flipbook_motion
+  pulls the two blended frames toward each other by a motion texture read at
+  both (links "motion" and "next_motion", "strength" in texture coordinates;
+  import the motion texture with color space linear, 0.5 being no motion)
+  and feeds a flipbook_sample's uv and next_uv: slow smoke from few frames
+  flows instead of cross-fading. Base Color is lit
+  as the emitter's lighting says (unlit shows it as emitted light); Emissive
+  always adds; an Unlit Shading Model is never lit. Normal is in the quad's
+  frame (x along its width, y up, z toward the camera); left unlinked, a lit
+  particle shades as a sphere. Roughness or Metallic set on the output or on
+  the Material Attributes it reads (a link, or a value other than the default
+  0.5 and 0; Specular or Glossiness in that workflow) makes a particle
+  reflect light: the sun's highlight where its emitter's lighting is surface,
+  and the light around it in a metal's colour (droplets, ice, metal
+  shavings). Left alone, a particle is matte and pays for none, so a
+  Roughness of exactly 0.5 is asked for by a link. What a particle reflects
+  fades with its Opacity whatever preserve_specular says. Scene Texture Scene
+  Color and Refraction read
+  the opaque scene behind the particles (heat haze, shockwaves), and Depth
+  Fade fades against it. Refraction bends by the Normal channel: without one
+  linked nothing bends. write_velocity "on" lets an emitter with
+  write_velocity draw the particles' motion. The engine's particle materials
+  (engine:/data/materials/particles/) are such graphs: material_graph_get
+  one to start from and save the copy under app:/data, since the engine's
+  own are not written.
 - depth_prepass "on" (sorted translucent, premultiplied): the depth draws
   before the colour, so only the mesh's nearest layer shows where it overlaps
   itself (a see-through character); its depth then hides what draws after it

@@ -109,6 +109,14 @@ constexpr const char* SHADER_BUFFER_TEXTURES_DEFINE = "SHADER_BUFFER_TEXTURES";
 /// Vertex shaders that draw only what compute shaders wrote, so they never run without storage buffers and need no
 /// texture twin: the shader print debug text.
 constexpr std::array<const char*, 1> COMPUTE_FED_VERTEX_SHADERS = {"shader_print/vs_shader_print"};
+/// Vertex variants that read what only compute shaders write beside what their shader's other variants draw, so they
+/// need no texture twin either: the lit particles that take the GI's light read its radiance cache.
+struct compute_fed_variant
+{
+    const char* shader;
+    const char* variant;
+};
+constexpr std::array<compute_fed_variant, 1> COMPUTE_FED_VERTEX_VARIANTS = {{{"particles/vs_particle", "graph_lit_gi"}}};
 
 /// The vertex uniform vectors every WebGL 2 device grants (MAX_VERTEX_UNIFORM_VECTORS): a vertex shader that declares
 /// more fails to compile on some devices, and bgfx stops at a failed compile.
@@ -1060,7 +1068,13 @@ void check_texture_twins(const fs::path& source,
     check_twin_defines(name, file);
     for(const auto& variant : compiled)
     {
-        if(!variant.bytes.empty())
+        const bool is_variant_compute_fed = std::any_of(COMPUTE_FED_VERTEX_VARIANTS.begin(),
+                                                        COMPUTE_FED_VERTEX_VARIANTS.end(),
+                                                        [&](const compute_fed_variant& fed)
+                                                        {
+                                                            return shader == fed.shader && variant.name == fed.variant;
+                                                        });
+        if(!variant.bytes.empty() || is_variant_compute_fed)
         {
             continue;
         }

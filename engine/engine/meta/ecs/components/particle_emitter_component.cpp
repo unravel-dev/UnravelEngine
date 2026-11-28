@@ -12,6 +12,10 @@
 #include <engine/meta/core/common/basetypes.hpp>
 #include <engine/meta/assets/asset_handle.hpp>
 #include <engine/meta/ecs/entity.hpp>
+#include <engine/meta/layers/layer_mask.hpp>
+#include <engine/meta/rendering/material_instance.hpp>
+#include <engine/rendering/material_graph/graph_material.h>
+#include <engine/rendering/material_graph/material_graph_compiler.h>
 #include <engine/rendering/mesh.h>
 
 namespace unravel
@@ -190,6 +194,89 @@ LOAD(particle_sub_emitter)
 LOAD_INSTANTIATE(particle_sub_emitter, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(particle_sub_emitter, ser20::iarchive_binary_t);
 
+REFLECT(particle_collision_decal)
+{
+    entt::meta_factory<particle_collision_decal>{}
+        .type("particle_collision_decal"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "particle_collision_decal"},
+            entt::attribute{"pretty_name", "Collision Decal"},
+        })
+        .data<&particle_collision_decal::enabled>("enabled"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enabled"},
+            entt::attribute{"pretty_name", "Enabled"},
+            entt::attribute{"tooltip", "Each contact leaves a decal on the surface while the game plays: scorch marks, splats, bullet holes."},
+        })
+        .data<&particle_collision_decal::material>("material"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "material"},
+            entt::attribute{"pretty_name", "Material"},
+            entt::attribute{"tooltip", "The Decal material the contacts leave. Empty uses the engine's Default Decal."},
+        })
+        .data<&particle_collision_decal::size>("size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "size"},
+            entt::attribute{"pretty_name", "Size (m)"},
+            entt::attribute{"tooltip", "Side of the square decal in metres, random between min and max."},
+            entt::attribute{"min", 0.001f},
+        })
+        .data<&particle_collision_decal::lifetime>("lifetime"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lifetime"},
+            entt::attribute{"pretty_name", "Lifetime (s)"},
+            entt::attribute{"tooltip", "Seconds a decal stays before it fades out. 0 keeps it until newer decals take its place."},
+            entt::attribute{"min", 0.0f},
+        })
+        .data<&particle_collision_decal::fade_out>("fade_out"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fade_out"},
+            entt::attribute{"pretty_name", "Fade Out (s)"},
+            entt::attribute{"tooltip", "Seconds a decal takes to fade out."},
+            entt::attribute{"min", 0.0f},
+        })
+        .data<&particle_collision_decal::probability>("probability"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "probability"},
+            entt::attribute{"pretty_name", "Probability"},
+            entt::attribute{"tooltip", "Chance that a contact leaves a decal."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+        })
+        .data<&particle_collision_decal::attach_to_entity>("attach_to_entity"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "attach_to_entity"},
+            entt::attribute{"pretty_name", "Attach To Entity"},
+            entt::attribute{"tooltip", "The decal follows the entity whose collider the particle touched, so it moves with a door or a crate."},
+        });
+}
+
+SAVE(particle_collision_decal)
+{
+    try_save(ar, ser20::make_nvp("enabled", obj.enabled));
+    try_save(ar, ser20::make_nvp("material", obj.material));
+    try_save(ar, ser20::make_nvp("size", obj.size));
+    try_save(ar, ser20::make_nvp("lifetime", obj.lifetime));
+    try_save(ar, ser20::make_nvp("fade_out", obj.fade_out));
+    try_save(ar, ser20::make_nvp("probability", obj.probability));
+    try_save(ar, ser20::make_nvp("attach_to_entity", obj.attach_to_entity));
+}
+SAVE_INSTANTIATE(particle_collision_decal, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(particle_collision_decal, ser20::oarchive_binary_t);
+
+LOAD(particle_collision_decal)
+{
+    try_load(ar, ser20::make_nvp("enabled", obj.enabled));
+    try_load(ar, ser20::make_nvp("material", obj.material));
+    try_load(ar, ser20::make_nvp("size", obj.size));
+    try_load(ar, ser20::make_nvp("lifetime", obj.lifetime));
+    try_load(ar, ser20::make_nvp("fade_out", obj.fade_out));
+    try_load(ar, ser20::make_nvp("probability", obj.probability));
+    try_load(ar, ser20::make_nvp("attach_to_entity", obj.attach_to_entity));
+}
+LOAD_INSTANTIATE(particle_collision_decal, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(particle_collision_decal, ser20::iarchive_binary_t);
+
 REFLECT(particle_emitter_component)
 {
     // Register EmitterShape enum
@@ -266,6 +353,77 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bounce"},
             entt::attribute{"pretty_name", "Bounce"},
+        })
+        .data<ps_soa::collision_mode::stick>("stick"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "stick"},
+            entt::attribute{"pretty_name", "Stick"},
+        });
+
+    entt::meta_factory<ps_soa::collision_source>{}
+        .type("collision_source"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "collision_source"},
+            entt::attribute{"pretty_name", "Collision Source"},
+        })
+        .data<ps_soa::collision_source::planes>("planes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "planes"},
+            entt::attribute{"pretty_name", "Planes"},
+        })
+        .data<ps_soa::collision_source::physics_colliders>("physics_colliders"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "physics_colliders"},
+            entt::attribute{"pretty_name", "Physics Colliders"},
+        })
+        .data<ps_soa::collision_source::scene_surfaces>("scene_surfaces"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "scene_surfaces"},
+            entt::attribute{"pretty_name", "Scene Surfaces"},
+        });
+
+    entt::meta_factory<ps_soa::scene_collision>{}
+        .type("scene_collision"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "scene_collision"},
+            entt::attribute{"pretty_name", "Scene Collision"},
+        })
+        .data<ps_soa::scene_collision::off>("off"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "off"},
+            entt::attribute{"pretty_name", "Off"},
+        })
+        .data<ps_soa::scene_collision::depth_buffer>("depth_buffer"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "depth_buffer"},
+            entt::attribute{"pretty_name", "Depth Buffer"},
+        })
+        .data<ps_soa::scene_collision::distance_field>("distance_field"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "distance_field"},
+            entt::attribute{"pretty_name", "Distance Field"},
+        });
+
+    entt::meta_factory<ps_soa::collision_quality>{}
+        .type("collision_quality"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "collision_quality"},
+            entt::attribute{"pretty_name", "Collision Quality"},
+        })
+        .data<ps_soa::collision_quality::low>("low"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "low"},
+            entt::attribute{"pretty_name", "Low"},
+        })
+        .data<ps_soa::collision_quality::medium>("medium"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "medium"},
+            entt::attribute{"pretty_name", "Medium"},
+        })
+        .data<ps_soa::collision_quality::high>("high"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "high"},
+            entt::attribute{"pretty_name", "High"},
         });
 
     entt::meta_factory<ps_soa::particle_lighting>{}
@@ -288,6 +446,23 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "surface"},
             entt::attribute{"pretty_name", "Surface"},
+        });
+
+    entt::meta_factory<ps_soa::particle_ambient>{}
+        .type("particle_ambient"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "particle_ambient"},
+            entt::attribute{"pretty_name", "Particle Ambient Light"},
+        })
+        .data<ps_soa::particle_ambient::sky>("sky"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sky"},
+            entt::attribute{"pretty_name", "Sky"},
+        })
+        .data<ps_soa::particle_ambient::global_illumination>("global_illumination"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "global_illumination"},
+            entt::attribute{"pretty_name", "Global Illumination"},
         });
 
     entt::meta_factory<ps_soa::ribbon_texture_mode>{}
@@ -327,6 +502,33 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "launch_direction"},
             entt::attribute{"pretty_name", "Launch Direction"},
+        });
+
+    entt::meta_factory<ps_soa::ribbon_smoothing>{}
+        .type("ribbon_smoothing"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ribbon_smoothing"},
+            entt::attribute{"pretty_name", "Ribbon Smoothing"},
+        })
+        .data<ps_soa::ribbon_smoothing::none>("none"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "none"},
+            entt::attribute{"pretty_name", "None"},
+        })
+        .data<ps_soa::ribbon_smoothing::low>("low"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "low"},
+            entt::attribute{"pretty_name", "Low"},
+        })
+        .data<ps_soa::ribbon_smoothing::medium>("medium"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "medium"},
+            entt::attribute{"pretty_name", "Medium"},
+        })
+        .data<ps_soa::ribbon_smoothing::high>("high"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "high"},
+            entt::attribute{"pretty_name", "High"},
         });
 
     entt::meta_factory<ps_soa::mesh_spawn_mode>{}
@@ -769,6 +971,27 @@ REFLECT(particle_emitter_component)
     const auto has_fixed_seed = when([](const emitter& e) { return e.get_use_fixed_seed(); });
     const auto has_collision = when([](const emitter& e) { return e.get_collision() != ps_soa::collision_mode::none; });
     const auto has_bounce = when([](const emitter& e) { return e.get_collision() == ps_soa::collision_mode::bounce; });
+    const auto has_collider_collision = when([](const emitter& e)
+                                             {
+                                                 return e.get_collision() != ps_soa::collision_mode::none &&
+                                                        e.get_collide_with() == ps_soa::collision_source::physics_colliders;
+                                             });
+    // The contacts the CPU finds (planes, colliders): the ones a contact's decal and events come from.
+    const auto has_known_contacts = when([](const emitter& e)
+                                         {
+                                             return e.get_collision() != ps_soa::collision_mode::none &&
+                                                    e.get_collide_with() != ps_soa::collision_source::scene_surfaces;
+                                         });
+    const auto has_lasting_contact = when([](const emitter& e)
+                                          {
+                                              return e.get_collision() == ps_soa::collision_mode::bounce ||
+                                                     e.get_collision() == ps_soa::collision_mode::stick;
+                                          });
+    const auto has_resting_particles = when([](const emitter& e)
+                                            {
+                                                return e.get_collision() == ps_soa::collision_mode::stick ||
+                                                       (e.get_collision() == ps_soa::collision_mode::bounce && e.get_rest_speed() > 0.0f);
+                                            });
     const auto has_turbulence = when([](const emitter& e) { return e.get_turbulence_strength() > 0.0f; });
     const auto has_two_gradients = when([](const emitter& e) { return e.get_random_between_gradients(); });
     const auto is_sprite_mode = when(is_sprite);
@@ -790,10 +1013,20 @@ REFLECT(particle_emitter_component)
     const auto is_mesh_mode = when([](const emitter& e) { return e.get_render_mode() == ps_soa::render_mode::mesh; });
     const auto is_cutout = when([is_sprite](const emitter& e)
                                 { return is_sprite(e) && e.get_primitive() == ps_soa::particle_primitive::cutout; });
-    const auto is_lit = when([is_sprite](const emitter& e)
-                             { return is_sprite(e) && e.get_lighting() != ps_soa::particle_lighting::unlit; });
-    const auto is_surface_lit = when([is_sprite](const emitter& e)
-                                     { return is_sprite(e) && e.get_lighting() == ps_soa::particle_lighting::surface; });
+    // The Lighting rows apply to a material that is lit: one whose Shading Model is Unlit shows as it is.
+    const auto draws_lit_material = [is_sprite](const emitter& e)
+    {
+        return is_sprite(e) && e.draws_lit_material();
+    };
+    const auto is_lit_material = when(draws_lit_material);
+    const auto is_lit = when([draws_lit_material](const emitter& e)
+                             { return draws_lit_material(e) && e.get_lighting() != ps_soa::particle_lighting::unlit; });
+    const auto is_surface_lit = when([draws_lit_material](const emitter& e)
+                                     { return draws_lit_material(e) && e.get_lighting() == ps_soa::particle_lighting::surface; });
+    static_assert(MATERIAL_GRAPH_MAX_PARTICLE_GI_TEXTURES == 2,
+                  "The Ambient Light tooltip, the Inspector's note and the audit's catalog say two textures.");
+    // The overrides show for a material the emitter draws, while it loads too.
+    const auto has_material = when([](const emitter& e) { return e.draws_own_material(); });
     const auto has_particle_lights = when([](const emitter& e) { return e.get_light_count() > 0; });
     const auto writes_velocity = when([is_sprite](const emitter& e) { return is_sprite(e) && e.get_write_velocity(); });
     const auto has_draw_distance = when([](const emitter& e) { return e.get_max_draw_distance() > 0.0f; });
@@ -1115,8 +1348,32 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "collision"},
             entt::attribute{"pretty_name", "Mode"},
-            entt::attribute{"tooltip", "What a particle does where its path first crosses one of the planes: dies there (Kill) or bounces off (Bounce). Exact at any frame rate: the contact is solved when the particle is born."},
+            entt::attribute{"tooltip", "What a particle does where its path first touches a surface: it dies there (Kill), bounces off (Bounce) or stays there (Stick). With planes and physics colliders the contact is exact at any frame rate, solved ahead of the particle. Particles collide in World simulation space only."},
             entt::attribute{"group", "Collision"},
+        })
+        .data<&particle_emitter_component::set_collide_with, &particle_emitter_component::get_collide_with>("collide_with"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "collide_with"},
+            entt::attribute{"pretty_name", "Collide With"},
+            entt::attribute{"tooltip", "What the particles can touch. Planes: the planes listed here, in the editor and in the game. Physics Colliders: those planes and the colliders of the physics world, which exists only while the game plays. Scene Surfaces: the opaque surfaces a camera draws, found on the GPU by each camera that draws the particles, once a frame and at no cost to the CPU, in the editor and in the game. The game is told of no such contact: it sends no event, leaves no decal and fires no sub-emitter, and deaths, particle lights and the particle count follow the path a particle would take without it: a particle a surface ended keeps its place in Max Particles until its lifetime is over. The particles of an emitter that no camera draws touch nothing."},
+            entt::attribute{"group", "Collision"},
+            entt::attribute{"predicate", has_collision},
+        })
+        .data<&particle_emitter_component::set_collision_layers, &particle_emitter_component::get_collision_layers>("collision_layers"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "collision_layers"},
+            entt::attribute{"pretty_name", "Layers"},
+            entt::attribute{"tooltip", "The layers whose colliders the particles touch."},
+            entt::attribute{"group", "Collision"},
+            entt::attribute{"predicate", has_collider_collision},
+        })
+        .data<&particle_emitter_component::set_collision_quality, &particle_emitter_component::get_collision_quality>("collision_quality"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "collision_quality"},
+            entt::attribute{"pretty_name", "Quality"},
+            entt::attribute{"tooltip", "How closely a particle's path is followed against the colliders. A higher quality notices a collider that moves sooner and follows a curved path more closely, with more casts for each particle."},
+            entt::attribute{"group", "Collision"},
+            entt::attribute{"predicate", has_collider_collision},
         })
         .data<&particle_emitter_component::set_collision_planes, &particle_emitter_component::get_collision_planes>("collision_planes"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -1124,13 +1381,13 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Planes"},
             entt::attribute{"tooltip", "Planes the particles collide with: a world normal (x, y, z) and an offset (w) from the emitter's origin along it. Particles live on the normal's side. (0, 1, 0, 0) is the ground at the emitter's height."},
             entt::attribute{"group", "Collision"},
-            entt::attribute{"predicate", has_collision},
+            entt::attribute{"predicate", has_known_contacts},
         })
         .data<&particle_emitter_component::set_collision_radius_scale, &particle_emitter_component::get_collision_radius_scale>("collision_radius_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "collision_radius_scale"},
             entt::attribute{"pretty_name", "Radius Scale"},
-            entt::attribute{"tooltip", "How far from a plane a particle touches it, in halves of its size: 1 = its edge (sprites and meshes rest on the floor), 0 = its centre."},
+            entt::attribute{"tooltip", "How far from a surface a particle touches it, in halves of its size: 1 = its edge (sprites and meshes rest on the floor), 0 = its centre."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 0.05f},
             entt::attribute{"group", "Collision"},
@@ -1140,7 +1397,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "restitution"},
             entt::attribute{"pretty_name", "Restitution"},
-            entt::attribute{"tooltip", "Share of its speed into the plane a particle keeps when it bounces: 0 = it slides along, 1 = a perfect bounce."},
+            entt::attribute{"tooltip", "Share of its speed into the surface a particle keeps when it bounces: 0 = it slides along, 1 = a perfect bounce."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"group", "Collision"},
@@ -1150,7 +1407,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "friction"},
             entt::attribute{"pretty_name", "Friction"},
-            entt::attribute{"tooltip", "Share of its speed along the plane a particle loses when it bounces."},
+            entt::attribute{"tooltip", "Share of its speed along the surface a particle loses when it bounces."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"group", "Collision"},
@@ -1160,18 +1417,94 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_bounces"},
             entt::attribute{"pretty_name", "Max Bounces"},
-            entt::attribute{"tooltip", "Bounces before the particle dies at its next contact instead of sinking through."},
+            entt::attribute{"tooltip", "Bounces before the particle dies at its next contact instead of sinking through. Particles that collide with Scene Surfaces count 63 bounces at most."},
             entt::attribute{"min", 0},
             entt::attribute{"max", 255},
             entt::attribute{"group", "Collision"},
             entt::attribute{"predicate", has_bounce},
         })
+        .data<&particle_emitter_component::set_bounce_scatter, &particle_emitter_component::get_bounce_scatter>("bounce_scatter"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "bounce_scatter"},
+            entt::attribute{"pretty_name", "Bounce Scatter"},
+            entt::attribute{"tooltip", "Half angle, in degrees, of the cone each bounce's direction is turned within at random, as a rough surface does."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 90.0f},
+            entt::attribute{"group", "Collision"},
+            entt::attribute{"predicate", has_bounce},
+        })
+        .data<&particle_emitter_component::set_rest_speed, &particle_emitter_component::get_rest_speed>("rest_speed"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rest_speed"},
+            entt::attribute{"pretty_name", "Rest Speed"},
+            entt::attribute{"tooltip", "A particle that leaves a bounce slower than this, in metres per second, comes to rest on the surface for the rest of its life. 0 never rests: the particle bounces until Max Bounces."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.05f},
+            entt::attribute{"group", "Collision"},
+            entt::attribute{"predicate", has_bounce},
+        })
+        .data<&particle_emitter_component::set_lifetime_loss, &particle_emitter_component::get_lifetime_loss>("lifetime_loss"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lifetime_loss"},
+            entt::attribute{"pretty_name", "Lifetime Loss"},
+            entt::attribute{"tooltip", "Share of the life a particle has left that each contact takes away. 1 ends the particle at its first contact."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"group", "Collision"},
+            entt::attribute{"predicate", has_lasting_contact},
+        })
+        .data<&particle_emitter_component::set_align_to_surface, &particle_emitter_component::get_align_to_surface>("align_to_surface"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "align_to_surface"},
+            entt::attribute{"pretty_name", "Align To Surface"},
+            entt::attribute{"tooltip", "Particles at rest lie flat on the surface they rest on, and meshes stand upright on it. A flat particle lies inside its Soft Fade Distance, so set that to 0 with this."},
+            entt::attribute{"group", "Collision"},
+            entt::attribute{"predicate", has_resting_particles},
+        })
+        .data<&particle_emitter_component::set_collision_decal, &particle_emitter_component::get_collision_decal>("collision_decal"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "collision_decal"},
+            entt::attribute{"pretty_name", "Decal"},
+            entt::attribute{"tooltip", "A decal each contact leaves on the surface it touched, while the game plays."},
+            entt::attribute{"group", "Collision"},
+            entt::attribute{"predicate", has_known_contacts},
+        })
         .data<&particle_emitter_component::set_sub_emitters, &particle_emitter_component::get_sub_emitters>("sub_emitters"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "sub_emitters"},
             entt::attribute{"pretty_name", "Sub Emitters"},
-            entt::attribute{"tooltip", "Bursts other emitters fire where this emitter's particles are born, die or hit a plane: sparks where embers land, smoke where rockets die. A burst starts at the particle, optionally with its velocity, color and size."},
+            entt::attribute{"tooltip", "Bursts other emitters fire where this emitter's particles are born, die or touch a surface: sparks where embers land, smoke where rockets die. A burst starts at the particle, optionally with its velocity, color and size."},
             entt::attribute{"group", "Sub Emitters"},
+        })
+        .data<&particle_emitter_component::set_send_birth_events, &particle_emitter_component::get_send_birth_events>("send_birth_events"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "send_birth_events"},
+            entt::attribute{"pretty_name", "Send Birth Events"},
+            entt::attribute{"tooltip", "The scripts on this entity, or on its nearest parent with scripts, are told of each particle that is born, once a frame in OnParticleEvents."},
+            entt::attribute{"group", "Script Events"},
+        })
+        .data<&particle_emitter_component::set_send_death_events, &particle_emitter_component::get_send_death_events>("send_death_events"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "send_death_events"},
+            entt::attribute{"pretty_name", "Send Death Events"},
+            entt::attribute{"tooltip", "The scripts on this entity, or on its nearest parent with scripts, are told of each particle that dies, once a frame in OnParticleEvents."},
+            entt::attribute{"group", "Script Events"},
+        })
+        .data<&particle_emitter_component::set_send_collision_events, &particle_emitter_component::get_send_collision_events>("send_collision_events"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "send_collision_events"},
+            entt::attribute{"pretty_name", "Send Collision Events"},
+            entt::attribute{"tooltip", "The scripts on this entity, or on its nearest parent with scripts, are told of each particle that touches a surface, once a frame in OnParticleEvents: where, how fast, the surface's normal and the entity it belongs to."},
+            entt::attribute{"group", "Script Events"},
+            entt::attribute{"predicate", has_known_contacts},
+        })
+        .data<&particle_emitter_component::set_notify_hit_entities, &particle_emitter_component::get_notify_hit_entities>("notify_hit_entities"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "notify_hit_entities"},
+            entt::attribute{"pretty_name", "Notify Hit Entities"},
+            entt::attribute{"tooltip", "The scripts on an entity whose collider a particle touches are told of it, once a frame in OnParticleHits: damage from sparks, flames or acid."},
+            entt::attribute{"group", "Script Events"},
+            entt::attribute{"predicate", has_collider_collision},
         })
         .data<&particle_emitter_component::set_size_over_life, &particle_emitter_component::get_size_over_life>("size_over_life"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -1321,20 +1654,40 @@ REFLECT(particle_emitter_component)
             entt::attribute{"tooltip", "Turn each particle so the texture's top (a mesh's +Y) points along its motion: sparks, streaks, arrows. Start Rotation turns art drawn another way."},
             entt::attribute{"group", "Rotation"},
         })
-        .data<&particle_emitter_component::set_texture, &particle_emitter_component::get_texture>("texture"_hs)
+        .data<&particle_emitter_component::set_render_material, &particle_emitter_component::get_render_material>("render_material"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "texture"},
-            entt::attribute{"pretty_name", "Texture"},
-            entt::attribute{"tooltip", "What each particle draws. Unset, a plain white square."},
-            entt::attribute{"group", "Texture"},
+            entt::attribute{"name", "render_material"},
+            entt::attribute{"pretty_name", "Material"},
+            entt::attribute{"tooltip", "What the particles draw. Sprites, trails and ribbons draw a Surface material whose output has Particle Use on. The engine's own, under engine:/data/materials/particles, come one for each Blend Mode, for mask textures and for normal maps. Unset, they draw the plain one. In Mesh mode it is the material of every part of the mesh, which keeps its own for one of the engine's particle materials and when unset."},
+            entt::attribute{"group", "Material"},
+            entt::attribute{"material_domain", get_material_domain_key(material_domain::surface)},
+            entt::attribute{"replaces", std::vector<std::string>{"blend_mode", "texture_mode", "normal_texture"}},
+        })
+        .data<&particle_emitter_component::set_material_instance,
+              static_cast<const material_instance& (particle_emitter_component::*)() const>(&particle_emitter_component::get_material_instance)>(
+            "material_overrides"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "material_overrides"},
+            entt::attribute{"pretty_name", "Material Overrides"},
+            entt::attribute{"tooltip", "This emitter's own values of its material's parameters and textures, such as its Texture or a tint. A value it does not override follows the material."},
+            entt::attribute{"group", "Material"},
+            entt::attribute{"predicate", has_material},
+            entt::attribute{"replaces", std::vector<std::string>{"texture", "normal_texture"}},
+        })
+        .data<&particle_emitter_component::set_custom_data_x, &particle_emitter_component::get_custom_data_x>("custom_data_x"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "custom_data_x"},
+            entt::attribute{"pretty_name", "Custom Data X"},
+            entt::attribute{"tooltip", "A value over each particle's life that the material reads through its Particle Custom Data node and gives a meaning, such as a dissolve amount or a glow."},
+            entt::attribute{"group", "Material"},
             entt::attribute{"predicate", is_sprite_mode},
         })
-        .data<&particle_emitter_component::set_texture_mode, &particle_emitter_component::get_texture_mode>("texture_mode"_hs)
+        .data<&particle_emitter_component::set_custom_data_y, &particle_emitter_component::get_custom_data_y>("custom_data_y"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "texture_mode"},
-            entt::attribute{"pretty_name", "Texture Mode"},
-            entt::attribute{"tooltip", "Multi Channel: the texture's color and alpha. Mask: its luminance is the opacity and the particle's color tints it."},
-            entt::attribute{"group", "Texture"},
+            entt::attribute{"name", "custom_data_y"},
+            entt::attribute{"pretty_name", "Custom Data Y"},
+            entt::attribute{"tooltip", "A second value over each particle's life for the material's Particle Custom Data node."},
+            entt::attribute{"group", "Material"},
             entt::attribute{"predicate", is_sprite_mode},
         })
         .data<&particle_emitter_component::set_texture_sheet_tiles, &particle_emitter_component::get_texture_sheet_tiles>("texture_sheet_tiles"_hs)
@@ -1456,6 +1809,24 @@ REFLECT(particle_emitter_component)
             entt::attribute{"group", "Renderer"},
             entt::attribute{"predicate", is_ribbon},
         })
+        .data<&particle_emitter_component::set_ribbon_count, &particle_emitter_component::get_ribbon_count>("ribbon_count"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ribbon_count"},
+            entt::attribute{"pretty_name", "Ribbons"},
+            entt::attribute{"min", uint32_t(1)},
+            entt::attribute{"max", ps_soa::k_max_ribbon_count},
+            entt::attribute{"tooltip", "How many ribbons the particles form. Each particle joins the next ribbon in turn as it is born. Several ribbons are a stream each: its particles are born at one place of the shape and launched one way at one speed, so a moving emitter leaves that many strands side by side, and a still one that many jets."},
+            entt::attribute{"group", "Renderer"},
+            entt::attribute{"predicate", is_ribbon},
+        })
+        .data<&particle_emitter_component::set_ribbon_smoothing, &particle_emitter_component::get_ribbon_smoothing>("ribbon_smoothing"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ribbon_smoothing"},
+            entt::attribute{"pretty_name", "Ribbon Smoothing"},
+            entt::attribute{"tooltip", "How finely the ribbon bends between two particles, along a smooth curve through the particles around them. None: straight from particle to particle. Low, Medium and High draw each stretch in 2, 4 and 8 pieces, and cost as many times the vertices."},
+            entt::attribute{"group", "Renderer"},
+            entt::attribute{"predicate", is_ribbon},
+        })
         .data<&particle_emitter_component::set_stretch_length_scale, &particle_emitter_component::get_stretch_length_scale>("stretch_length_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "stretch_length_scale"},
@@ -1502,14 +1873,6 @@ REFLECT(particle_emitter_component)
             entt::attribute{"group", "Renderer"},
             entt::attribute{"predicate", is_mesh_mode},
         })
-        .data<&particle_emitter_component::set_render_material, &particle_emitter_component::get_render_material>("render_material"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "render_material"},
-            entt::attribute{"pretty_name", "Material"},
-            entt::attribute{"tooltip", "The material of every part of the mesh. Unset, the mesh keeps its own. The color's alpha and Opacity fade the meshes by dithering. The color does not tint them."},
-            entt::attribute{"group", "Renderer"},
-            entt::attribute{"predicate", is_mesh_mode},
-        })
         .data<&particle_emitter_component::set_mesh_cast_shadows, &particle_emitter_component::get_mesh_cast_shadows>("mesh_cast_shadows"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "mesh_cast_shadows"},
@@ -1517,14 +1880,6 @@ REFLECT(particle_emitter_component)
             entt::attribute{"tooltip", "The meshes cast shadows (when their material does)."},
             entt::attribute{"group", "Renderer"},
             entt::attribute{"predicate", is_mesh_mode},
-        })
-        .data<&particle_emitter_component::set_blend_mode, &particle_emitter_component::get_blend_mode>("blend_mode"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "blend_mode"},
-            entt::attribute{"pretty_name", "Blend Mode"},
-            entt::attribute{"tooltip", "How particles blend over the scene. Normal: alpha transparency. Additive: glow (fire, sparks). Multiply: darkens what is behind by the color, no change where transparent. Premultiplied: Normal for a texture whose color is already multiplied by its alpha."},
-            entt::attribute{"group", "Renderer"},
-            entt::attribute{"predicate", is_sprite_mode},
         })
         .data<&particle_emitter_component::set_pivot, &particle_emitter_component::get_pivot>("pivot"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -1561,9 +1916,9 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "lighting"},
             entt::attribute{"pretty_name", "Lighting"},
-            entt::attribute{"tooltip", "Unlit: the color is the light the particle gives off (fire, magic, sparks). Volumetric: lit once per particle like a small cloud by the sky, the sun (with its shadow) and up to 4 nearby lights, the same from every side (smoke, dust, steam). Surface: lit like a small sphere facing the camera, the sun per pixel (debris, snow, leaves). Lit particles take their color as albedo. Multiply blend stays unlit."},
+            entt::attribute{"tooltip", "How the material's Base Color shows. Unlit: it is the light the particle gives off (fire, magic, sparks). Volumetric: lit once per particle like a small cloud by the sky, the sun (with its shadow) and up to 4 nearby lights, the same from every side (smoke, dust, steam). Surface: lit like a small sphere facing the camera, the sun per pixel, by the material's Normal where it gives one (debris, snow, leaves), with the sun's highlight where the material sets its Roughness or Metallic (droplets, ice, metal shavings). A material whose Shading Model is Unlit, as one that filters the scene, has no such choice."},
             entt::attribute{"group", "Lighting"},
-            entt::attribute{"predicate", is_sprite_mode},
+            entt::attribute{"predicate", is_lit_material},
         })
         .data<&particle_emitter_component::set_lighting_wrap, &particle_emitter_component::get_lighting_wrap>("lighting_wrap"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -1576,13 +1931,13 @@ REFLECT(particle_emitter_component)
             entt::attribute{"predicate", is_surface_lit},
             entt::attribute{"former_name", "light_wrap"},
         })
-        .data<&particle_emitter_component::set_normal_texture, &particle_emitter_component::get_normal_texture>("normal_texture"_hs)
+        .data<&particle_emitter_component::set_ambient_light, &particle_emitter_component::get_ambient_light>("ambient_light"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "normal_texture"},
-            entt::attribute{"pretty_name", "Normal Texture"},
-            entt::attribute{"tooltip", "A tangent-space normal map (green up) laid out like the texture, sheet frames included: the sun lights each pixel by it, so smoke and debris show their shapes. Unset, particles light as spheres."},
+            entt::attribute{"name", "ambient_light"},
+            entt::attribute{"pretty_name", "Ambient Light"},
+            entt::attribute{"tooltip", "Where the particles take the light around them from. Sky: the sky's light, the same wherever a particle is. Global Illumination: the scene's bounced light where the particle is, so smoke in a dark room is dark and takes the colour of what is lit beside it. That needs a view whose Global Illumination runs and a material with at most two textures that reads no Scene Color. The emitters of a view that are lit this way share the probes for a box of particles about eight metres a side near the camera, and for a larger one farther away. The nearest come first, and an emitter that does not fit keeps the sky's light, as the particles do wherever one of these is missing. While such an emitter is in view the Global Illumination keeps probes around its particles."},
             entt::attribute{"group", "Lighting"},
-            entt::attribute{"predicate", is_surface_lit},
+            entt::attribute{"predicate", is_lit},
         })
         .data<&particle_emitter_component::set_receive_shadows, &particle_emitter_component::get_receive_shadows>("receive_shadows"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -1645,7 +2000,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "sort_backend"},
             entt::attribute{"pretty_name", "Sort Backend"},
-            entt::attribute{"tooltip", "Where the particles are culled and sorted for each view. GPU: one compute pass for every emitter drawn. CPU: on the main thread. They look the same either way."},
+            entt::attribute{"tooltip", "Where the particles are culled and sorted for each view. GPU: one compute pass for every emitter drawn. CPU: on the main thread. They look the same either way. An emitter that collides with Scene Surfaces is always culled and sorted on the GPU, which alone knows where its particles went."},
             entt::attribute{"group", "Sorting"},
             entt::attribute{"predicate", is_sprite_mode},
             entt::attribute{"former_name", "simulation_backend"},
@@ -1835,7 +2190,19 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("restitution", obj.get_restitution()));
     try_save(ar, ser20::make_nvp("friction", obj.get_friction()));
     try_save(ar, ser20::make_nvp("max_bounces", obj.get_max_bounces()));
+    try_save(ar, ser20::make_nvp("collide_with", obj.get_collide_with()));
+    try_save(ar, ser20::make_nvp("collision_layers", obj.get_collision_layers()));
+    try_save(ar, ser20::make_nvp("collision_quality", obj.get_collision_quality()));
+    try_save(ar, ser20::make_nvp("rest_speed", obj.get_rest_speed()));
+    try_save(ar, ser20::make_nvp("lifetime_loss", obj.get_lifetime_loss()));
+    try_save(ar, ser20::make_nvp("bounce_scatter", obj.get_bounce_scatter()));
+    try_save(ar, ser20::make_nvp("align_to_surface", obj.get_align_to_surface()));
+    try_save(ar, ser20::make_nvp("collision_decal", obj.get_collision_decal()));
     try_save(ar, ser20::make_nvp("sub_emitters", obj.get_sub_emitters()));
+    try_save(ar, ser20::make_nvp("send_birth_events", obj.get_send_birth_events()));
+    try_save(ar, ser20::make_nvp("send_death_events", obj.get_send_death_events()));
+    try_save(ar, ser20::make_nvp("send_collision_events", obj.get_send_collision_events()));
+    try_save(ar, ser20::make_nvp("notify_hit_entities", obj.get_notify_hit_entities()));
     try_save(ar, ser20::make_nvp("size_over_life", obj.get_size_over_life()));
     try_save(ar, ser20::make_nvp("size_axes", obj.get_size_axes()));
     try_save(ar, ser20::make_nvp("size_axes_over_life", obj.get_size_axes_over_life()));
@@ -1854,8 +2221,6 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("spin_over_life", obj.get_spin_over_life()));
     try_save(ar, ser20::make_nvp("random_spin_direction", obj.get_random_spin_direction()));
     try_save(ar, ser20::make_nvp("align_to_direction", obj.get_align_to_direction()));
-    try_save(ar, ser20::make_nvp("texture", obj.get_texture()));
-    try_save(ar, ser20::make_nvp("texture_mode", obj.get_texture_mode()));
     try_save(ar, ser20::make_nvp("texture_sheet_tiles", obj.get_texture_sheet_tiles()));
     try_save(ar, ser20::make_nvp("texture_sheet_cycles", obj.get_texture_sheet_cycles()));
     try_save(ar, ser20::make_nvp("texture_sheet_randomize", obj.get_texture_sheet_randomize()));
@@ -1875,14 +2240,16 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("facing_axis", obj.get_facing_axis()));
     try_save(ar, ser20::make_nvp("render_mesh", obj.get_render_mesh()));
     try_save(ar, ser20::make_nvp("render_material", obj.get_render_material()));
+    try_save(ar, ser20::make_nvp("material_overrides", obj.get_material_instance()));
+    try_save(ar, ser20::make_nvp("custom_data_x", obj.get_custom_data_x()));
+    try_save(ar, ser20::make_nvp("custom_data_y", obj.get_custom_data_y()));
     try_save(ar, ser20::make_nvp("mesh_cast_shadows", obj.get_mesh_cast_shadows()));
-    try_save(ar, ser20::make_nvp("blend_mode", obj.get_blend_mode()));
     try_save(ar, ser20::make_nvp("pivot", obj.get_pivot()));
     try_save(ar, ser20::make_nvp("soft_fade_distance", obj.get_soft_fade_distance()));
     try_save(ar, ser20::make_nvp("camera_offset", obj.get_camera_offset()));
     try_save(ar, ser20::make_nvp("lighting", obj.get_lighting()));
+    try_save(ar, ser20::make_nvp("ambient_light", obj.get_ambient_light()));
     try_save(ar, ser20::make_nvp("lighting_wrap", obj.get_lighting_wrap()));
-    try_save(ar, ser20::make_nvp("normal_texture", obj.get_normal_texture()));
     try_save(ar, ser20::make_nvp("receive_shadows", obj.get_receive_shadows()));
     try_save(ar, ser20::make_nvp("light_count", obj.get_light_count()));
     try_save(ar, ser20::make_nvp("light_intensity", obj.get_light_intensity()));
@@ -1906,6 +2273,8 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("write_velocity", obj.get_write_velocity()));
     try_save(ar, ser20::make_nvp("velocity_alpha_threshold", obj.get_velocity_alpha_threshold()));
     try_save(ar, ser20::make_nvp("ribbon_facing", obj.get_ribbon_facing()));
+    try_save(ar, ser20::make_nvp("ribbon_count", obj.get_ribbon_count()));
+    try_save(ar, ser20::make_nvp("ribbon_smoothing", obj.get_ribbon_smoothing()));
 }
 SAVE_INSTANTIATE(particle_emitter_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(particle_emitter_component, ser20::oarchive_binary_t);
@@ -2019,6 +2388,88 @@ void load_legacy_motion(Archive& ar, particle_emitter_component& obj)
     obj.set_color_by_speed_speed_range(doubled(obj.get_color_by_speed_speed_range()));
 }
 
+/// Whether the load in progress reads member @p name of the component: every member without a list of what to read
+/// (a prefab instance's overrides), else the ones the list names.
+auto is_emitter_member_read(const char* name) -> bool
+{
+    const auto* path_ctx = serialization::get_path_context();
+    if(path_ctx == nullptr || !path_ctx->is_recording())
+    {
+        return true;
+    }
+    const serialization::path_segment_guard member(name);
+    return path_ctx->should_serialize_property(path_ctx->get_current_path());
+}
+
+/**
+ * @brief What a scene saved before materials drew particles states of an emitter's look, under the keys the emitter
+ * had for it then: its texture, how the texture gives the opacity, how the particles blend, and its normal map.
+ */
+struct particle_legacy_look
+{
+    asset_handle<gfx::texture> texture;
+    asset_handle<gfx::texture> normal_texture;
+    ps_soa::texture_mode texture_mode{ps_soa::texture_mode::multi_channel};
+    ps_soa::blend_mode blend_mode{ps_soa::blend_mode::normal};
+    bool has_texture{};
+    bool has_normal_texture{};
+    bool has_texture_mode{};
+    bool has_blend_mode{};
+
+    auto is_stated() const -> bool
+    {
+        return has_texture || has_normal_texture || has_texture_mode || has_blend_mode;
+    }
+};
+
+/// The old keys of the look, as far as the load reads the members that took them over: the material for the blend and
+/// the texture mode, the material's overrides for the texture, both for the normal map.
+template<typename Archive>
+auto load_legacy_look(Archive& ar) -> particle_legacy_look
+{
+    particle_legacy_look look;
+    const bool reads_material = is_emitter_member_read("render_material");
+    const bool reads_overrides = is_emitter_member_read("material_overrides");
+    // Read whole: the keys stand for members with other names, which are what a list of members names.
+    const serialization::path_context_pause unfiltered;
+    if(reads_material)
+    {
+        look.has_blend_mode = try_load(ar, ser20::make_nvp("blend_mode", look.blend_mode));
+        look.has_texture_mode = try_load(ar, ser20::make_nvp("texture_mode", look.texture_mode));
+    }
+    if(reads_overrides)
+    {
+        look.has_texture = try_load(ar, ser20::make_nvp("texture", look.texture));
+    }
+    if(reads_material || reads_overrides)
+    {
+        look.has_normal_texture = try_load(ar, ser20::make_nvp("normal_texture", look.normal_texture));
+    }
+    return look;
+}
+
+/// Gives @p obj the look @p look states, through the setters a script picks a look with: each takes the Standard
+/// particle material that draws it and keeps the texture as the emitter's override.
+void apply_legacy_look(const particle_legacy_look& look, particle_emitter_component& obj)
+{
+    if(look.has_blend_mode)
+    {
+        obj.set_blend_mode(look.blend_mode);
+    }
+    if(look.has_texture_mode)
+    {
+        obj.set_texture_mode(look.texture_mode);
+    }
+    if(look.has_texture)
+    {
+        obj.set_texture(look.texture);
+    }
+    if(look.has_normal_texture)
+    {
+        obj.set_normal_texture(look.normal_texture);
+    }
+}
+
 } // namespace
 
 LOAD(particle_emitter_component)
@@ -2073,7 +2524,19 @@ LOAD(particle_emitter_component)
     load_property(ar, "restitution", obj.get_restitution(), [&](const auto& v) { obj.set_restitution(v); });
     load_property(ar, "friction", obj.get_friction(), [&](const auto& v) { obj.set_friction(v); });
     load_property(ar, "max_bounces", obj.get_max_bounces(), [&](const auto& v) { obj.set_max_bounces(v); });
+    load_property(ar, "collide_with", obj.get_collide_with(), [&](const auto& v) { obj.set_collide_with(v); });
+    load_property(ar, "collision_layers", obj.get_collision_layers(), [&](const auto& v) { obj.set_collision_layers(v); });
+    load_property(ar, "collision_quality", obj.get_collision_quality(), [&](const auto& v) { obj.set_collision_quality(v); });
+    load_property(ar, "rest_speed", obj.get_rest_speed(), [&](const auto& v) { obj.set_rest_speed(v); });
+    load_property(ar, "lifetime_loss", obj.get_lifetime_loss(), [&](const auto& v) { obj.set_lifetime_loss(v); });
+    load_property(ar, "bounce_scatter", obj.get_bounce_scatter(), [&](const auto& v) { obj.set_bounce_scatter(v); });
+    load_property(ar, "align_to_surface", obj.get_align_to_surface(), [&](const auto& v) { obj.set_align_to_surface(v); });
+    load_property(ar, "collision_decal", obj.get_collision_decal(), [&](const auto& v) { obj.set_collision_decal(v); });
     load_property(ar, "sub_emitters", obj.get_sub_emitters(), [&](const auto& v) { obj.set_sub_emitters(v); });
+    load_property(ar, "send_birth_events", obj.get_send_birth_events(), [&](const auto& v) { obj.set_send_birth_events(v); });
+    load_property(ar, "send_death_events", obj.get_send_death_events(), [&](const auto& v) { obj.set_send_death_events(v); });
+    load_property(ar, "send_collision_events", obj.get_send_collision_events(), [&](const auto& v) { obj.set_send_collision_events(v); });
+    load_property(ar, "notify_hit_entities", obj.get_notify_hit_entities(), [&](const auto& v) { obj.set_notify_hit_entities(v); });
     load_property(ar, "size_over_life", obj.get_size_over_life(), [&](const auto& v) { obj.set_size_over_life(v); });
     load_property(ar, "size_axes", obj.get_size_axes(), [&](const auto& v) { obj.set_size_axes(v); has_size_axes = true; });
     load_property(ar, "size_axes_over_life", obj.get_size_axes_over_life(), [&](const auto& v) { obj.set_size_axes_over_life(v); has_size_axes_over_life = true; });
@@ -2092,8 +2555,6 @@ LOAD(particle_emitter_component)
     load_property(ar, "spin_over_life", obj.get_spin_over_life(), [&](const auto& v) { obj.set_spin_over_life(v); });
     load_property(ar, "random_spin_direction", obj.get_random_spin_direction(), [&](const auto& v) { obj.set_random_spin_direction(v); });
     load_property(ar, "align_to_direction", obj.get_align_to_direction(), [&](const auto& v) { obj.set_align_to_direction(v); });
-    load_property(ar, "texture", obj.get_texture(), [&](const auto& v) { obj.set_texture(v); });
-    load_property(ar, "texture_mode", obj.get_texture_mode(), [&](const auto& v) { obj.set_texture_mode(v); });
     load_property(ar, "texture_sheet_tiles", obj.get_texture_sheet_tiles(), [&](const auto& v) { obj.set_texture_sheet_tiles(v); });
     load_property(ar, "texture_sheet_cycles", obj.get_texture_sheet_cycles(), [&](const auto& v) { obj.set_texture_sheet_cycles(v); });
     load_property(ar, "texture_sheet_randomize", obj.get_texture_sheet_randomize(), [&](const auto& v) { obj.set_texture_sheet_randomize(v); });
@@ -2112,15 +2573,34 @@ LOAD(particle_emitter_component)
     load_property(ar, "stretch_camera_velocity_scale", obj.get_stretch_camera_velocity_scale(), [&](const auto& v) { obj.set_stretch_camera_velocity_scale(v); });
     load_property(ar, "facing_axis", obj.get_facing_axis(), [&](const auto& v) { obj.set_facing_axis(v); });
     load_property(ar, "render_mesh", obj.get_render_mesh(), [&](const auto& v) { obj.set_render_mesh(v); });
-    load_property(ar, "render_material", obj.get_render_material(), [&](const auto& v) { obj.set_render_material(v); });
+    // A scene from before materials drew particles names the look on the emitter itself: it loads as the Standard
+    // particle material of that look, and the material it names is the one its mesh mode drew.
+    const particle_legacy_look legacy_look = load_legacy_look(ar);
+    const bool is_mesh_mode = obj.get_render_mode() == ps_soa::render_mode::mesh;
+    if(!legacy_look.is_stated() || is_mesh_mode)
+    {
+        load_property(ar, "render_material", obj.get_render_material(), [&](const auto& v) { obj.set_render_material(v); });
+    }
+    if(!legacy_look.is_stated())
+    {
+        // The overrides load onto an instance of the material just read, which tells their types.
+        load_property(ar, "material_overrides", obj.get_material_instance(), [&](const auto& v) { obj.set_material_instance(v); });
+    }
+    else if(!is_mesh_mode || (obj.get_render_material().uid().is_nil() && obj.get_render_material().id().empty()))
+    {
+        // In Mesh mode too while no material covers the mesh: the engine's particle materials leave a mesh its own,
+        // and the look is there when the emitter draws sprites again.
+        apply_legacy_look(legacy_look, obj);
+    }
+    load_property(ar, "custom_data_x", obj.get_custom_data_x(), [&](const auto& v) { obj.set_custom_data_x(v); });
+    load_property(ar, "custom_data_y", obj.get_custom_data_y(), [&](const auto& v) { obj.set_custom_data_y(v); });
     load_property(ar, "mesh_cast_shadows", obj.get_mesh_cast_shadows(), [&](const auto& v) { obj.set_mesh_cast_shadows(v); });
-    load_property(ar, "blend_mode", obj.get_blend_mode(), [&](const auto& v) { obj.set_blend_mode(v); });
     load_property(ar, "pivot", obj.get_pivot(), [&](const auto& v) { obj.set_pivot(v); });
     load_property(ar, "soft_fade_distance", obj.get_soft_fade_distance(), [&](const auto& v) { obj.set_soft_fade_distance(v); });
     load_property(ar, "camera_offset", obj.get_camera_offset(), [&](const auto& v) { obj.set_camera_offset(v); });
     load_property(ar, "lighting", obj.get_lighting(), [&](const auto& v) { obj.set_lighting(v); });
+    load_property(ar, "ambient_light", obj.get_ambient_light(), [&](const auto& v) { obj.set_ambient_light(v); });
     load_property(ar, "lighting_wrap", obj.get_lighting_wrap(), [&](const auto& v) { obj.set_lighting_wrap(v); });
-    load_property(ar, "normal_texture", obj.get_normal_texture(), [&](const auto& v) { obj.set_normal_texture(v); });
     load_property(ar, "receive_shadows", obj.get_receive_shadows(), [&](const auto& v) { obj.set_receive_shadows(v); });
     load_property(ar, "light_count", obj.get_light_count(), [&](const auto& v) { obj.set_light_count(v); });
     load_property(ar, "light_intensity", obj.get_light_intensity(), [&](const auto& v) { obj.set_light_intensity(v); });
@@ -2144,6 +2624,8 @@ LOAD(particle_emitter_component)
     load_property(ar, "write_velocity", obj.get_write_velocity(), [&](const auto& v) { obj.set_write_velocity(v); });
     load_property(ar, "velocity_alpha_threshold", obj.get_velocity_alpha_threshold(), [&](const auto& v) { obj.set_velocity_alpha_threshold(v); });
     load_property(ar, "ribbon_facing", obj.get_ribbon_facing(), [&](const auto& v) { obj.set_ribbon_facing(v); });
+    load_property(ar, "ribbon_count", obj.get_ribbon_count(), [&](const auto& v) { obj.set_ribbon_count(v); });
+    load_property(ar, "ribbon_smoothing", obj.get_ribbon_smoothing(), [&](const auto& v) { obj.set_ribbon_smoothing(v); });
 
     // Older scenes: keys that were replaced (a renamed key loads from its former name above).
     if(!has_start_speed)

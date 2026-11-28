@@ -28,9 +28,9 @@ the top source of broken scenes.
     components:["Light",...] to keep responses small.
 - scene_get_component_properties_batch reads one component, optionally only
   some names - the cheapest way to check a value.
-- scene_get_bounds_batch: world AABBs (meshes, particles, world-space UI
-  documents) - overlap, containment and floor-height checks without a
-  screenshot.
+- scene_get_bounds_batch: world AABBs (meshes, particles, lines, trails,
+  world-space UI documents) - overlap, containment and floor-height checks
+  without a screenshot.
 - scene_raycast: what a ray hits on the models' triangles, nearest first
   (entity_id, point, normal, distance). A model with morph target weights is
   hit in the shape they give it. The ray is origin + direction, or

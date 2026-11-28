@@ -151,6 +151,7 @@ void save_binding(Archive& ar, const material_graph_binding& binding)
     try_save(ar, ser20::make_nvp("writes_velocity", binding.writes_velocity));
     try_save(ar, ser20::make_nvp("has_gi_variant", binding.has_gi_variant));
     try_save(ar, ser20::make_nvp("has_gi_reflection_variant", binding.has_gi_reflection_variant));
+    try_save(ar, ser20::make_nvp("particle_use", binding.particle_use));
 }
 
 template<typename Archive>
@@ -198,6 +199,7 @@ void load_binding(Archive& ar, material_graph_binding& binding)
     try_load(ar, ser20::make_nvp("writes_velocity", binding.writes_velocity));
     try_load(ar, ser20::make_nvp("has_gi_variant", binding.has_gi_variant));
     try_load(ar, ser20::make_nvp("has_gi_reflection_variant", binding.has_gi_reflection_variant));
+    try_load(ar, ser20::make_nvp("particle_use", binding.particle_use));
 }
 
 constexpr const char* FUNCTIONS_KEY = "functions";

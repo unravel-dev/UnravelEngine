@@ -2,8 +2,8 @@
 #define __GI_RADIANCE_CACHE_LATTICE_SH__
 /*
  * The lattice probes a radiance cache lookup interpolates: the eight probes around a point in the clipmap it reads,
- * with their trilinear weights. Shared by the screen-probe hand-off (gi_radiance_cache_sample.sh) and the surfaces
- * outside the G-buffer (material_graph/mg_forward.sh FORWARD_GI).
+ * with their trilinear weights. Shared by the screen-probe hand-off (gi_radiance_cache_sample.sh) and what is lit
+ * outside the G-buffer (gi_radiance_cache_surface.sh: the translucency pass's surfaces and the lit particles).
  *
  * The includer declares b_gi_rc_indirection (uint, indexable) and includes gi_radiance_cache_common.sh.
  */

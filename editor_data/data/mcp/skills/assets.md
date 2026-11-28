@@ -58,6 +58,12 @@ inside the project).
   whose class has the file's name is renamed along.
 - assets_duplicate_batch copies files or folders next to themselves
   ("Name (0)"); each copy gets an id of its own.
+- assets_copy_to_project_batch [{asset, to}] copies an asset from any folder
+  into the project with its import settings, under an id of its own. Assets the
+  engine ships (engine:/...) are shared by every project and replaced by an
+  update, so no tool and no editor window changes them: copy one into the
+  project and edit the copy. The Inspector and the Material Graph window show
+  such an asset read only and offer the same copy as Duplicate Into Project.
 - assets_delete_batch is recoverable: the assets move, each with its .meta,
   into one batch of the project's trash (editor/trash).
   assets_restore_deleted {"trash":<batch>} puts them back with the same ids;

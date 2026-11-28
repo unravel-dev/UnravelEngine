@@ -1,0 +1,33 @@
+[code]
+/*
+ * Copies the records of a particle pool that grew into its larger pool: the records live on the GPU, and the ones a
+ * scene collision rewrote there (cs_particle_collide.eshader) exist nowhere else.
+ */
+
+#include <bgfx_compute.sh>
+
+#define PARTICLE_RECORD_UINTS 16u
+
+BUFFER_RO(s_particle_pool_source, uint, 0);
+BUFFER_WO(s_particle_records, uint, 1);
+
+/// x = records to copy.
+uniform vec4 u_particle_pool_copy;
+
+/// Threads in one row of a dispatch (particle_gpu.cpp, dispatch_threads): 65535 groups of 64.
+#define PARTICLE_DISPATCH_ROW_THREADS (65535u * 64u)
+
+NUM_THREADS(64, 1, 1)
+void main()
+{
+	uint index = gl_GlobalInvocationID.y * PARTICLE_DISPATCH_ROW_THREADS + gl_GlobalInvocationID.x;
+	if(index >= uint(u_particle_pool_copy.x))
+	{
+		return;
+	}
+	uint base = index * PARTICLE_RECORD_UINTS;
+	for(uint k = 0u; k < PARTICLE_RECORD_UINTS; ++k)
+	{
+		s_particle_records[base + k] = s_particle_pool_source[base + k];
+	}
+}

@@ -126,14 +126,29 @@ struct emitter_motion_desc
     math::gradient<float> turbulence_over_life;
     /// Collision (world-space emitters): planes with a world normal and an offset from the emitter's origin along
     /// it (normal . (p - origin) = offset; the normal's side is open). A bounce keeps restitution of the speed into
-    /// the plane and loses friction of the speed along it.
+    /// the surface and loses friction of the speed along it. Particles that collide with scene surfaces
+    /// (collision_source::scene_surfaces) count at most motion_offset_bounce_mask bounces.
     collision_mode collision = collision_mode::none;
     std::vector<math::vec4> collision_planes;
     float restitution = 0.5f;
     float friction = 0.2f;
     uint32_t max_bounces = 3;
-    /// A particle touches a plane at this many halves of its size from it (0 = its centre).
+    /// A particle touches a surface at this many halves of its size from it (0 = its centre).
     float collision_radius_scale = 1.0f;
+    /// What the particles can touch.
+    collision_source collide_with = collision_source::planes;
+    /// Physics colliders: the layers (bits of a layer mask) whose colliders the particles touch, and how closely
+    /// their paths are followed.
+    int collision_layers = -1;
+    collision_quality collision_quality = collision_quality::medium;
+    /// A particle that leaves a bounce slower than this, metres per second, rests on the surface instead (0 = never).
+    float rest_speed = 0.0f;
+    /// Share of the life a particle has left that each bounce and each stick takes (0..1).
+    float lifetime_loss = 0.0f;
+    /// Half angle, degrees, of the cone a bounce's direction is turned within at random (rough surfaces).
+    float bounce_scatter = 0.0f;
+    /// A particle at rest lies flat on the surface it rests on (a mesh turns its up axis along the surface's normal).
+    bool align_to_surface = false;
     float spawn_along_path = 1.0f;
     /// Remaps a particle's life before its motion is evaluated (Linear = physical timing).
     bx::Easing::Enum motion_easing = bx::Easing::Linear;
@@ -166,6 +181,10 @@ struct emitter_appearance_desc
     math::gradient<math::color> color_gradient_b;
     /// Multiplier of the color's intensity over life (1 throughout = none).
     math::gradient<float> intensity_over_life;
+    /// Two values over life the emitter's material reads through its Particle Custom Data node (0 throughout by
+    /// default): what they mean is the material's choice.
+    math::gradient<float> custom_data_x;
+    math::gradient<float> custom_data_y;
 
     void reset();
 };
@@ -175,7 +194,6 @@ struct emitter_appearance_desc
  */
 struct emitter_render_desc
 {
-    texture_mode texture_mode = texture_mode::multi_channel;
     render_mode render_mode = render_mode::billboard;
     blend_mode blend_mode = blend_mode::normal;
     /// Particles turn so the texture's top points along their motion.
@@ -228,6 +246,12 @@ struct emitter_render_desc
     float ribbon_tile_time = 0.25f;
     /// Ribbon render mode: which way the ribbon's width runs.
     ribbon_facing ribbon_facing = ribbon_facing::camera;
+    /// Ribbon render mode: how many ribbons the particles form, 1 to k_max_ribbon_count. Each particle joins the next
+    /// ribbon in turn as it is born. Several ribbons are a stream each: the particles of one are born at one place of
+    /// the shape and launched one way at one speed, so a moving emitter leaves as many strands side by side.
+    uint32_t ribbon_count = 1;
+    /// Ribbon render mode: how finely the ribbon bends between two particles.
+    ribbon_smoothing ribbon_smoothing = ribbon_smoothing::none;
     /// Stretched mode: quad length = size x stretch_length_scale + speed x stretch_speed_scale.
     float stretch_length_scale = 1.0f;
     float stretch_speed_scale = 0.1f;
@@ -244,6 +268,8 @@ struct emitter_render_desc
     float max_screen_size = 0.0f;
     /// How the particles are lit (multiply blend stays unlit). Lit particles take the color as their albedo.
     particle_lighting lighting = particle_lighting::unlit;
+    /// Where lit particles take the light around them from.
+    particle_ambient ambient = particle_ambient::sky;
     /// Surface lighting: how far the sun wraps past the lit half (0 = a hard terminator, 1 = lit all round).
     float lighting_wrap = 0.5f;
     /// Lit particles darken in the sun's shadow.
@@ -305,6 +331,27 @@ struct emitter_desc
      */
     auto bake_features() const -> emitter_feature;
 };
+
+/**
+ * @brief Whether the emitter's particles are swept against the physics world's colliders: it collides, with physics
+ * colliders, in world simulation space.
+ */
+auto collides_with_colliders(const emitter_desc& desc) -> bool;
+
+/**
+ * @brief Whether the emitter's particles collide with the surfaces a camera draws, on the GPU: it collides, with scene
+ * surfaces, in world simulation space, and draws something other than meshes (those are placed by the CPU, which
+ * knows of no such contact).
+ */
+auto collides_with_scene_surfaces(const emitter_desc& desc) -> bool;
+
+/**
+ * @brief About the casts a second the particles of an emitter that holds up to @p capacity of them need to collide
+ * with physics colliders: each particle born is swept once a stretch of its life, with one cast along a straight
+ * path and four where gravity, a force or turbulence bends it; bounces add more. 0 for an emitter that does not
+ * collide with them.
+ */
+auto estimate_collision_casts_per_second(const emitter_desc& desc, uint32_t capacity) -> float;
 
 /**
  * @brief True when @p curve holds @p value everywhere.

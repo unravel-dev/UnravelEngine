@@ -11,6 +11,7 @@
 #include <engine/rendering/model.h>
 #include <engine/rendering/pipeline/pipeline.h>
 #include <engine/rendering/shadow_atlas.h>
+#include <engine/rendering/shadow_geometry_source.h>
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
@@ -720,6 +721,8 @@ struct shadow_visibility_data
     math::bbox world_bounds;
     /// Set for an instanced source (mesh particles, scripted instance draws): its instances cast instead of the entity's model.
     const instanced_mesh_source* instances = nullptr;
+    /// Set for geometry built for the frame (lines, trails): it casts instead of the entity's model.
+    const shadow_geometry_source* geometry = nullptr;
 };
 using shadow_map_models_t = hpp::small_vector<shadow_visibility_data>;
 
@@ -938,6 +941,14 @@ private:
         movers_only,
     };
 
+    /// Geometry built for the frame (shadow_visibility_data::geometry), recorded by collect_shadow_casters and drawn
+    /// by submit_shadow_casters into the views of its mask that render.
+    struct geometry_caster
+    {
+        const shadow_geometry_source* source = nullptr;
+        uint8_t view_mask = 0;
+    };
+
     /// A caster on the individual path (no batching), recorded by collect_shadow_casters and drawn by
     /// submit_shadow_casters into the views that render.
     struct individual_caster
@@ -1064,6 +1075,15 @@ private:
                                                bool skinned,
                                                ::unravel::rendering::pipeline_stats* stats = nullptr);
 
+    /// Draws @p caster into shadow view @p view_id with the material's own shadow program, or the plain one for a
+    /// material that needs none. False when the draw could not be made yet (its shader is not compiled, the frame has
+    /// no room for its geometry): the view's cached map must not be kept.
+    auto submit_geometry_caster(const geometry_caster& caster,
+                                bgfx::ViewId view_id,
+                                ShadowMapSettings* currentSmSettings,
+                                const RenderState& render_state,
+                                ::unravel::rendering::pipeline_stats* stats) -> bool;
+
     /// Draws a view's runs of packed instances (cascade_runs_) and empties the list: static parts with the instanced
     /// program, baked parts with the baked program when the device draws baked animation.
     void submit_shadow_runs(instanced_run_list& runs,
@@ -1160,6 +1180,10 @@ private:
     bgfx::UniformHandle restore_params_{bgfx::kInvalidHandle};
     /// Scratch of collect_shadow_casters / submit_shadow_casters.
     std::vector<individual_caster> individual_casters_;
+    std::vector<geometry_caster> geometry_casters_;
+    /// The views a geometry caster could not be drawn into by the last submit_shadow_casters: their maps are not
+    /// kept as cached.
+    uint8_t missed_geometry_views_ = 0;
     std::vector<caster_facts> caster_facts_;
     /// Forgets every view key (new or lost render targets).
     void invalidate_view_keys();

@@ -11,6 +11,8 @@
 #include <engine/loading_screen.h>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/ecs/systems/particle_system.h>
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/scripting/script.h>
 
@@ -718,6 +720,8 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     cache_.on_collision_exit_method =
         cache_.script_component_type.get_method("internal_n2m_on_collision_exit", 3);
     cache_.on_joint_break_method = cache_.script_component_type.get_method("internal_n2m_on_joint_break", 5);
+    cache_.on_particle_events_method = cache_.script_component_type.get_method("internal_n2m_on_particle_events", 2);
+    cache_.on_particle_hits_method = cache_.script_component_type.get_method("internal_n2m_on_particle_hits", 2);
     cache_.on_animation_event_method =
         cache_.script_component_type.get_method("internal_n2m_on_animation_event", 8);
     cache_.invoke_method = cache_.script_component_type.get_method("internal_n2m_invoke", 2);
@@ -1214,6 +1218,7 @@ void script_system::on_frame_update(rtti::context& ctx, const frame_times& times
         if(play.is_simulation_running() && !play.is_simulation_paused())
         {
             dispatch_animation_events(scn);
+            dispatch_particle_events(scn);
         }
 
         if(play.is_simulation_running() && !play.is_simulation_paused() && cache_.update_invoker.valid())
@@ -1231,6 +1236,155 @@ void script_system::on_frame_update(rtti::context& ctx, const frame_times& times
         log_exception(e);
     }
     is_updating_ = false;
+}
+
+namespace
+{
+/// The entity whose scripts take what happens to @p entity: itself, or its nearest ancestor with scripts.
+auto find_script_receiver(entt::handle entity) -> entt::handle
+{
+    entt::handle receiver = entity;
+    while(receiver && !(receiver.all_of<script_component>() && receiver.get<script_component>().has_script_components()))
+    {
+        auto* transform = receiver.try_get<transform_component>();
+        receiver = transform ? transform->get_parent() : entt::handle{};
+    }
+    return receiver;
+}
+
+using managed_particle_event = dotnetpp_backend::managed_interface::particle_event;
+// ParticleEvent in ParticleEmitterComponent.cs has this layout: the events cross as its bytes.
+static_assert(sizeof(managed_particle_event) == 19 * sizeof(float), "ParticleEvent is 19 floats, ints and ids of 4 bytes");
+
+/// @p event as scripts read it: its color as a picker (sRGB) color, like the one a burst takes.
+auto to_managed_particle_event(const ps_soa::particle_event& event) -> managed_particle_event
+{
+    using converter = dotnet::managed_interface::converter;
+    using managed_vector = dotnetpp_backend::managed_interface::vector3;
+    const math::vec4 color = math::clamp(event.color, math::vec4(0.0f), math::vec4(1.0f));
+    managed_particle_event managed;
+    managed.type = int32_t(event.type);
+    managed.position = converter::convert<math::vec3, managed_vector>(event.position);
+    managed.velocity = converter::convert<math::vec3, managed_vector>(event.velocity);
+    managed.normal = converter::convert<math::vec3, managed_vector>(event.normal);
+    managed.surface_point = converter::convert<math::vec3, managed_vector>(event.surface_point);
+    managed.color = converter::convert<math::color, dotnetpp_backend::managed_interface::color>(
+        math::color(color.r, color.g, color.b, color.a).to_srgb());
+    managed.size = event.size;
+    // Scripts read entity 0 as none.
+    managed.entity = event.entity == ps_soa::no_particle_entity ? entt::entity(0) : entt::entity(event.entity);
+    return managed;
+}
+
+/// The events of @p events of the kinds in @p kinds (ps_soa::particle_event_type bits), as scripts read them.
+auto to_managed_particle_events(const std::vector<ps_soa::particle_event>& events, uint32_t kinds)
+    -> std::vector<managed_particle_event>
+{
+    std::vector<managed_particle_event> managed;
+    for(const auto& event : events)
+    {
+        if((uint32_t(event.type) & kinds) != 0u)
+        {
+            managed.push_back(to_managed_particle_event(event));
+        }
+    }
+    return managed;
+}
+
+/// A collision with a collider, and the entity whose scripts are told of it.
+struct particle_hit
+{
+    entt::entity receiver = entt::null;
+    managed_particle_event event;
+};
+
+/// The collisions of @p events with a collider whose entity, or its nearest ancestor, has scripts: the ones each
+/// receiver is told of together, in the order they came.
+auto find_particle_hits(entt::registry& registry, const std::vector<ps_soa::particle_event>& events) -> std::vector<particle_hit>
+{
+    std::vector<particle_hit> hits;
+    // Collisions in a row often name one collider: its receiver is looked up once.
+    entt::entity touched = entt::null;
+    entt::entity receiver = entt::null;
+    for(const auto& event : events)
+    {
+        if(event.type != ps_soa::particle_event_type::collision || event.entity == ps_soa::no_particle_entity)
+        {
+            continue;
+        }
+        const auto entity = entt::entity(event.entity);
+        if(entity != touched)
+        {
+            touched = entity;
+            // The collider's entity may have gone since the particle's path was swept.
+            const entt::handle found = registry.valid(entity) ? find_script_receiver(entt::handle(registry, entity))
+                                                              : entt::handle{};
+            receiver = found ? found.entity() : entt::entity(entt::null);
+        }
+        if(receiver != entt::null)
+        {
+            hits.push_back({receiver, to_managed_particle_event(event)});
+        }
+    }
+    std::stable_sort(hits.begin(),
+                     hits.end(),
+                     [](const particle_hit& a, const particle_hit& b)
+                     {
+                         return entt::to_integral(a.receiver) < entt::to_integral(b.receiver);
+                     });
+    return hits;
+}
+
+/// Tells each receiver of @p hits of the particles of the emitter on entity @p emitter that touched its colliders,
+/// in one call. @p hits holds the ones of each receiver together.
+void send_particle_hits(entt::registry& registry, entt::entity emitter, const std::vector<particle_hit>& hits)
+{
+    std::vector<managed_particle_event> of_receiver;
+    for(size_t first = 0; first < hits.size();)
+    {
+        const entt::entity receiver = hits[first].receiver;
+        of_receiver.clear();
+        for(; first < hits.size() && hits[first].receiver == receiver; ++first)
+        {
+            of_receiver.push_back(hits[first].event);
+        }
+        // A handler before this one may have destroyed the receiver.
+        auto* scripts = registry.valid(receiver) ? registry.try_get<script_component>(receiver) : nullptr;
+        if(scripts != nullptr)
+        {
+            scripts->on_particle_hits(emitter, of_receiver);
+        }
+    }
+}
+} // namespace
+
+void script_system::dispatch_particle_events(scene& scn)
+{
+    APP_SCOPE_PERF("Script/Particle Events");
+    if(!cache_.on_particle_events_method.valid() || !cache_.on_particle_hits_method.valid())
+    {
+        return;
+    }
+    auto& registry = *scn.registry;
+    // Taken out first: a handler may change an emitter, or destroy its entity.
+    std::vector<particle_script_events> batches;
+    engine::context().get_cached<particle_system>().take_script_events(batches);
+    for(const auto& batch : batches)
+    {
+        const auto own_events = to_managed_particle_events(batch.events, batch.sent_kinds);
+        // An emitter whose entity is gone has no scripts to tell; the entities its particles touched still hear.
+        const entt::handle receiver = !own_events.empty() && registry.valid(batch.emitter)
+                                          ? find_script_receiver(entt::handle(registry, batch.emitter))
+                                          : entt::handle{};
+        if(receiver)
+        {
+            receiver.get<script_component>().on_particle_events(batch.emitter, own_events);
+        }
+        if(batch.notifies_hit_entities)
+        {
+            send_particle_hits(registry, batch.emitter, find_particle_hits(registry, batch.events));
+        }
+    }
 }
 
 void script_system::dispatch_animation_events(scene& scn)
@@ -1265,12 +1419,7 @@ void script_system::dispatch_animation_events(scene& scn)
         animation->get_player().clear_fired_events();
 
         // The animated entity takes its events, or its nearest ancestor with scripts.
-        entt::handle receiver(registry, source);
-        while(receiver && !(receiver.all_of<script_component>() && receiver.get<script_component>().has_script_components()))
-        {
-            auto* transform = receiver.try_get<transform_component>();
-            receiver = transform ? transform->get_parent() : entt::handle{};
-        }
+        const entt::handle receiver = find_script_receiver(entt::handle(registry, source));
         if(!receiver)
         {
             continue;

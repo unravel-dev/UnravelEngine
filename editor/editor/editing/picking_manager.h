@@ -4,6 +4,7 @@
 #include <engine/frame_times.h>
 #include <engine/assets/asset_handle.h>
 #include <engine/rendering/camera.h>
+#include <engine/rendering/dynamic_geometry/dynamic_geometry.h>
 #include <engine/rendering/gpu_program.h>
 #include <engine/rendering/material_graph/graph_material_programs.h>
 #include <hpp/optional.hpp>
@@ -49,6 +50,9 @@ public:
     void on_frame_render(rtti::context& ctx, const frame_times& times);
 
     void on_frame_pick(rtti::context& ctx, delta_t dt);
+    /// Draws what the Line and the Trail of @p entity draw into the pick pass @p view in the colour of the entity's
+    /// id, a thin strip widened to a few pixels of @p original_camera. False when none of it is in the pick's frustum.
+    auto pick_dynamic_renderers(entt::handle entity, const camera& original_camera, const camera& pick_camera, bgfx::ViewId view) -> bool;
 
     auto get_pick_texture() const -> const std::shared_ptr<gfx::texture>&;
 
@@ -79,6 +83,8 @@ private:
     /// The ids of graph materials whose World Position Offset moves their vertices: their own vertex shader with the
     /// id's fragment shader, so a click on the moved surface picks it.
     graph_material_programs moved_vertex_programs_;
+    /// Scratch of the pick pass for a line or a trail: it keeps its memory between picks.
+    dynamic_geometry pick_geometry_;
     asset_handle<gfx::shader> id_fragment_shader_;
     /// Read blit into this
     std::array<std::uint8_t, tex_id_dim * tex_id_dim * 4> blit_data_;

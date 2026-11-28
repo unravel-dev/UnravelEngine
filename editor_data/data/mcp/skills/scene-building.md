@@ -50,7 +50,7 @@ scene_create_batch makes everything the hierarchy's Create menu makes, in one
 undo step, each item checked before anything is created: kind empty,
 primitive (primitive: a built-in shape's name), mesh / prefab (asset: key or
 uid), light (light_type), reflection_probe (probe_type), camera, volume,
-audio_source, particle_emitter, text, ui_document.
+audio_source, particle_emitter, line, trail, text, ui_document.
 
 1. Group parents (kind empty, one per room / area).
 2. Architecture - floors, walls, pedestals (kind primitive). Pass material

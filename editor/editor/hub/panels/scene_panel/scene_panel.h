@@ -19,6 +19,23 @@
 
 namespace unravel
 {
+/// The Scene view's editing of the points of the one selected Line: a handle on each point, and the gizmo on the one
+/// that was picked by its handle.
+struct line_point_edit
+{
+    /// The Line whose points have handles; none while the selection is anything but one entity with a Line.
+    entt::handle entity;
+    /// The point that holds the gizmo, or -1 while the entity's own gizmo shows.
+    int picked = -1;
+    /// The point whose handle is under the mouse this frame, or -1.
+    int hovered = -1;
+    /// A press on a handle is still held: it moves nothing, and the drag that follows it draws no selection rectangle.
+    bool holds_press = false;
+    /// The view's image on the screen.
+    ImVec2 image_min;
+    ImVec2 image_max;
+};
+
 class scene_panel : public entity_panel
 
 {
@@ -187,6 +204,7 @@ private:
     ImVec2 drag_start_pos_{};
     ImVec2 drag_current_pos_{};
     bool was_using_gizmo_{false};
+    line_point_edit line_point_edit_{};
 
     std::string fullscreen_name_{};
 

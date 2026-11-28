@@ -9,23 +9,6 @@
 
 namespace unravel
 {
-namespace
-{
-namespace ANONYMOUS
-{
-/// Material texture mip bias while TAA jitters the view: the jitter integrates the slightly sharper mip's
-/// extra detail instead of aliasing it.
-constexpr float material_taa_mip_bias = -0.3f;
-
-/// The G-buffer's u_camera_clip_planes: near, far, and the material texture mip bias (TAA jitter active or not).
-auto make_geometry_clip_planes(const camera& view_camera) -> math::vec4
-{
-    const bool is_jittered = view_camera.get_aa_data().y > 1.0f;
-    return {view_camera.get_near_clip(), view_camera.get_far_clip(), is_jittered ? material_taa_mip_bias : 0.0f, 0.0f};
-}
-
-} // namespace ANONYMOUS
-} // namespace
 
 namespace rendering
 {
@@ -372,7 +355,7 @@ void deferred::run_g_buffer_pass(hpp::span<const visibility_data> visibility_set
         else
         {
             const auto camera_pos = camera.get_position();
-            const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
+            const auto clip_planes = pipeline::get_material_clip_planes(camera);
             model::submit_callbacks callbacks;
             callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
             {
@@ -485,6 +468,11 @@ void deferred::run_g_buffer_pass(hpp::span<const visibility_data> visibility_set
         submit_batched_skinned_geometry(pass, camera);
     }
     submit_source_runs(pass, camera);
+    // Lines and trails draw after the decals, which they keep none of.
+    if(phase == g_buffer_phase::after_decals || !decal_pass_.has_decals())
+    {
+        submit_dynamic_geometry(pass, camera);
+    }
     bgfx::discard();
 }
 
@@ -607,7 +595,7 @@ void deferred::submit_prepared_geometry(batch_collector& collector,
         return;
     }
     const auto camera_pos = camera.get_position();
-    const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
+    const auto clip_planes = pipeline::get_material_clip_planes(camera);
     // A batch whose instances carry per-instance material values (material instances sharing the draw) uses the
     // layout and program that read them; the others keep the matrix-only layout.
     plain_batches_.clear();
@@ -729,7 +717,7 @@ void deferred::submit_source_runs(gfx::render_pass& pass, const camera& camera)
     source_runs_.merge();
     auto& baked_animations = engine::context().get_cached<rendering_system>().get_baked_animations();
     const auto camera_pos = camera.get_position();
-    const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
+    const auto clip_planes = pipeline::get_material_clip_planes(camera);
     // No LOD transition: packed instances draw their LOD fully.
     const auto lod_params = math::vec3{0.0f, -1.0f, 1.0f};
     const auto draw_runs = [&](geom_program& program, bool is_baked)
@@ -768,6 +756,8 @@ void deferred::submit_source_runs(gfx::render_pass& pass, const camera& camera)
     {
         draw_runs(geom_program_skinned_baked_instanced_, true);
     }
+    // Drawn: the G-buffer's phase after the decals does not draw them again.
+    source_runs_.clear();
 }
 
 auto deferred::is_velocity_wanted(const run_params& params) const -> bool
@@ -1162,15 +1152,18 @@ auto deferred::collect_translucent_draws(const run_context& run) -> translucent_
     translucent_order_independent_.clear();
     translucent_velocity_.clear();
     translucent_probes_.clear();
-    if(translucent_models_.empty())
+    dynamic_forward_probes_.clear();
+    if(translucent_models_.empty() && dynamic_forward_count_ == 0)
     {
         return list;
     }
     APP_SCOPE_PERF("Rendering/Translucency/Collect");
     stats_.drawn_translucent_models += uint32_t(translucent_models_.size());
     const math::vec3 eye = run.cam.get_position();
+    // The models' keys, then the ones of the lines and trails: an index past the models names one of those.
+    const size_t model_count = translucent_models_.size();
     std::vector<translucent_mesh_list::key> keys;
-    keys.reserve(translucent_models_.size());
+    keys.reserve(model_count + dynamic_forward_count_);
     for(size_t i = 0; i < translucent_models_.size(); ++i)
     {
         const auto& model_comp = translucent_models_[i].entity.get<model_component>();
@@ -1190,6 +1183,14 @@ auto deferred::collect_translucent_draws(const run_context& run) -> translucent_
         }
         list.has_depth_prepass = list.has_depth_prepass || reads.has_depth_prepass;
         list.scene_textures |= reads.scene_textures;
+    }
+    for(size_t i = 0; i < dynamic_forward_count_; ++i)
+    {
+        const auto& draw = dynamic_forward_[i];
+        keys.push_back({draw.sort_priority, math::distance2(eye, draw.world_bounds.get_center())});
+        translucent_order_.push_back(model_count + i);
+        list.has_depth_prepass = list.has_depth_prepass || draw.graph->has_depth_prepass();
+        list.scene_textures |= draw.graph->get_scene_textures();
     }
     std::stable_sort(translucent_order_.begin(),
                      translucent_order_.end(),
@@ -1222,9 +1223,22 @@ auto deferred::collect_translucent_draws(const run_context& run) -> translucent_
     {
         translucent_model_probes_.push_back(find_forward_probe(run, element.entity.get<model_component>().get_world_bounds().get_center()));
     }
-    list.draw = [this, &run](bgfx::ViewId view, size_t index)
+    dynamic_forward_probes_.reserve(dynamic_forward_count_);
+    for(size_t i = 0; i < dynamic_forward_count_; ++i)
     {
-        draw_translucent_model(view, translucent_order_[index], run, false);
+        dynamic_forward_probes_.push_back(find_forward_probe(run, dynamic_forward_[i].world_bounds.get_center()));
+    }
+    list.draw = [this, &run, model_count](bgfx::ViewId view, size_t index)
+    {
+        const size_t entry = translucent_order_[index];
+        if(entry < model_count)
+        {
+            draw_translucent_model(view, entry, run, false);
+        }
+        else
+        {
+            draw_translucent_dynamic(view, entry - model_count, run);
+        }
     };
     list.has_order_independent = !translucent_order_independent_.empty();
     if(list.has_order_independent)
@@ -1325,6 +1339,9 @@ auto deferred::collect_translucent_gi_points(const math::vec3& eye) -> const std
 {
     translucent_gi_points_.clear();
     translucent_gi_marked_.assign(translucent_models_.size(), 0);
+    particle_gi_candidates_.clear();
+    particle_gi_marked_.clear();
+    particle_gi_marks_.clear();
     // The nearest models first: past the budget, the farthest go without and take the sky's light, whole.
     auto& order = translucent_gi_order_;
     order.clear();
@@ -1345,7 +1362,51 @@ auto deferred::collect_translucent_gi_points(const math::vec3& eye) -> const std
             translucent_gi_marked_[index] = 1;
         }
     }
+    collect_particle_gi_points(eye);
     return translucent_gi_points_.empty() ? nullptr : &translucent_gi_points_;
+}
+
+void deferred::collect_particle_gi_points(const math::vec3& eye)
+{
+    if(current_run_->runs_particle_step())
+    {
+        collect_particle_gi_emitters(current_run_->scn,
+                                     current_run_->cam,
+                                     current_run_->dt,
+                                     current_run_->render_mask,
+                                     particle_gi_candidates_);
+    }
+    // The nearest emitters first, as the models: the ones past what the models left, or past the emitters' own share,
+    // go without, whole.
+    auto& order = translucent_gi_order_;
+    order.clear();
+    for(size_t i = 0; i < particle_gi_candidates_.size(); ++i)
+    {
+        order.emplace_back(math::distance2(eye, particle_gi_candidates_[i].bounds.get_center()), i);
+    }
+    std::sort(order.begin(), order.end());
+    for(const auto& [distance, index] : order)
+    {
+        const auto& emitter = particle_gi_candidates_[index];
+        if(add_particle_gi_points(emitter.bounds, eye))
+        {
+            particle_gi_marked_.push_back(emitter.handle);
+        }
+    }
+    set_particle_gi_emitters(particle_gi_marked_);
+}
+
+auto deferred::add_particle_gi_points(const math::bbox& bounds, const math::vec3& eye) -> bool
+{
+    auto& candidates = translucent_gi_model_points_;
+    candidates.clear();
+    // A box no clipmap reaches has no point: its particles read no probe and take the sky's light.
+    if(!gi_radiance_cache::make_volume_points(bounds, eye, max_gi_points_per_model, candidates) || candidates.empty())
+    {
+        return false;
+    }
+    const size_t points_left = gi_radiance_cache::max_surface_points - translucent_gi_points_.size();
+    return particle_gi_marks_.add(candidates, points_left, max_particle_gi_probes, translucent_gi_points_);
 }
 
 auto deferred::add_translucent_gi_points(const math::bbox& bounds, const math::vec3& eye) -> bool
@@ -1424,7 +1485,7 @@ auto deferred::draw_gi_reflection_layer_model(bgfx::ViewId view,
     const math::vec3 params{1.0f - transition_progress, 0.0f, 0.0f};
     const math::vec3 params_inv{-transition_progress, 0.0f, 0.0f};
     const auto camera_pos = camera.get_position();
-    const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
+    const auto clip_planes = pipeline::get_material_clip_planes(camera);
     auto extras = model_comp.get_submit_extras(false);
     extras.material_pass = model_material_pass::forward;
     math::vec3 lod_params = params;
@@ -1616,6 +1677,88 @@ auto get_translucent_blend_state(material_blend_mode mode, bool has_reactive_tar
 }
 } // namespace
 
+auto deferred::submit_forward_surface(bgfx::ViewId view,
+                                      const graph_material& graph,
+                                      geom_program& prog,
+                                      const math::bbox& bounds,
+                                      const forward_probe& probe,
+                                      bool uses_gi_reflections,
+                                      bool uses_gi,
+                                      bool order_independent,
+                                      uint8_t discard) -> uint32_t
+{
+    // Until a variant is compiled the surface draws the next one down.
+    const char* plain_variant = order_independent ? "oit" : gfx::shader::DEFAULT_VARIANT;
+    gpu_program* program =
+        uses_gi_reflections ? graph_material_programs_.begin(graph, prog.vertex_variant, order_independent ? "oit_gi_reflect" : "gi_reflect")
+                            : nullptr;
+    if(program == nullptr)
+    {
+        uses_gi_reflections = false;
+        program = uses_gi ? graph_material_programs_.begin(graph, prog.vertex_variant, order_independent ? "oit_gi" : "gi") : nullptr;
+    }
+    if(program == nullptr)
+    {
+        uses_gi = false;
+        program = graph_material_programs_.begin(graph, prog.vertex_variant, plain_variant);
+    }
+    if(program == nullptr)
+    {
+        // Not compiled yet: the surface draws once its shader is there.
+        bgfx::discard(discard);
+        return 0;
+    }
+    const bool has_reactive_target = forward_has_reactive_target_;
+    graph_material_programs_.submit_values(graph);
+    bind_forward_lighting(bounds,
+                          graph.get_shading_model() == material_shading_model::default_lit,
+                          probe,
+                          graph.get_scene_textures(),
+                          uses_gi,
+                          uses_gi_reflections);
+    if(order_independent)
+    {
+        // Weighed sums in any order (fs_material_graph_forward.sh FORWARD_OIT): one blend serves both targets.
+        const uint64_t sums = BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,
+                                                             BGFX_STATE_BLEND_ONE,
+                                                             BGFX_STATE_BLEND_ZERO,
+                                                             BGFX_STATE_BLEND_INV_SRC_ALPHA);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | gfx::depth_test_nearer | sums |
+                       (graph.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK));
+        bgfx::submit(view, program->native_handle(), 0, discard);
+        return 1;
+    }
+    const uint32_t blend_rgba = has_reactive_target ? ps_soa::reactive_blend_rgba : 0u;
+    if(graph.has_depth_prepass())
+    {
+        // The depth first, then the colour where it is the nearest layer: both faces of a two-sided surface at once.
+        const uint64_t cull = graph.get_cull_type() == cull_type::none ? 0 : graph.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
+        bgfx::setState(BGFX_STATE_WRITE_Z | gfx::depth_test_nearer | BGFX_STATE_MSAA | cull);
+        bgfx::submit(view, program->native_handle(), 0, BGFX_DISCARD_NONE);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | gfx::depth_test_nearer_or_equal | BGFX_STATE_MSAA | cull |
+                           get_translucent_blend_state(graph.get_blend_mode(), has_reactive_target),
+                       blend_rgba);
+        bgfx::submit(view, program->native_handle(), 0, discard);
+        return 1;
+    }
+    const uint64_t base = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | gfx::depth_test_nearer | BGFX_STATE_MSAA |
+                          get_translucent_blend_state(graph.get_blend_mode(), has_reactive_target);
+    const bool is_two_sided = graph.get_cull_type() == cull_type::none;
+    if(is_two_sided)
+    {
+        // Two sided: the back faces first, then the front ones over them.
+        bgfx::setState(base | BGFX_STATE_CULL_CW, blend_rgba);
+        bgfx::submit(view, program->native_handle(), 0, BGFX_DISCARD_NONE);
+        bgfx::setState(base | BGFX_STATE_CULL_CCW, blend_rgba);
+    }
+    else
+    {
+        bgfx::setState(base | (graph.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK), blend_rgba);
+    }
+    bgfx::submit(view, program->native_handle(), 0, discard);
+    return is_two_sided ? 2 : 1;
+}
+
 void deferred::draw_translucent_model(bgfx::ViewId view, size_t index, const run_context& run, bool order_independent)
 {
     const auto& element = translucent_models_[index];
@@ -1638,9 +1781,8 @@ void deferred::draw_translucent_model(bgfx::ViewId view, size_t index, const run
     const math::vec3 params_inv{-transition_progress, 0.0f, 0.0f};
     const math::bbox bounds = model_comp.get_world_bounds();
     const forward_probe& probe = translucent_model_probes_[index];
-    const bool has_reactive_target = forward_has_reactive_target_;
     const auto camera_pos = camera.get_position();
-    const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
+    const auto clip_planes = pipeline::get_material_clip_planes(camera);
     auto extras = model_comp.get_submit_extras(false);
     extras.material_pass = model_material_pass::forward;
     math::vec3 lod_params = params;
@@ -1664,85 +1806,22 @@ void deferred::draw_translucent_model(bgfx::ViewId view, size_t index, const run
         geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
         // The sorted draws and the order-independent ones each take their own surfaces.
         const bool is_drawn = graph != nullptr && graph->is_forward() && graph->is_order_independent() == order_independent;
-        // Lit surfaces take the GI's light in their "gi" variants where the run's GI updated its radiance cache, and with
-        // GI Reflections the traced reflections of their front layer in their "gi_reflect" variants; until a variant is
-        // compiled they draw the next one down.
-        bool uses_gi_reflections = is_drawn && draws_with_gi_reflections(*graph, index);
-        bool uses_gi = is_drawn && draws_with_gi(*graph, index);
-        const char* plain_variant = order_independent ? "oit" : gfx::shader::DEFAULT_VARIANT;
-        gpu_program* program =
-            uses_gi_reflections
-                ? graph_material_programs_.begin(*graph, prog.vertex_variant, order_independent ? "oit_gi_reflect" : "gi_reflect")
-                : nullptr;
-        if(program == nullptr)
+        if(!is_drawn)
         {
-            uses_gi_reflections = false;
-            program = uses_gi ? graph_material_programs_.begin(*graph, prog.vertex_variant, order_independent ? "oit_gi" : "gi")
-                              : nullptr;
-        }
-        if(program == nullptr)
-        {
-            uses_gi = false;
-            program = is_drawn ? graph_material_programs_.begin(*graph, prog.vertex_variant, plain_variant) : nullptr;
-        }
-        if(program == nullptr)
-        {
-            // Not compiled yet: the surface draws once its shader is there.
             bgfx::discard(discard);
             return;
         }
-        graph_material_programs_.submit_values(*graph);
-        bind_forward_lighting(bounds,
-                              graph->get_shading_model() == material_shading_model::default_lit,
-                              probe,
-                              graph->get_scene_textures(),
-                              uses_gi,
-                              uses_gi_reflections);
-        if(order_independent)
-        {
-            // Weighed sums in any order (fs_material_graph_forward.sh FORWARD_OIT): one blend serves both targets.
-            const uint64_t sums = BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,
-                                                                 BGFX_STATE_BLEND_ONE,
-                                                                 BGFX_STATE_BLEND_ZERO,
-                                                                 BGFX_STATE_BLEND_INV_SRC_ALPHA);
-            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | gfx::depth_test_nearer | sums |
-                           (graph->get_render_states(true, false, false) & BGFX_STATE_CULL_MASK));
-            bgfx::submit(view, program->native_handle(), 0, discard);
-            stats_.drawn_translucent_submeshes++;
-            return;
-        }
-        const uint32_t blend_rgba = has_reactive_target ? ps_soa::reactive_blend_rgba : 0u;
-        if(graph->has_depth_prepass())
-        {
-            // The depth first, then the colour where it is the nearest layer: both faces of a two-sided surface at once.
-            const uint64_t cull = graph->get_cull_type() == cull_type::none
-                                      ? 0
-                                      : graph->get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
-            bgfx::setState(BGFX_STATE_WRITE_Z | gfx::depth_test_nearer | BGFX_STATE_MSAA | cull);
-            bgfx::submit(view, program->native_handle(), 0, BGFX_DISCARD_NONE);
-            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | gfx::depth_test_nearer_or_equal | BGFX_STATE_MSAA | cull |
-                               get_translucent_blend_state(graph->get_blend_mode(), has_reactive_target),
-                           blend_rgba);
-            bgfx::submit(view, program->native_handle(), 0, discard);
-            stats_.drawn_translucent_submeshes++;
-            return;
-        }
-        const uint64_t base = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | gfx::depth_test_nearer | BGFX_STATE_MSAA |
-                              get_translucent_blend_state(graph->get_blend_mode(), has_reactive_target);
-        if(graph->get_cull_type() == cull_type::none)
-        {
-            // Two sided: the back faces first, then the front ones over them.
-            bgfx::setState(base | BGFX_STATE_CULL_CW, blend_rgba);
-            bgfx::submit(view, program->native_handle(), 0, BGFX_DISCARD_NONE);
-            stats_.drawn_translucent_submeshes++;
-            bgfx::setState(base | BGFX_STATE_CULL_CCW, blend_rgba);
-        }
-        else
-        {
-            bgfx::setState(base | (graph->get_render_states(true, false, false) & BGFX_STATE_CULL_MASK), blend_rgba);
-        }
-        bgfx::submit(view, program->native_handle(), 0, discard);
-        stats_.drawn_translucent_submeshes++;
+        // Lit surfaces take the GI's light in their "gi" variants where the run's GI updated its radiance cache, and with
+        // GI Reflections the traced reflections of their front layer in their "gi_reflect" variants.
+        stats_.drawn_translucent_submeshes += submit_forward_surface(view,
+                                                                     *graph,
+                                                                     prog,
+                                                                     bounds,
+                                                                     probe,
+                                                                     draws_with_gi_reflections(*graph, index),
+                                                                     draws_with_gi(*graph, index),
+                                                                     order_independent,
+                                                                     discard);
     };
     callbacks.setup_end = [&](const model::submit_callbacks::params&)
     {

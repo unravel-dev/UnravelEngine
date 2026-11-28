@@ -976,6 +976,12 @@ auto content_browser_item::is_folder() const -> bool
     return entry.entry.is_directory();
 }
 
+namespace
+{
+/// How much of the color of the window it is in covers a dimmed card.
+constexpr float CONTENT_CARD_DIMMED_VEIL = 0.6f;
+} // namespace
+
 auto draw_content_card(const content_card_view& card, ImGuiID id) -> bool
 {
     ImGuiWindow* window = ImGui::GetCurrentWindow();
@@ -999,6 +1005,12 @@ auto draw_content_card(const content_card_view& card, ImGuiID id) -> bool
     content_card::draw_card_import_badge(draw_list, layout.well, fonts, card);
     content_card::draw_card_current_badge(draw_list, layout.well, fonts, card);
     content_card::draw_card_labels(draw_list, layout, fonts, card);
+    if(card.is_dimmed)
+    {
+        const bool is_in_popup = (window->RootWindow->Flags & ImGuiWindowFlags_Popup) != 0;
+        const ImU32 veil = ImGui::GetColorU32(is_in_popup ? ImGuiCol_PopupBg : ImGuiCol_WindowBg, CONTENT_CARD_DIMMED_VEIL);
+        draw_list->AddRectFilled(layout.card.Min, layout.card.Max, veil, content_card::CARD_ROUNDING);
+    }
     content_card::draw_card_ring(draw_list, layout, card, state);
     return is_pressed;
 }

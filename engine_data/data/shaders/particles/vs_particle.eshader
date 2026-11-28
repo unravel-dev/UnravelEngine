@@ -1,25 +1,49 @@
 [variants]
+// default: the particle quads as the overdraw view counts them (fs_particle_overdraw.eshader).
 default
-// lit: the particle quads of lit emitters, with the light each particle receives (particle_lighting.sh).
-lit        LIT
-// velocity: the particle quads of the velocity pass: the color pass's corners with their motion since the last frame. The
-// clip positions are interpolated and divided per pixel (fs_particle_velocity.eshader), as the scene's velocity pass does.
-velocity   VELOCITY
-// textures, lit_textures, velocity_textures: the same, reading the particle data from textures (shader_buffer.sh) on
-// devices without storage buffers in vertex shaders, as WebGL 2.
+// textures: the same, reading the particle data from textures (shader_buffer.sh) on devices without storage buffers in
+// vertex shaders, as WebGL 2.
 textures            SHADER_BUFFER_TEXTURES
-lit_textures        LIT SHADER_BUFFER_TEXTURES
-velocity_textures   VELOCITY SHADER_BUFFER_TEXTURES
+// graph: the quads a material draws, with what its graph reads of the particle
+// (material_graph/fs_material_graph_particle.sh).
+// graph_lit: with the light each particle receives (particle_lighting.sh), for a lit material on an emitter whose
+// Lighting lights it.
+// graph_lit_gi: the same with the GI's light around the particle in place of the sky's, for an emitter whose Ambient
+// Light is Global Illumination. The GI's buffers are no textures: it has no texture twin, and such a device draws
+// graph_lit_textures.
+// graph_velocity: with the corners' motion since the last frame, for the velocity pass. The clip positions are
+// interpolated and divided per pixel, as the scene's velocity pass does.
+// Their *_textures twins as above.
+graph                     PARTICLE_GRAPH
+graph_lit                 PARTICLE_GRAPH LIT
+graph_lit_gi              PARTICLE_GRAPH LIT PARTICLE_GI
+graph_velocity            PARTICLE_GRAPH VELOCITY
+graph_textures            PARTICLE_GRAPH SHADER_BUFFER_TEXTURES
+graph_lit_textures        PARTICLE_GRAPH LIT SHADER_BUFFER_TEXTURES
+graph_velocity_textures   PARTICLE_GRAPH VELOCITY SHADER_BUFFER_TEXTURES
 
 [inputs]
 vec3 a_position
 vec2 a_texcoord0
 
 [outputs]
-vec3 v_texcoord0
-vec2 v_texcoord1
-vec4 v_color0 = vec4(1.0, 0.0, 0.0, 1.0)
+#if PARTICLE_GRAPH
+vec4 v_particle_uv
+vec4 v_particle_next
+vec4 v_particle_color = vec4(1.0, 1.0, 1.0, 1.0)
+vec4 v_particle_fade = vec4(1.0, 0.0, 1.0, 0.0)
+vec4 v_particle_data
+vec4 v_particle_custom
+vec3 v_particle_wpos
+vec3 v_particle_center
+vec3 v_particle_normal = vec3(0.0, 0.0, 1.0)
+vec4 v_particle_tangent = vec4(1.0, 0.0, 0.0, 1.0)
+#else
+vec3 v_sprite_uv
+vec2 v_sprite_next_uv
+vec4 v_sprite_color = vec4(1.0, 0.0, 0.0, 1.0)
 vec4 v_particle = vec4(0.0, 0.0, 1.0, 0.0)
+#endif
 #if LIT
 vec3 v_light_ambient = vec3(1.0, 1.0, 1.0)
 vec4 v_light_sun
@@ -66,15 +90,35 @@ void main()
     particle_vertex vertex = particle_build_vertex(a_position, a_texcoord0, uint(gl_InstanceID));
     gl_Position = vertex.clip;
 #if VELOCITY
-    // z: the opacity from which a texel writes its motion.
-    v_texcoord0 = vec3(vertex.texcoord0, particle_static(vertex.emitter, PARTICLE_STATIC_STRETCH).w);
+    // The opacity from which a texel writes its motion.
+    float response = particle_static(vertex.emitter, PARTICLE_STATIC_STRETCH).w;
 #else
-    // z: the emitter's TAA response, the scale of its reactive coverage.
-    v_texcoord0 = vec3(vertex.texcoord0, particle_static(vertex.emitter, PARTICLE_STATIC_STRETCH).z);
+    // The emitter's TAA response, the scale of its reactive coverage.
+    float response = particle_static(vertex.emitter, PARTICLE_STATIC_STRETCH).z;
 #endif
-    v_texcoord1 = vertex.texcoord1;
+#if PARTICLE_GRAPH
+    // xy: the whole quad's uv, zw: this sheet frame's.
+    v_particle_uv = vec4(vertex.surface_uv, vertex.texcoord0);
+    // xy: the next sheet frame's uv, z: the blend toward it, w: the erosion threshold.
+    v_particle_next = vec4(vertex.texcoord1, vertex.particle.x, vertex.particle.w);
+    v_particle_color = vertex.base_color;
+    // x: the view's fades, y: the soft fade distance, z: the view depth, w: the response above.
+    v_particle_fade = vec4(vertex.view_fade, vertex.particle.y, vertex.particle.z, response);
+    v_particle_data = vertex.data;
+    v_particle_custom = vertex.custom;
+    // Offsets from the view origin, as the pass's matrices take them (view_origin.sh).
+    v_particle_wpos = vertex.world_position;
+    v_particle_center = vertex.position;
+    v_particle_normal = vertex.normal;
+    // w: the side the quad's y axis lies on of normal x tangent.
+    float bitangent_sign = dot(cross(vertex.normal, vertex.axis_x), vertex.axis_y) < 0.0 ? -1.0 : 1.0;
+    v_particle_tangent = vec4(vertex.axis_x, bitangent_sign);
+#else
+    v_sprite_uv = vec3(vertex.texcoord0, response);
+    v_sprite_next_uv = vertex.texcoord1;
     v_particle = vertex.particle;
-    v_color0 = vertex.color;
+    v_sprite_color = vertex.color;
+#endif
 #if LIT
     particle_light_vertex(vertex, v_light_ambient, v_light_sun, v_sun_local);
     // The unit quad's corner, -1..1: the sphere the quad stands for.

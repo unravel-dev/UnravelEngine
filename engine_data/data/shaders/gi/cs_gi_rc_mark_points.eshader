@@ -1,6 +1,7 @@
 [code]
 /*
- * Radiance cache marking for surfaces outside the G-buffer (the translucency pass's lit surfaces): every point of
+ * Radiance cache marking for what is lit outside the G-buffer (the translucency pass's lit surfaces and the lit
+ * particles that take the GI's light): every point of
  * b_gi_rc_points marks the eight lattice probes around it in the finest clipmap that covers it, as a screen probe marks
  * those of its own position (cs_gi_rc_mark.eshader), so the probes those surfaces interpolate exist and are traced.
  * One thread per point.

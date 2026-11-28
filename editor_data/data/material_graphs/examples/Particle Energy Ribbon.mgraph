@@ -1,0 +1,30 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "value": [0.0, 0.0, 0.0]},
+    {"pin": "emissive", "link": "glow"},
+    {"pin": "opacity_mask", "link": "alpha"}
+   ], "settings": [{"name": "blend_mode", "value": "additive"}, {"name": "shading_model", "value": "unlit"}, {"name": "particle_use", "value": "on"}]},
+   {"id": "uv", "type": "texcoord"},
+   {"id": "from_middle", "type": "subtract", "inputs": [{"pin": "a", "link": "uv.u"}, {"pin": "b", "value": [0.5]}]},
+   {"id": "off_middle", "type": "abs", "inputs": [{"pin": "in", "link": "from_middle"}]},
+   {"id": "to_edge", "type": "multiply", "inputs": [{"pin": "a", "link": "off_middle"}, {"pin": "b", "value": [2.0]}]},
+   {"id": "across", "type": "one_minus", "inputs": [{"pin": "in", "link": "to_edge"}]},
+   {"id": "beam", "type": "power", "inputs": [{"pin": "a", "link": "across"}, {"pin": "b", "value": [2.0]}]},
+   {"id": "flow", "type": "panner", "inputs": [{"pin": "uv", "link": "uv"}, {"pin": "speed", "value": [0.0, -1.5]}]},
+   {"id": "arcs", "type": "noise", "inputs": [{"pin": "uv", "link": "flow"}, {"pin": "scale", "value": [6.0]}, {"pin": "octaves", "value": [2.0]}]},
+   {"id": "flicker", "type": "lerp", "inputs": [{"pin": "a", "value": [0.5]}, {"pin": "b", "value": [1.5]}, {"pin": "alpha", "link": "arcs"}]},
+   {"id": "energy", "type": "multiply", "inputs": [{"pin": "a", "link": "beam"}, {"pin": "b", "link": "flicker"}]},
+   {"id": "toward_head", "type": "one_minus", "inputs": [{"pin": "in", "link": "uv.v"}]},
+   {"id": "tint", "type": "color_parameter", "inputs": [{"pin": "value", "value": [0.6, 2.5, 5.0, 1.0]}],
+    "settings": [{"name": "name", "value": "Energy Color"}]},
+   {"id": "color", "type": "vertex_color"},
+   {"id": "glow", "type": "multiply", "inputs": [{"pin": "a", "link": "tint.rgb"}, {"pin": "b", "link": "color.rgb"}]},
+   {"id": "along", "type": "multiply", "inputs": [{"pin": "a", "link": "energy"}, {"pin": "b", "link": "toward_head"}]},
+   {"id": "faded", "type": "multiply", "inputs": [{"pin": "a", "link": "along"}, {"pin": "b", "link": "color.a"}]},
+   {"id": "alpha", "type": "saturate", "inputs": [{"pin": "in", "link": "faded"}]}
+  ]
+ }
+}

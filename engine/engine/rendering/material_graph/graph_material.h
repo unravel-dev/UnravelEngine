@@ -233,6 +233,18 @@ public:
     auto has_depth_prepass() const -> bool;
     /// A surface of the translucency pass that draws its motion into the velocity buffer, over the whole surface.
     auto writes_velocity() const -> bool;
+    /// A surface of the translucency pass also compiled for particle emitters (Particle Use): its shader has the
+    /// "particle" variant, which draws an emitter's sprites, trails and ribbons.
+    auto is_particle_use() const -> bool;
+
+    /// What a draw binds of the material, hashed: the code of its shader, its parameter registers and its textures
+    /// with how each is read. Equal for two materials that bind the same (binds_same_draw); it changes only with the
+    /// material's revision.
+    auto get_draw_hash() const -> uint64_t;
+    /// Whether a draw binds the same of this material and @p other: the same code, the same parameter values and the
+    /// same loaded textures read the same way. Two material instances with the same overrides then share a draw, and
+    /// so do two materials of the same code. Textures still loading read the default texture, and bind alike.
+    auto binds_same_draw(const graph_material& other) const -> bool;
 
     /// The material casts a shadow: an opaque surface, or one of the translucency pass whose Cast Shadow is Dithered.
     auto casts_shadow() const -> bool;

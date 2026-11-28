@@ -10,7 +10,8 @@
  *   0 s_particle_records  uint  PARTICLE_RECORD_UINTS per particle
  *   1 s_particle_static   vec4  PARTICLE_STATIC_VEC4S per emitter (changes with the emitter's settings)
  *   2 s_particle_dynamic  uint  PARTICLE_DYNAMIC_UINTS per emitter (rewritten every frame)
- *   3 s_particle_luts     vec4  PARTICLE_LUT_ROWS x PARTICLE_LUT_SIZE per curve set
+ *   3 s_particle_luts     vec4  PARTICLE_LUT_ROWS x PARTICLE_LUT_SIZE per curve set (a cutout table takes blocks of
+ *                               that size of its own)
  * and binds the turbulence noise volume this file declares at stage 7 (s_particle_noise). They are shader buffers
  * (shader_buffer.sh) of uint4, float4, uint4 and float4 elements: storage buffers, or textures in the
  * SHADER_BUFFER_TEXTURES variants, for devices without storage buffers in vertex shaders, as WebGL 2.
@@ -24,6 +25,15 @@
 #define PARTICLE_LUT_SIZE 256u
 #define PARTICLE_LUT_ROWS 7u
 #define PARTICLE_TICKS_PER_SECOND 8192.0
+/// The bit of a record's motion_offset that marks a particle at rest (particle_record.h, motion_offset_rest_bit):
+/// the other bits are the age, ticks, it came to rest at, and its velocity holds the unit normal of its surface.
+#define PARTICLE_MOTION_REST_BIT 0x80000000u
+/// A record in the GPU's pool counts its particle's bounces off scene surfaces (cs_particle_collide.eshader) in the
+/// bits of motion_offset between the age and the rest bit (particle_record.h, motion_offset_bounce_shift,
+/// motion_offset_bounce_mask and motion_offset_age_mask).
+#define PARTICLE_MOTION_BOUNCE_SHIFT 25u
+#define PARTICLE_MOTION_BOUNCE_MASK 0x3fu
+#define PARTICLE_MOTION_AGE_MASK 0x1ffffffu
 
 /// Slots of the emitter static row (particle_record.h, static_slot).
 #define PARTICLE_STATIC_APPEARANCE 0u
@@ -99,6 +109,7 @@
 #define PARTICLE_SALT_SHEET 4u
 #define PARTICLE_SALT_GRADIENT 5u
 #define PARTICLE_SALT_SHEET_ROW 6u
+#define PARTICLE_SALT_MATERIAL 9u
 
 /// Below this drag x time the exponential forms lose precision (the gravity term divides a small difference by
 /// drag squared); their series are used instead, exact to float precision up to it.
@@ -116,7 +127,12 @@ struct particle_record
 	float size_offset;
 	vec4 tint;
 	uint emitter;
+	/// The ribbon of its emitter the particle is of (ribbon render mode).
+	uint ribbon;
+	/// The age, ticks, its current path segment began at, with PARTICLE_MOTION_REST_BIT when it rests there.
 	uint motion_offset;
+	/// Its bounces off scene surfaces so far.
+	uint bounces;
 };
 
 struct particle_state
@@ -199,7 +215,9 @@ particle_record particle_load(uint slot)
 	record.size_offset = uintBitsToFloat(shape.w);
 	record.tint = vec4(particle_unpack_half2(identity.x), particle_unpack_half2(identity.y));
 	record.emitter = identity.z & 0xffffu;
-	record.motion_offset = identity.w;
+	record.ribbon = identity.z >> 16u;
+	record.motion_offset = identity.w & (PARTICLE_MOTION_AGE_MASK | PARTICLE_MOTION_REST_BIT);
+	record.bounces = (identity.w >> PARTICLE_MOTION_BOUNCE_SHIFT) & PARTICLE_MOTION_BOUNCE_MASK;
 	return record;
 }
 
@@ -328,6 +346,12 @@ particle_state particle_evaluate_at(particle_record record, uint now)
 	}
 	vec3 position = record.start + displacement + acceleration * gamma;
 	velocity = (velocity + acceleration * lambda) * time_rate;
+	// A particle at rest stays at its start: no time passes on its path (its segment began at its age), and nothing
+	// moves it.
+	if((record.motion_offset & PARTICLE_MOTION_REST_BIT) != 0u)
+	{
+		velocity = vec3_splat(0.0);
+	}
 	if((flags & PARTICLE_FLAG_LOCAL_SPACE) != 0u)
 	{
 		position = particle_local_to_world_point(emitter, position);
@@ -414,12 +438,19 @@ float particle_angle(particle_record record, particle_state state)
 	{
 		speed = -speed;
 	}
-	// A spin curve turns by the curve's integral over the life lived (in lifetimes) times the lifetime.
+	// A particle at rest stopped turning at the age it came to rest.
+	float lifespan = max(float(record.lifespan), 1.0) / PARTICLE_TICKS_PER_SECOND;
 	float spun_time = state.age;
+	float spun_life = state.life;
+	if((record.motion_offset & PARTICLE_MOTION_REST_BIT) != 0u)
+	{
+		spun_time = min(spun_time, float(record.motion_offset & ~PARTICLE_MOTION_REST_BIT) / PARTICLE_TICKS_PER_SECOND);
+		spun_life = clamp(spun_time / lifespan, 0.0, 1.0);
+	}
+	// A spin curve turns by the curve's integral over the life lived (in lifetimes) times the lifetime.
 	if((particle_flags(emitter) & PARTICLE_FLAG_SPIN_CURVE) != 0u)
 	{
-		float lifespan = max(float(record.lifespan), 1.0) / PARTICLE_TICKS_PER_SECOND;
-		spun_time = particle_lut(emitter, PARTICLE_LUT_ROW_SHAPE, state.life).z * lifespan;
+		spun_time = particle_lut(emitter, PARTICLE_LUT_ROW_SHAPE, spun_life).z * lifespan;
 	}
 	return mix(rotation.z, rotation.w, particle_random(record.seed, PARTICLE_SALT_ROTATION)) + speed * spun_time;
 }
@@ -508,7 +539,8 @@ void particle_apply_turbulence(particle_record record, inout particle_state stat
 particle_state particle_place_at(particle_record record, uint now)
 {
 	particle_state state = particle_evaluate_at(record, now);
-	if((particle_flags(record.emitter) & PARTICLE_FLAG_TURBULENCE) != 0u)
+	// The turbulence pushes a particle along its path, and a particle at rest has none.
+	if((particle_flags(record.emitter) & PARTICLE_FLAG_TURBULENCE) != 0u && (record.motion_offset & PARTICLE_MOTION_REST_BIT) == 0u)
 	{
 		particle_apply_turbulence(record, state);
 	}
@@ -612,6 +644,20 @@ float particle_erosion(particle_record record, particle_state state)
 		return 0.0;
 	}
 	return particle_lut(record.emitter, PARTICLE_LUT_ROW_SPEED, state.life).z;
+}
+
+/// The emitter's two Custom Data curves at the particle's life: what a material reads through Particle Custom Data
+/// (particle_eval.cpp, evaluate_particle_custom_data).
+vec2 particle_custom_data(particle_record record, particle_state state)
+{
+	return particle_lut(record.emitter, PARTICLE_LUT_ROW_TURBULENCE_SIZE_Z, state.life).zw;
+}
+
+/// What a material reads of the particle through Particle Data: its age in seconds, its life (0..1), a number in
+/// [0, 1) of its own for its whole life, and its speed in metres per second.
+vec4 particle_material_data(particle_record record, particle_state state)
+{
+	return vec4(state.age, state.life, particle_random(record.seed, PARTICLE_SALT_MATERIAL), length(state.velocity));
 }
 
 #endif // PARTICLE_COMMON_SH_HEADER_GUARD

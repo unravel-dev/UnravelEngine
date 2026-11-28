@@ -87,6 +87,15 @@ struct MaterialInputs
 	vec3 world_position_ddy;
 	// Post-process: the exposure the view is shown with (Exposure); 1 elsewhere.
 	float exposure;
+	// A particle emitter's sprites, trails and ribbons (fs_material_graph_particle.sh); zero elsewhere, the sheet
+	// coordinates copies of the first texture coordinates.
+	// The particle's age in seconds, its life from 0 to 1, a random number of its own and its speed (Particle Data).
+	vec4 particle_data;
+	// The emitter's Custom Data X and Y at the particle's life (Particle Custom Data), how far its texture sheet is
+	// between this frame and the next (Particle Frame Blend) and its erosion threshold (Particle Erosion).
+	vec4 particle_custom;
+	// The coordinates of the particle's texture sheet frame (xy) and of the frame after it (zw) (Particle Sub UV).
+	vec4 particle_sheet_uv;
 #ifdef MATERIAL_GRAPH_INSTANCE_MATERIAL
 	// The instance's own values of the first parameter registers (the instance_material variant): the varyings are
 	// main()'s alone, so the graph's code reads them here.
@@ -157,7 +166,8 @@ struct MaterialVertex
 	_i.object_axis_x = (_packed0).xyz; \
 	_i.object_axis_y = (_packed1).xyz; \
 	_i.object_axis_z = (_packed2).xyz
-// The inputs of the other domains, for a main of a domain without them: a surface reads no decal and no exposure.
+// The inputs of the other domains and of particles, for a main without them: a surface reads no decal and no
+// exposure, and only a particle's main has a particle (it sets those after this). Set after uv0.
 #define mg_set_domain_input_defaults(_i) \
 	_i.decal_data = vec4(1.0, 0.0, 0.0, 0.0); \
 	_i.decal_position = vec3_splat(0.0); \
@@ -165,7 +175,10 @@ struct MaterialVertex
 	_i.decal_position_ddy = vec3_splat(0.0); \
 	_i.world_position_ddx = vec3_splat(0.0); \
 	_i.world_position_ddy = vec3_splat(0.0); \
-	_i.exposure = 1.0
+	_i.exposure = 1.0; \
+	_i.particle_data = vec4_splat(0.0); \
+	_i.particle_custom = vec4_splat(0.0); \
+	_i.particle_sheet_uv = vec4(_i.uv0, _i.uv0)
 // Of a pixel, from the graph's own vertex shader where its pixels read them (MATERIAL_UV1: v_texcoord1,
 // MATERIAL_VERTEX_COLOR: v_color0); the first texture coordinates and white otherwise.
 #if MATERIAL_UV1
@@ -486,6 +499,37 @@ vec4 mg_triplanar(sampler2D tex, vec3 position, vec3 normal, float sharpness, fl
 	vec4 along_y = mg_texture2D(tex, position.xz, bias);
 	vec4 along_z = mg_texture2D(tex, position.xy, bias);
 	return along_x * weights.x + along_y * weights.y + along_z * weights.z;
+}
+
+// Flipbook Sample node: the texture at uv, crossfaded into its texel at next_uv by blend. The second read happens only
+// while a blend is in progress, with the first read's gradients (both frames cover the same texels): a read with
+// implicit gradients must not sit in flow control.
+#if BGFX_SHADER_TYPE_FRAGMENT
+vec4 mg_flipbook(sampler2D tex, vec2 uv, vec2 next_uv, float blend, float bias)
+{
+	float gradient_scale = exp2(bias);
+	vec2 uv_dx = dFdx(uv) * gradient_scale;
+	vec2 uv_dy = dFdy(uv) * gradient_scale;
+	vec4 texel = mg_texture2D(tex, uv, bias);
+	if(blend > 0.0)
+	{
+		texel = mix(texel, texture2DGrad(tex, next_uv, uv_dx, uv_dy), blend);
+	}
+	return texel;
+}
+#else
+vec4 mg_flipbook(sampler2D tex, vec2 uv, vec2 next_uv, float blend, float bias)
+{
+	return mix(texture2DLod(tex, uv, 0.0), texture2DLod(tex, next_uv, 0.0), blend);
+}
+#endif
+
+// Particle Erosion node: x the alpha with what lies below the threshold gone and the rest rescaled to stay whole at 1
+// (the alpha itself at threshold 0), y the threshold, z the eroded alpha over the alpha (0 where the alpha is 0).
+vec3 mg_particle_erosion(float alpha, float threshold)
+{
+	float eroded = threshold <= 0.0 ? alpha : saturate((alpha - threshold) / max(1.0 - threshold, 0.001));
+	return vec3(eroded, threshold, alpha > 0.0001 ? eroded / alpha : 0.0);
 }
 
 // A Color Ramp's eased blend between two stops (Interpolation: Smooth).
@@ -854,6 +898,17 @@ vec2 mg_spherize(vec2 uv, vec2 center, float strength, vec2 offset)
 	vec2 d = uv - center;
 	float d2 = dot(d, d);
 	return uv + d * (d2 * d2 * strength) + offset;
+}
+
+// Flipbook Motion node: the coordinates of a flipbook's frame (xy) and of the frame after it (zw), pulled toward each
+// other by the sheet's motion vectors (red along u, green along v, 0.5 none; strength is what a full channel moves, in
+// texture coordinates). The frame is read back along its motion by the blend, so what it shows has moved on by that
+// much; the next frame is read forward by what is left of the blend, so what it shows has not got there yet.
+vec4 mg_flipbook_motion(vec2 uv, vec2 next_uv, float blend, vec2 motion, vec2 next_motion, float strength)
+{
+	vec2 moved = (motion * 2.0 - 1.0) * strength;
+	vec2 next_moved = (next_motion * 2.0 - 1.0) * strength;
+	return vec4(uv - moved * blend, next_uv + next_moved * (1.0 - blend));
 }
 
 #define mg_flipbook_from_top 1.0

@@ -1,4 +1,5 @@
 #include "mcp_asset_lookup.h"
+#include "mcp_project_paths.h"
 #include "mcp_tools_common.h"
 
 #include <asset_compiler/asset_compiler.h>
@@ -243,10 +244,17 @@ auto describe_compile(const material_graph_compile_result& result, bool include_
     }
     else
     {
-        json += fmt::format(R"(,"blend_mode":{},"shading_model":{},"draws_in_translucency_pass":{})",
+        json += fmt::format(R"(,"blend_mode":{},"shading_model":{},"draws_in_translucency_pass":{},"particle_use":{})",
                             make_json_string(get_material_blend_mode_key(result.blend_mode)),
                             make_json_string(get_material_shading_model_key(result.shading_model)),
-                            bool_to_json(result.is_forward()));
+                            bool_to_json(result.is_forward()),
+                            bool_to_json(result.particle_use));
+        if(result.particle_use)
+        {
+            // What a particle draw leaves the graph, fewer than a mesh's.
+            json += fmt::format(R"(,"particle_max_textures":{})",
+                                get_material_graph_particle_max_textures(result.shading_model, result.scene_textures));
+        }
     }
     if(include_code)
     {
@@ -313,11 +321,11 @@ auto read_graph_argument(const simdjson::dom::object& args, material_graph& grap
     return true;
 }
 
-/// The graph material named by the "key" argument; empty with @p error when it is not one.
-auto find_graph_material(rtti::context& ctx, const simdjson::dom::object& args, std::string& error) -> asset_handle<material>
+/// The graph material asset @p key names (a key or a uid); empty, with @p error, when there is none or it is no
+/// material graph.
+auto find_graph_material_by_key(rtti::context& ctx, const std::string& key, std::string& error) -> asset_handle<material>
 {
-    std::string key;
-    if(!read_string(args, "key", key) || key.empty())
+    if(key.empty())
     {
         error = "key is required: the graph material's asset key (app:/data/....mat)";
         return {};
@@ -333,6 +341,14 @@ auto find_graph_material(rtti::context& ctx, const simdjson::dom::object& args, 
         return {};
     }
     return asset;
+}
+
+/// The graph material the tool's key argument names.
+auto find_graph_material(rtti::context& ctx, const simdjson::dom::object& args, std::string& error) -> asset_handle<material>
+{
+    std::string key;
+    read_string(args, "key", key);
+    return find_graph_material_by_key(ctx, key, error);
 }
 
 /// Compiles the generated code, and the vertex code if there is any, with shaderc for the renderer the editor draws
@@ -461,7 +477,9 @@ void register_material_graph_tools(mcp_tool_registry& registry)
          .description =
              "Replaces the graph of a graph material (key: app:/data/....mat) and saves it, as the Material Graph "
              "window does: the scene shows the new graph once the material recompiles (a moment); the "
-             "window, if it shows the material, follows. create:true makes the .mat when there is none. graph is the "
+             "window, if it shows the material, follows. create:true makes the .mat when there is none, under "
+             "app:/data. A material the engine ships is not written: assets_copy_to_project_batch copies it into "
+             "the project, and the copy takes the graph. graph is the "
              "object material_graph_get returns (nodes, comments; positions may be left out - the window lays the "
              "graph out). The result says what the compile found; a graph with errors is saved too (its errors draw "
              "defaults), so read errors and fix them. Not undoable through edit_undo: keep the material_graph_get "
@@ -481,32 +499,48 @@ void register_material_graph_tools(mcp_tool_registry& registry)
              read_string(args, "key", key);
              bool create = false;
              read_bool(args, "create", create);
-             // The file decides: looking a missing key up registers it with the asset manager.
+             // A new material's place is checked as every place a tool writes to is. Whether it is new the file decides:
+             // looking a missing key up registers it with the asset manager.
+             const std::vector<std::string> formats{ex::get_format<material>()};
+             std::string new_key;
+             std::string place_error;
+             const bool names_place =
+                 ends_with_ci(key, formats.front()) && to_project_data_file_key(ctx, key, formats, new_key, place_error);
              fs::error_code ec;
-             const bool exists = !key.empty() && fs::exists(fs::resolve_protocol(key), ec);
+             const bool exists = names_place && fs::exists(fs::resolve_protocol(new_key), ec);
              bool is_created = false;
-             if(!exists && create)
+             if(create && names_place && !exists)
              {
-                 if(!ends_with_ci(key, ex::get_format<material>()) || !starts_with(key, "app:/"))
+                 if(!asset_actions::create_material_graph(ctx, fs::resolve_protocol(new_key), graph))
                  {
-                     return {.text = "A new graph material's key is app:/<folder>/<name>.mat", .is_error = true};
+                     return {.text = "Could not create " + new_key + ".", .is_error = true};
                  }
-                 if(!asset_actions::create_material_graph(ctx, fs::resolve_protocol(key), graph))
-                 {
-                     return {.text = "Could not create " + key, .is_error = true};
-                 }
+                 key = new_key;
                  is_created = true;
              }
              else
              {
-                 const auto asset = find_graph_material(ctx, args, error);
+                 // By the place's own key where the argument named one, as a path relative to app:/data does.
+                 const auto asset = find_graph_material_by_key(ctx, names_place ? new_key : key, error);
                  if(!asset)
                  {
+                     if(create && !names_place)
+                     {
+                         return {.text = place_error.empty() ? "A new graph material's key is app:/data/<folder>/<name>.mat."
+                                                             : place_error,
+                                 .is_error = true};
+                     }
                      return {.text = exists || create ? error : error + " (create:true makes it)", .is_error = true};
                  }
+                 if(!require_project_data_asset(asset.id(), error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 // The asset's own key, whatever named it: a relative path or a uid.
+                 key = asset.id();
                  if(!asset_actions::save_material_graph(ctx, asset, graph))
                  {
-                     return {.text = "Could not save " + key, .is_error = true};
+                     return {.text = "Could not save " + key + ".", .is_error = true};
                  }
              }
              const auto result = compile_graph(graph, key);
@@ -571,8 +605,9 @@ void register_material_graph_tools(mcp_tool_registry& registry)
         {.name = "material_graph_open",
          .description =
              "Opens a graph material (key: app:/data/....mat) in the Material Graph window and shows it, as "
-             "double-clicking it in the Content Browser does. Refused while the window holds an untitled graph with "
-             "unsaved changes, which the user decides about.",
+             "double-clicking it in the Content Browser does. A material the engine ships (engine:/...) opens for "
+             "viewing only: the window shows its graph and changes nothing of it. Refused while the window holds an "
+             "untitled graph with unsaved changes, which the user decides about.",
          .input_schema_json = R"json({"type":"object","properties":{"key":{"type":"string"}},"required":["key"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result

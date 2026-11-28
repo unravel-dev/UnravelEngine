@@ -73,6 +73,7 @@
 
 #include <asset_compiler/asset_compiler.h>
 #include <engine/assets/asset_manager.h>
+#include <engine/defaults/engine_asset_keys.h>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/rendering/graph_material.hpp>
 #include <engine/meta/rendering/material.hpp>
@@ -80,12 +81,15 @@
 #include <engine/meta/rendering/material_graph.hpp>
 #include <engine/meta/rendering/shader_variants.hpp>
 #include <engine/meta/rendering/standard_material.hpp>
+#include <engine/rendering/material_graph/dynamic_geometry_material.h>
 #include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/material_graph/material_graph.h>
 #include <engine/rendering/material_graph/material_graph_compiler.h>
 #include <engine/rendering/material_graph/material_graph_library.h>
+#include <engine/rendering/material_graph/particle_material.h>
 #include <engine/rendering/material_graph/standard_material.h>
 #include <engine/rendering/material_instance.h>
+#include <engine/rendering/particles/ps/particle_gpu_schema.h>
 #include <engine/rendering/skinning_palette_buffer.h>
 #include <uuid/uuid.h>
 #include <filesystem/filesystem.h>
@@ -95,6 +99,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <set>
@@ -1604,6 +1609,480 @@ auto make_graph_of_every_node(material_domain domain = material_domain::surface)
     return graph;
 }
 
+auto make_summed_graph(const std::string& type, const std::string& output, uint32_t count, const std::string& prefix) -> material_graph;
+
+/// The "<type> <name>" varyings a shader section declares, defaults dropped: of @p text between the line @p first
+/// and the line @p last.
+auto read_varyings(const std::string& text, const std::string& first, const std::string& last) -> std::map<std::string, std::string>
+{
+    std::map<std::string, std::string> varyings;
+    std::istringstream lines(text);
+    std::string line;
+    bool is_inside = false;
+    while(std::getline(lines, line))
+    {
+        if(!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+        if(line == first)
+        {
+            is_inside = true;
+            continue;
+        }
+        if(is_inside && line == last)
+        {
+            break;
+        }
+        std::istringstream words(line);
+        std::string type;
+        std::string name;
+        if(is_inside && (words >> type >> name) && name.rfind("v_", 0) == 0)
+        {
+            varyings[name] = type;
+        }
+    }
+    return varyings;
+}
+
+/// A surface for particles: the particle's colour times a texture read at its sheet frame and the frame after it,
+/// mixed by the frame blend, dissolving by the erosion and the custom data, its random number in the roughness.
+auto make_particle_graph(material_blend_mode mode, material_shading_model model) -> material_graph
+{
+    auto graph = make_graph_with_output();
+    set_material_graph_blend_mode(graph, mode);
+    auto& output = graph.nodes[size_t(find_material_graph_output(graph))];
+    set_material_graph_setting(output, MATERIAL_SHADING_MODEL_SETTING, get_material_shading_model_key(model));
+    set_material_graph_particle_use(graph, true);
+    add_node(graph, "frames", "particle_sub_uv");
+    add_node(graph, "sheet", "texture_sample");
+    link(graph, "sheet", "uv", "frames.uv");
+    add_node(graph, "next_sheet", "texture_sample");
+    link(graph, "next_sheet", "uv", "frames.next_uv");
+    add_node(graph, "blend", "particle_frame_blend");
+    add_node(graph, "flipbook", "lerp");
+    link(graph, "flipbook", "a", "sheet.rgba");
+    link(graph, "flipbook", "b", "next_sheet.rgba");
+    link(graph, "flipbook", "alpha", "blend");
+    add_node(graph, "tint", "vertex_color");
+    add_node(graph, "tinted", "multiply");
+    link(graph, "tinted", "a", "flipbook");
+    link(graph, "tinted", "b", "tint.rgba");
+    add_node(graph, "erosion", "particle_erosion");
+    add_node(graph, "custom", "particle_custom_data");
+    add_node(graph, "dissolve", "add");
+    link(graph, "dissolve", "a", "erosion");
+    link(graph, "dissolve", "b", "custom.x");
+    add_node(graph, "eroded", "subtract");
+    link(graph, "eroded", "a", "tinted.out.a");
+    link(graph, "eroded", "b", "dissolve");
+    add_node(graph, "particle", "particle_data");
+    add_node(graph, "glow", "multiply");
+    link(graph, "glow", "a", "tinted.out.rgb");
+    link(graph, "glow", "b", "particle.life");
+    link(graph, "output", "emissive", "glow");
+    link(graph, "output", "opacity_mask", "eroded");
+    if(model != material_shading_model::unlit)
+    {
+        link(graph, "output", "base_color", "tinted.out.rgb");
+        link(graph, "output", "roughness", "particle.random");
+        link(graph, "output", "metallic", "particle.speed");
+    }
+    return graph;
+}
+
+/// A lit particle surface that says nothing of how it reflects light: the particle's colour as its Base Color.
+auto make_matte_particle_graph() -> material_graph
+{
+    auto graph = make_graph_with_output();
+    set_material_graph_blend_mode(graph, material_blend_mode::translucent);
+    set_material_graph_particle_use(graph, true);
+    add_node(graph, "tint", "vertex_color");
+    link(graph, "output", "base_color", "tint.rgba");
+    link(graph, "output", "opacity_mask", "tint.a");
+    return graph;
+}
+
+/// The texture stages the samplers of shader file @p key are declared at: SAMPLER2D(name, 12) and its kin with a
+/// number for the stage.
+auto read_sampler_stages(const std::string& key) -> std::set<uint8_t>
+{
+    std::set<uint8_t> stages;
+    const std::string text = read_text(fs::resolve_protocol(key));
+    const std::string marker = "SAMPLER";
+    for(size_t at = text.find(marker); at != std::string::npos; at = text.find(marker, at + 1))
+    {
+        // A declaration starts its line.
+        if(at > 0 && text[at - 1] != '\n')
+        {
+            continue;
+        }
+        const size_t comma = text.find(',', at);
+        const size_t close = text.find(')', at);
+        if(comma == std::string::npos || close == std::string::npos || comma > close)
+        {
+            continue;
+        }
+        const std::string stage = text.substr(comma + 1, close - comma - 1);
+        const size_t first = stage.find_first_not_of(' ');
+        if(first != std::string::npos && stage.find_first_not_of("0123456789", first) == std::string::npos)
+        {
+            stages.insert(uint8_t(std::stoi(stage.substr(first))));
+        }
+    }
+    return stages;
+}
+
+/// Emitters batch by what their materials bind: two materials of one code and the same values draw together, and any
+/// difference of code, value or texture keeps them apart. A shader is told apart by its code, since the loader's
+/// shader handles carry no uid.
+void test_particle_draw_identity()
+{
+    std::printf("test_particle_draw_identity\n");
+    const auto make = [](const particle_surface& surface, const char* code_hash)
+    {
+        auto mat = make_particle_material(surface);
+        mat->set_shader_hash(code_hash);
+        return mat;
+    };
+    const particle_surface additive{material_blend_mode::additive, false, false};
+    const particle_surface additive_mask{material_blend_mode::additive, true, false};
+    const auto a = make(additive, "code-a");
+    const auto same = make(additive, "code-a");
+    const auto other_code = make(additive_mask, "code-b");
+    check(a->get_parameter_registers() == other_code->get_parameter_registers() &&
+              a->get_textures().size() == other_code->get_textures().size(),
+          "two Standard particle materials differ in their code alone: no parameter, one texture");
+    check(a->binds_same_draw(*same) && a->get_draw_hash() == same->get_draw_hash(),
+          "two materials of one code and the same values bind the same draw");
+    check(!a->binds_same_draw(*other_code) && a->get_draw_hash() != other_code->get_draw_hash(),
+          "materials of different code never share a draw, whatever else they bind alike");
+    const auto textured = make(additive, "code-a");
+    asset_handle<gfx::texture> texture;
+    texture.set_internal_ids(generate_uuid("particle draw identity"), "app:/data/draw_identity.png");
+    check(textured->set_texture(PARTICLE_TEXTURE_NAME, texture), "the Standard particle material has a Texture to set");
+    check(a->get_draw_hash() != textured->get_draw_hash(), "another texture is another draw, which the sort keeps apart");
+    const auto textured_twin = make(additive, "code-a");
+    textured_twin->set_texture(PARTICLE_TEXTURE_NAME, texture);
+    check(textured->binds_same_draw(*textured_twin) && textured->get_draw_hash() == textured_twin->get_draw_hash(),
+          "the same texture on the same code is the same draw");
+    const auto no_code = make(additive, "");
+    const auto no_code_twin = make(additive, "");
+    check(no_code->binds_same_draw(*no_code_twin) && !no_code->binds_same_draw(*a),
+          "materials without a code hash are told apart by their loaded shader, and from the ones with one");
+}
+
+/// Particle Use: a surface of the translucency pass also compiled for particle emitters. The setting needs a Blend
+/// Mode of that pass; the shader gets the particle variants, the inputs vs_particle.eshader's graph variants write and
+/// its textures at the stages a particle draw leaves, fewer than a mesh's; the notes say what a particle leaves out.
+void test_particle_use()
+{
+    std::printf("test_particle_use\n");
+    auto opaque = make_graph_with_output();
+    check(!is_material_graph_particle_use(opaque) && set_material_graph_particle_use(opaque, true) &&
+              !set_material_graph_particle_use(opaque, true),
+          "Particle Use is off by default, and setting it says whether it changed");
+    const auto& opaque_output = opaque.nodes[size_t(find_material_graph_output(opaque))];
+    const auto refused = compile_material_graph(opaque);
+    check(!is_material_graph_particle_use(opaque) && !refused.particle_use && !refused.has_errors() &&
+              !contains(refused.shader, "MATERIAL_PARTICLE") && !is_material_output_setting_shown(opaque_output, MATERIAL_PARTICLE_USE_SETTING),
+          "an Opaque surface hides the setting and is not compiled for particles, whatever the setting holds");
+    for(const auto mode : {material_blend_mode::translucent,
+                           material_blend_mode::premultiplied,
+                           material_blend_mode::additive,
+                           material_blend_mode::modulate})
+    {
+        auto graph = opaque;
+        set_material_graph_blend_mode(graph, mode);
+        const auto result = compile_material_graph(graph);
+        check(is_material_graph_particle_use(graph) && result.particle_use && !result.has_errors() &&
+                  is_material_output_setting_shown(graph.nodes[size_t(find_material_graph_output(graph))], MATERIAL_PARTICLE_USE_SETTING),
+              std::string("a ") + get_material_blend_mode_label(mode) + " surface compiles for particles" + describe(result));
+    }
+
+    const auto lit_graph = make_particle_graph(material_blend_mode::translucent, material_shading_model::default_lit);
+    const auto lit = compile_material_graph(lit_graph);
+    check(!lit.has_errors() && lit.particle_use && lit.reads_vertex_color, "a lit particle surface compiles" + describe(lit));
+    check(contains(lit.shader, "\nparticle            MATERIAL_PARTICLE\n") && !contains(lit.shader, "particle_velocity") &&
+              contains(lit.shader, "\nparticle_unlit      MATERIAL_PARTICLE PARTICLE_UNLIT\n") && contains(lit.shader, "\ndefault\n"),
+          "its shader has the particle variant beside the mesh's, one for an emitter whose Lighting is Unlit, and no velocity one");
+    check(contains(lit.shader, "#if MATERIAL_PARTICLE\n#include \"material_graph/mg_particle.sh\"\n#else\n#include \"material_graph/mg_forward.sh\"\n#endif") &&
+              contains(lit.shader, "#if MATERIAL_PARTICLE\n#include \"material_graph/fs_material_graph_particle.sh\"\n#else\n"),
+          "the particle variant reads the particle header and main, the others the translucency pass's");
+    check(contains(lit.shader, "i.particle_sheet_uv") && contains(lit.shader, "i.particle_custom.z") && contains(lit.shader, "i.particle_custom.w") &&
+              contains(lit.shader, "i.particle_custom.xy") && contains(lit.shader, "i.particle_data"),
+          "the particle nodes read the particle's inputs");
+    check(!contains(lit.shader, "MATERIAL_NORMAL_LINKED") &&
+              !has_diagnostic(lit, material_graph_severity::info, "output", MATERIAL_PARTICLE_USE_SETTING),
+          "a graph that leaves Normal alone shades as a sphere, and one reading Vertex Color has no note");
+    check(contains(lit.shader, "#define MATERIAL_PARTICLE_SPECULAR 1"),
+          "a lit particle whose Roughness and Metallic are linked shows the sun's highlight");
+    {
+        const auto matte_graph = make_matte_particle_graph();
+        const auto matte = compile_material_graph(matte_graph);
+        check(!matte.has_errors() && matte.particle_use && !contains(matte.shader, "#define MATERIAL_PARTICLE_SPECULAR"),
+              "a graph that leaves Roughness and Metallic alone is matte" + describe(matte));
+        auto glossy = matte_graph;
+        set_value(glossy, "output", MATERIAL_ROUGHNESS_PIN, math::vec4(0.2f, 0.0f, 0.0f, 0.0f));
+        const auto with_roughness = compile_material_graph(glossy);
+        check(!with_roughness.has_errors() && contains(with_roughness.shader, "#define MATERIAL_PARTICLE_SPECULAR 1"),
+              "a Roughness of its own gives a lit particle the sun's highlight" + describe(with_roughness));
+        auto metal = matte_graph;
+        add_node(metal, "metalness", "constant");
+        link(metal, "output", MATERIAL_METALLIC_PIN, "metalness");
+        const auto with_metallic = compile_material_graph(metal);
+        check(!with_metallic.has_errors() && contains(with_metallic.shader, "#define MATERIAL_PARTICLE_SPECULAR 1"),
+              "and so does a linked Metallic" + describe(with_metallic));
+        auto unlit_glossy = glossy;
+        set_material_graph_setting(unlit_glossy.nodes[size_t(find_material_graph_output(unlit_glossy))],
+                                   MATERIAL_SHADING_MODEL_SETTING,
+                                   get_material_shading_model_key(material_shading_model::unlit));
+        const auto unlit_result = compile_material_graph(unlit_glossy);
+        check(!contains(unlit_result.shader, "#define MATERIAL_PARTICLE_SPECULAR"), "an unlit particle has no highlight to show");
+        // Only the workflow's own inputs count: a Glossiness left from the other workflow is not read.
+        auto stale = matte_graph;
+        set_value(stale, "output", MATERIAL_GLOSSINESS_PIN, math::vec4(0.9f, 0.0f, 0.0f, 0.0f));
+        check(!contains(compile_material_graph(stale).shader, "#define MATERIAL_PARTICLE_SPECULAR"),
+              "the other workflow's Glossiness asks for no highlight");
+        auto polished = stale;
+        set_material_graph_setting(polished.nodes[size_t(find_material_graph_output(polished))],
+                                   MATERIAL_WORKFLOW_SETTING,
+                                   MATERIAL_WORKFLOW_SPECULAR);
+        check(contains(compile_material_graph(polished).shader, "#define MATERIAL_PARTICLE_SPECULAR 1"),
+              "in the specular workflow that Glossiness does");
+        auto stale_roughness = glossy;
+        set_material_graph_setting(stale_roughness.nodes[size_t(find_material_graph_output(stale_roughness))],
+                                   MATERIAL_WORKFLOW_SETTING,
+                                   MATERIAL_WORKFLOW_SPECULAR);
+        check(!contains(compile_material_graph(stale_roughness).shader, "#define MATERIAL_PARTICLE_SPECULAR"),
+              "and the metallic workflow's Roughness does not there");
+        // Material Attributes ask for it when the attributes they carry set one of the inputs.
+        auto plain_attributes = make_graph_with_output();
+        set_material_graph_blend_mode(plain_attributes, material_blend_mode::translucent);
+        set_material_graph_particle_use(plain_attributes, true);
+        add_node(plain_attributes, "surface", "make_material_attributes");
+        link(plain_attributes, "output", MATERIAL_ATTRIBUTES_PIN, "surface");
+        const auto with_plain_attributes = compile_material_graph(plain_attributes);
+        check(!with_plain_attributes.has_errors() && !contains(with_plain_attributes.shader, "#define MATERIAL_PARTICLE_SPECULAR"),
+              "attributes that leave Roughness and Metallic alone are matte" + describe(with_plain_attributes));
+        auto glossy_attributes = plain_attributes;
+        set_value(glossy_attributes, "surface", MATERIAL_ROUGHNESS_PIN, math::vec4(0.2f, 0.0f, 0.0f, 0.0f));
+        check(contains(compile_material_graph(glossy_attributes).shader, "#define MATERIAL_PARTICLE_SPECULAR 1"),
+              "attributes with a Roughness of their own are not");
+    }
+    {
+        // Flipbook Motion feeds a Flipbook Sample the two frames' coordinates, the particle's by default.
+        auto flowing = make_matte_particle_graph();
+        add_node(flowing, "flow", "flipbook_motion");
+        add_node(flowing, "sheet", "flipbook_sample");
+        link(flowing, "sheet", "uv", "flow.uv");
+        link(flowing, "sheet", "next_uv", "flow.next_uv");
+        link(flowing, "output", "emissive", "sheet.rgb");
+        const auto with_flow = compile_material_graph(flowing);
+        check(!with_flow.has_errors() &&
+                  contains(with_flow.shader, "mg_flipbook_motion(i.particle_sheet_uv.xy, i.particle_sheet_uv.zw, i.particle_custom.z, ") &&
+                  contains(with_flow.shader, "mg_flipbook("),
+              "Flipbook Motion warps the particle's two frames for a Flipbook Sample" + describe(with_flow));
+    }
+    {
+        auto bumped = lit_graph;
+        add_node(bumped, "bump", "normal_map");
+        link(bumped, "output", "normal", "bump");
+        const auto with_normal = compile_material_graph(bumped);
+        check(!with_normal.has_errors() && contains(with_normal.shader, "#define MATERIAL_NORMAL_LINKED 1"),
+              "a linked Normal is the particle's normal" + describe(with_normal));
+    }
+    {
+        auto moving = lit_graph;
+        set_material_graph_setting(moving.nodes[size_t(find_material_graph_output(moving))], MATERIAL_WRITE_VELOCITY_SETTING, MATERIAL_SETTING_ON);
+        const auto with_velocity = compile_material_graph(moving);
+        check(with_velocity.writes_velocity && contains(with_velocity.shader, "\nparticle_velocity   MATERIAL_PARTICLE PARTICLE_VELOCITY\n"),
+              "Write Velocity adds the particle velocity variant" + describe(with_velocity));
+    }
+
+    // The fragment inputs are what vs_particle.eshader's graph variants write, by name and type.
+    const auto vertex_text = read_text(fs::resolve_protocol("engine:/data/shaders/particles/vs_particle.eshader"));
+    const auto written = read_varyings(vertex_text, "[outputs]", "[code]");
+    const auto read_by_lit = read_varyings(lit.shader, "#if MATERIAL_PARTICLE", "#else");
+    const auto unlit_graph = make_particle_graph(material_blend_mode::additive, material_shading_model::unlit);
+    const auto unlit = compile_material_graph(unlit_graph);
+    const auto read_by_unlit = read_varyings(unlit.shader, "#if MATERIAL_PARTICLE", "#else");
+    const auto is_written = [&](const std::map<std::string, std::string>& read)
+    {
+        return std::all_of(read.begin(),
+                           read.end(),
+                           [&](const auto& varying)
+                           {
+                               const auto found = written.find(varying.first);
+                               return found != written.end() && found->second == varying.second;
+                           });
+    };
+    check(read_by_lit.size() == 17 && read_by_unlit.size() == 13 && is_written(read_by_lit) && is_written(read_by_unlit) &&
+              read_by_lit.count("v_light_sun") == 1 && read_by_unlit.count("v_light_sun") == 0,
+          "the particle variants read the varyings vs_particle.eshader writes; a lit surface alone reads the light");
+    // A program is refused when its two shader files give one varying name two types, in any variant of either
+    // (gpu_program::find_refusal): the mesh variants' varyings of a graph that reads every vertex output count too.
+    auto every_output = make_graph_of_every_node();
+    set_material_graph_blend_mode(every_output, material_blend_mode::translucent);
+    set_material_graph_particle_use(every_output, true);
+    const auto read_by_every_variant = read_varyings(compile_material_graph(every_output).shader, "[inputs]", "[code]");
+    std::string clashing;
+    for(const auto& [name, type] : read_by_every_variant)
+    {
+        const auto found = written.find(name);
+        if(found != written.end() && found->second != type)
+        {
+            clashing += " " + name;
+        }
+    }
+    check(clashing.empty() && read_by_every_variant.count("v_texcoord0") == 1 && read_by_every_variant.count("v_color0") == 1,
+          "no varying of a particle surface's mesh variants has another type in vs_particle.eshader:" + clashing);
+
+    // Textures: the stages a particle draw leaves, fewer for a lit surface, one fewer with a read of the scene's colour.
+    check(get_material_graph_particle_max_textures(material_shading_model::default_lit) == MATERIAL_GRAPH_MAX_PARTICLE_LIT_TEXTURES &&
+              get_material_graph_particle_max_textures(material_shading_model::unlit) == MATERIAL_GRAPH_MAX_PARTICLE_UNLIT_TEXTURES &&
+              get_material_graph_particle_max_textures(material_shading_model::default_lit, material_scene_texture_color) ==
+                  MATERIAL_GRAPH_MAX_PARTICLE_LIT_TEXTURES - 1 &&
+              get_material_graph_particle_max_textures(material_shading_model::unlit, material_scene_texture_depth) ==
+                  MATERIAL_GRAPH_MAX_PARTICLE_UNLIT_TEXTURES,
+          "a read of the scene's colour takes a texture's stage, a read of its depth none");
+    // What every particle draw binds, read from where it is declared: the particle data's stages, and the samplers of
+    // the particle shaders (the noise, the sky's SH and the view's depth; a lit draw's cascades, an unlit one's fog
+    // column).
+    const std::set<uint8_t> data_stages = {ps_soa::gpu_records_stage,
+                                           ps_soa::gpu_static_stage,
+                                           ps_soa::gpu_dynamic_stage,
+                                           ps_soa::gpu_luts_stage,
+                                           ps_soa::gpu_sorted_stage};
+    const auto common_stages = read_sampler_stages("engine:/data/shaders/particles/particle_common.sh");
+    const auto shading_stages = read_sampler_stages("engine:/data/shaders/particles/particle_shading.sh");
+    const auto lighting_stages = read_sampler_stages("engine:/data/shaders/particles/particle_lighting.sh");
+    check(common_stages.count(ps_soa::gpu_noise_stage) == 1 && shading_stages.count(ps_soa::gpu_scene_depth_stage) == 1 &&
+              shading_stages.size() == 3 && lighting_stages.size() == 5,
+          "the particle shaders declare the noise, the view's depth, the sky's SH, a fog column and four cascades");
+    for(const bool is_lit : {true, false})
+    {
+        const auto model = is_lit ? material_shading_model::default_lit : material_shading_model::unlit;
+        const uint32_t limit = get_material_graph_particle_max_textures(model);
+        // An unlit draw holds the fog's column where a lit one holds the first cascade.
+        std::set<uint8_t> engine_stages = data_stages;
+        engine_stages.insert(common_stages.begin(), common_stages.end());
+        engine_stages.insert(shading_stages.begin(), shading_stages.end());
+        if(is_lit)
+        {
+            engine_stages.insert(lighting_stages.begin(), lighting_stages.end());
+        }
+        std::set<uint8_t> stages;
+        bool is_clear = true;
+        for(uint32_t i = 0; i < limit; ++i)
+        {
+            const uint8_t stage = get_material_graph_particle_texture_stage(i);
+            stages.insert(stage);
+            is_clear = is_clear && engine_stages.count(stage) == 0 && stage < 16;
+        }
+        check(is_clear && stages.size() == limit && get_material_graph_particle_scene_color_stage(model) == get_material_graph_particle_texture_stage(limit - 1),
+              std::string(is_lit ? "a lit" : "an unlit") +
+                  " particle surface's textures take distinct stages clear of the particle draw's own, the scene's colour the last");
+        auto many = make_summed_graph("texture_sample", "rgb", limit + 1, "tex_");
+        set_material_graph_blend_mode(many, material_blend_mode::translucent);
+        set_material_graph_setting(many.nodes[size_t(find_material_graph_output(many))],
+                                   MATERIAL_SHADING_MODEL_SETTING,
+                                   get_material_shading_model_key(model));
+        link(many, "output", "emissive", find_link(many, "output", "base_color"));
+        set_material_graph_particle_use(many, true);
+        const auto crowded = compile_material_graph(many);
+        check(crowded.textures.size() == limit && has_diagnostic(crowded, material_graph_severity::error, "tex_" + std::to_string(limit)),
+              "the texture past the particle limit is an error" + describe(crowded));
+        bool is_declared = true;
+        for(uint32_t i = 0; i < limit; ++i)
+        {
+            const std::string sampler = get_material_graph_sampler_name(i);
+            const std::string node = "); // " + crowded.textures[i].node_id + "\n";
+            is_declared = is_declared && contains(crowded.shader,
+                                                  "#if MATERIAL_PARTICLE\nSAMPLER2D(" + sampler + ", " +
+                                                      std::to_string(get_material_graph_particle_texture_stage(i)) + node + "#else\nSAMPLER2D(" +
+                                                      sampler + ", " + std::to_string(crowded.textures[i].stage) + node + "#endif");
+        }
+        check(is_declared, "each sampler is declared at its particle stage in the particle variants and at its own in the others");
+        set_material_graph_particle_use(many, false);
+        check(compile_material_graph(many).textures.size() == limit + 1, "without Particle Use the surface keeps the translucency pass's limit");
+    }
+    const auto header = read_text(fs::resolve_protocol("engine:/data/shaders/material_graph/mg_particle.sh"));
+    check(contains(header,
+                   "#if MATERIAL_UNLIT\n#define PARTICLE_SCENE_COLOR_STAGE " +
+                       std::to_string(get_material_graph_particle_scene_color_stage(material_shading_model::unlit)) +
+                       "\n#else\n#define PARTICLE_SCENE_COLOR_STAGE " +
+                       std::to_string(get_material_graph_particle_scene_color_stage(material_shading_model::default_lit)) + "\n#endif") ||
+              contains(header,
+                       "#if MATERIAL_UNLIT\r\n#define PARTICLE_SCENE_COLOR_STAGE " +
+                           std::to_string(get_material_graph_particle_scene_color_stage(material_shading_model::unlit)) +
+                           "\r\n#else\r\n#define PARTICLE_SCENE_COLOR_STAGE " +
+                           std::to_string(get_material_graph_particle_scene_color_stage(material_shading_model::default_lit)) + "\r\n#endif"),
+          "mg_particle.sh reads the scene's colour where get_material_graph_particle_scene_color_stage puts it");
+
+    // A lit particle draw that takes the GI's light holds the radiance cache's two buffers where the third and fourth
+    // texture and the copy of the lit scene would sit: below the eight buffer bindings every device has, clear of what
+    // the draw holds anyway, and a material that needs those stages keeps the sky's light.
+    std::string lighting_header = read_text(fs::resolve_protocol("engine:/data/shaders/particles/particle_lighting.sh"));
+    std::erase(lighting_header, '\r');
+    const particle_gi_stages gi_stages = get_material_graph_particle_gi_stages();
+    check(contains(lighting_header, "#define PARTICLE_GI_INDIRECTION_STAGE " + std::to_string(gi_stages.indirection) + "\n") &&
+              contains(lighting_header, "#define PARTICLE_GI_SH_STAGE " + std::to_string(gi_stages.sh) + "\n"),
+          "particle_lighting.sh reads the radiance cache where get_material_graph_particle_gi_stages puts it");
+    std::set<uint8_t> lit_draw_stages = data_stages;
+    lit_draw_stages.insert(common_stages.begin(), common_stages.end());
+    lit_draw_stages.insert(shading_stages.begin(), shading_stages.end());
+    lit_draw_stages.insert(lighting_stages.begin(), lighting_stages.end());
+    for(uint32_t i = 0; i < MATERIAL_GRAPH_MAX_PARTICLE_GI_TEXTURES; ++i)
+    {
+        lit_draw_stages.insert(get_material_graph_particle_texture_stage(i));
+    }
+    check(gi_stages.indirection != gi_stages.sh && gi_stages.indirection < 8 && gi_stages.sh < 8 &&
+              lit_draw_stages.count(gi_stages.indirection) == 0 && lit_draw_stages.count(gi_stages.sh) == 0,
+          "the radiance cache's buffers take two stages below 8 that a lit draw of two textures leaves");
+    const uint8_t lit_scene_stage = get_material_graph_particle_scene_color_stage(material_shading_model::default_lit);
+    check(fits_material_graph_particle_gi(MATERIAL_GRAPH_MAX_PARTICLE_GI_TEXTURES, 0) &&
+              fits_material_graph_particle_gi(0, material_scene_texture_depth) &&
+              !fits_material_graph_particle_gi(MATERIAL_GRAPH_MAX_PARTICLE_GI_TEXTURES + 1, 0) &&
+              !fits_material_graph_particle_gi(0, material_scene_texture_color) &&
+              (lit_scene_stage == gi_stages.indirection || lit_scene_stage == gi_stages.sh),
+          "a material of more textures, or one that reads the scene's colour there, does not take the GI's light");
+
+    // What a particle leaves out is said on the output.
+    auto plain = make_graph_with_output();
+    set_material_graph_blend_mode(plain, material_blend_mode::additive);
+    set_material_graph_particle_use(plain, true);
+    add_node(plain, "per_vertex", "vertex_interpolator");
+    add_node(plain, "uv", "texcoord");
+    link(plain, "per_vertex", "in", "uv");
+    link(plain, "output", "emissive", "per_vertex.out.x");
+    add_node(plain, "up", "vector3");
+    set_value(plain, "up", "value", math::vec4(0.0f, 1.0f, 0.0f, 0.0f));
+    link(plain, "output", "world_position_offset", "up");
+    const auto noted = compile_material_graph(plain);
+    const auto count_notes = [&](const std::string& pin)
+    {
+        return std::count_if(noted.diagnostics.begin(),
+                             noted.diagnostics.end(),
+                             [&](const material_graph_diagnostic& diagnostic)
+                             {
+                                 return diagnostic.severity == material_graph_severity::info && diagnostic.node_id == "output" &&
+                                        diagnostic.pin == pin;
+                             });
+    };
+    check(!noted.has_errors() && noted.particle_use && count_notes(MATERIAL_PARTICLE_USE_SETTING) == 2 &&
+              count_notes("world_position_offset") == 1,
+          "notes say a particle shows no emitter colour without Vertex Color, is not moved by the offset and has no interpolators" +
+              describe(noted));
+
+    graph_material mat;
+    mat.set_graph(lit_graph);
+    check(mat.is_particle_use() && mat.is_forward(), "a graph material knows it draws on particles");
+    graph_material mesh_only;
+    mesh_only.set_graph(opaque);
+    check(!mesh_only.is_particle_use(), "and an Opaque one asked for particles does not");
+}
+
 /// Random's code follows the width of its seed; a pixel-only node cannot feed the offset; a Color Ramp blends its
 /// stops in the order of their positions; Math Constant and Wave name their choices.
 void test_node_code_choices()
@@ -2012,6 +2491,12 @@ struct shader_compile_job
     size_t variant_count{};
 };
 
+void save_graph_material(const fs::path& path, const material_graph& graph);
+auto list_file_names(const fs::path& folder) -> std::set<std::string>;
+class shader_compile_batch;
+void test_shipped_particle_materials(shader_compile_batch* batch);
+void test_shipped_strip_material(shader_compile_batch* batch);
+
 /**
  * @brief The shaderc compiles of generated graph shaders, run together on every core.
  *
@@ -2036,7 +2521,10 @@ public:
             result.is_forward() ? FORWARD_VARIANT_COUNT + (result.order_independent ? 1 : 0) +
                                       (result.has_gi_variant ? (result.order_independent ? 2 : 1) : 0) +
                                       (result.has_gi_reflection_variant ? (result.order_independent ? 3 : 2) : 0) +
-                                      (result.casts_forward_shadow ? MASKED_VARIANT_COUNT - PLAIN_VARIANT_COUNT : 0)
+                                      (result.casts_forward_shadow ? MASKED_VARIANT_COUNT - PLAIN_VARIANT_COUNT : 0) +
+                                      (result.particle_use ? 1 + (result.shading_model != material_shading_model::unlit ? 1 : 0) +
+                                                                 (result.writes_velocity ? 1 : 0)
+                                                           : 0)
                                 : (has_casters ? MASKED_VARIANT_COUNT : PLAIN_VARIANT_COUNT);
         const size_t variant_count = is_preview ? PREVIEW_VARIANT_COUNT
                                                 : (result.domain == material_domain::surface ? surface_variant_count : domain_variant_count);
@@ -2583,6 +3071,51 @@ void test_examples(asset_manager* am, const fs::path& output_folder)
                                          (order_independent ? "_oit" : ""),
                                      std::move(compiled));
     }
+    // Particle surfaces: the particle nodes lit and unlit, with their velocity variant; every node as a particle
+    // surface; and the scene reads (Scene Color, Depth Fade, Refraction) of a lit and an unlit one.
+    for(const auto model : {material_shading_model::default_lit, material_shading_model::unlit})
+    {
+        const std::string model_key = get_material_shading_model_key(model);
+        auto sprite = make_particle_graph(material_blend_mode::translucent, model);
+        set_material_graph_setting(sprite.nodes[size_t(find_material_graph_output(sprite))], MATERIAL_WRITE_VELOCITY_SETTING, MATERIAL_SETTING_ON);
+        auto sprite_result = compile_material_graph(sprite);
+        check(!sprite_result.has_errors() && sprite_result.particle_use && sprite_result.writes_velocity,
+              "a particle surface with its velocity compiles without errors" + describe(sprite_result));
+        forward_results.emplace_back("particle_nodes_" + model_key, std::move(sprite_result));
+
+        auto every_particle_node = every_node;
+        set_material_graph_blend_mode(every_particle_node, material_blend_mode::premultiplied);
+        set_material_graph_setting(every_particle_node.nodes[size_t(find_material_graph_output(every_particle_node))],
+                                   MATERIAL_SHADING_MODEL_SETTING,
+                                   model_key);
+        set_material_graph_particle_use(every_particle_node, true);
+        auto every_particle_result = compile_material_graph(every_particle_node);
+        check(every_particle_result.particle_use && every_particle_result.textures.size() <= get_material_graph_particle_max_textures(model),
+              "every node compiles into the particle main, within a particle's texture limit");
+        forward_results.emplace_back("every_node_particle_" + model_key, std::move(every_particle_result));
+
+        auto bending = make_graph_with_output();
+        set_material_graph_blend_mode(bending, material_blend_mode::translucent);
+        auto& output = bending.nodes[size_t(find_material_graph_output(bending))];
+        set_material_graph_setting(output, MATERIAL_SHADING_MODEL_SETTING, model_key);
+        set_material_graph_particle_use(bending, true);
+        get_or_add_material_graph_input(output, MATERIAL_REFRACTION_PIN, math::vec4(1.2f)).value = math::vec4(1.2f);
+        add_node(bending, "behind", MATERIAL_SCENE_TEXTURE_TYPE);
+        set_material_graph_setting(bending.nodes.back(), MATERIAL_SCENE_TEXTURE_SOURCE_SETTING, "scene_color");
+        add_node(bending, "edge", MATERIAL_DEPTH_FADE_TYPE);
+        add_node(bending, "tint", "vertex_color");
+        add_node(bending, "soft", "multiply");
+        link(bending, "soft", "a", "edge");
+        link(bending, "soft", "b", "tint.a");
+        link(bending, "output", "emissive", "behind.rgb");
+        link(bending, "output", "opacity_mask", "soft");
+        auto bending_result = compile_material_graph(bending);
+        check(!bending_result.has_errors() && bending_result.particle_use &&
+                  (bending_result.scene_textures & (material_scene_texture_color | material_scene_texture_depth)) ==
+                      (material_scene_texture_color | material_scene_texture_depth),
+              "a particle surface reads and bends the scene behind it" + describe(bending_result));
+        forward_results.emplace_back("particle_scene_reads_" + model_key, std::move(bending_result));
+    }
     if(am)
     {
         for(const auto& [name, forward] : forward_results)
@@ -2599,6 +3132,30 @@ void test_examples(asset_manager* am, const fs::path& output_folder)
         low.quality = material_graph_quality::low;
         batch.add("every_node_low", compile_material_graph(every_node, low));
         batch.add("wave_offset", compile_material_graph(make_wave_offset_graph()));
+        {
+            // Lit particles that reflect light by values of their own: a Roughness and a Metallic, the specular
+            // workflow's Glossiness, and a Premultiplied surface with a Normal: the particle main's reflected light.
+            auto glossy_particle = make_matte_particle_graph();
+            set_value(glossy_particle, "output", MATERIAL_ROUGHNESS_PIN, math::vec4(0.2f, 0.0f, 0.0f, 0.0f));
+            set_value(glossy_particle, "output", MATERIAL_METALLIC_PIN, math::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+            batch.add("particle_glossy", compile_material_graph(glossy_particle));
+            auto polished_particle = make_matte_particle_graph();
+            set_material_graph_setting(polished_particle.nodes[size_t(find_material_graph_output(polished_particle))],
+                                       MATERIAL_WORKFLOW_SETTING,
+                                       MATERIAL_WORKFLOW_SPECULAR);
+            set_value(polished_particle, "output", MATERIAL_GLOSSINESS_PIN, math::vec4(0.8f, 0.0f, 0.0f, 0.0f));
+            const auto polished_result = compile_material_graph(polished_particle);
+            check(contains(polished_result.shader, "#define MATERIAL_PARTICLE_SPECULAR 1") &&
+                      contains(polished_result.shader, "MATERIAL_SPECULAR_WORKFLOW"),
+                  "the specular workflow's Glossiness asks for the reflected light");
+            batch.add("particle_polished", polished_result);
+            auto bumped_particle = make_matte_particle_graph();
+            set_material_graph_blend_mode(bumped_particle, material_blend_mode::premultiplied);
+            set_value(bumped_particle, "output", MATERIAL_ROUGHNESS_PIN, math::vec4(0.3f, 0.0f, 0.0f, 0.0f));
+            add_node(bumped_particle, "bump", "normal_map");
+            link(bumped_particle, "output", "normal", "bump");
+            batch.add("particle_bumped_premultiplied", compile_material_graph(bumped_particle));
+        }
         batch.add("vertex_attributes", compile_material_graph(make_vertex_attribute_graph()));
         standard_surface painted;
         painted.multiply_vertex_color = true;
@@ -2610,6 +3167,8 @@ void test_examples(asset_manager* am, const fs::path& output_folder)
         batch.add("standard_translucent", compile_material_graph(make_standard_material_graph(blended)));
         add_domain_shaders(batch);
     }
+    test_shipped_particle_materials(am ? &batch : nullptr);
+    test_shipped_strip_material(am ? &batch : nullptr);
     if(am)
     {
         batch.check_all(*am);
@@ -3290,6 +3849,140 @@ auto list_file_names(const fs::path& folder) -> std::set<std::string>
     return names;
 }
 
+/// Set to make the suite write the engine's Standard particle materials from their generator instead of checking the
+/// files against it: after a change of make_particle_material_graph.
+constexpr const char* WRITE_PARTICLE_MATERIALS_VARIABLE = "UNRAVEL_WRITE_PARTICLE_MATERIALS";
+
+/// The engine's Standard particle materials: one file for each surface the generator makes, holding its graph, under the
+/// id its key gives; each compiles for particles without a warning, within a lit particle's textures; an emitter's own
+/// texture and normal map go by the names a material instance sets.
+void test_shipped_particle_materials(shader_compile_batch* batch)
+{
+    std::printf("test_shipped_particle_materials\n");
+    const auto surfaces = get_shipped_particle_surfaces();
+    check(surfaces.size() == 12, "the engine ships twelve Standard particle materials");
+    check(get_particle_material_key({}) == DEFAULT_PARTICLE_MATERIAL_KEY, "the plain one is what a new emitter draws");
+    particle_surface translucent_mask;
+    translucent_mask.is_mask = true;
+    particle_surface premultiplied_mask = translucent_mask;
+    premultiplied_mask.blend = material_blend_mode::premultiplied;
+    particle_surface mapped_filter;
+    mapped_filter.blend = material_blend_mode::modulate;
+    mapped_filter.has_normal_map = true;
+    check(get_particle_material_key(translucent_mask) == get_particle_material_key(premultiplied_mask) &&
+              get_material_graph_blend_mode(make_particle_material_graph(translucent_mask)) == material_blend_mode::premultiplied,
+          "a mask blends in one way, premultiplied: its colour carries its opacity");
+    check(get_particle_material_key(mapped_filter) == std::string(PARTICLE_MATERIAL_KEY_PREFIX) + "_modulate.mat" &&
+              get_material_graph_shading_model(make_particle_material_graph(mapped_filter)) == material_shading_model::unlit &&
+              get_material_graph_shading_model(make_particle_material_graph({})) == material_shading_model::default_lit,
+          "a Modulate surface is never lit and has no normal map; the others are lit as the emitter's Lighting says");
+    const bool writes_files = std::getenv(WRITE_PARTICLE_MATERIALS_VARIABLE) != nullptr;
+    const std::string engine_protocol = "engine:/";
+    std::set<std::string> shipped_names;
+    fs::path folder;
+    for(const auto& surface : surfaces)
+    {
+        const std::string key = get_particle_material_key(surface);
+        const fs::path path = fs::path(ENGINE_DATA_DIR) / key.substr(engine_protocol.size());
+        const std::string name = path.filename().string();
+        folder = path.parent_path();
+        shipped_names.insert(name);
+        shipped_names.insert(name + ".meta");
+        const auto graph = make_particle_material_graph(surface);
+        if(writes_files)
+        {
+            fs::error_code ec;
+            fs::create_directories(folder, ec);
+            save_graph_material(path, graph);
+            asset_meta meta;
+            meta.uid = generate_uuid(key);
+            meta.type = path.extension().string();
+            save_to_file(path.string() + ".meta", meta);
+        }
+        std::shared_ptr<material> loaded;
+        load_from_file(path.string(), loaded);
+        const auto loaded_graph = safe_pointer_cast<graph_material>(loaded);
+        check(loaded_graph && save_to_string(loaded_graph->get_graph()) == save_to_string(graph),
+              name + " holds the graph its generator makes (set " + WRITE_PARTICLE_MATERIALS_VARIABLE + " to write the files)");
+        asset_meta meta;
+        load_from_file(path.string() + ".meta", meta);
+        check(meta.uid == generate_uuid(key) && meta.type == ".mat", name + " has the id its key gives");
+
+        const auto result = compile_material_graph(graph);
+        const bool every_node_used = std::all_of(result.nodes.begin(),
+                                                 result.nodes.end(),
+                                                 [](const material_graph_node_info& info)
+                                                 {
+                                                     return info.is_used;
+                                                 });
+        // A node without a texture says what it reads: the emitter's material instance gives it one.
+        check(!result.has_errors() && !has_warning(result) && every_node_used && result.particle_use && result.writes_velocity &&
+                  result.reads_vertex_color,
+              name + " compiles for particles without a warning, every node used" + describe(result));
+        const auto shipped = get_shipped_particle_surface(surface);
+        const auto found = find_shipped_particle_surface(key);
+        check(found && get_shipped_particle_surface(*found) == shipped, name + " is found by its key");
+        const bool is_filter = shipped.blend == material_blend_mode::modulate;
+        check(result.blend_mode == shipped.blend && (result.shading_model == material_shading_model::unlit) == is_filter &&
+                  contains(result.shader, "\nparticle_unlit      MATERIAL_PARTICLE PARTICLE_UNLIT\n") == !is_filter &&
+                  result.textures.size() == (shipped.has_normal_map ? 2u : 1u) && find_texture(result, PARTICLE_TEXTURE_NAME) != nullptr &&
+                  (find_texture(result, PARTICLE_NORMAL_MAP_NAME) != nullptr) == shipped.has_normal_map &&
+                  contains(result.shader, "MATERIAL_NORMAL_LINKED") == shipped.has_normal_map,
+              name + " blends and lights as its surface says, and reads the textures an emitter sets by name");
+        check(contains(result.shader, "mg_flipbook(") && contains(result.shader, "mg_particle_erosion("),
+              name + " reads its sheet through one Flipbook Sample and dissolves by the emitter's erosion");
+        if(batch != nullptr)
+        {
+            batch->add("shipped_" + path.stem().string(), result);
+        }
+    }
+    check(list_file_names(folder) == shipped_names, "the particle materials folder holds those files alone");
+}
+
+/// The material a Line or a Trail draws without one of its own is the output of its generator, written with the
+/// variable that writes the particle materials. It draws in the G-buffer, on both sides, and shows the colour the
+/// component writes to its vertices.
+void test_shipped_strip_material(shader_compile_batch* batch)
+{
+    std::printf("test_shipped_strip_material\n");
+    const std::string key = STRIP_MATERIAL_KEY;
+    const material_graph graph = make_strip_material_graph();
+    const std::string engine_protocol = "engine:/";
+    const fs::path path = fs::path(ENGINE_DATA_DIR) / key.substr(engine_protocol.size());
+    const std::string name = path.filename().string();
+    if(std::getenv(WRITE_PARTICLE_MATERIALS_VARIABLE) != nullptr)
+    {
+        save_graph_material(path, graph);
+        asset_meta meta;
+        meta.uid = generate_uuid(key);
+        meta.type = path.extension().string();
+        save_to_file(path.string() + ".meta", meta);
+    }
+    std::shared_ptr<material> loaded;
+    load_from_file(path.string(), loaded);
+    const auto loaded_graph = safe_pointer_cast<graph_material>(loaded);
+    check(loaded_graph && save_to_string(loaded_graph->get_graph()) == save_to_string(graph),
+          name + " holds the graph its generator makes (set " + WRITE_PARTICLE_MATERIALS_VARIABLE + " to write the files)");
+    asset_meta meta;
+    load_from_file(path.string() + ".meta", meta);
+    check(meta.uid == generate_uuid(key) && meta.type == ".mat", name + " has the id its key gives");
+    const auto result = compile_material_graph(graph);
+    const bool every_node_used = std::all_of(result.nodes.begin(),
+                                             result.nodes.end(),
+                                             [](const material_graph_node_info& info)
+                                             {
+                                                 return info.is_used;
+                                             });
+    check(!result.has_errors() && !has_warning(result) && every_node_used, name + " compiles without a warning, every node used" + describe(result));
+    check(result.domain == material_domain::surface && result.blend_mode == material_blend_mode::dithered && !result.is_forward() &&
+              result.reads_vertex_color && result.textures.empty(),
+          name + " draws in the G-buffer with its opacity dithered and shows the colour its vertices carry");
+    if(batch != nullptr)
+    {
+        batch->add("shipped_" + path.stem().string(), result);
+    }
+}
+
 void test_graph_material_asset(asset_manager& am, bool can_compile)
 {
     std::printf("test_graph_material_asset\n");
@@ -3408,6 +4101,8 @@ void run_material_graph_suite(rtti::context& ctx)
     RUN_CASE(test_forward_stages());
     RUN_CASE(test_gi_variant());
     RUN_CASE(test_gi_reflection_variants());
+    RUN_CASE(test_particle_use());
+    RUN_CASE(test_particle_draw_identity());
     RUN_CASE(test_binding_limits());
     RUN_CASE(test_opacity_mask_shadows());
     RUN_CASE(test_world_position_offset());

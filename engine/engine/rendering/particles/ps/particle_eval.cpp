@@ -94,7 +94,10 @@ auto pack_static_row(const emitter_eval_params& params) -> static_row
     row[static_slot_trail] = math::vec4(params.trail_length, params.trail_width_end, float(int(params.ribbon_texture_mode)), params.ribbon_tiles_per_second);
     row[static_slot_facing] = math::vec4(params.facing_axis, params.stretch_camera_velocity_scale);
     row[static_slot_speed_bound] = math::vec4(params.speed_bound.x, params.speed_bound.y, 0.0f, 0.0f);
-    row[static_slot_ribbon] = math::vec4(float(int(params.ribbon_facing)), 0.0f, 0.0f, 0.0f);
+    row[static_slot_ribbon] = math::vec4(float(int(params.ribbon_facing)),
+                                         float(params.ribbon_count),
+                                         params.align_to_surface ? 1.0f : 0.0f,
+                                         0.0f);
     return row;
 }
 
@@ -208,7 +211,14 @@ auto evaluate_particle(const particle_record& record, const emitter_eval_params&
     }
     math::vec3 position = record.get_start() + displacement + params.acceleration * gamma;
     velocity = (velocity + params.acceleration * lambda) * time_rate;
-    if(has_flag(params.flags, emitter_feature::turbulence))
+    // A particle at rest stays at its start: no time passes on its path (its segment began at its age), and nothing
+    // moves it.
+    const bool rests = is_at_rest(record);
+    if(rests)
+    {
+        velocity = math::vec3(0.0f);
+    }
+    if(has_flag(params.flags, emitter_feature::turbulence) && !rests)
     {
         // The field at the particle's start, scrolled from its birth by its age (so a stream from one point sways
         // over time): the displacement is how far the scroll has moved it since its segment began, the velocity
@@ -279,6 +289,17 @@ auto evaluate_particle_color(const particle_record& record,
     color.g *= intensity;
     color.b *= intensity;
     return color;
+}
+
+auto evaluate_particle_custom_data(const particle_state& state, const lut_set& luts) -> math::vec2
+{
+    const math::vec4 row = luts.sample(lut_row_turbulence_size_z, state.life);
+    return {row.z, row.w};
+}
+
+auto evaluate_particle_material_data(const particle_record& record, const particle_state& state) -> math::vec4
+{
+    return {state.age, state.life, particle_random(record.seed, salt_material), math::length(state.velocity)};
 }
 
 auto evaluate_particle_quad(const particle_record& record,
@@ -353,12 +374,19 @@ auto evaluate_particle_angle(const particle_record& record,
     {
         speed = -speed;
     }
-    // A spin curve turns by the curve's integral over the life lived (in lifetimes) times the lifetime.
+    // A particle at rest stopped turning at the age it came to rest.
+    const float lifespan = math::max(float(record.lifespan), 1.0f) / float(ticks_per_second);
     float spun_time = state.age;
+    float spun_life = state.life;
+    if(is_at_rest(record))
+    {
+        spun_time = math::min(spun_time, float(get_rest_age_ticks(record)) / float(ticks_per_second));
+        spun_life = math::clamp(spun_time / lifespan, 0.0f, 1.0f);
+    }
+    // A spin curve turns by the curve's integral over the life lived (in lifetimes) times the lifetime.
     if(has_flag(params.flags, emitter_feature::spin_curve))
     {
-        const float lifespan = math::max(float(record.lifespan), 1.0f) / float(ticks_per_second);
-        spun_time = luts.sample(lut_row_shape, state.life).z * lifespan;
+        spun_time = luts.sample(lut_row_shape, spun_life).z * lifespan;
     }
     return math::mix(params.rotation.x, params.rotation.y, particle_random(record.seed, salt_rotation)) + speed * spun_time;
 }

@@ -27,6 +27,7 @@
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/shadow.h>
 #include <engine/rendering/pipeline/passes/gi_radiance_cache.h>
+#include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
 #include <engine/rendering/particles/ps/particle_gpu.h>
 #include <engine/rendering/shader_buffer.h>
@@ -34,9 +35,11 @@
 #include <engine/engine.h>
 #include <RmlUi/Core/ElementDocument.h>
 
+#include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/material_graph/material_graph.h>
 #include <engine/rendering/material_graph/material_graph_compiler.h>
 #include <engine/rendering/material_graph/material_graph_library.h>
+#include <base/hash.hpp>
 #include <graphics/device_caps.h>
 #include <graphics/format.h>
 #include <graphics/graphics.h>
@@ -49,6 +52,7 @@
 #include <concurrency/concurrentqueue.h>
 
 #include <algorithm>
+#include <cstring>
 #include <atomic>
 
 namespace unravel
@@ -83,12 +87,12 @@ constexpr size_t k_particle_light_vec4s = k_particle_max_lights * 3;
 constexpr uint16_t k_irradiance_sh_coefficients = 9;
 /// Stages of the lit particles' sky irradiance and sun shadow cascades (particle_lighting.sh).
 constexpr uint8_t k_particle_irradiance_stage = 12;
-/// Surface lighting's normal map.
-constexpr uint8_t k_particle_normal_stage = 14;
 constexpr uint8_t k_particle_shadow_stage = 8;
-/// The volumetric fog's froxel column in the unlit programs (particle_fragment.sh); the lit ones hold the sun's
-/// cascades there.
+/// The volumetric fog's froxel column in the unlit draws (particle_shading.sh); the lit ones hold the sun's cascades
+/// there.
 constexpr uint8_t k_particle_fog_volume_stage = 8;
+/// The scene reads a particle material's draw takes from the view.
+constexpr uint32_t k_particle_scene_textures = material_scene_texture_color | material_scene_texture_depth;
 /// Stages of what the translucency pass's surfaces read (mg_forward.sh): the sky SH, the probe, the sun's cascades
 /// (4 from k_forward_shadow_stage), the fog's froxel column (lit, unlit) and the point and spot lights' shadow atlas.
 constexpr uint8_t k_forward_irradiance_stage = 15;
@@ -301,25 +305,6 @@ auto get_camera_velocity(const camera& camera, delta_t dt) -> math::vec3
     return speed > k_max_stretch_camera_speed ? velocity * (k_max_stretch_camera_speed / speed) : velocity;
 }
 
-/// The normal map a surface-lit emitter's batch lights with, once it has loaded; nil otherwise (it never splits a
-/// batch then).
-auto get_normal_texture_uid(const particle_emitter_component& emitter) -> hpp::uuid
-{
-    const auto& normal_texture = emitter.get_normal_texture();
-    if(ps_soa::get_capped_lighting(emitter.get_lighting()) != ps_soa::particle_lighting::surface ||
-       emitter.get_blend_mode() == ps_soa::blend_mode::multiply || !normal_texture.is_valid())
-    {
-        return {};
-    }
-    // A scene loads its asset handles deferred: try_get starts the load, is_ready alone never would.
-    const auto loaded = normal_texture.try_get();
-    if(!loaded || asset_handle<gfx::texture>::is_empty(loaded))
-    {
-        return {};
-    }
-    return normal_texture.uid();
-}
-
 /// Whether every corner of @p bounds is a finite number.
 auto is_finite(const math::bbox& bounds) -> bool
 {
@@ -403,20 +388,22 @@ auto acquire_particle_overdraw_target(gfx::render_view& rview, const gfx::frame_
  *
  * Emitters draw by sort priority, then back to front by distance, whatever their blend mode: additive and
  * alpha-blended layers only composite correctly against each other in depth order (fire in front of smoke adds over
- * it, smoke in front of fire hides it). The material key only breaks ties, so neighbouring emitters of one material
- * coalesce into one draw, whose particles sort together.
+ * it, smoke in front of fire hides it). What the material binds only breaks ties, so neighbouring emitters that draw
+ * alike coalesce into one draw, whose particles sort together.
  */
 struct particle_draw_key
 {
     particle_emitter_component* component;
+    /// The material the emitter's particles draw with (particle_emitter_component::get_particle_material); null while
+    /// it loads: nothing is drawn then. The blend mode is the material's.
+    const graph_material* material;
+    /// What a draw binds of the material (graph_material::get_draw_hash): emitters whose materials differ only in which
+    /// object holds them, as two instances with the same overrides, draw together.
+    uint64_t material_hash;
     ps_soa::blend_mode blend_mode;
-    ps_soa::texture_mode texture_mode;
     ps_soa::sort_mode sort_mode;
     ps_soa::particle_primitive primitive;
     ps_soa::particle_sort_backend backend;
-    hpp::uuid texture_uid;
-    /// Surface-lit emitters: their normal map (nil without one, and for every other lighting).
-    hpp::uuid normal_texture_uid;
     float distance;
     int32_t sort_priority;
     /// Drawn by the half-resolution pass (never for multiply blend).
@@ -438,7 +425,28 @@ struct particle_batch_lists
     particle_batch_list half;
     particle_batch_list velocity;
     bool has_lit = false;
+    /// What the batches' materials read of the scene behind them (material_scene_texture_bits: colour, depth).
+    uint32_t scene_textures = 0;
 };
+
+/// The lighting an emitter's particles draw with: the emitter's Lighting for a material that is lit (its Base Color
+/// then shows as the light the particle gives off where that says Unlit), and unlit for one whose Shading Model is
+/// Unlit, as every filter's is.
+auto get_particle_draw_lighting(const particle_emitter_component& emitter, const graph_material* material) -> ps_soa::particle_lighting
+{
+    if(material == nullptr || material->get_shading_model() == material_shading_model::unlit)
+    {
+        return ps_soa::particle_lighting::unlit;
+    }
+    return ps_soa::get_capped_lighting(emitter.get_lighting());
+}
+
+
+/// Whether @p material reads the copy of the lit scene, which only the full-resolution pass has behind it.
+auto reads_scene_color(const graph_material* material) -> bool
+{
+    return material != nullptr && (material->get_scene_textures() & material_scene_texture_color) != 0;
+}
 
 /// The geometry an emitter draws: its primitive, or the strip its trail or ribbon mode needs.
 auto get_drawn_primitive(const particle_emitter_component& emitter) -> ps_soa::particle_primitive
@@ -460,23 +468,28 @@ auto make_particle_draw_key(particle_emitter_component& emitter,
                             uint32_t particle_count,
                             const ps_soa::particle_quality& quality) -> particle_draw_key
 {
-    const bool is_multiply = emitter.get_blend_mode() == ps_soa::blend_mode::multiply;
-    return {&emitter,
-            emitter.get_blend_mode(),
-            emitter.get_texture_mode(),
-            emitter.get_sort_mode(),
-            get_drawn_primitive(emitter),
-            ps_soa::get_emitter_sort_backend(emitter.get_emitter_handle()),
-            emitter.get_drawn_texture().uid(),
-            get_normal_texture_uid(emitter),
-            distance,
-            emitter.get_sort_priority(),
-            (emitter.get_half_resolution() || quality.force_half_resolution) && !is_multiply,
-            emitter.get_write_velocity(),
-            significance,
-            particle_count,
-            // Multiply blend filters the scene: it stays unlit.
-            is_multiply ? ps_soa::particle_lighting::unlit : ps_soa::get_capped_lighting(emitter.get_lighting())};
+    const graph_material* material = emitter.get_particle_material();
+    const ps_soa::blend_mode blend = material != nullptr ? get_particle_blend_mode(material->get_blend_mode()) : emitter.get_blend_mode();
+    const bool is_multiply = blend == ps_soa::blend_mode::multiply;
+    const bool wants_half_resolution = emitter.get_half_resolution() || quality.force_half_resolution;
+    particle_draw_key key{};
+    key.component = &emitter;
+    key.material = material;
+    key.material_hash = emitter.get_particle_material_hash();
+    key.blend_mode = blend;
+    key.sort_mode = emitter.get_sort_mode();
+    key.primitive = get_drawn_primitive(emitter);
+    key.backend = ps_soa::get_emitter_sort_backend(emitter.get_emitter_handle());
+    key.distance = distance;
+    key.sort_priority = emitter.get_sort_priority();
+    // The half-size target cannot hold a multiply's filter, and has no copy of the lit scene behind it.
+    key.is_half_resolution = wants_half_resolution && !is_multiply && !reads_scene_color(material);
+    // A material draws its motion with its own variant, which it has only with Write Velocity.
+    key.writes_velocity = emitter.get_write_velocity() && material != nullptr && material->writes_velocity();
+    key.significance = significance;
+    key.particle_count = particle_count;
+    key.lighting = get_particle_draw_lighting(emitter, material);
+    return key;
 }
 
 /// The view's particle budget: the emitters largest on screen are drawn while they fit. The largest is always
@@ -529,29 +542,24 @@ void sort_particle_draw_keys(particle_draw_keys& emitters)
                   {
                       return a.blend_mode < b.blend_mode;
                   }
-                  if(a.texture_uid != b.texture_uid)
-                  {
-                      return a.texture_uid < b.texture_uid;
-                  }
-                  return a.texture_mode < b.texture_mode;
+                  return a.material_hash < b.material_hash;
               });
 }
 
-/// Whether @p next draws in the batch @p open started: same texture, texture mode, sort mode, primitive, backend
-/// and sort priority (a change of any must not reorder what draws first); the color passes also need the same blend,
-/// resolution and no lighting (lit emitters pick their lights where they are, so they draw on their own). A ribbon
-/// threads one emitter's particles: it never shares its draw.
+/// Whether @p next draws in the batch @p open started: materials that bind the same, and the same sort mode,
+/// primitive, backend and sort priority (a change of any must not reorder what draws first); the color passes also
+/// need the same blend, resolution and no lighting (lit emitters pick their lights where they are, so they draw on
+/// their own). A ribbon threads one emitter's particles: it never shares its draw.
 auto is_same_particle_batch(const particle_draw_key& open, const particle_draw_key& next, bool is_velocity) -> bool
 {
     if(next.primitive == ps_soa::particle_primitive::ribbon)
     {
         return false;
     }
-    const bool has_same_geometry = open.texture_uid == next.texture_uid &&
-                                   open.normal_texture_uid == next.normal_texture_uid &&
-                                   open.texture_mode == next.texture_mode && open.sort_mode == next.sort_mode &&
-                                   open.primitive == next.primitive && open.backend == next.backend &&
-                                   open.sort_priority == next.sort_priority;
+    const bool has_same_material = open.material_hash == next.material_hash && open.material != nullptr && next.material != nullptr &&
+                                   open.material->binds_same_draw(*next.material);
+    const bool has_same_geometry = has_same_material && open.sort_mode == next.sort_mode && open.primitive == next.primitive &&
+                                   open.backend == next.backend && open.sort_priority == next.sort_priority;
     if(!has_same_geometry || is_velocity)
     {
         return has_same_geometry;
@@ -570,19 +578,12 @@ auto make_particle_batch(const particle_draw_key& key,
     ps_soa::render_batch batch;
     batch.emitters = handles.data() + first;
     batch.count = count;
-    batch.texture = key.component->get_drawn_texture().get()->native_handle();
-    batch.texture_mode = key.texture_mode;
+    batch.material = key.material;
     batch.blend_mode = key.blend_mode;
     batch.primitive = key.primitive;
     batch.lighting = is_velocity ? ps_soa::particle_lighting::unlit : key.lighting;
     batch.sort_priority = key.sort_priority;
     batch.distance = key.distance;
-    if(batch.lighting == ps_soa::particle_lighting::surface && !key.normal_texture_uid.is_nil())
-    {
-        const auto normal_texture = key.component->get_normal_texture().get();
-        batch.normal_texture = normal_texture->native_handle();
-        batch.normal_channels = normal_texture->get_normal_map_channels();
-    }
     return batch;
 }
 
@@ -609,7 +610,8 @@ auto build_particle_batches(const particle_draw_keys& emitters, std::vector<ps_s
         {
             const auto handle = emitter.component->get_emitter_handle();
             const bool is_drawn = !is_velocity || emitter.writes_velocity;
-            if(!is_drawn || !ps_soa::is_valid(handle) || !emitter.component->get_drawn_texture().is_valid())
+            // An emitter whose material has not loaded yet draws nothing.
+            if(!is_drawn || !ps_soa::is_valid(handle) || emitter.material == nullptr)
             {
                 continue;
             }
@@ -628,6 +630,9 @@ auto build_particle_batches(const particle_draw_keys& emitters, std::vector<ps_s
     {
         const ps_soa::render_batch batch = make_particle_batch(*range.key, handles, range.first, range.count, range.is_velocity);
         lists.has_lit = lists.has_lit || batch.lighting != ps_soa::particle_lighting::unlit;
+        // A particle reads the scene's colour and depth as they are: the blurred copy a rough refracting mesh reads
+        // is not made for it.
+        lists.scene_textures |= batch.material->get_scene_textures() & k_particle_scene_textures;
         auto& list = range.is_velocity ? lists.velocity : range.key->is_half_resolution ? lists.half : lists.full;
         list.push_back(batch);
     }
@@ -659,6 +664,48 @@ void reset_particle_stats(pipeline_stats& stats)
     stats.skipped_particle_emitters = 0;
     stats.skipped_particles = 0;
     stats.sorted_particle_keys = 0;
+    stats.scene_collision_particles = 0;
+    stats.gi_lit_particle_emitters = 0;
+}
+
+/// What a view makes of an emitter's sprites, trails and ribbons, before the view's particle budget.
+struct particle_emitter_view
+{
+    /// Its bounds, with its particles' stretch against the camera, are in the frustum.
+    bool is_in_view = false;
+    /// In view, within its max draw distance and no smaller on screen than the project allows.
+    bool is_drawn = false;
+    /// Those bounds, and the share of the view's height they cover (get_screen_size).
+    math::bbox bounds;
+    float significance = 0.0f;
+};
+
+auto view_particle_emitter(const particle_emitter_component& emitter,
+                           const camera& camera,
+                           float camera_speed,
+                           const ps_soa::particle_quality& quality) -> particle_emitter_view
+{
+    particle_emitter_view view;
+    view.bounds = emitter.get_world_bounds();
+    const auto handle = emitter.get_emitter_handle();
+    if(ps_soa::is_valid(handle))
+    {
+        view.bounds.inflate(ps_soa::get_camera_stretch_reach(handle, camera_speed));
+    }
+    // A degenerate emitter (a non-finite transform) has nothing to draw and would break the sorts.
+    view.is_in_view = is_finite(view.bounds) && camera.test_aabb(view.bounds);
+    if(!view.is_in_view)
+    {
+        return view;
+    }
+    const auto eye = camera.get_position();
+    const float max_draw_distance = emitter.get_max_draw_distance();
+    view.significance = get_screen_size(camera, view.bounds, eye);
+    const bool is_too_far =
+        max_draw_distance > 0.0f && math::distance(eye, math::clamp(eye, view.bounds.min, view.bounds.max)) > max_draw_distance;
+    const bool is_too_small = quality.min_screen_size > 0.0f && view.significance < quality.min_screen_size;
+    view.is_drawn = !is_too_far && !is_too_small;
+    return view;
 }
 
 /**
@@ -697,23 +744,14 @@ auto gather_particle_emitters(scene& scn,
                 }
                 return;
             }
-            math::bbox bounds = emitter.get_world_bounds();
-            const auto handle = emitter.get_emitter_handle();
-            if(ps_soa::is_valid(handle))
-            {
-                bounds.inflate(ps_soa::get_camera_stretch_reach(handle, camera_speed));
-            }
-            // A degenerate emitter (a non-finite transform) has nothing to draw and would break the sorts.
-            if(!is_finite(bounds) || !camera.test_aabb(bounds))
+            const particle_emitter_view view = view_particle_emitter(emitter, camera, camera_speed, quality);
+            if(!view.is_in_view)
             {
                 return;
             }
             // Beyond its max draw distance, or smaller on screen than the project allows, an emitter is not drawn,
             // and renderer-based culling freezes it.
-            const float max_draw_distance = emitter.get_max_draw_distance();
-            const float significance = get_screen_size(camera, bounds, eye);
-            if((max_draw_distance > 0.0f && math::distance(eye, math::clamp(eye, bounds.min, bounds.max)) > max_draw_distance) ||
-               (quality.min_screen_size > 0.0f && significance < quality.min_screen_size))
+            if(!view.is_drawn)
             {
                 stats.skipped_particle_emitters++;
                 stats.skipped_particles += particle_count;
@@ -725,8 +763,8 @@ auto gather_particle_emitters(scene& scn,
                 emitter.set_last_render_frame(frame);
                 return;
             }
-            const float distance = math::distance2(bounds.get_center(), eye);
-            emitters.push_back(make_particle_draw_key(emitter, distance, significance, particle_count, quality));
+            const float distance = math::distance2(view.bounds.get_center(), eye);
+            emitters.push_back(make_particle_draw_key(emitter, distance, view.significance, particle_count, quality));
         });
     for(const auto& emitter : emitters)
     {
@@ -736,6 +774,77 @@ auto gather_particle_emitters(scene& scn,
     }
     apply_particle_budget(emitters, quality.max_drawn_particles, stats);
     return emitters;
+}
+
+/// The view's distance field for @p view to collide particles with, when the view has one that is ready to sample.
+void set_collision_distance_field(const gfx::render_view& rview, ps_soa::scene_collision_view& view)
+{
+    const auto* view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
+    if(view_cache == nullptr || !view_cache->get_clipmap_gpu().is_valid())
+    {
+        return;
+    }
+    const global_sdf_clipmap_gpu& field = view_cache->get_clipmap_gpu();
+    // The sampling uniform's w says whether the field holds the scene yet.
+    constexpr size_t usable_component = 3;
+    if(field.get_sampling_params()[usable_component] <= 0.0f)
+    {
+        return;
+    }
+    view.distance_field = field.get_texture()->native_handle();
+    view.distance_field_levels = field.get_level_params();
+    view.distance_field_params = field.get_sampling_params();
+}
+
+/**
+ * @brief The particles of the view's emitters that collide with scene surfaces touch what the view shows: its depth
+ * and normals, or its distance field where the project asks for that and the view has one. Runs in a view of its own
+ * before the particles' draws.
+ * @return The particles tested.
+ */
+auto collide_particles_with_scene(const camera& camera,
+                                  gfx::render_view& rview,
+                                  const particle_draw_keys& emitters,
+                                  std::vector<ps_soa::emitter_handle>& handles) -> uint32_t
+{
+    const ps_soa::scene_collision source = ps_soa::get_quality().scene_collision;
+    if(source == ps_soa::scene_collision::off || !ps_soa::can_collide_with_scene())
+    {
+        return 0;
+    }
+    // The view keeps its pass whether or not an emitter in it collides this frame, so the views after it keep their
+    // places. A frame that dispatches nothing leaves it untouched: an empty view of its own would still be a pass
+    // over the window on a tile-based GPU.
+    gfx::render_pass pass("Particles/Scene Collision");
+    handles.clear();
+    for(const auto& emitter : emitters)
+    {
+        const auto handle = emitter.component->get_emitter_handle();
+        if(ps_soa::is_valid(handle) && ps_soa::collides_with_scene(handle))
+        {
+            handles.push_back(handle);
+        }
+    }
+    if(handles.empty())
+    {
+        return 0;
+    }
+    APP_SCOPE_PERF("Rendering/Particle Pass/Scene Collision");
+    ps_soa::scene_collision_view view;
+    const auto& depth = rview.tex_find("DEPTH");
+    const auto& normals = rview.tex_find("GBUFFER_1");
+    if(depth && normals)
+    {
+        view.depth = depth->native_handle();
+        view.normals = normals->native_handle();
+    }
+    if(source == ps_soa::scene_collision::distance_field)
+    {
+        set_collision_distance_field(rview, view);
+    }
+    camera.set_pass_view_proj(pass, camera.get_projection());
+    view.view = pass.id;
+    return ps_soa::collide_with_scene(view, handles.data(), uint32_t(handles.size()));
 }
 
 /// Whether any of the view's emitters fades softly into the scene (the pass then needs the scene's depth).
@@ -823,10 +932,9 @@ auto pipeline::init(rtti::context& ctx) -> bool
     };
     constexpr auto default_variant = gfx::shader::DEFAULT_VARIANT;
 
-    // Uniforms before programs (GL uniform order contract, gpu_program.h).
+    // Uniforms before programs (GL uniform order contract, gpu_program.h): the particles' own are made at their
+    // materials' first draws.
     particle_pre_exposure_uniform_ = std::make_shared<gfx::uniform>("u_pre_exposure", bgfx::UniformType::Vec4);
-    particle_program_ = load_particle_program(default_variant, "fs_particle", default_variant);
-    particle_program_mask_ = load_particle_program(default_variant, "fs_particle", "mask");
     particle_prev_view_proj_uniform_ = std::make_shared<gfx::uniform>("u_prev_view_proj", bgfx::UniformType::Mat4);
     particle_sun_direction_uniform_ = std::make_shared<gfx::uniform>("u_particle_sun_direction", bgfx::UniformType::Vec4);
     particle_sun_color_uniform_ = std::make_shared<gfx::uniform>("u_particle_sun_color", bgfx::UniformType::Vec4);
@@ -834,14 +942,11 @@ auto pipeline::init(rtti::context& ctx) -> bool
     particle_lights_uniform_ =
         std::make_shared<gfx::uniform>("u_particle_lights", bgfx::UniformType::Vec4, uint16_t(k_particle_light_vec4s));
     particle_irradiance_sampler_ = std::make_shared<gfx::uniform>("s_particle_irradiance", bgfx::UniformType::Sampler);
-    particle_normal_sampler_ = std::make_shared<gfx::uniform>("s_particle_normal", bgfx::UniformType::Sampler);
     for(size_t i = 0; i < particle_shadow_samplers_.size(); ++i)
     {
         particle_shadow_samplers_[i] =
             std::make_shared<gfx::uniform>("s_shadowMap" + std::to_string(i), bgfx::UniformType::Sampler);
     }
-    particle_program_lit_ = load_particle_program("lit", "fs_particle", "lit");
-    particle_program_lit_mask_ = load_particle_program("lit", "fs_particle", "mask_lit");
     create_particle_light_fallbacks(particle_no_sky_, particle_no_shadow_);
     // The translucency pass's surfaces (mg_forward.sh): their programs are made at their first draw, after these.
     forward_sun_direction_uniform_ = std::make_shared<gfx::uniform>("u_fwd_sun_direction", bgfx::UniformType::Vec4);
@@ -880,8 +985,20 @@ auto pipeline::init(rtti::context& ctx) -> bool
                                                        bgfx::TextureFormat::RGBA8,
                                                        BGFX_SAMPLER_UVW_CLAMP,
                                                        bgfx::copy(black_cube.data(), uint32_t(sizeof(black_cube))));
-    particle_velocity_program_ = load_particle_program("velocity", "fs_particle_velocity", default_variant);
     particle_overdraw_program_ = load_particle_program(default_variant, "fs_particle_overdraw", default_variant);
+    // What a material's particle draws read (mg_particle.sh), before their programs, which are made at their first
+    // draw.
+    particle_clip_planes_uniform_ = std::make_shared<gfx::uniform>("u_camera_clip_planes", bgfx::UniformType::Vec4);
+    particle_scene_uniform_ = std::make_shared<gfx::uniform>("u_particle_scene", bgfx::UniformType::Vec4);
+    particle_scene_color_sampler_ = std::make_shared<gfx::uniform>("s_particle_scene_color", bgfx::UniformType::Sampler);
+    particle_material_programs_.init(am.get_asset<gfx::shader>("engine:/data/shaders/particles/vs_particle.eshader"),
+                                     material_domain::surface,
+                                     false);
+    const shader_buffer_storage particle_storage = ps_soa::get_particle_data_storage();
+    particle_material_variants_ = {get_shader_buffer_variant("graph", particle_storage),
+                                   get_shader_buffer_variant("graph_lit", particle_storage),
+                                   get_shader_buffer_variant("graph_velocity", particle_storage),
+                                   "graph_lit_gi"};
     world_quad_program_ = load_program("rmlui_world/vs_world_quad", "rmlui_world/fs_world_quad");
 
     return true;
@@ -1549,21 +1666,22 @@ auto pipeline::run_particle_pass(scene& scn,
     const math::vec3 camera_velocity = get_camera_velocity(camera, dt);
     const float camera_speed = math::length(camera_velocity);
 
-    // The particle programs draw the particles alone: see-through meshes draw with their own materials, so a particle
-    // program that did not load or is not ready yet leaves them drawn. Before the pass is set up there is neither.
-    const bool is_set_up = particle_program_ && particle_program_mask_;
-    const bool has_particle_programs = is_set_up && particle_program_->begin() && particle_program_mask_->begin();
-    if(is_set_up && (has_particle_programs || has_meshes))
+    // Particles and see-through meshes draw with their own materials. Before the pass is set up there is neither.
+    const bool is_set_up = particle_overdraw_program_ != nullptr;
+    if(is_set_up)
     {
+        // A program holds its shaders: the ones of materials no emitter draws any more, or that recompiled, go.
+        particle_material_programs_.release_unused();
         const auto cam_pos = camera.get_position();
-        particle_draw_keys particle_emitters = include_particles && has_particle_programs
+        particle_draw_keys particle_emitters = include_particles
                                                    ? gather_particle_emitters(scn, camera, camera_speed, render_mask, stats_)
                                                    : particle_draw_keys{};
-        const bool wants_scene_depth = has_soft_particles(particle_emitters);
         {
             APP_SCOPE_PERF("Rendering/Particle Pass/Sort Emitters");
             sort_particle_draw_keys(particle_emitters);
         }
+        stats_.scene_collision_particles =
+            collide_particles_with_scene(camera, rview, particle_emitters, particle_collision_scratch_);
         {
             APP_SCOPE_PERF("Rendering/Particle Pass/Submit Emitter Batches");
             const particle_batch_lists batches = build_particle_batches(particle_emitters, particle_handles_scratch_);
@@ -1571,6 +1689,11 @@ auto pipeline::run_particle_pass(scene& scn,
             const particle_batch_list& half_batches = batches.half;
             const particle_batch_list& velocity_batches = batches.velocity;
             const bool has_lit_batches = batches.has_lit;
+            // Soft particles fade against the scene's depth, and a material may read it (Depth Fade, Refraction).
+            const bool wants_scene_depth =
+                has_soft_particles(particle_emitters) || (batches.scene_textures & material_scene_texture_depth) != 0;
+            // What the pass's meshes and particle materials read of the scene behind them.
+            const uint32_t scene_reads = batches.scene_textures | (has_meshes ? meshes->scene_textures : 0u);
             if((!full_batches.empty() || !half_batches.empty() || has_meshes) && lbuffer_depth)
             {
                 // The TAA lowers its history weight where particles cover the pixel (they have no motion
@@ -1582,11 +1705,6 @@ auto pipeline::run_particle_pass(scene& scn,
                 ps_soa::render_view_params params;
                 params.has_reactive_target = has_reactive_target;
                 forward_has_reactive_target_ = has_reactive_target;
-                if(has_particle_programs)
-                {
-                    params.program = particle_program_->native_handle();
-                    params.mask_program = particle_program_mask_->native_handle();
-                }
                 params.view_matrix = &camera.get_view()[0][0];
                 params.eye = cam_pos;
                 params.camera_velocity = camera_velocity;
@@ -1596,11 +1714,14 @@ auto pipeline::run_particle_pass(scene& scn,
                 {
                     params.frustum_planes[i] = planes[i].data;
                 }
+                // Half the view's height is 1 / projection[1][1] metres, at depth 1 through a perspective.
+                params.pixels_per_metre = std::abs(camera.get_projection()[1][1]) * float(camera.get_viewport_size().height) * 0.5f;
+                params.is_orthographic = camera.get_projection_mode() == projection_mode::orthographic;
                 const auto pre_exposure_values = pre_exposure.to_uniform();
                 params.pre_exposure = math::vec4(pre_exposure_values[0], pre_exposure_values[1], pre_exposure_values[2], pre_exposure_values[3]);
                 params.pre_exposure_uniform = particle_pre_exposure_uniform_->native_handle();
-                // Every particle program reads the GPU's share of the pre-exposure from the environment SH at the lit
-                // programs' sky stage (particle_fragment.sh), so each draw binds it there.
+                // Every particle draw reads the GPU's share of the pre-exposure from the environment SH at the lit
+                // draws' sky stage (particle_shading.sh), so each draw binds it there.
                 params.environment_texture = pre_exposure.gpu_texture;
                 params.environment_sampler = particle_irradiance_sampler_->native_handle();
                 params.environment_stage = k_particle_irradiance_stage;
@@ -1616,7 +1737,7 @@ auto pipeline::run_particle_pass(scene& scn,
                 };
                 // Lit batches and the translucent meshes read the scene's light, gathered once per view and bound before
                 // each of their draws.
-                const bool has_lit_particles = has_lit_batches && particle_program_lit_->begin() && particle_program_lit_mask_->begin();
+                const bool has_lit_particles = has_lit_batches;
                 if(has_lit_particles || has_meshes)
                 {
                     forward_lighting_ = std::make_shared<particle_scene_lighting>(
@@ -1625,10 +1746,6 @@ auto pipeline::run_particle_pass(scene& scn,
                     forward_pre_exposure_ = params.pre_exposure;
                     forward_environment_ = pre_exposure.gpu_texture;
                     forward_light_limit_ = uint32_t(std::clamp(limits.translucent_lights, 0, int(k_particle_max_lights)));
-                    if(has_meshes)
-                    {
-                        prepare_forward_scene_reads(rview, lbuffer_depth, hiz_depth, *meshes, limits);
-                    }
                     if(has_meshes && meshes->has_depth_prepass)
                     {
                         opaque_depth_before_translucency_ = depth_copy_pass_.run(rview,
@@ -1639,13 +1756,19 @@ auto pipeline::run_particle_pass(scene& scn,
                 }
                 if(has_lit_particles)
                 {
-                    params.lit_program = particle_program_lit_->native_handle();
-                    params.lit_mask_program = particle_program_lit_mask_->native_handle();
                     params.bind_lighting = [&](const ps_soa::render_batch& batch)
                     {
-                        bind_particle_lighting(*forward_lighting_, batch);
+                        return bind_particle_lighting(*forward_lighting_, batch);
                     };
                 }
+                if(scene_reads != 0)
+                {
+                    prepare_forward_scene_reads(rview, lbuffer_depth, hiz_depth, scene_reads, limits);
+                }
+                params.begin_material = [&](const ps_soa::render_batch& batch, const ps_soa::material_draw& draw)
+                {
+                    return begin_particle_material(batch, draw, camera);
+                };
                 const auto draw_batches = [&](bgfx::ViewId view, const particle_batch_list& batches)
                 {
                     params.view = view;
@@ -1738,14 +1861,7 @@ auto pipeline::run_particle_pass(scene& scn,
                 {
                     reactive = targets->get_texture(1);
                 }
-                if(params.bind_lighting)
-                {
-                    particle_program_lit_->end();
-                    particle_program_lit_mask_->end();
-                    params.bind_lighting = nullptr;
-                    params.lit_program = BGFX_INVALID_HANDLE;
-                    params.lit_mask_program = BGFX_INVALID_HANDLE;
-                }
+                params.bind_lighting = nullptr;
                 forward_lighting_.reset();
                 forward_light_pick_ = {};
                 forward_fog_ = nullptr;
@@ -1761,7 +1877,7 @@ auto pipeline::run_particle_pass(scene& scn,
                     camera.set_pass_view_proj(pass, camera.get_projection());
                     meshes->draw_velocity(pass.id);
                 }
-                if(!velocity_batches.empty() && velocity_target && particle_velocity_program_->begin())
+                if(!velocity_batches.empty() && velocity_target)
                 {
                     // Nearly opaque particles replace the scene's motion vectors with their own, so the TAA
                     // reprojects them (rasterized jittered like the scene's movers, previous frame unjittered).
@@ -1771,8 +1887,6 @@ auto pipeline::run_particle_pass(scene& scn,
                     // For offsets from the camera, the view's origin (camera::set_pass_view_proj).
                     const math::transform prev_view_proj(camera.get_prev_view_projection_from_current_unjittered());
                     params.view = pass.id;
-                    params.program = particle_velocity_program_->native_handle();
-                    params.mask_program = params.program;
                     params.scene_depth = BGFX_INVALID_HANDLE;
                     params.is_transmittance_target = false;
                     params.has_reactive_target = false;
@@ -1782,7 +1896,6 @@ auto pipeline::run_particle_pass(scene& scn,
                         ps_soa::render_view(params, velocity_batches.data(), uint32_t(velocity_batches.size()));
                     stats_.drawn_particles_batches += view_stats.draws;
                     stats_.sorted_particle_keys += view_stats.sorted_keys;
-                    particle_velocity_program_->end();
                 }
                 if(overdraw_target && particle_overdraw_program_->begin())
                 {
@@ -1790,8 +1903,7 @@ auto pipeline::run_particle_pass(scene& scn,
                     // shade a quarter of the pixels they cover, the velocity draws as many again. Each list
                     // gets its own view: a view runs all its culling dispatches before any of its draws.
                     constexpr float half_resolution_weight = 0.25f;
-                    params.program = particle_overdraw_program_->native_handle();
-                    params.mask_program = params.program;
+                    params.overdraw_program = particle_overdraw_program_->native_handle();
                     params.scene_depth = BGFX_INVALID_HANDLE;
                     params.is_transmittance_target = false;
                     params.has_reactive_target = false;
@@ -1820,12 +1932,6 @@ auto pipeline::run_particle_pass(scene& scn,
                 }
             }
         }
-
-        if(has_particle_programs)
-        {
-            particle_program_->end();
-            particle_program_mask_->end();
-        }
     }
     return reactive;
 }
@@ -1833,18 +1939,18 @@ auto pipeline::run_particle_pass(scene& scn,
 void pipeline::prepare_forward_scene_reads(gfx::render_view& rview,
                                            const gfx::frame_buffer::ptr& lbuffer_depth,
                                            const gfx::texture::ptr& hiz_depth,
-                                           const translucent_mesh_list& meshes,
+                                           uint32_t scene_textures,
                                            const feature_limits& limits)
 {
     forward_scene_color_ = BGFX_INVALID_HANDLE;
     forward_scene_depth_ = BGFX_INVALID_HANDLE;
     forward_scene_blurred_ = BGFX_INVALID_HANDLE;
-    if((meshes.scene_textures & material_scene_texture_depth) != 0)
+    if((scene_textures & material_scene_texture_depth) != 0)
     {
         forward_scene_depth_ = resolve_particle_scene_depth(rview, hiz_depth, depth_copy_pass_);
     }
     const auto& lbuffer = rview.fbo_find("LBUFFER");
-    if((meshes.scene_textures & material_scene_texture_color) == 0 || !limits.translucent_scene_color || !lbuffer)
+    if((scene_textures & material_scene_texture_color) == 0 || !limits.translucent_scene_color || !lbuffer)
     {
         return;
     }
@@ -1863,7 +1969,7 @@ void pipeline::prepare_forward_scene_reads(gfx::render_view& rview,
     }
     blit_pass_.run(rview, {.input = lbuffer, .output = fbo});
     forward_scene_color_ = copy->native_handle();
-    if((meshes.scene_textures & material_scene_texture_blurred_color) != 0 && scene_downsample_program_)
+    if((scene_textures & material_scene_texture_blurred_color) != 0 && scene_downsample_program_)
     {
         APP_SCOPE_PERF("Rendering/Translucency/Scene Color Blur");
         // Without the program there is no blurred copy: rough surfaces then read the sharp one (bind_forward_lighting).
@@ -2148,8 +2254,90 @@ void pipeline::bind_forward_light_shadow_atlas()
     bgfx::setTexture(k_forward_light_shadow_stage, forward_light_shadow_atlas_sampler_->native_handle(), particle_no_shadow_->native_handle());
 }
 
-void pipeline::bind_particle_lighting(const particle_scene_lighting& lighting, const ps_soa::render_batch& batch)
+auto pipeline::can_light_particles_with_gi(const particle_emitter_component& emitter) -> bool
 {
+    const bool asks = emitter.get_ambient_light() == ps_soa::particle_ambient::global_illumination &&
+                      emitter.get_render_mode() != ps_soa::render_mode::mesh;
+    if(!asks)
+    {
+        return false;
+    }
+    // A material that has not loaded, or that the scene does not light, draws unlit.
+    const graph_material* material = emitter.get_particle_material();
+    if(get_particle_draw_lighting(emitter, material) == ps_soa::particle_lighting::unlit)
+    {
+        return false;
+    }
+    return fits_material_graph_particle_gi(uint32_t(material->get_textures().size()), material->get_scene_textures()) &&
+           ps_soa::get_particle_data_storage() == shader_buffer_storage::buffer;
+}
+
+void pipeline::collect_particle_gi_emitters(scene& scn,
+                                            const camera& camera,
+                                            delta_t dt,
+                                            const layer_mask& render_mask,
+                                            std::vector<particle_gi_emitter>& emitters)
+{
+    emitters.clear();
+    const float camera_speed = math::length(get_camera_velocity(camera, dt));
+    const ps_soa::particle_quality& quality = ps_soa::get_quality();
+    scn.registry->view<transform_component, particle_emitter_component, active_component>().each(
+        [&](auto e, auto&& /*transform_comp*/, auto&& emitter, auto&& /*active*/)
+        {
+            if(!emitter.is_enabled() || !is_on_rendered_layer(*scn.registry, e, render_mask) || !can_light_particles_with_gi(emitter))
+            {
+                return;
+            }
+            const auto handle = emitter.get_emitter_handle();
+            if(!ps_soa::is_valid(handle) || emitter.get_num_particles() == 0)
+            {
+                return;
+            }
+            // The emitters the particle pass draws (gather_particle_emitters), before its particle budget: one the
+            // budget leaves out this frame keeps its probes for the frame it fits again.
+            if(!view_particle_emitter(emitter, camera, camera_speed, quality).is_drawn)
+            {
+                return;
+            }
+            // A particle is lit where its centre is: the box without the size of its quad.
+            math::bbox lit_bounds;
+            ps_soa::get_lit_aabb(handle, lit_bounds);
+            if(is_finite(lit_bounds))
+            {
+                emitters.push_back({handle, lit_bounds});
+            }
+        });
+}
+
+void pipeline::set_particle_gi_emitters(const std::vector<ps_soa::emitter_handle>& emitters)
+{
+    particle_gi_emitters_.clear();
+    for(const auto& emitter : emitters)
+    {
+        particle_gi_emitters_.push_back(emitter.idx);
+    }
+    std::sort(particle_gi_emitters_.begin(), particle_gi_emitters_.end());
+}
+
+auto pipeline::draws_particles_with_gi(const ps_soa::render_batch& batch) const -> bool
+{
+    // A lit emitter draws on its own (is_same_particle_batch), so the batch is the emitter.
+    if(forward_gi_cache_ == nullptr || !forward_gi_cache_->has_surface_sh() || batch.count != 1)
+    {
+        return false;
+    }
+    return std::binary_search(particle_gi_emitters_.begin(), particle_gi_emitters_.end(), batch.emitters[0].idx);
+}
+
+auto pipeline::bind_particle_lighting(const particle_scene_lighting& lighting, const ps_soa::render_batch& batch) -> bool
+{
+    const bool reads_gi = draws_particles_with_gi(batch);
+    if(reads_gi)
+    {
+        const particle_gi_stages stages = get_material_graph_particle_gi_stages();
+        forward_gi_cache_->bind_for_surfaces(stages.indirection, stages.sh);
+        gfx::set_uniform(forward_gi_uniform_, math::vec4(forward_gi_intensity_, 0.0f, 0.0f, 0.0f));
+    }
     math::bbox bounds;
     for(uint32_t e = 0; e < batch.count; ++e)
     {
@@ -2167,15 +2355,7 @@ void pipeline::bind_particle_lighting(const particle_scene_lighting& lighting, c
     }
     std::array<math::vec4, k_particle_light_vec4s> lights{};
     const uint32_t light_count = pick_particle_lights(lighting, bounds, lights);
-    const bool has_normal_map = bgfx::isValid(batch.normal_texture);
-    const float lighting_params[4] = {float(light_count),
-                                      lighting.pre_exposure,
-                                      has_normal_map ? 1.0f : 0.0f,
-                                      has_normal_map ? static_cast<float>(batch.normal_channels) : 0.0f};
-    // Without a normal map the stage still holds a texture: the shader does not read it then.
-    bgfx::setTexture(k_particle_normal_stage,
-                     particle_normal_sampler_->native_handle(),
-                     has_normal_map ? batch.normal_texture : particle_no_sky_->native_handle());
+    const float lighting_params[4] = {float(light_count), lighting.pre_exposure, 0.0f, 0.0f};
     gfx::set_uniform(particle_sun_direction_uniform_, lighting.sun_direction);
     gfx::set_uniform(particle_sun_color_uniform_, lighting.sun_color);
     gfx::set_uniform(particle_lighting_uniform_, lighting_params);
@@ -2185,7 +2365,7 @@ void pipeline::bind_particle_lighting(const particle_scene_lighting& lighting, c
     if(lighting.shadow)
     {
         lighting.shadow->submit_uniforms(k_particle_shadow_stage, shadow::shadowmap_generator::no_compare_stage, lighting.origin);
-        return;
+        return reads_gi;
     }
     for(size_t i = 0; i < particle_shadow_samplers_.size(); ++i)
     {
@@ -2193,6 +2373,61 @@ void pipeline::bind_particle_lighting(const particle_scene_lighting& lighting, c
                          particle_shadow_samplers_[i]->native_handle(),
                          particle_no_shadow_->native_handle());
     }
+    return reads_gi;
+}
+
+auto pipeline::get_material_clip_planes(const camera& view_camera) -> math::vec4
+{
+    constexpr float taa_mip_bias = -0.3f;
+    const bool is_jittered = view_camera.get_aa_data().y > 1.0f;
+    return {view_camera.get_near_clip(), view_camera.get_far_clip(), is_jittered ? taa_mip_bias : 0.0f, 0.0f};
+}
+
+auto pipeline::begin_particle_material(const ps_soa::render_batch& batch, const ps_soa::material_draw& draw, const camera& view_camera)
+    -> bgfx::ProgramHandle
+{
+    constexpr size_t unlit_variant = 0;
+    constexpr size_t lit_variant = 1;
+    constexpr size_t velocity_variant = 2;
+    constexpr size_t lit_gi_variant = 3;
+    const graph_material& material = *batch.material;
+    const size_t color_variant = !draw.is_lit ? unlit_variant : draw.reads_gi ? lit_gi_variant : lit_variant;
+    const std::string& vertex_variant = particle_material_variants_[draw.is_velocity ? velocity_variant : color_variant];
+    // A material that is lit has a variant of its own for the emitters whose Lighting is Unlit.
+    static const std::string lit_fragment_variant = "particle";
+    static const std::string unlit_fragment_variant = "particle_unlit";
+    static const std::string velocity_fragment_variant = "particle_velocity";
+    const bool is_lit_material = material.get_shading_model() != material_shading_model::unlit;
+    const std::string& fragment_variant = draw.is_velocity                  ? velocity_fragment_variant
+                                          : is_lit_material && !draw.is_lit ? unlit_fragment_variant
+                                                                            : lit_fragment_variant;
+    gpu_program* program = particle_material_programs_.begin(material, vertex_variant, fragment_variant);
+    const bool is_lit_by_gi = program != nullptr && color_variant == lit_gi_variant && !draw.is_velocity;
+    if(program == nullptr && draw.reads_gi)
+    {
+        // A particle vertex shader without the variant the GI lights draws the emitter with the sky's light: the
+        // radiance cache's buffers stay bound and no program reads them.
+        program = particle_material_programs_.begin(material, particle_material_variants_[lit_variant], fragment_variant);
+    }
+    if(program == nullptr)
+    {
+        return BGFX_INVALID_HANDLE;
+    }
+    stats_.gi_lit_particle_emitters += is_lit_by_gi ? 1u : 0u;
+    particle_material_programs_.submit_particle_values(material, draw.address_mask, draw.address_flags);
+    particle_material_programs_.submit_camera_position(view_camera.get_position());
+    gfx::set_uniform(particle_clip_planes_uniform_, get_material_clip_planes(view_camera));
+    if((material.get_scene_textures() & material_scene_texture_color) != 0)
+    {
+        // The copy of the lit scene the pass took for what reads it; without one the material reads black.
+        const bool has_scene = bgfx::isValid(forward_scene_color_);
+        bgfx::setTexture(get_material_graph_particle_scene_color_stage(material.get_shading_model()),
+                         particle_scene_color_sampler_->native_handle(),
+                         has_scene ? forward_scene_color_ : particle_no_sky_->native_handle(),
+                         BGFX_SAMPLER_UVW_CLAMP);
+        gfx::set_uniform(particle_scene_uniform_, math::vec4(has_scene ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f));
+    }
+    return program->native_handle();
 }
 
 // pipeline_stats implementation
@@ -2242,12 +2477,16 @@ void pipeline_stats::add_stats(const pipeline_stats& stats)
     skipped_particle_emitters += stats.skipped_particle_emitters;
     skipped_particles += stats.skipped_particles;
     sorted_particle_keys += stats.sorted_particle_keys;
+    scene_collision_particles += stats.scene_collision_particles;
+    gi_lit_particle_emitters += stats.gi_lit_particle_emitters;
     drawn_decals += stats.drawn_decals;
     decal_draws += stats.decal_draws;
     decal_buffer_runs += stats.decal_buffer_runs;
     post_process_material_passes += stats.post_process_material_passes;
     drawn_translucent_models += stats.drawn_translucent_models;
     drawn_translucent_submeshes += stats.drawn_translucent_submeshes;
+    drawn_dynamic_renderers += stats.drawn_dynamic_renderers;
+    drawn_dynamic_batches += stats.drawn_dynamic_batches;
 
     add_batch_stats(stats.batching_stats);
 }

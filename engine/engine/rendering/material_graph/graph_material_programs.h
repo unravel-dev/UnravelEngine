@@ -57,7 +57,11 @@ class graph_material_programs : public uniforms_cache
 public:
     /// Binds the programs to @p vertex_shader, for materials of @p domain alone: a material of another domain gets no
     /// program, so a decal or post-process material on a model draws the default surface.
-    void init(asset_handle<gfx::shader> vertex_shader, material_domain domain = material_domain::surface);
+    /// @param uses_material_vertex_stage False for a vertex shader that writes every varying its fragment variants read
+    ///        whatever the graph, as the particles' does: a material's own vertex shader never draws with it.
+    void init(asset_handle<gfx::shader> vertex_shader,
+              material_domain domain = material_domain::surface,
+              bool uses_material_vertex_stage = true);
 
     /**
      * @brief The program drawing @p mat with the vertex shader's @p vertex_variant and its shader's @p
@@ -92,6 +96,11 @@ public:
 
     /// Binds @p registers (u_mg_params) and @p textures, and the times, for the next draw.
     void submit_values(const std::vector<math::vec4>& registers, const std::vector<material_graph_texture>& textures) const;
+
+    /// Binds @p mat's textures at the stages a particle draw leaves them (get_material_graph_particle_texture_stage), its
+    /// parameters and the time, for the next draw of its "particle" variants. The textures that read as their texture
+    /// says take @p address_flags in the address bits @p address_mask names (a ribbon's clamp); 0 leaves them.
+    void submit_particle_values(const graph_material& mat, uint32_t address_mask = 0, uint32_t address_flags = 0) const;
 
     /// Sets the camera position the next draw evaluates the graph for (u_camera_wpos), for passes whose views are not
     /// the camera's, such as shadow maps.
@@ -159,6 +168,18 @@ private:
                      const asset_handle<gfx::shader>& vertex_shader,
                      const asset_handle<gfx::shader>& fragment_shader) -> gpu_program*;
 
+    /// Where a draw binds a material's textures: at the stage its compile gave each, or at a particle draw's.
+    enum class texture_stages : uint8_t
+    {
+        compiled,
+        particle,
+    };
+    void submit_values(const std::vector<math::vec4>& registers,
+                       const std::vector<material_graph_texture>& textures,
+                       texture_stages stages,
+                       uint32_t address_mask = 0,
+                       uint32_t address_flags = 0) const;
+
     std::vector<gfx::program::uniform_ptr> samplers_;
     gfx::program::uniform_ptr parameters_;
     gfx::program::uniform_ptr normal_channels_;
@@ -166,6 +187,8 @@ private:
     gfx::program::uniform_ptr camera_position_;
     asset_handle<gfx::shader> vertex_shader_;
     material_domain domain_{material_domain::surface};
+    /// A material's own vertex shader draws in place of vertex_shader_ where it has one (init).
+    bool uses_material_vertex_stage_{true};
     std::map<program_key, program_entry, program_key_less> programs_;
 };
 

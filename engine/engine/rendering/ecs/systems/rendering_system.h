@@ -80,6 +80,8 @@ public:
 
 
     void on_frame_end(rtti::context& ctx, const frame_times& times);
+    /// Play begins: the scene's trails forget their points.
+    void on_play_begin(rtti::context& ctx);
     void on_play_end(rtti::context& ctx);
     /// Drops the instanced draws scripts made before a frame in which they update again.
     void reset_script_draws(rtti::context& ctx, const frame_times& times);

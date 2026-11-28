@@ -120,6 +120,14 @@ auto get_component_icon() -> std::string
     {
         return ICON_MDI_TEXT;
     }
+    else if constexpr(std::is_same<T, line_component>::value)
+    {
+        return ICON_MDI_VECTOR_POLYLINE;
+    }
+    else if constexpr(std::is_same<T, trail_component>::value)
+    {
+        return ICON_MDI_CHART_BELL_CURVE;
+    }
     // Animation
     else if constexpr(std::is_same<T, animation_component>::value)
     {

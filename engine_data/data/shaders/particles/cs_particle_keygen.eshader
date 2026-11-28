@@ -2,7 +2,8 @@
 /*
  * Per view: culls every particle slot of the view's GPU-drawn emitters and writes what each draw reads.
  *
- * A task is one emitter of one draw (batch). Its slots [0, high water) map to threads
+ * A task is one emitter of one draw (batch): pool base, high water, thread offset, output base, batch, sort kind,
+ * batch key and, for a ribbon, how its key's bits are shared. Its slots [0, high water) map to threads
  * [thread_offset, thread_offset + high water). A sorted batch writes a key and a slot for EVERY thread
  * at a fixed place (out_base + local index): the key holds the batch's ordinal in its top bits, so the one
  * sort of the view groups every batch's particles together, and a dead or culled particle takes its
@@ -148,12 +149,28 @@ void main()
 			order = distance_order(dot(to_particle, u_particle_view1.xyz));
 		}
 		// Every distance order is a 32-bit value whose top distance_bits bits are kept. Ages and slots keep their
-		// low bits instead: exact while they fit (2^24 ticks is over half an hour), so a ribbon's order never ties.
+		// low bits instead: exact while they fit (2^24 ticks is over half an hour).
 		order = order >> (32u - distance_bits);
 		uint age = min(age_ticks, low_mask - 1u);
-		if(sort_kind == PARTICLE_SORT_KIND_OLDEST_FIRST || sort_kind == PARTICLE_SORT_KIND_RIBBON)
+		if(sort_kind == PARTICLE_SORT_KIND_OLDEST_FIRST)
 		{
 			order = low_mask - 1u - age;
+		}
+		else if(sort_kind == PARTICLE_SORT_KIND_RIBBON)
+		{
+			// The particles of a ribbon follow the ones of the ribbon before it, each ribbon oldest first. The task
+			// says how many of the key's bits hold the ribbon, and how far an age is shifted down to fit the rest
+			// (pack_ribbon_key_bits in particle_gpu_schema.h).
+			uint ribbon_key = task_value(task, 7u);
+			uint ribbon_bits = ribbon_key & 0xffu;
+			uint age_bits = distance_bits - ribbon_bits;
+			uint age_mask = age_bits >= 32u ? 0xffffffffu : ((1u << age_bits) - 1u);
+			uint ribbon_age = min(age_ticks >> (ribbon_key >> 8u), age_mask - 1u);
+			order = age_mask - 1u - ribbon_age;
+			if(ribbon_bits > 0u)
+			{
+				order |= (record.ribbon & ((1u << ribbon_bits) - 1u)) << age_bits;
+			}
 		}
 		else if(sort_kind == PARTICLE_SORT_KIND_YOUNGEST_FIRST)
 		{

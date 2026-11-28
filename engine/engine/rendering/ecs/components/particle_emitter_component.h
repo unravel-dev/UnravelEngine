@@ -1,10 +1,12 @@
 #pragma once
 
 #include <engine/ecs/components/basic_component.h>
+#include <engine/layers/layer_mask.h>
 #include <engine/rendering/particles/ps/particle_system_soa.h>
 #include <graphics/texture.h>
 #include <engine/assets/asset_handle.h>
 #include <engine/rendering/batch_collector.h>
+#include <engine/rendering/material_graph/particle_material.h>
 #include <engine/rendering/instanced_mesh_source.h>
 #include <engine/rendering/model.h>
 #include <bx/easing.h>
@@ -36,6 +38,91 @@ struct particle_sub_emitter
     bool inherit_color = false;
     bool inherit_size = false;
 };
+
+/// Why an emitter's sprites, trails and ribbons cannot draw a material.
+enum class particle_material_problem
+{
+    /// They draw it.
+    none,
+    /// It is a decal or post-process material, or no graph material.
+    not_surface,
+    /// It draws in the G-buffer (Blend Mode Opaque or Dithered), where particles do not draw.
+    not_forward,
+    /// Its output has Particle Use off.
+    particle_use_off,
+    /// Its shader did not compile for the renderer that draws.
+    no_shader,
+};
+
+/**
+ * @brief A decal an emitter leaves where one of its particles touches a surface, while the game plays.
+ */
+struct particle_collision_decal
+{
+    /// Whether contacts leave decals.
+    bool enabled = false;
+    /// The Decal material; empty takes the engine's Default Decal.
+    asset_handle<material> material;
+    /// Side of the square decal, metres, random between min and max.
+    frange_t size{0.2f, 0.4f};
+    /// Seconds a decal stays before it fades out (0 keeps it until newer ones take its place), and the seconds the
+    /// fade takes.
+    float lifetime = 10.0f;
+    float fade_out = 1.0f;
+    /// Chance (0..1) that a contact leaves one.
+    float probability = 1.0f;
+    /// The decal follows the entity whose collider the particle touched.
+    bool attach_to_entity = true;
+};
+
+/**
+ * @brief A decal an emitter asks for where a particle touched a surface (particle_collision_decal).
+ */
+struct particle_decal_spawn
+{
+    asset_handle<material> material;
+    /// Where on the surface, and the surface's unit normal there, world space.
+    math::vec3 point{0.0f};
+    math::vec3 normal{0.0f, 1.0f, 0.0f};
+    /// Side of the square decal, metres, and the degrees it turns about the normal.
+    float size = 0.0f;
+    float roll_degrees = 0.0f;
+    float lifetime = 0.0f;
+    float fade_out = 0.0f;
+    /// The entity the decal follows; entt::null: none.
+    entt::entity attach_to = entt::null;
+};
+
+/**
+ * @brief The particle events one emitter recorded in a frame for scripts.
+ */
+struct particle_script_events
+{
+    /// The emitter's entity.
+    entt::entity emitter = entt::null;
+    /// The kinds (ps_soa::particle_event_type bits) the scripts of the emitter's entity are told of, and whether the
+    /// scripts of an entity a collision names are told of that collision.
+    uint32_t sent_kinds = 0;
+    bool notifies_hit_entities = false;
+    /// Oldest first.
+    std::vector<ps_soa::particle_event> events;
+};
+
+/**
+ * @brief Where an emitter hands out a frame's events (particle_emitter_component::dispatch_events). A list that is
+ * not there is a reader that is not there: scripts run and decals are made only while the game plays, and decals only
+ * where the project allows them.
+ */
+struct particle_event_outputs
+{
+    std::vector<particle_script_events>* script_events = nullptr;
+    std::vector<particle_decal_spawn>* decals = nullptr;
+};
+
+/// The particle blend a material's Blend Mode draws with: the translucency pass's four are the particles' four.
+auto get_particle_blend_mode(material_blend_mode mode) -> ps_soa::blend_mode;
+/// The Blend Mode of the materials that draw particle blend @p mode.
+auto get_material_blend_mode(ps_soa::blend_mode mode) -> material_blend_mode;
 
 /**
  * @class particle_emitter_component
@@ -248,18 +335,26 @@ public:
     auto get_world_bounds() const -> math::bbox;
     auto get_updated_world_bounds(const math::transform& world_transform) const -> math::bbox;
 
-    /// The texture each particle draws; invalid when none is set.
+    /// The texture each particle shows: what the emitter's material reads as its Texture (PARTICLE_TEXTURE_NAME), set
+    /// as the emitter's own override of it; an emitter without a material takes the engine's plain particle material
+    /// first. An empty handle drops the override, so the material's own texture shows (white on the engine's particle
+    /// materials). Nothing shows of it on a material without that node.
     void set_texture(const asset_handle<gfx::texture>& texture);
-    auto get_texture() const -> const asset_handle<gfx::texture>&;
-    /// The texture the particles draw with: theirs, or the default color map when none is set.
-    auto get_drawn_texture() const -> const asset_handle<gfx::texture>&;
+    /// The emitter's override of its material's Texture, else the material's own; empty while the material loads.
+    auto get_texture() const -> asset_handle<gfx::texture>;
 
+    /// How the texture gives the opacity: by its alpha, or as a mask by its luminance. Read from the Standard particle
+    /// material the emitter draws; setting it picks the one of that look (set_blend_mode).
     void set_texture_mode(ps_soa::texture_mode mode);
     auto get_texture_mode() const -> ps_soa::texture_mode;
 
     void set_render_mode(ps_soa::render_mode mode);
     auto get_render_mode() const -> ps_soa::render_mode;
 
+    /// How the particles blend over the scene: their material's Blend Mode. Setting it picks the Standard particle
+    /// material of that blend (get_particle_material_key), which only an emitter that draws one of those, or no
+    /// material, can take: a material of the project's own keeps its Blend Mode, and the call does nothing. A mask
+    /// has one material for Normal and Premultiplied, which draw alike on it.
     void set_blend_mode(ps_soa::blend_mode mode);
     auto get_blend_mode() const -> ps_soa::blend_mode;
 
@@ -372,35 +467,100 @@ public:
     /// Ribbon render mode: which way the ribbon's width runs (the camera, or each particle's launch direction).
     void set_ribbon_facing(ps_soa::ribbon_facing facing);
     auto get_ribbon_facing() const -> ps_soa::ribbon_facing;
+    /// Ribbon render mode: how many ribbons the particles form, 1 to ps_soa::k_max_ribbon_count. Each particle joins
+    /// the next ribbon in turn as it is born, and several ribbons are a stream each, with one place of the shape and
+    /// one launch direction of its own.
+    void set_ribbon_count(uint32_t count);
+    auto get_ribbon_count() const -> uint32_t;
+    /// Ribbon render mode: how finely the ribbon bends between two particles, along a smooth curve through them.
+    void set_ribbon_smoothing(ps_soa::ribbon_smoothing smoothing);
+    auto get_ribbon_smoothing() const -> ps_soa::ribbon_smoothing;
 
-    /// Collision bounce: share of the speed into the plane a bounce keeps.
+    /// Collision bounce: share of the speed into the surface a bounce keeps.
     void set_restitution(float value);
     auto get_restitution() const -> float;
 
-    /// Collision bounce: share of the speed along the plane a bounce loses.
+    /// Collision bounce: share of the speed along the surface a bounce loses.
     void set_friction(float value);
     auto get_friction() const -> float;
 
     /// Collision bounce: bounces before the particle dies at its next contact.
     void set_max_bounces(uint32_t value);
     auto get_max_bounces() const -> uint32_t;
-    /// Collision: a particle touches a plane at this many halves of its size from it (0 = its centre).
+    /// Collision: a particle touches a surface at this many halves of its size from it (0 = its centre).
     void set_collision_radius_scale(float value);
     auto get_collision_radius_scale() const -> float;
 
-    /// Collision (world-space emitters): kill or bounce where a particle's path first crosses a plane.
+    /// Collision (world-space emitters): what a particle does where its path first touches a surface.
     void set_collision(ps_soa::collision_mode mode);
     auto get_collision() const -> ps_soa::collision_mode;
     /// Planes: world normal (xyz) and offset (w) from the emitter's origin along it; the normal's side is open.
     void set_collision_planes(const std::vector<math::vec4>& planes);
     auto get_collision_planes() const -> const std::vector<math::vec4>&;
 
+    /// Collision: what the particles can touch, the collision planes alone or the physics world's colliders too
+    /// (while the game plays).
+    void set_collide_with(ps_soa::collision_source source);
+    auto get_collide_with() const -> ps_soa::collision_source;
+    /// Physics colliders: the layers whose colliders the particles touch.
+    void set_collision_layers(layer_mask layers);
+    auto get_collision_layers() const -> layer_mask;
+    /// Physics colliders: how closely the particles' paths are followed.
+    void set_collision_quality(ps_soa::collision_quality quality);
+    auto get_collision_quality() const -> ps_soa::collision_quality;
+    /// Collision bounce: a particle that leaves a bounce slower than this, metres per second, rests on the surface
+    /// for the rest of its life (0 = never).
+    void set_rest_speed(float value);
+    auto get_rest_speed() const -> float;
+    /// Collision: share of the life a particle has left that each bounce and each stick takes.
+    void set_lifetime_loss(float value);
+    auto get_lifetime_loss() const -> float;
+    /// Collision bounce: half angle, degrees, of the cone a bounce's direction is turned within at random.
+    void set_bounce_scatter(float value);
+    auto get_bounce_scatter() const -> float;
+    /// Collision: particles at rest lie flat on the surface they rest on.
+    void set_align_to_surface(bool value);
+    auto get_align_to_surface() const -> bool;
+
+    /// How many of the emitter's particles wait for a sweep of their path against the scene's colliders.
+    auto get_waiting_sweeps() const -> uint32_t;
+    /// Whether resolve_collisions has work this frame: the emitter collides with physics colliders, or paths it asked
+    /// to be swept before its settings changed still wait.
+    auto sweeps_colliders() const -> bool;
+    /// Sweeps the waiting paths with @p sweep in at most @p max_casts sweeps (ps_soa::resolve_collisions). Call once
+    /// per frame after every emitter updated, on one thread, before dispatch_events.
+    auto resolve_collisions(const ps_soa::particle_sweep& sweep, uint32_t max_casts) -> ps_soa::collision_resolve_stats;
+
     /// Bursts other emitters fire where this emitter's particles are born, die or collide.
     void set_sub_emitters(const std::vector<particle_sub_emitter>& sub_emitters);
     auto get_sub_emitters() const -> const std::vector<particle_sub_emitter>&;
-    /// Fires the sub-emitters for the events of the last update. Call once per frame after every emitter
-    /// updated, on one thread: it queues bursts on other emitters.
-    void fire_sub_emitters();
+
+    /// Script events: the scripts of the emitter's entity are told where its particles are born, die or collide
+    /// (OnParticleEvents, one call a frame). Each is off until asked for.
+    void set_send_birth_events(bool value);
+    auto get_send_birth_events() const -> bool;
+    void set_send_death_events(bool value);
+    auto get_send_death_events() const -> bool;
+    void set_send_collision_events(bool value);
+    auto get_send_collision_events() const -> bool;
+    /// The events (ps_soa::particle_event_type bits) the scripts of the emitter's entity are told of.
+    void set_send_events(uint32_t mask);
+    auto get_send_events() const -> uint32_t;
+    /// Script events: the scripts of an entity whose collider a particle touches are told of it (OnParticleHits).
+    /// It has an effect while the particles collide with physics colliders.
+    void set_notify_hit_entities(bool value);
+    auto get_notify_hit_entities() const -> bool;
+
+    /// The decal a contact leaves on the surface.
+    void set_collision_decal(const particle_collision_decal& decal);
+    auto get_collision_decal() const -> const particle_collision_decal&;
+
+    /**
+     * @brief Hands out the events of the last update: the sub-emitters fire, and the events its scripts asked for
+     * and the decals its contacts leave go to the lists of @p outputs that are there. Call once per frame after every
+     * emitter updated, on one thread: it queues bursts on other emitters.
+     */
+    void dispatch_events(const particle_event_outputs& outputs);
 
     /// Particles that light the scene as point lights (the brightest; 0 = off).
     void set_light_count(uint32_t value);
@@ -422,13 +582,22 @@ public:
     void set_lighting_wrap(float value);
     auto get_lighting_wrap() const -> float;
 
-    /// Surface lighting: a tangent-space normal map (green up) laid out like the texture, sheet frames included.
+    /// Surface lighting: a tangent-space normal map (green up) laid out like the texture, sheet frames included: what
+    /// the emitter's material reads as its Normal Map (PARTICLE_NORMAL_MAP_NAME), set as the emitter's own override.
+    /// An emitter drawing a Standard particle material takes the one that reads a normal map, or the one that does
+    /// not for an empty handle.
     void set_normal_texture(const asset_handle<gfx::texture>& value);
-    auto get_normal_texture() const -> const asset_handle<gfx::texture>&;
+    auto get_normal_texture() const -> asset_handle<gfx::texture>;
 
-    /// How the particles are lit (multiply blend stays unlit); lit particles take their color as albedo.
+    /// How a material that is lit shows on the particles: as the light they give off (unlit), or lit by the scene, its
+    /// Base Color their albedo. A material whose Shading Model is Unlit, and one that filters the scene, ignore it.
     void set_lighting(ps_soa::particle_lighting lighting);
     auto get_lighting() const -> ps_soa::particle_lighting;
+
+    /// Where lit particles take the light around them from: the sky, or the global illumination where they are (in
+    /// the views that can give it: pipeline::can_light_particles_with_gi).
+    void set_ambient_light(ps_soa::particle_ambient ambient);
+    auto get_ambient_light() const -> ps_soa::particle_ambient;
 
     /// Lit particles darken in the sun's shadow.
     void set_receive_shadows(bool value);
@@ -496,6 +665,13 @@ public:
     void set_intensity_over_life(const math::gradient<float>& value);
     auto get_intensity_over_life() const -> const math::gradient<float>&;
 
+    /// Two values over life the emitter's material reads through its Particle Custom Data node (0 throughout by
+    /// default).
+    void set_custom_data_x(const math::gradient<float>& value);
+    auto get_custom_data_x() const -> const math::gradient<float>&;
+    void set_custom_data_y(const math::gradient<float>& value);
+    auto get_custom_data_y() const -> const math::gradient<float>&;
+
     /// Multiplier of the spin over life (1 throughout = constant spin).
     void set_spin_over_life(const math::gradient<float>& value);
     auto get_spin_over_life() const -> const math::gradient<float>&;
@@ -521,9 +697,45 @@ public:
     /// Mesh render mode: the mesh each particle draws.
     void set_render_mesh(const asset_handle<mesh>& value);
     auto get_render_mesh() const -> const asset_handle<mesh>&;
+    /// The emitter's material. Sprites, trails and ribbons draw it when it is a Surface material with Particle Use.
     /// Mesh render mode: the material of every slot of the mesh; unset, the mesh's own materials.
     void set_render_material(const asset_handle<material>& value);
     auto get_render_material() const -> const asset_handle<material>&;
+
+    /// This emitter's overrides of its material: a value it does not override follows the material.
+    auto get_material_instance() const -> const material_instance&;
+    auto get_material_instance() -> material_instance&;
+    void set_material_instance(const material_instance& instance);
+    /// Brings the material the emitter draws with up to date with its material and overrides, and in Mesh mode the
+    /// materials of the mesh's slots. Once a frame, from the emitter's own task: it reads and writes this emitter
+    /// alone and never waits for an asset.
+    void refresh_material();
+
+    /// Why an emitter's sprites, trails and ribbons cannot draw the loaded material @p mat; none when they can.
+    static auto find_material_problem(const material& mat) -> particle_material_problem;
+
+    /// The material the emitter's sprites, trails and ribbons draw with, as refresh_material last found it: its
+    /// Material with the emitter's overrides, or the engine's plain particle material when it has none, or one that
+    /// cannot draw particles (has_unusable_material). While its Material loads it is the one drawn before, null the
+    /// first time. Null before the first refresh and in Mesh mode, where the Material is the mesh's.
+    auto get_particle_material() const -> const graph_material*;
+    /// What a draw binds of get_particle_material (graph_material::get_draw_hash): emitters with the same draw
+    /// together. 0 without one.
+    auto get_particle_material_hash() const -> uint64_t;
+    /// Whether the emitter's sprites, trails and ribbons cannot draw its Material: one that has loaded and is no Surface
+    /// material with Particle Use, or whose shader did not compile. They draw the engine's plain particle material in
+    /// its place.
+    auto has_unusable_material() const -> bool;
+    /// Whether the emitter's Material is what it draws, so its overrides show on the particles: one its sprites,
+    /// trails and ribbons can draw, or in Mesh mode one that covers the mesh (the engine's particle materials leave a
+    /// mesh its own).
+    auto draws_own_material() const -> bool;
+    /// Whether the emitter's Lighting applies to what its sprites, trails and ribbons draw: false for a material whose
+    /// Shading Model is Unlit, and in Mesh mode. Read from the material itself, so it answers for an emitter no frame
+    /// has refreshed; true while the material loads.
+    auto draws_lit_material() const -> bool;
+    /// The material an emitter without one draws its sprites, trails and ribbons with (DEFAULT_PARTICLE_MATERIAL_KEY).
+    static auto default_material() -> asset_handle<material>&;
     /// Mesh render mode: the particles cast shadows.
     void set_mesh_cast_shadows(bool value);
     auto get_mesh_cast_shadows() const -> bool;
@@ -598,18 +810,65 @@ private:
     /// Mesh render mode: evaluates the particles' world matrices and the box they fill.
     void update_mesh_instances();
 
-    asset_handle<gfx::texture> texture_;
-    asset_handle<gfx::texture> normal_texture_;
+    /// The emitter's Material as loaded, with the overrides applied; null without one or while it loads.
+    auto find_own_material() const -> std::shared_ptr<material>;
+    /// What the sprites, trails and ribbons draw with now (get_particle_material); null while it loads. Never waits.
+    auto find_drawn_material() const -> std::shared_ptr<material>;
+    /// Whether the emitter names a Material that has no load to draw yet.
+    auto is_material_loading() const -> bool;
+    /// Sets the Material without forgetting the blend a mask was given (set_render_material forgets it).
+    void assign_render_material(const asset_handle<material>& value);
+    /// Whether the emitter overrides texture node @p name of its material with a texture.
+    auto has_texture_override(hpp::string_view name) const -> bool;
+    /// The Standard particle surface the emitter draws: its Material's when that is one of the engine's, the plain one
+    /// without a Material; empty for a material of the project's own.
+    auto find_standard_surface() const -> hpp::optional<particle_surface>;
+    /// Draws Standard particle surface @p surface, keeping the emitter's overrides: the one that reads a normal map
+    /// while the emitter overrides the Normal Map, whatever @p surface says of it.
+    void set_standard_surface(const particle_surface& surface);
+    /// What the emitter's material reads as texture node @p name: the emitter's override, else the material's own.
+    auto find_material_texture(hpp::string_view name) const -> asset_handle<gfx::texture>;
+
+    /// The events the simulation records are the ones a sub-emitter, a script or the collision decal reads.
+    void refresh_event_mask();
+    /// Seeds the emitter's own sequence for what its events draw at random, once.
+    void seed_event_rng();
+    /// Bursts the sub-emitters for the frame's events.
+    void fire_sub_emitters();
+    /// Whether the scripts of the entities its particles touch are told: asked for, and the particles collide with
+    /// physics colliders, the only contacts that name an entity.
+    auto tells_hit_entities() const -> bool;
+    /// Hands the frame's events the scripts asked for to @p out_events.
+    void hand_out_script_events(std::vector<particle_script_events>& out_events);
+    /// Asks for the decals the frame's contacts leave.
+    void request_collision_decals(std::vector<particle_decal_spawn>& out_decals);
+
     std::vector<particle_sub_emitter> sub_emitters_;
-    std::vector<ps_soa::particle_event> sub_emitter_events_;
-    bx::RngMwc sub_emitter_rng_{};
-    bool is_sub_emitter_rng_seeded_ = false;
+    /// The events of the last update.
+    std::vector<ps_soa::particle_event> frame_events_;
+    /// The events (ps_soa::particle_event_type bits) the entity's scripts are told of, and whether hit entities are.
+    uint32_t send_events_ = 0;
+    bool notify_hit_entities_ = false;
+    particle_collision_decal collision_decal_;
+    bx::RngMwc event_rng_{};
+    bool is_event_rng_seeded_ = false;
     /// The mesh shape's mesh, and the loaded mesh its spawn data was built from (compared, never read).
     asset_handle<mesh> shape_mesh_;
     const mesh* emission_mesh_source_ = nullptr;
     /// Mesh render mode: what the particles draw and the loaded mesh it was built from (compared, never read).
     asset_handle<mesh> render_mesh_;
-    asset_handle<material> render_material_;
+    /// The emitter's material and its overrides of it.
+    material_instance material_;
+    /// What refresh_material found the sprites, trails and ribbons draw with, kept alive until the next refresh; what a
+    /// draw binds of it, and the revision it was hashed at.
+    std::shared_ptr<material> drawn_material_;
+    const graph_material* drawn_graph_ = nullptr;
+    uint64_t drawn_hash_ = 0;
+    uint64_t drawn_revision_ = 0;
+    /// The alpha blend a mask was given through set_blend_mode: its one material draws Normal and Premultiplied alike,
+    /// so this is what get_blend_mode answers and what the emitter goes back to when its texture stops being a mask.
+    /// Not saved: a loaded mask is Normal.
+    bool is_mask_premultiplied_ = false;
     bool mesh_cast_shadows_ = true;
     model mesh_model_;
     const mesh* render_mesh_source_ = nullptr;

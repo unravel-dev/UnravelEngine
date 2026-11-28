@@ -342,6 +342,10 @@ public class Material : Asset<Material>
     /// Graph sets it.</summary>
     public MaterialBlendMode blendMode => (MaterialBlendMode)internal_m2n_material_get_blend_mode(uid);
 
+    /// <summary>Whether particle emitters can draw the material on their sprites, trails and ribbons: its graph's
+    /// Particle Use, with a Blend Mode of the translucency pass. Read only: the Material Graph sets it.</summary>
+    public bool particleUse => internal_m2n_material_get_particle_use(uid);
+
     /// <summary>Which light the material's surface takes: its graph's Shading Model. Read only: the Material Graph sets
     /// it.</summary>
     public MaterialShadingModel shadingModel => (MaterialShadingModel)internal_m2n_material_get_shading_model(uid);
@@ -573,6 +577,9 @@ public class Material : Asset<Material>
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private static extern int internal_m2n_material_get_blend_mode(Guid uid);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern bool internal_m2n_material_get_particle_use(Guid uid);
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private static extern int internal_m2n_material_get_shading_model(Guid uid);

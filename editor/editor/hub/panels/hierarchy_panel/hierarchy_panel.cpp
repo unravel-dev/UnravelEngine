@@ -296,6 +296,24 @@ void create_text_entity(rtti::context& ctx, entt::handle parent_entity)
         });
 }
 
+void create_line_entity(rtti::context& ctx, entt::handle parent_entity)
+{
+    queue_create_with_parent(ctx, parent_entity, "Create Line Entity",
+        [](rtti::context& ctx, scene& scn) -> entt::handle
+        {
+            return defaults::create_line_entity(ctx, scn, "Line");
+        });
+}
+
+void create_trail_entity(rtti::context& ctx, entt::handle parent_entity)
+{
+    queue_create_with_parent(ctx, parent_entity, "Create Trail Entity",
+        [](rtti::context& ctx, scene& scn) -> entt::handle
+        {
+            return defaults::create_trail_entity(ctx, scn, "Trail");
+        });
+}
+
 void create_particle_emitter_entity(rtti::context& ctx, entt::handle parent_entity)
 {
     queue_create_with_parent(ctx, parent_entity, "Create Particle Emitter Entity",
@@ -692,6 +710,18 @@ void draw_common_menu_items(rtti::context& ctx, entt::handle parent_entity)
     {
         create_particle_emitter_entity(ctx, parent_entity);
     }
+
+    if(ImGui::MenuItemIcon(ICON_MDI_VECTOR_POLYLINE, "Line"))
+    {
+        create_line_entity(ctx, parent_entity);
+    }
+    ImGui::SetItemTooltipEx("A strip through a list of points, drawn with a material: a laser, a rope, a path.");
+
+    if(ImGui::MenuItemIcon(ICON_MDI_CHART_BELL_CURVE, "Trail"))
+    {
+        create_trail_entity(ctx, parent_entity);
+    }
+    ImGui::SetItemTooltipEx("A strip along where the entity has been, or the sheet a blade sweeps in Edge mode.");
 
     if(ImGui::MenuItemIcon(ICON_MDI_FILE_DOCUMENT, "UI Document"))
     {

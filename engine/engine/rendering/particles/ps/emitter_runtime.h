@@ -52,6 +52,10 @@ struct emitter_sim_state
     uint32_t temporal_count = 0;
 
     math::bbox world_bounds{math::vec3(-1.0f), math::vec3(1.0f)};
+    /// The box the particles are lit in: their centres, with how far the turbulence and the camera offset move them,
+    /// without the size of their quads. The bounds themselves for an emitter with Fixed bounds whose particles take
+    /// the sky's light, which walks no paths.
+    math::bbox lit_bounds{math::vec3(-1.0f), math::vec3(1.0f)};
 
     void reset();
     void push_temporal_sample(const math::vec3& position, float dt);

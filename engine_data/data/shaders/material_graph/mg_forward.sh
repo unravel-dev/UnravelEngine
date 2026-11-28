@@ -123,15 +123,8 @@ vec4 mg_scene_texture_scene_depth(vec2 uv)
 #endif // MG_READS_SCENE_COLOR || MG_READS_SCENE_DEPTH
 
 #if MATERIAL_REFRACTION && BGFX_SHADER_TYPE_FRAGMENT && !SHADOW_CASTER
-/// The farthest, in world units, the opaque scene behind a refracting surface bends its view as if it lay.
-#define FORWARD_REFRACTION_MAX_GAP 1.0
-
-/// @p clip as a position on the view, 0 to 1 from the top as gl_FragCoord runs.
-vec2 forward_clip_to_view_uv(vec4 clip)
-{
-	vec2 ndc = clip.xy / max(clip.w, 1e-6);
-	return vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-}
+#define MG_SCENE_CLAMP_UV(_uv) mg_forward_clamp_uv(_uv)
+#include "mg_refraction.sh"
 
 #if MATERIAL_ROUGH_REFRACTION
 /// Roughness from which, and to which, a refracting surface goes from the sharp scene to the blurred one.
@@ -152,23 +145,12 @@ vec3 forward_blurred_scene(vec2 uv, float roughness)
 
 /**
  * The opaque scene seen through a surface of index of refraction @p ior at @p position (the view @p V and the normal
- * @p N in world space, @p uv its pixel), pre-exposed: the view ray bent by the surface, carried to the depth of the
- * scene behind (at most FORWARD_REFRACTION_MAX_GAP further), and read where that lands. A read that lands on something
- * in front of the surface takes the unbent pixel, so nothing nearer smears into it. A rough surface
- * (MATERIAL_ROUGH_REFRACTION) blurs it by its @p roughness.
+ * @p N in world space, @p uv its pixel), pre-exposed: read where the bent view ray lands (mg_refracted_uv). A rough
+ * surface (MATERIAL_ROUGH_REFRACTION) blurs it by its @p roughness.
  */
 vec3 forward_refracted_scene(vec3 position, vec3 N, vec3 V, float ior, vec2 uv, float roughness)
 {
-	float pixel_depth = dot(position - mg_camera_offset(), mg_camera_direction());
-	float gap = clamp(mg_scene_texture_scene_depth(uv).x - pixel_depth, 0.0, FORWARD_REFRACTION_MAX_GAP);
-	vec3 bent = refract(-V, N, 1.0 / max(ior, 1.0));
-	vec2 shift = forward_clip_to_view_uv(mul(u_viewProj, vec4(position + bent * gap, 1.0))) -
-	             forward_clip_to_view_uv(mul(u_viewProj, vec4(position, 1.0)));
-	vec2 bent_uv = mg_forward_clamp_uv(uv + shift);
-	if(mg_scene_texture_scene_depth(bent_uv).x < pixel_depth)
-	{
-		bent_uv = uv;
-	}
+	vec2 bent_uv = mg_refracted_uv(position, N, V, ior, uv);
 	vec3 scene = texture2DLod(s_fwd_scene_color, bent_uv, 0.0).rgb;
 #if MATERIAL_ROUGH_REFRACTION
 	float blur = smoothstep(FORWARD_ROUGH_REFRACTION_START, FORWARD_ROUGH_REFRACTION_FULL, roughness);
@@ -287,10 +269,9 @@ float forward_sun_visibility(vec3 position)
 #include "../shader_buffer.sh"
 #include "../gi/gi_radiance_cache_common.sh"
 
-/// The radiance cache's indirection (gi_radiance_cache_common.sh) and its probes' L1 SH: per probe four vec4, the red,
-/// green and blue coefficients (Y00, Y1-1, Y10, Y11), absolute (GI_CACHED_LIGHTING_PRE_EXPOSURE is 1), and its cell.
+/// The radiance cache's indirection and its probes' L1 SH (gi_radiance_cache_surface.sh).
 SHADER_BUFFER_UINT(b_gi_rc_indirection, FORWARD_GI_INDIRECTION_STAGE);
-SHADER_BUFFER_FLOAT4(b_fwd_gi_sh, FORWARD_GI_SH_STAGE);
+SHADER_BUFFER_FLOAT4(b_gi_rc_surface_sh, FORWARD_GI_SH_STAGE);
 /// x: the GI's diffuse intensity, which scales its light as it scales the opaque surfaces'; y: the roughness the traced
 /// reflections end at, z: 1 / the roughness over which they fade out, w: 1 when s_fwd_gi_reflection holds this frame's
 /// traces (FORWARD_GI_REFLECTIONS).
@@ -299,77 +280,7 @@ uniform vec4 u_fwd_gi;
 /// The pixels [xy, zw) the front layer's traces wrote this frame: s_fwd_gi_reflection covers them from xy.
 uniform vec4 u_fwd_gi_region;
 #endif
-#include "../gi/gi_radiance_cache_lattice.sh"
-
-/// The GI's light at a point: its L1 SH per colour, and how much of the lattice around the point has probes.
-struct ForwardGiSh
-{
-	vec4 red;
-	vec4 green;
-	vec4 blue;
-	float coverage;
-};
-
-/**
- * The GI's L1 SH at @p position: the eight lattice probes around it in the finest clipmap that covers it, weighted
- * trilinearly over the ones that exist and renormalised, times the GI's diffuse intensity, with their share of the
- * weights as the coverage (0 outside the clipmaps or where no probe is traced yet). The probes' rays start a cell
- * diagonal out, so a surface right beside a wall can take some of the light from its other side.
- */
-ForwardGiSh forward_gi_sh(vec3 position)
-{
-	ForwardGiSh sh;
-	sh.red = vec4_splat(0.0);
-	sh.green = vec4_splat(0.0);
-	sh.blue = vec4_splat(0.0);
-	sh.coverage = 0.0;
-	int clipmap = GiRcClipmapOf(position);
-	if(clipmap >= GI_RADIANCE_CACHE_CLIPMAPS)
-	{
-		return sh;
-	}
-	for(int corner = 0; corner < 8; ++corner)
-	{
-		GiRcLatticeProbe lattice = GiRcInterpolationProbe(position, clipmap, corner);
-		if(lattice.probe == GI_RC_INVALID)
-		{
-			continue;
-		}
-		uint probe = lattice.probe;
-		// The SH must be this probe's: projected at its position, or by the full pass that knows none. A probe not traced
-		// since it took a slot holds another place's light, or none.
-		vec4 key = shader_buffer_float4(b_fwd_gi_sh, 4u * probe + 3u);
-		vec3 offset = abs(key.xyz - GiRcProbePosition(lattice.cell, clipmap));
-		bool is_projected = key.w > 0.75 ? all(lessThan(offset, vec3_splat(0.01 * u_gi_rc_clipmaps[clipmap].w))) : key.w > 0.25;
-		if(!is_projected)
-		{
-			continue;
-		}
-		sh.red += lattice.weight * shader_buffer_float4(b_fwd_gi_sh, 4u * probe);
-		sh.green += lattice.weight * shader_buffer_float4(b_fwd_gi_sh, 4u * probe + 1u);
-		sh.blue += lattice.weight * shader_buffer_float4(b_fwd_gi_sh, 4u * probe + 2u);
-		sh.coverage += lattice.weight;
-	}
-	if(sh.coverage > 1e-4)
-	{
-		float normalise = max(u_fwd_gi.x, 0.0) / sh.coverage;
-		sh.red *= normalise;
-		sh.green *= normalise;
-		sh.blue *= normalise;
-	}
-	return sh;
-}
-
-/// @p sh along @p direction with the cosine lobe's band constants times @p band_scale (eval_irradiance_sh_scaled's
-/// first two bands): the irradiance with (1, 1), a rough reflection's lobe with sh_lobe_band_scale.
-vec3 forward_gi_eval(ForwardGiSh sh, vec3 direction, vec2 band_scale)
-{
-	vec4 lobe = vec4(PI * band_scale.x * 0.282095,
-	                 (2.0 * PI / 3.0) * band_scale.y * 0.488603 * direction.y,
-	                 (2.0 * PI / 3.0) * band_scale.y * 0.488603 * direction.z,
-	                 (2.0 * PI / 3.0) * band_scale.y * 0.488603 * direction.x);
-	return max(vec3(dot(sh.red, lobe), dot(sh.green, lobe), dot(sh.blue, lobe)), vec3_splat(0.0));
-}
+#include "../gi/gi_radiance_cache_surface.sh"
 
 #if FORWARD_GI_REFLECTIONS
 /// How far a fragment's distance from the camera may be from the front layer's, as a share of it, and still be that
@@ -569,10 +480,10 @@ ForwardLight forward_light(vec3 position,
 	// The GI's light where its radiance cache has probes around the surface, the sky's elsewhere: the bounce light of
 	// the room as an opaque surface there takes it.
 	// The radiance cache's lattice is world-locked: it takes the absolute position.
-	ForwardGiSh gi = forward_gi_sh(viewOffsetToWorld(position));
-	float gi_share = saturate(gi.coverage * 2.0);
-	irradiance = mix(irradiance, forward_gi_eval(gi, N, vec2_splat(1.0)), gi_share);
-	environment = mix(environment, forward_gi_eval(gi, R, sh_lobe_band_scale(roughness).xy), gi_share);
+	GiRcSurfaceSh gi = GiRcSurfaceShAt(viewOffsetToWorld(position), u_fwd_gi.x);
+	float gi_share = GiRcSurfaceShShare(gi);
+	irradiance = mix(irradiance, GiRcSurfaceShEval(gi, N, vec2_splat(1.0)), gi_share);
+	environment = mix(environment, GiRcSurfaceShEval(gi, R, sh_lobe_band_scale(roughness).xy), gi_share);
 #endif
 	vec3 indirect_diffuse = irradiance * (RECIP_PI * pre_exposure * ao);
 	environment *= pre_exposure;

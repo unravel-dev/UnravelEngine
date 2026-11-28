@@ -32,6 +32,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     register_bone_component_script_bindings();
     register_volume_component_script_bindings();
     register_decal_component_script_bindings();
+    register_dynamic_renderer_script_bindings();
     register_post_process_material_script_bindings();
     register_assets_script_bindings();
     register_gizmos_script_bindings();

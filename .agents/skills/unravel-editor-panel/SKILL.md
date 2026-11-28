@@ -72,6 +72,29 @@ window (`unravel-editor-mcp`), prefab editing and override paths (`unravel-prefa
   `content_card_view` (`content_browser_item.h`), as the asset picker draws it. The picker
   (`asset_picker::draw_window`) asks for thumbnails, badges and details only of the entries
   on screen, and one picker serves every asset field and the deploy window's scene list.
+- What an inspector says about a value goes on that value's row, never only at the top of the
+  component: a warning the user has to scroll to is not seen. The component's inspector fills
+  a `row_notes` (`inspector.h`) before it draws its properties. A warned row's label takes
+  `imgui_style::get_warning_color()` with an alert icon, its asset field is outlined, the
+  note and its fix button sit under the value, and `row_notes::draw_summary` names the warned
+  rows under the component's status as links that scroll to them. The rows that show notes
+  are the ones `inspect_property` draws as one value (an enum, or a type with an inspector);
+  a list, a map, a sub-object and a row a custom drawer takes show none.
+- An asset row that only some assets suit gives its picker a fit rule
+  (`row_notes::set_fit_rule`): the picker opens on the ones that suit and on what the row
+  holds, tags the cards that suit and veils the others, which All shows, with the reason in
+  its details. The rule is asked for every entry each frame the picker is open, so it reads
+  with `try_get()` and loads every asset of the type, as an acceptor does.
+- Read only is a scope: `ImGui::PushReadonly(true)` around an object makes every row drawn
+  through `inspect_property` or `inspect_var` read only, and an asset field show and open its
+  asset without picking (`field_content::is_read_only`). Of ImGui's own widgets only sliders,
+  drags and text inputs follow that flag: a button, combo, checkbox or custom widget an
+  inspector draws itself goes inside `ImGui::BeginDisabled(ImGui::IsReadonly())`. What a
+  read-only view still lets the user do (open the asset in its window, play a clip, pick the
+  mip shown) goes inside `ImGui::PushReadonlyExempt()`, so it works and does not look greyed
+  out. The Inspector opens the scope for an asset the project does not own (skill
+  `unravel-assets`); what holds for the whole object goes above its rows in
+  `draw_inspector_banner`.
 - `flattable` is read as a `bool`; the string `"true"` is ignored. The attribute list:
   [add-inspector.md](add-inspector.md).
 - A value that does not survive save and reload is usually missing from the component's
@@ -187,11 +210,25 @@ window (`unravel-editor-mcp`), prefab editing and override paths (`unravel-prefa
   editor-only entities) and the prefab scene while visible; `game_panel` updates the game
   scene every frame and renders it while visible or forced.
 - Picking (`picking_manager`): a click draws entity ids around the cursor (models' geometry,
-  text and UI bounds, the icons of `billboard_components`) and takes the id seen most. The first
+  what a Line and a Trail draw with a thin strip widened to 8 pixels, text and UI
+  bounds, the icons of `billboard_components`) and takes the id seen most. The first
   click on a nested entity selects its logical top-level entity, the next the entity itself
   (`get_logical_top_level_entity`). A plain click selection whose ray hits a model under a decal
   takes the decal (`pick_decal_over`, the engine's `find_decal_at`); a click on a selected decal
   passes through to the surface. Area picks and drag-and-drop picks (a callback) keep what they hit.
+- The Scene view's own handles over the image (the point handles of a selected Line,
+  `update_line_point_edit` in `scene_panel.cpp`) are drawn into the window's draw list and hit by
+  hand, before the view reads its clicks. An ImGui item there would become the last item, which
+  the view's drag-and-drop target and its click selection read, and could grow the window past
+  the image. A handle that is hovered keeps the click from the pick, the selection rectangle and
+  the entity's gizmo (`is_line_point_engaged`, `ImGuizmo::Enable`), and a handle's edit is one
+  undoable action that restores the prefab override it recorded (`entity_set_line_points_action_t`).
+  The press that picks a handle moves nothing: a gizmo that runs in the frame of the pick is
+  disabled for that press (`line_point_edit::holds_press`), or the click's jitter becomes a drag.
+  State of such handles lives in the panel (`scene_panel::line_point_edit_`), not in a file global.
+- An override path recorded outside the Inspector (`prefab_override_context::mark_path_changed`)
+  names a list element as the Inspector's row does, `points[3]`: the pretty path is derived from
+  the list's reflected property, so the path needs no pretty twin.
 - `editing_manager` holds the selection (`entt::meta_any` objects: entities, assets), focus,
   gizmo, snap and grid settings, prefab mode and the `undo_redo_stack`. `do_action` runs an
   action now; `queue_action` runs it at `execute_actions` during the frame update.

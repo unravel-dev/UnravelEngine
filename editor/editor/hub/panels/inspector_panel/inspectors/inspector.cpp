@@ -196,6 +196,300 @@ property_layout_group::~property_layout_group()
 
 }
 
+namespace
+{
+/// The row_notes alive, the innermost last; the rows being drawn, the innermost last; and the row a summary's link
+/// asked to scroll to, with the frames left to do it in (the link is drawn above the row, the frame it is clicked).
+std::vector<const row_notes*> row_notes_stack;
+
+struct drawn_row
+{
+    const void* object{};
+    std::string property;
+    const void* value{};
+};
+std::vector<drawn_row> drawn_row_stack;
+
+/// A row a summary's link asked to scroll to, and the frame it was asked in.
+struct row_reveal_request
+{
+    const void* object{};
+    std::string property;
+    int frame{};
+};
+row_reveal_request pending_row_reveal;
+
+/// Where a revealed row comes to rest in the inspector, as a share of its height from the top.
+constexpr float ROW_REVEAL_Y = 0.3f;
+/// Frames a reveal lasts: the link is drawn above its row, the filter goes the frame after the click, and the scroll
+/// settles over the one after that. A row not drawn by then is not scrolled to later.
+constexpr int ROW_REVEAL_FRAMES = 3;
+
+/// The drawn row whose value is @p value; null when the innermost row draws another value.
+auto find_drawn_row(const void* value) -> const drawn_row*
+{
+    return !drawn_row_stack.empty() && drawn_row_stack.back().value == value ? &drawn_row_stack.back() : nullptr;
+}
+
+/// A warned row as the summary names it: its group first where its own name does not hold it.
+auto make_summary_row_name(const entt::meta_type& type, const std::string& property) -> std::string
+{
+    const auto prop = type.data(entt::hashed_string{property.c_str()}.value());
+    if(!prop)
+    {
+        return property;
+    }
+    const std::string name = entt::get_pretty_name(prop);
+    const auto group = entt::get_attribute_as<std::string>(prop, "group");
+    return group.empty() || name.find(group) != std::string::npos ? name : group + " > " + name;
+}
+} // namespace
+
+row_notes::row_notes(const void* object)
+    : object_(object)
+{
+    row_notes_stack.push_back(this);
+}
+
+row_notes::~row_notes()
+{
+    row_notes_stack.erase(std::remove(row_notes_stack.begin(), row_notes_stack.end(), this), row_notes_stack.end());
+}
+
+auto row_notes::get_row(std::string property) -> row&
+{
+    const auto found = std::find_if(rows_.begin(),
+                                    rows_.end(),
+                                    [&](const row& entry)
+                                    {
+                                        return entry.property == property;
+                                    });
+    if(found != rows_.end())
+    {
+        return *found;
+    }
+    rows_.push_back({std::move(property), {}, {}});
+    return rows_.back();
+}
+
+void row_notes::add(std::string property, row_note note)
+{
+    get_row(std::move(property)).notes.push_back(std::move(note));
+}
+
+void row_notes::set_fit_rule(std::string property, asset_fit_rule rule)
+{
+    get_row(std::move(property)).fit_rule = std::move(rule);
+}
+
+auto row_notes::find_row(const void* object, const std::string& property) -> const row*
+{
+    for(auto notes = row_notes_stack.rbegin(); notes != row_notes_stack.rend(); ++notes)
+    {
+        if((*notes)->object_ != object)
+        {
+            continue;
+        }
+        for(const auto& entry : (*notes)->rows_)
+        {
+            if(entry.property == property)
+            {
+                return &entry;
+            }
+        }
+    }
+    return nullptr;
+}
+
+auto row_notes::find_notes(const void* object, const std::string& property) -> const std::vector<row_note>*
+{
+    const row* found = find_row(object, property);
+    return found != nullptr && !found->notes.empty() ? &found->notes : nullptr;
+}
+
+auto row_notes::find_fit_rule(const void* object, const std::string& property) -> const asset_fit_rule*
+{
+    const row* found = find_row(object, property);
+    return found != nullptr && found->fit_rule ? &*found->fit_rule : nullptr;
+}
+
+auto row_notes::has_warning(const void* object, const std::string& property) -> bool
+{
+    const auto* notes = find_notes(object, property);
+    return notes != nullptr && std::any_of(notes->begin(),
+                                           notes->end(),
+                                           [](const row_note& note)
+                                           {
+                                               return note.is_warning;
+                                           });
+}
+
+void row_notes::draw_summary(const entt::meta_type& type) const
+{
+    std::vector<const row*> warned;
+    for(const auto& entry : rows_)
+    {
+        if(has_warning(object_, entry.property))
+        {
+            warned.push_back(&entry);
+        }
+    }
+    if(warned.empty())
+    {
+        return;
+    }
+    // "See Material, Collision > Mode and Ambient Light below.", on as many lines as the names need.
+    const float gap = ImGui::GetStyle().ItemInnerSpacing.x;
+    ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_warning_color());
+    ImGui::TextUnformatted(ICON_MDI_ALERT " See");
+    ImGui::PopStyleColor();
+    for(std::size_t index = 0; index < warned.size(); ++index)
+    {
+        const std::string name = make_summary_row_name(type, warned[index]->property);
+        const bool is_last = index + 1 == warned.size();
+        const char* after = is_last ? " below." : index + 2 == warned.size() ? " and" : ",";
+        // The name stays on the line while it fits with what follows it.
+        ImGui::SameLine(0.0f, gap);
+        if(ImGui::GetContentRegionAvail().x < ImGui::CalcTextSize(name.c_str()).x + ImGui::CalcTextSize(after).x)
+        {
+            ImGui::NewLine();
+        }
+        ImGui::PushID(static_cast<int>(index));
+        if(ImGui::TextLink(name.c_str()))
+        {
+            pending_row_reveal = {object_, warned[index]->property, ImGui::GetFrameCount()};
+            auto& filter_owner = engine::context().get_cached<inspector_context>();
+            filter_owner.is_filter_reset_requested = filter_owner.filter.is_active();
+        }
+        ImGui::PopID();
+        ImGui::SetItemTooltipEx("%s", "Scrolls to the row, which says what is wrong with it.");
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_warning_color());
+        ImGui::TextUnformatted(after);
+        ImGui::PopStyleColor();
+    }
+}
+
+current_row_scope::current_row_scope(const void* object, std::string property, const void* value)
+{
+    const auto& reveal = pending_row_reveal;
+    const bool is_asked = reveal.object == object && reveal.property == property && !reveal.property.empty();
+    if(is_asked && ImGui::GetFrameCount() - reveal.frame <= ROW_REVEAL_FRAMES)
+    {
+        ImGui::SetScrollHereY(ROW_REVEAL_Y);
+    }
+    drawn_row_stack.push_back({object, std::move(property), value});
+}
+
+current_row_scope::~current_row_scope()
+{
+    drawn_row_stack.pop_back();
+}
+
+auto current_row_scope::has_warning(const void* value) -> bool
+{
+    const drawn_row* row = find_drawn_row(value);
+    return row != nullptr && row_notes::has_warning(row->object, row->property);
+}
+
+auto current_row_scope::get_fit_rule(const void* value) -> const asset_fit_rule*
+{
+    const drawn_row* row = find_drawn_row(value);
+    return row != nullptr ? row_notes::find_fit_rule(row->object, row->property) : nullptr;
+}
+
+namespace
+{
+constexpr float INSPECTOR_BANNER_ROUNDING = 4.0f;
+constexpr float INSPECTOR_BANNER_ICON_GAP_EM = 0.4f;
+/// The banner is tinted with its color at this alpha, as the rows' notes are.
+constexpr float INSPECTOR_BANNER_BACKGROUND_ALPHA = 0.12f;
+
+/// The icon in the banner's color at the cursor; the cursor moves past it, to where the text starts.
+void draw_inspector_banner_icon(const char* icon, ImU32 color)
+{
+    const float icon_width = ImGui::GetFontSize();
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    ImGui::RenderIconCentered(ImGui::GetWindowDrawList(),
+                              ImVec2(min.x + icon_width * 0.5f, min.y + ImGui::GetTextLineHeight() * 0.5f),
+                              icon,
+                              color);
+    ImGui::SetCursorScreenPos(ImVec2(min.x + icon_width * (1.0f + INSPECTOR_BANNER_ICON_GAP_EM), min.y));
+}
+} // namespace
+
+void draw_inspector_banner(const char* id,
+                           const char* icon,
+                           ImU32 color,
+                           const std::string& title,
+                           const std::string& message,
+                           const std::function<void()>& draw_actions)
+{
+    ImVec4 background = ImGui::ColorConvertU32ToFloat4(color);
+    background.w = INSPECTOR_BANNER_BACKGROUND_ALPHA;
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, INSPECTOR_BANNER_ROUNDING);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImGui::GetStyle().FramePadding);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, background);
+    if(ImGui::BeginChild(id, ImVec2(0.0f, 0.0f), ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_AutoResizeY))
+    {
+        draw_inspector_banner_icon(icon, color);
+        ImGui::BeginGroup();
+        ImGui::PushFont(ImGui::Font::Bold);
+        ImGui::TextUnformatted(title.c_str());
+        ImGui::PopFont();
+        ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(message.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        if(draw_actions)
+        {
+            draw_actions();
+        }
+        ImGui::EndGroup();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+}
+
+void current_row_scope::draw_notes()
+{
+    const auto* notes = drawn_row_stack.empty() ? nullptr
+                                                : row_notes::find_notes(drawn_row_stack.back().object, drawn_row_stack.back().property);
+    if(notes == nullptr)
+    {
+        return;
+    }
+    for(std::size_t index = 0; index < notes->size(); ++index)
+    {
+        const row_note& note = (*notes)[index];
+        const std::string text = std::string(note.is_warning ? ICON_MDI_ALERT : ICON_MDI_INFORMATION_OUTLINE) + " " + note.text;
+        ImGui::PushStyleColor(ImGuiCol_Text, note.is_warning ? imgui_style::get_warning_color() : imgui_style::get_muted_text_color());
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(text.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        if(note.fix_label.empty() || !note.fix)
+        {
+            continue;
+        }
+        // A row that cannot be edited is not fixed either.
+        ImGui::PushID(static_cast<int>(index));
+        ImGui::BeginDisabled(ImGui::IsReadonly());
+        if(ImGui::Button(note.fix_label.c_str()))
+        {
+            note.fix();
+        }
+        ImGui::EndDisabled();
+        ImGui::PopID();
+        if(!note.fix_tooltip.empty())
+        {
+            ImGui::SetItemTooltipEx("%s", note.fix_tooltip.c_str());
+        }
+    }
+}
+
 auto property_layout::get_current() -> property_layout*
 {
     if(stack.empty())
@@ -363,13 +657,30 @@ void property_layout::push_layout(bool auto_proceed_to_next_column, float label_
         ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_mixed_value_color());
     }
 
+    // A row its object's inspector warns about says so in its label, with the warning in its tooltip; the row's notes
+    // are under its value.
+    const bool may_carry_notes = prop_ && object_ && !row_notes_stack.empty();
+    const std::string row_property = may_carry_notes ? entt::get_name(prop_) : std::string();
+    const bool is_warned = may_carry_notes && row_notes::has_warning(object_.base().data(), row_property);
+    if(is_warned)
+    {
+        for(const auto& note : *row_notes::find_notes(object_.base().data(), row_property))
+        {
+            if(note.is_warning)
+            {
+                tooltip_ += (tooltip_.empty() ? "" : "\n\n") + note.text;
+            }
+        }
+    }
+    const std::string label = is_warned ? std::string(ICON_MDI_ALERT " ") + name_ : name_;
+
     ImGui::AlignTextToFramePadding();
     // The divider's grab strip and the caller's buttons share the cell with the label; a stacked row's label line
     // ends where its revert button is.
     const float label_room = ImGui::GetContentRegionAvail().x - label_reserve -
                              (columns_open_ ? DIVIDER_GRAB_HALF_WIDTH : 0.0f) -
                              (stacked_ ? ImGui::GetFrameHeight() : 0.0f);
-    const float text_width = ImGui::CalcTextSize(name_.c_str()).x;
+    const float text_width = ImGui::CalcTextSize(label.c_str()).x;
     const bool show_help_marker = !tooltip_.empty() && text_width + get_help_marker_width() <= label_room;
     if(callback_)
     {
@@ -377,7 +688,15 @@ void property_layout::push_layout(bool auto_proceed_to_next_column, float label_
     }
     else
     {
-        draw_label_text(name_, label_room);
+        if(is_warned)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_warning_color());
+        }
+        draw_label_text(label, label_room);
+        if(is_warned)
+        {
+            ImGui::PopStyleColor();
+        }
     }
     if(is_mixed)
     {

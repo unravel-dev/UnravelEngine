@@ -30,6 +30,7 @@
 #include <engine/physics/physics_material.h>
 #include <engine/animation/animation_controller.h>
 #include <engine/rendering/material_graph/material_graph.h>
+#include <engine/rendering/material_graph/particle_material.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/font.h>
@@ -1128,6 +1129,18 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
         ImGui::SetItemTooltipEx("A material a Decal component projects onto the surfaces in its box: a tinted colour map to "
                                 "start from. Drag it onto a surface in the Scene view to place a decal there.");
 
+        if(ImGui::MenuItem("Particle Material"))
+        {
+            const auto available =
+                asset_actions::get_free_copy_path(target_path, "New Particle Material", ex::get_format<material>());
+            if(asset_actions::create_material_graph(ctx, available, make_particle_material_graph({})))
+            {
+                pending_rename = available;
+            }
+        }
+        ImGui::SetItemTooltipEx("A material a Particle Emitter draws on its sprites, trails and ribbons: a texture, or the "
+                                "frames of a sheet, tinted by each particle's colour. Assign it as an emitter's Material.");
+
         if(ImGui::MenuItem("Post Process Material"))
         {
             const auto available =
@@ -1206,6 +1219,12 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
 
         ImGui::EndMenu();
     }
+}
+
+auto content_browser_panel::get_current_folder() const -> fs::path
+{
+    const fs::path& shown = cache_.get_path();
+    return shown.empty() ? fs::resolve_protocol("app:/data") : shown;
 }
 
 void content_browser_panel::set_cache_path(const fs::path& path)

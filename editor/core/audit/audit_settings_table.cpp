@@ -171,6 +171,22 @@ auto make_settings() -> std::vector<performance_setting>
          {
              to.graphics.particles.force_half_resolution = from.graphics.particles.force_half_resolution;
          }},
+        {"graphics/particles/max_collision_casts",
+         "Graphics > Particles > Max Collision Casts",
+         "Each cast of a particle against the physics colliders takes processor time on the main thread. A phone's "
+         "core is several times slower than a desktop's, and browsers on phones run web builds too.",
+         [](const settings& value)
+         {
+             return static_cast<std::int64_t>(value.graphics.particles.max_collision_casts);
+         },
+         [](const settings& value)
+         {
+             return std::to_string(value.graphics.particles.max_collision_casts);
+         },
+         [](settings& to, const settings& from)
+         {
+             to.graphics.particles.max_collision_casts = from.graphics.particles.max_collision_casts;
+         }},
         {"graphics/material_quality",
          "Graphics > Material Quality",
          "The Quality Switch nodes of graph materials take their cheaper input at Low, and browsers on phones run web "

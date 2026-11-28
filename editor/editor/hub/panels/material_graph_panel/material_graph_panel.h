@@ -31,8 +31,10 @@ class material;
  * A graph is a graph material (.mat, graph_material): the window edits the loaded asset, so the scene shows every
  * value at once, and saves each finished edit to its file, whose compile writes the shader the scene draws it with.
  * Graph files (.mgraph JSON, engine/meta/rendering/material_graph.hpp), the shipped examples among them, open as
- * untitled graphs that Save makes a material of. Ctrl+Z undoes while the window has focus; the scene's own undo, redo
- * and save shortcuts stay out of it meanwhile.
+ * untitled graphs that Save makes a material of. A material the project does not own (asset_actions::is_project_asset),
+ * such as one the engine ships, opens for viewing only: the window shows its graph, changes and saves nothing, and
+ * offers a copy in the project. Ctrl+Z undoes while the window has focus; the scene's own undo, redo and save
+ * shortcuts stay out of it meanwhile.
  *
  * Every node shows a swatch of its value and the side pane a 3D preview of the material, both drawn with shaders the
  * window compiles itself (material_graph_previews), so an untitled graph previews as well as a saved one.
@@ -52,8 +54,12 @@ public:
     void show(bool s);
 
     /// Opens graph material @p asset and shows the window. False, opening nothing, for a material that is not a graph,
-    /// or when the user keeps the untitled graph the window holds.
+    /// or when the user keeps the untitled graph the window holds. A material the project does not own opens for
+    /// viewing only.
     auto open(const asset_handle<material>& asset) -> bool;
+
+    /// The window shows the graph of a material the project does not own: nothing edits or saves it.
+    auto is_view_only() const -> bool;
 
     /// The window holds an untitled graph with changes: opening another asks the user before it discards them.
     auto has_unsaved_untitled_graph() const -> bool;
@@ -83,8 +89,12 @@ private:
     void set_untitled_graph(material_graph graph, const std::string& name);
     void new_graph();
     void open_dialog();
-    /// Opens a graph material (.mat) or, untitled, a graph file (.mgraph).
+    /// Opens a graph material (.mat) or, untitled, a graph file (.mgraph). Its callers have asked about the untitled
+    /// graph it replaces (confirm_discard): it asks nothing.
     void open_file(const std::string& absolute_path);
+    /// Shows graph material @p asset in place of what the window holds, asking nothing: for a caller that has asked,
+    /// or has nothing to ask about. False for a material that is not a graph.
+    auto show_material(const asset_handle<material>& asset) -> bool;
     /// Opens the graph file at @p absolute_path as an untitled graph named @p name.
     void open_graph_file(const std::string& absolute_path, const std::string& name);
     void save();
@@ -126,11 +136,20 @@ private:
     void step_history(std::vector<std::string>& from, std::vector<std::string>& to);
     void compile_if_needed();
     void lay_out();
+    /// Puts the graph back to the one last committed. An edit of a graph the window only shows ends here.
+    void show_committed_graph();
+    /// Copies the material the window only shows into the project (editor_actions::duplicate_asset_into_project); the
+    /// window opens the copy once it is imported.
+    void duplicate_into_project();
+    /// Opens the copy duplicate_into_project made once the asset watcher has imported it.
+    void open_pending_copy();
 
     // Drawing.
     void draw_ui(rtti::context& ctx);
     void handle_shortcuts();
     void draw_toolbar();
+    /// Under the toolbar of a graph the window only shows: why, and Duplicate Into Project.
+    void draw_view_only_bar();
     /// A toolbar toggle showing or hiding a part of the window.
     void draw_pane_toggle(const char* icon, bool& shown, const char* tooltip);
     /// The way back to the graphs the window came from: a Back button and the trail of their names.
@@ -247,6 +266,16 @@ private:
     bool edit_open_{};
     ImGuiID edit_item_{};
     bool dirty_{};
+
+    /// The copy duplicate_into_project made that is still being imported: its key, the material it copies, and when
+    /// the wait for it ends (ImGui time).
+    struct pending_copy
+    {
+        std::string key;
+        hpp::uuid source;
+        double deadline{};
+    };
+    pending_copy pending_copy_;
 
     /// A graph to open once this frame's drawing is done (a Material Function's function).
     std::string pending_open_;

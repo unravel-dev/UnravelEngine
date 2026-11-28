@@ -57,6 +57,9 @@ auto read_ray(rtti::context& ctx, const simdjson::dom::object& args, scene_ray& 
             return false;
         }
         const auto& cam = camera_entity.get<camera_component>().get_camera();
+        // The camera counts pixels from where its view sits on the desktop; the tools count from the view's corner.
+        const auto& view_corner = cam.get_viewport_pos();
+        pixel += math::vec2(float(view_corner.x), float(view_corner.y));
         if(!cam.viewport_to_ray(pixel, ray.origin, ray.direction))
         {
             error = "The Scene view has no size yet (show it with panel_focus)";
@@ -106,7 +109,9 @@ auto projected_point_json(const camera& cam, const math::vec3& point) -> std::st
     {
         return fmt::format(R"({{"screen":null,"depth":{:.6g},"visible":false}})", depth);
     }
-    const auto screen = cam.world_to_viewport(point);
+    // The camera counts pixels from where its view sits on the desktop; the tools count from the view's corner.
+    const auto& view_corner = cam.get_viewport_pos();
+    const auto screen = cam.world_to_viewport(point) - math::vec3(float(view_corner.x), float(view_corner.y), 0.0f);
     const auto& size = cam.get_viewport_size();
     const bool is_visible = depth > 0.0f && screen.x >= 0.0f && screen.y >= 0.0f &&
                             screen.x < static_cast<float>(size.width) && screen.y < static_cast<float>(size.height);

@@ -107,11 +107,13 @@ auto inspector_layer::inspect(rtti::context& ctx,
     {
         preview = "Mixed...";
     }
+    ImGui::BeginDisabled(info.read_only);
     if(ImGui::BeginCombo("##Type", preview.c_str()))
     {
         result.changed = draw_layer_mask_menu_items(ctx, data);
         ImGui::EndCombo();
     }
+    ImGui::EndDisabled();
     result.edit_finished |= result.changed;
     return result;
 }

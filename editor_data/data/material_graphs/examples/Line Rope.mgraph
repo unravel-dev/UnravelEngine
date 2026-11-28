@@ -1,0 +1,28 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "link": "tinted"},
+    {"pin": "roughness", "value": [0.85]}
+   ]},
+   {"id": "uv", "type": "texcoord"},
+   {"id": "twists", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [6.0]}],
+    "settings": [{"name": "name", "value": "Twists"}]},
+   {"id": "along", "type": "multiply", "inputs": [{"pin": "a", "link": "uv.v"}, {"pin": "b", "link": "twists"}]},
+   {"id": "slanted", "type": "add", "inputs": [{"pin": "a", "link": "along"}, {"pin": "b", "link": "uv.u"}]},
+   {"id": "strands", "type": "multiply", "inputs": [{"pin": "a", "link": "slanted"}, {"pin": "b", "value": [3.0]}]},
+   {"id": "strand", "type": "frac", "inputs": [{"pin": "in", "link": "strands"}]},
+   {"id": "from_middle", "type": "subtract", "inputs": [{"pin": "a", "link": "strand"}, {"pin": "b", "value": [0.5]}]},
+   {"id": "off_middle", "type": "abs", "inputs": [{"pin": "in", "link": "from_middle"}]},
+   {"id": "groove", "type": "multiply", "inputs": [{"pin": "a", "link": "off_middle"}, {"pin": "b", "value": [2.0]}]},
+   {"id": "ridge", "type": "one_minus", "inputs": [{"pin": "in", "link": "groove"}]},
+   {"id": "shade", "type": "lerp", "inputs": [{"pin": "a", "value": [0.35]}, {"pin": "b", "value": [1.0]}, {"pin": "alpha", "link": "ridge"}]},
+   {"id": "fibre", "type": "color_parameter", "inputs": [{"pin": "value", "value": [0.55, 0.42, 0.26, 1.0]}],
+    "settings": [{"name": "name", "value": "Rope Color"}]},
+   {"id": "shaded", "type": "multiply", "inputs": [{"pin": "a", "link": "fibre.rgb"}, {"pin": "b", "link": "shade"}]},
+   {"id": "color", "type": "vertex_color"},
+   {"id": "tinted", "type": "multiply", "inputs": [{"pin": "a", "link": "shaded"}, {"pin": "b", "link": "color.rgb"}]}
+  ]
+ }
+}

@@ -1,5 +1,6 @@
 #include "animation_retarget_check.h"
 
+#include <editor/assets/asset_actions.h>
 #include <editor/editing/editor_actions.h>
 #include <engine/animation/animation_controller.h>
 #include <engine/assets/asset_manager.h>
@@ -238,7 +239,7 @@ auto get_editable_model_key(const model_component& model) -> std::string
 {
     const auto lod = model.get_model().get_lod(0);
     std::string key = lod ? lod.id() : std::string{};
-    return key.rfind("app:", 0) == 0 ? key : std::string{};
+    return asset_actions::is_project_asset(key) ? key : std::string{};
 }
 
 auto get_model_humanoid_overrides(rtti::context& ctx, const std::string& model_key) -> std::vector<humanoid_bone_override>

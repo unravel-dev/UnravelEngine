@@ -133,6 +133,10 @@ public:
     /// The swatches the nodes show; null for none. @p are_shown false hides every one, and the room they take.
     void set_previews(const material_graph_previews* previews, bool are_shown);
 
+    /// A read-only canvas shows the graph and changes nothing of it: it pans, zooms, frames, selects and copies, and
+    /// draw() reports no edit. For a graph its owner may not write, such as a material the engine ships.
+    void set_read_only(bool is_read_only);
+
 private:
     enum class pin_side : uint8_t
     {
@@ -305,6 +309,12 @@ private:
 
     // Input.
     void handle_input(material_graph& graph, material_graph_selection& selection, result& out);
+    /// The input of a read-only canvas: what looks at the graph, and nothing that changes it.
+    void handle_view_only_input(const material_graph& graph, material_graph_selection& selection);
+    /// Selects what a press of a read-only canvas landed on: a node, a comment, a link, or a box started on the
+    /// empty canvas.
+    void select_pressed(const material_graph& graph, material_graph_selection& selection);
+    void handle_view_only_keys(const material_graph& graph, material_graph_selection& selection);
     void handle_zoom_and_pan();
     void handle_press(material_graph& graph, material_graph_selection& selection, result& out);
     void press_pin(material_graph& graph, const pin_ref& pin, result& out);
@@ -368,6 +378,7 @@ private:
     const material_graph_compile_result* compiled_{};
     const material_graph_previews* previews_{};
     bool are_swatches_shown_{};
+    bool is_read_only_{};
 
     interaction interaction_{interaction::none};
     ImVec2 press_position_{};

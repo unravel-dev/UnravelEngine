@@ -39,7 +39,12 @@
 #include <engine/ecs/components/test_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
+#include <engine/rendering/ecs/components/line_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/ecs/components/trail_component.h>
+#include <engine/rendering/material_graph/particle_material.h>
+#include <engine/meta/assets/asset_handle.hpp>
+#include <engine/defaults/engine_asset_keys.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/ecs/components/volume_component.h>
@@ -2070,6 +2075,256 @@ void test_resync_honours_particle_emitter_overrides()
     gfx::shutdown();
 }
 
+/// What a scene saved before materials drew particles holds of an emitter's look, under the emitter's keys of then.
+struct legacy_emitter_document
+{
+    asset_handle<gfx::texture> texture;
+    asset_handle<gfx::texture> normal_texture;
+    ps_soa::texture_mode texture_mode{ps_soa::texture_mode::multi_channel};
+    ps_soa::blend_mode blend_mode{ps_soa::blend_mode::normal};
+    ps_soa::particle_lighting lighting{ps_soa::particle_lighting::unlit};
+    ps_soa::render_mode render_mode{ps_soa::render_mode::billboard};
+    asset_handle<material> render_material;
+};
+
+SAVE_INLINE(legacy_emitter_document)
+{
+    try_save(ar, ser20::make_nvp("texture", obj.texture));
+    try_save(ar, ser20::make_nvp("texture_mode", obj.texture_mode));
+    try_save(ar, ser20::make_nvp("render_mode", obj.render_mode));
+    try_save(ar, ser20::make_nvp("render_material", obj.render_material));
+    try_save(ar, ser20::make_nvp("blend_mode", obj.blend_mode));
+    try_save(ar, ser20::make_nvp("lighting", obj.lighting));
+    try_save(ar, ser20::make_nvp("normal_texture", obj.normal_texture));
+}
+
+template<typename T>
+auto save_emitter_document(const T& emitter) -> std::string
+{
+    std::stringstream stream;
+    {
+        ser20::oarchive_associative_t ar(stream);
+        try_save(ar, ser20::make_nvp("emitter", emitter));
+    }
+    return stream.str();
+}
+
+/// Loads @p document over @p emitter: whole, or only the members @p paths lists, as a prefab instance's overrides load.
+void load_emitter_document(particle_emitter_component& emitter, const std::string& document, const serialization::path_set* paths = nullptr)
+{
+    hpp::optional<serialization::scoped_path_filter> filter;
+    if(paths != nullptr)
+    {
+        filter.emplace("emitter", *paths);
+    }
+    std::stringstream stream(document);
+    ser20::iarchive_associative_t ar(stream);
+    try_load(ar, ser20::make_nvp("emitter", emitter));
+}
+
+/// The emitter's own override of texture node @p name of its material; empty without one.
+auto get_emitter_texture_override(const particle_emitter_component& emitter, const char* name) -> asset_handle<gfx::texture>
+{
+    for(const auto& entry : emitter.get_material_instance().get_graph_texture_overrides())
+    {
+        if(entry.name == name)
+        {
+            return entry.texture;
+        }
+    }
+    return {};
+}
+
+/// A scene saved before materials drew particles names an emitter's look on the emitter: its texture, how the texture
+/// gives the opacity, how the particles blend and its normal map. It loads as the Standard particle material of that
+/// look, with the textures as the emitter's overrides of it; a list of members reads the old keys through the members
+/// that took them over; a save writes none of them again; and a statement about one is restated on those members.
+void test_particle_emitter_legacy_look()
+{
+    begin_test("an emitter saved with its own texture and blend loads as the Standard particle material of that look");
+
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    if(!gfx::init(init))
+    {
+        check(false, "bgfx initialises on the Noop renderer");
+        gfx::shutdown();
+        return;
+    }
+    ps_soa::init(16);
+    {
+        auto& am = engine::context().get_cached<asset_manager>();
+        const auto color = am.get_asset<gfx::texture>("engine:/data/textures/default_color.dds");
+        const auto normal = am.get_asset<gfx::texture>("engine:/data/textures/default_normal.dds");
+        entt::registry registry;
+        const auto add_emitter = [&registry]() -> particle_emitter_component&
+        {
+            entt::handle entity(registry, registry.create());
+            return entity.emplace<particle_emitter_component>();
+        };
+
+        legacy_emitter_document smoke;
+        smoke.texture = color;
+        smoke.normal_texture = normal;
+        smoke.texture_mode = ps_soa::texture_mode::mask;
+        smoke.blend_mode = ps_soa::blend_mode::additive;
+        smoke.lighting = ps_soa::particle_lighting::surface;
+        auto& upgraded = add_emitter();
+        load_emitter_document(upgraded, save_emitter_document(smoke));
+        particle_surface lit_mask;
+        lit_mask.blend = material_blend_mode::additive;
+        lit_mask.is_mask = true;
+        lit_mask.has_normal_map = true;
+        check_eq(upgraded.get_render_material().id(), get_particle_material_key(lit_mask), "the blend, the mask and the normal map pick the material");
+        check(get_emitter_texture_override(upgraded, PARTICLE_TEXTURE_NAME) == color &&
+                  get_emitter_texture_override(upgraded, PARTICLE_NORMAL_MAP_NAME) == normal,
+              "the texture and the normal map are the emitter's overrides of it");
+        check(upgraded.get_blend_mode() == ps_soa::blend_mode::additive, "the emitter answers the blend it was saved with");
+        check(upgraded.get_texture_mode() == ps_soa::texture_mode::mask, "and the texture mode");
+        check(upgraded.get_lighting() == ps_soa::particle_lighting::surface, "and keeps its lighting");
+
+        legacy_emitter_document plain;
+        plain.texture = color;
+        auto& simple = add_emitter();
+        load_emitter_document(simple, save_emitter_document(plain));
+        check_eq(simple.get_render_material().id(), std::string(DEFAULT_PARTICLE_MATERIAL_KEY), "a plain emitter takes the plain particle material");
+        check(simple.get_texture() == color && !get_emitter_texture_override(simple, PARTICLE_NORMAL_MAP_NAME),
+              "with its texture, and no normal map");
+
+        legacy_emitter_document masked = plain;
+        masked.texture_mode = ps_soa::texture_mode::mask;
+        auto& mask = add_emitter();
+        load_emitter_document(mask, save_emitter_document(masked));
+        check(mask.get_blend_mode() == ps_soa::blend_mode::normal && mask.get_texture_mode() == ps_soa::texture_mode::mask,
+              "a mask of the Normal blend answers Normal, though its one material blends premultiplied");
+
+        // An emitter saved without a texture has none of its own: no override, so nothing to draw apart for.
+        legacy_emitter_document bare;
+        auto& untextured = add_emitter();
+        untextured.set_texture(color);
+        load_emitter_document(untextured, save_emitter_document(bare));
+        check(!untextured.get_material_instance().has_overrides() && !untextured.get_texture(),
+              "a saved emitter without a texture overrides none, and drops the one it had");
+
+        // The look's setters round trip: a mask's one alpha-blended material remembers the blend it was given, and
+        // the normal map comes back when the blend can be lit again.
+        auto& looks = add_emitter();
+        looks.set_blend_mode(ps_soa::blend_mode::premultiplied);
+        looks.set_texture_mode(ps_soa::texture_mode::mask);
+        check(looks.get_blend_mode() == ps_soa::blend_mode::premultiplied,
+              "a mask given the Premultiplied blend answers it, on the material Normal masks draw too");
+        looks.set_texture_mode(ps_soa::texture_mode::multi_channel);
+        particle_surface premultiplied;
+        premultiplied.blend = material_blend_mode::premultiplied;
+        check_eq(looks.get_render_material().id(), get_particle_material_key(premultiplied), "and goes back to it when the texture stops being a mask");
+        looks.set_normal_texture(normal);
+        looks.set_blend_mode(ps_soa::blend_mode::multiply);
+        check(!find_shipped_particle_surface(looks.get_render_material().id())->has_normal_map && looks.get_normal_texture() == normal,
+              "a filter reads no normal map, and the emitter keeps the one it has");
+        looks.set_blend_mode(ps_soa::blend_mode::normal);
+        check(find_shipped_particle_surface(looks.get_render_material().id())->has_normal_map,
+              "a blend that is lit again reads the emitter's normal map again");
+        looks.set_normal_texture({});
+        check(!find_shipped_particle_surface(looks.get_render_material().id())->has_normal_map &&
+                  !get_emitter_texture_override(looks, PARTICLE_NORMAL_MAP_NAME),
+              "an empty normal map drops the override and the material that reads one");
+
+        legacy_emitter_document meshes = smoke;
+        meshes.render_mode = ps_soa::render_mode::mesh;
+        meshes.render_material = am.get_asset<material>(STANDARD_MATERIAL_KEY);
+        auto& mesh_emitter = add_emitter();
+        load_emitter_document(mesh_emitter, save_emitter_document(meshes));
+        check_eq(mesh_emitter.get_render_material().id(), std::string(STANDARD_MATERIAL_KEY), "a mesh emitter keeps the material its meshes drew");
+        legacy_emitter_document bare_meshes = smoke;
+        bare_meshes.render_mode = ps_soa::render_mode::mesh;
+        auto& bare_mesh_emitter = add_emitter();
+        load_emitter_document(bare_mesh_emitter, save_emitter_document(bare_meshes));
+        check_eq(bare_mesh_emitter.get_render_material().id(),
+                 get_particle_material_key(lit_mask),
+                 "a mesh emitter without a material keeps the look its sprites drew, which leaves the mesh its own");
+
+        // A save names the look by the material alone, and loads back the same.
+        const std::string saved = save_emitter_document(upgraded);
+        check(saved.find("\"blend_mode\"") == std::string::npos && saved.find("\"texture_mode\"") == std::string::npos &&
+                  saved.find("\"normal_texture\"") == std::string::npos && saved.find("\"texture\"") == std::string::npos,
+              "a save writes none of the old keys");
+        auto& reloaded = add_emitter();
+        load_emitter_document(reloaded, saved);
+        check(reloaded.get_render_material() == upgraded.get_render_material() &&
+                  get_emitter_texture_override(reloaded, PARTICLE_TEXTURE_NAME) == color &&
+                  get_emitter_texture_override(reloaded, PARTICLE_NORMAL_MAP_NAME) == normal,
+              "and the emitter loads back with its material and overrides");
+
+        // A list of members, as a prefab instance's overrides: the old keys are read through the members that took
+        // them over.
+        legacy_emitter_document filter_look;
+        filter_look.texture = normal;
+        filter_look.blend_mode = ps_soa::blend_mode::multiply;
+        const std::string filter_document = save_emitter_document(filter_look);
+        auto& retextured = add_emitter();
+        retextured.set_blend_mode(ps_soa::blend_mode::additive);
+        retextured.set_texture(color);
+        const serialization::path_set texture_alone{"material_overrides"};
+        load_emitter_document(retextured, filter_document, &texture_alone);
+        check(retextured.get_blend_mode() == ps_soa::blend_mode::additive, "a list naming the overrides leaves the material");
+        check(retextured.get_texture() == normal, "and takes the document's texture");
+        auto& reblended = add_emitter();
+        reblended.set_blend_mode(ps_soa::blend_mode::additive);
+        reblended.set_texture(color);
+        const serialization::path_set material_alone{"render_material"};
+        load_emitter_document(reblended, filter_document, &material_alone);
+        check(reblended.get_blend_mode() == ps_soa::blend_mode::multiply, "a list naming the material takes the document's blend");
+        check(reblended.get_texture() == color, "and leaves the texture");
+
+        // A material of the project's own keeps its blend: the look's setters pick among the engine's alone.
+        auto& custom = add_emitter();
+        custom.set_render_material(am.get_asset<material>(STANDARD_MATERIAL_KEY));
+        custom.set_blend_mode(ps_soa::blend_mode::additive);
+        check_eq(custom.get_render_material().id(), std::string(STANDARD_MATERIAL_KEY), "a material of the project's own is not replaced");
+
+        // Statements about the old keys are restated on the members that took them over.
+        prefab_statements stated;
+        const auto entity_uid = generate_uuid();
+        stated.add_override({}, entity_uid, "particle_emitter_component/texture", "Particle Emitter/Texture");
+        stated.add_override({}, entity_uid, "particle_emitter_component/blend_mode", "Particle Emitter/Blend Mode");
+        stated.add_override({}, entity_uid, "particle_emitter_component/lifetime/min", "Particle Emitter/Lifetime/Min");
+        std::stringstream stream;
+        {
+            ser20::oarchive_associative_t ar(stream);
+            try_save(ar, ser20::make_nvp("statements", stated));
+        }
+        prefab_statements restated;
+        {
+            ser20::iarchive_associative_t ar(stream);
+            try_load(ar, ser20::make_nvp("statements", restated));
+        }
+        check(restated.has_override({}, entity_uid, "particle_emitter_component/material_overrides") &&
+                  restated.has_override({}, entity_uid, "particle_emitter_component/render_material") &&
+                  restated.has_override({}, entity_uid, "particle_emitter_component/lifetime/min") &&
+                  !restated.has_override({}, entity_uid, "particle_emitter_component/texture") &&
+                  !restated.has_override({}, entity_uid, "particle_emitter_component/blend_mode") && restated.overrides.size() == 3,
+              "an override of the texture is one of the material's overrides, one of the blend one of the material");
+        prefab_statements normal_stated;
+        normal_stated.add_override({}, entity_uid, "particle_emitter_component/normal_texture", "Particle Emitter/Normal Texture");
+        std::stringstream normal_stream;
+        {
+            ser20::oarchive_associative_t ar(normal_stream);
+            try_save(ar, ser20::make_nvp("statements", normal_stated));
+        }
+        prefab_statements normal_restated;
+        {
+            ser20::iarchive_associative_t ar(normal_stream);
+            try_load(ar, ser20::make_nvp("statements", normal_restated));
+        }
+        check(normal_restated.overrides.size() == 2 &&
+                  normal_restated.has_override({}, entity_uid, "particle_emitter_component/material_overrides") &&
+                  normal_restated.has_override({}, entity_uid, "particle_emitter_component/render_material"),
+              "an override of the normal map is one of both: the map is an override, and picks the material that reads it");
+    }
+    ps_soa::shutdown();
+    gfx::shutdown();
+}
+
 /// Overrides below a particle emitter property, as the inspector records an edit of one field: one end of a
 /// range, one field of one list element. The field keeps the instance's value; its siblings follow the prefab.
 void test_resync_honours_particle_emitter_field_overrides()
@@ -2136,6 +2391,68 @@ void test_resync_honours_particle_emitter_field_overrides()
     }
     ps_soa::shutdown();
     gfx::shutdown();
+}
+
+/// A Line and a Trail in a prefab: an instance's override of one point, of one field of the strip and of one row
+/// stays through a resync, and what it did not override follows the prefab.
+void test_resync_honours_line_and_trail_overrides()
+{
+    begin_test("resync keeps the overridden point and rows of a line and a trail, and updates the others");
+
+    prefab_fixture fix;
+    fix.source = build_sample_tree(fix.authoring);
+    auto source_child = find_child_by_name(fix.source, "child_a");
+    auto& source_line = source_child.emplace<line_component>();
+    source_line.points = {math::vec3(0.0f), math::vec3(1.0f, 0.0f, 0.0f), math::vec3(2.0f, 0.0f, 0.0f)};
+    source_child.emplace<trail_component>();
+    fix.asset = make_prefab_from(fix.source, "test:/tree.pfb");
+    fix.instance = fix.world.instantiate(fix.asset, false);
+    auto instance_child = fix.instance ? find_child_by_name(fix.instance, "child_a") : entt::handle{};
+    const bool has_both = instance_child && instance_child.all_of<line_component, trail_component>();
+    check(has_both, "the instance has the line and the trail");
+    if(!has_both)
+    {
+        return;
+    }
+    check(instance_child.get<line_component>().points.size() == 3, "the instance has the prefab's points");
+
+    const auto child_prefab_uid = prefab_uid_of(instance_child);
+    auto& instance_prefab = fix.instance.get<prefab_component>();
+    instance_child.get<line_component>().points[1] = math::vec3(1.0f, 5.0f, 0.0f);
+    instance_prefab.add_override(child_prefab_uid, "line_component/points[1]");
+    instance_child.get<line_component>().strip.width = 0.75f;
+    instance_prefab.add_override(child_prefab_uid, "line_component/strip/width");
+    instance_child.get<trail_component>().time = 3.0f;
+    instance_prefab.add_override(child_prefab_uid, "trail_component/time");
+
+    source_line.points = {math::vec3(0.0f), math::vec3(1.0f, -1.0f, 0.0f), math::vec3(2.0f, 0.0f, 9.0f)};
+    source_line.strip.width = 0.2f;
+    source_line.strip.shape = strip_shape::tube;
+    source_line.loop = true;
+    auto& source_trail = source_child.get<trail_component>();
+    source_trail.time = 0.5f;
+    source_trail.min_distance = 0.4f;
+    source_trail.edge = true;
+    source_trail.casts_shadow = false;
+
+    fix.republish_and_sync();
+
+    auto after = find_child_by_name(fix.instance, "child_a");
+    if(!after || !after.all_of<line_component, trail_component>())
+    {
+        check(false, "both components are still there after the resync");
+        return;
+    }
+    const float tolerance = 1.0e-5f;
+    const auto& line = after.get<line_component>();
+    check(line.points.size() == 3 && std::abs(line.points[1].y - 5.0f) < tolerance, "the overridden point stays");
+    check(line.points.size() == 3 && std::abs(line.points[2].z - 9.0f) < tolerance, "the other points follow the prefab");
+    check(std::abs(line.strip.width - 0.75f) < tolerance, "the overridden field of the strip stays");
+    check(line.strip.shape == strip_shape::tube && line.loop, "the strip's other fields and the line's rows follow the prefab");
+    const auto& trail = after.get<trail_component>();
+    check(std::abs(trail.time - 3.0f) < tolerance, "the trail's overridden row stays");
+    check(std::abs(trail.min_distance - 0.4f) < tolerance && trail.edge && !trail.casts_shadow,
+          "the trail's other rows follow the prefab, the ones every renderer has included");
 }
 
 /// The override path is the one the inspector records for the probe's Extents row: the reflected names.
@@ -2379,7 +2696,7 @@ void test_resync_honours_camera_and_light_row_overrides()
     authored.shadow_params.pcf.y_offset = 1.0f;
     authored.directional_shadow_params.num_splits = 4;
     authored.directional_shadow_params.split_distribution = 0.8f;
-    authored.contact_shadow.thickness = 0.1f;
+    authored.contact_shadow.occluder_thickness = 0.1f;
     source_child.emplace<light_component>().set_light(authored);
     fix.asset = make_prefab_from(fix.source, "test:/tree.pfb");
     fix.instance = fix.world.instantiate(fix.asset, false);
@@ -2399,7 +2716,7 @@ void test_resync_honours_camera_and_light_row_overrides()
         local.shadow_params.bias = 5.0f;
         local.shadow_params.pcf.x_offset = 2.5f;
         local.directional_shadow_params.num_splits = 2;
-        local.contact_shadow.thickness = 0.7f;
+        local.contact_shadow.occluder_thickness = 0.7f;
         instance_child.get<light_component>().set_light(local);
         instance_prefab.add_override(uid, "light_component/light/shadow_params/depth_bias_texels");
         instance_prefab.add_override(uid, "light_component/light/shadow_params/pcf/x_offset");
@@ -2417,7 +2734,7 @@ void test_resync_honours_camera_and_light_row_overrides()
         authored.shadow_params.pcf.y_offset = 3.0f;
         authored.directional_shadow_params.num_splits = 3;
         authored.directional_shadow_params.split_distribution = 0.5f;
-        authored.contact_shadow.thickness = 0.2f;
+        authored.contact_shadow.occluder_thickness = 0.2f;
         authored.contact_shadow.opacity = 0.4f;
         source_child.get<light_component>().set_light(authored);
 
@@ -2443,7 +2760,7 @@ void test_resync_honours_camera_and_light_row_overrides()
                              0.5f,
                              tolerance,
                              "light: the cascade distribution follows the prefab");
-            test::check_near(lit.contact_shadow.thickness, 0.7f, tolerance, "light: the overridden thickness survives");
+            test::check_near(lit.contact_shadow.occluder_thickness, 0.7f, tolerance, "light: the overridden thickness survives");
             test::check_near(lit.contact_shadow.opacity, 0.4f, tolerance, "light: the contact opacity follows the prefab");
         }
         else
@@ -2604,7 +2921,7 @@ void test_camera_and_light_documents_in_earlier_layouts_load()
                          tolerance,
                          format + "light: it keeps its cascade distribution");
         check(!lit.directional_shadow_params.stabilize, format + "light: it keeps its stabilize setting");
-        test::check_near(lit.contact_shadow.thickness, 0.2f, tolerance, format + "light: it keeps its contact thickness");
+        test::check_near(lit.contact_shadow.occluder_thickness, 0.2f, tolerance, format + "light: it keeps its contact thickness");
 
         light kept;
         kept.type = light_type::directional;
@@ -5647,9 +5964,11 @@ void test_released_format_overrides_load_as_local()
     {
         return;
     }
+    // One of them names an emitter's blend, whose value the emitter's material holds.
     scene_text.replace(pos,
                        k_empty_statement_lists.size(),
-                       R"("property_overrides":[)" + legacy_override_entry(child_uid, "tag_component/name") +
+                       R"("property_overrides":[)" + legacy_override_entry(child_uid, "tag_component/name") + "," +
+                           legacy_override_entry(child_uid, "particle_emitter_component/blend_mode") +
                            R"(],"removed_entities":[])");
 
     scene loaded("loaded");
@@ -5666,7 +5985,19 @@ void test_released_format_overrides_load_as_local()
     {
         return;
     }
-    check_eq(local_overrides_of(roots[0]).size(), 1, "the override reads as the scene's own");
+    const auto local = local_overrides_of(roots[0]);
+    const auto states = [&local](const char* component_path)
+    {
+        return std::any_of(local.begin(),
+                           local.end(),
+                           [component_path](const prefab_property_override_data& stated)
+                           {
+                               return stated.component_path == component_path;
+                           });
+    };
+    check_eq(local.size(), 2, "the overrides read as the scene's own");
+    check(states("particle_emitter_component/render_material") && !states("particle_emitter_component/blend_mode"),
+          "an override of a name whose value another property holds is restated on that property");
     check(inherited_overrides_of(roots[0]).empty(), "and not as anyone's statement");
     sync_all_prefab_instances(*loaded.registry);
     check(static_cast<bool>(find_child_by_name(roots[0], "released_override")),
@@ -8533,7 +8864,9 @@ void run_ecs_serialization_cases()
         RUN_CASE(test_resync_keeps_the_same_entities());
         RUN_CASE(test_resync_honours_a_property_override());
         RUN_CASE(test_resync_honours_particle_emitter_overrides());
+        RUN_CASE(test_particle_emitter_legacy_look());
         RUN_CASE(test_resync_honours_particle_emitter_field_overrides());
+        RUN_CASE(test_resync_honours_line_and_trail_overrides());
         RUN_CASE(test_resync_honours_reflection_probe_shape_overrides());
         RUN_CASE(test_resync_honours_camera_and_light_row_overrides());
         RUN_CASE(test_resync_honours_row_overrides_against_a_prefab_in_an_earlier_layout());

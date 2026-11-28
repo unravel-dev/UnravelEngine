@@ -6,6 +6,7 @@
 #include <editor/editing/editing_manager.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/ecs.h>
+#include <engine/rendering/dynamic_geometry/dynamic_geometry.h>
 #include <engine/rendering/material_graph/graph_material_programs.h>
 
 namespace unravel
@@ -28,6 +29,9 @@ private:
     void draw_selection_gizmos(rtti::context& ctx, const camera& camera, gfx::dd_raii& dd, dd_2d_raii& dd_2d);
     void draw_icon_gizmos(rtti::context& ctx, scene& scn, const camera& camera, gfx::dd_raii& dd);
     auto draw_selection_mask_pass(rtti::context& ctx, const camera& camera, const gfx::frame_buffer::ptr& selection_mask) -> bool;
+    /// Draws what the Line and the Trail of @p entity draw into the selection mask in @p view. False when it has
+    /// neither in view.
+    auto draw_dynamic_renderer_mask(entt::handle entity, const camera& camera, bgfx::ViewId view) -> bool;
     void draw_outline_pass(const gfx::frame_buffer::ptr& selection_mask, const gfx::frame_buffer::ptr& obuffer, gfx::dd_raii& dd);
     void draw_selection_wireframe_pass(rtti::context& ctx, const camera& camera, const gfx::frame_buffer::ptr& obuffer);
     ///
@@ -74,6 +78,8 @@ private:
     /// The selection mask of graph materials whose World Position Offset moves their vertices: their own vertex shader
     /// with the mask's fragment shader, so the outline follows the moved surface.
     graph_material_programs moved_vertex_programs_;
+    /// Scratch of draw_dynamic_renderer_mask: it keeps its memory between frames.
+    dynamic_geometry mask_geometry_;
     asset_handle<gfx::shader> outline_mask_fragment_shader_;
 
     struct outline_program : uniforms_cache

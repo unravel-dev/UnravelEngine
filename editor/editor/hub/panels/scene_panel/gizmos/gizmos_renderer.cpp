@@ -7,6 +7,7 @@
 
 #include <engine/events.h>
 #include <engine/rendering/camera.h>
+#include <engine/rendering/dynamic_geometry/dynamic_geometry_draw.h>
 #include <engine/rendering/gpu_program.h>
 
 #include <engine/physics/ecs/systems/physics_system.h>
@@ -188,6 +189,45 @@ void gizmos_renderer::draw_selection_gizmos(rtti::context& ctx, const camera& ca
     }
 }
 
+auto gizmos_renderer::draw_dynamic_renderer_mask(entt::handle entity, const camera& camera, bgfx::ViewId view) -> bool
+{
+    const math::bbox box = get_dynamic_renderer_bounds(entity);
+    if(!box.is_populated() || !camera.test_aabb(box))
+    {
+        return false;
+    }
+    const math::vec3 origin = camera.get_position();
+    auto& program = outline_mask_program_.program;
+    const math::mat4 world = get_dynamic_geometry_world(origin);
+    bool is_drawn = false;
+    draw_dynamic_renderers(entity,
+                           camera,
+                           origin,
+                           {},
+                           mask_geometry_,
+                           [&](const dynamic_geometry& geometry, const std::shared_ptr<material>& drawn)
+                           {
+                               program->begin();
+                               gfx::set_world_transform(math::value_ptr(world));
+                               if(bind_dynamic_geometry(geometry))
+                               {
+                                   // A material that moves its vertices is outlined where it draws them.
+                                   auto* moved = drawn ? moved_vertex_programs_.begin_moved_vertices(
+                                                             *drawn,
+                                                             graph_material_programs::get_position_only_variant(false),
+                                                             outline_mask_fragment_shader_,
+                                                             origin)
+                                                       : nullptr;
+                                   // Both sides: a strip is a sheet.
+                                   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+                                   bgfx::submit(view, moved != nullptr ? moved->native_handle() : program->native_handle(), 0, BGFX_DISCARD_ALL);
+                                   is_drawn = true;
+                               }
+                               program->end();
+                           });
+    return is_drawn;
+}
+
 auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
                                                const camera& camera,
                                                const gfx::frame_buffer::ptr& selection_mask) -> bool
@@ -223,6 +263,8 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
                 continue;
             }
             const auto& world_transform = transform_comp->get_transform_global();
+
+            any_drawn |= draw_dynamic_renderer_mask(e, camera, pass.id);
 
             if(auto model_comp = e.try_get<model_component>())
             {

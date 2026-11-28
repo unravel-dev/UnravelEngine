@@ -176,6 +176,14 @@ public:
     /// Tells every script on the entity that a joint it takes part in broke.
     void on_joint_break(entt::handle joint, entt::handle body_a, entt::handle body_b, float force, float torque);
 
+    /// Tells every script on the entity what happened to the particles of the emitter on entity @p emitter
+    /// (OnParticleEvents).
+    void on_particle_events(entt::entity emitter,
+                            const std::vector<dotnetpp_backend::managed_interface::particle_event>& events);
+    /// Tells every script on the entity which particles of the emitter on entity @p emitter touched its colliders
+    /// (OnParticleHits). The emitter's entity may be gone by now.
+    void on_particle_hits(entt::entity emitter, const std::vector<dotnetpp_backend::managed_interface::particle_event>& hits);
+
 private:
     void enable(script_object& script_obj, bool check_order);
     void disable(script_object& script_obj, bool check_order);
@@ -197,6 +205,10 @@ private:
                            const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds,
                            contact_end_reason reason);
     void on_animation_event(const dotnet::object& obj, const animation_event_hit& hit);
+    /// Calls @p method (an emitter and its events) on every script of the entity.
+    void send_particle_events(const dotnet::method& method,
+                              entt::entity emitter,
+                              const std::vector<dotnetpp_backend::managed_interface::particle_event>& events);
 
     template<typename F>
     auto safe_foreach(script_components_t& components, F&& f)

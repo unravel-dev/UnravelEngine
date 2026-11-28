@@ -1,0 +1,163 @@
+{
+ "material": {
+  "polymorphic_id": 2147483649,
+  "polymorphic_name": "graph_material",
+  "ptr_wrapper": {
+   "id": 2147483649,
+   "data": {
+    "base_type": {
+     "cull_type": 2
+    },
+    "graph": {
+     "version": 1,
+     "nodes": [
+      {
+       "id": "output",
+       "type": "surface_output",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "emissive",
+         "link": "tinted",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "opacity_mask",
+         "link": "opacity",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": [
+        {
+         "name": "blend_mode",
+         "value": "modulate"
+        },
+        {
+         "name": "shading_model",
+         "value": "unlit"
+        },
+        {
+         "name": "particle_use",
+         "value": "on"
+        },
+        {
+         "name": "write_velocity",
+         "value": "on"
+        }
+       ]
+      },
+      {
+       "id": "texture",
+       "type": "flipbook_sample",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [],
+       "settings": [
+        {
+         "name": "name",
+         "value": "Texture"
+        },
+        {
+         "name": "description",
+         "value": "What each particle draws: one image, or a sheet whose frames the emitter's Sheet rows play."
+        },
+        {
+         "name": "filter",
+         "value": "trilinear"
+        }
+       ]
+      },
+      {
+       "id": "color",
+       "type": "vertex_color",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [],
+       "settings": []
+      },
+      {
+       "id": "erosion",
+       "type": "particle_erosion",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "alpha",
+         "link": "texture.a",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": []
+      },
+      {
+       "id": "opacity",
+       "type": "multiply",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "a",
+         "link": "erosion.out",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "b",
+         "link": "color.a",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": []
+      },
+      {
+       "id": "tinted",
+       "type": "multiply",
+       "position": {
+        "x": 0.0,
+        "y": 0.0
+       },
+       "inputs": [
+        {
+         "pin": "a",
+         "link": "texture.rgb",
+         "value": [
+          0.0
+         ]
+        },
+        {
+         "pin": "b",
+         "link": "color.rgb",
+         "value": [
+          0.0
+         ]
+        }
+       ],
+       "settings": []
+      }
+     ],
+     "comments": []
+    }
+   }
+  }
+ }
+}

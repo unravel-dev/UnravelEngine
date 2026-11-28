@@ -123,6 +123,8 @@ enum class limited_feature : std::uint8_t
     ambient_occlusion,
     bloom,
     decals,
+    /// The decals a particle emitter's contacts leave: the Decals limit decides them too.
+    collision_decals,
     post_process_materials,
     temporal_anti_aliasing,
     fxaa,
@@ -161,6 +163,20 @@ struct entity_problem
     std::string message;
 };
 
+/// A Line or a Trail of one document and the material it names, which does not draw what the component asks of it.
+struct strip_material_problem
+{
+    std::string document;
+    /// The entity's uid in the document.
+    std::string entity_id;
+    /// The entity's path, as names from its root.
+    std::string entity;
+    /// The component as the Inspector names it: "Line" or "Trail".
+    std::string component;
+    /// The key of the material.
+    std::string material;
+};
+
 /// Entities of one document whose component asks for a feature that limits can turn off.
 struct feature_use
 {
@@ -171,6 +187,47 @@ struct feature_use
     /// The entities' paths, in document order.
     std::vector<std::string> entities;
 };
+
+/// The particle emitters of one document that collide with physics colliders.
+struct collider_emitter_use
+{
+    std::string document;
+    /// The emitters' entity paths, in document order.
+    std::vector<std::string> entities;
+    /// The casts a second their particles need at the least.
+    double casts_per_second{};
+};
+
+/// The particle emitters of one document whose particles collide with scene surfaces.
+struct scene_surface_emitter_use
+{
+    std::string document;
+    /// The emitters' entity paths, in document order.
+    std::vector<std::string> entities;
+};
+
+/// What an emitter whose Collide With is Scene Surfaces also asks for. The game is told of no contact with a scene
+/// surface, so none of it gets what it waits for.
+struct scene_contact_needs
+{
+    /// Its particles are meshes, which the CPU places: they do not touch scene surfaces at all.
+    bool draws_meshes{false};
+    /// It has a sub-emitter that fires on Collision, and one that fires on Death.
+    bool fires_on_collision{false};
+    bool fires_on_death{false};
+    bool sends_death_events{false};
+    /// Its brightest particles light the scene (Light Count above 0).
+    bool lights_scene{false};
+};
+
+/// What the audit says of such an emitter, as sentences; empty when it asks for none of those.
+auto make_scene_contact_message(const scene_contact_needs& needs) -> std::string;
+
+/// What the audit says of an emitter whose Ambient Light is Global Illumination and whose Material @p material
+/// reads @p texture_count textures and, with @p reads_scene_color, the Scene Color; empty when the material leaves
+/// the Global Illumination its place (@p max_textures textures at most and no Scene Color).
+auto make_gi_ambient_message(const std::string& material, std::uint32_t texture_count, bool reads_scene_color, std::uint32_t max_textures)
+    -> std::string;
 
 /// An audio source of a scene or prefab and the clip it plays.
 struct audio_source_use
@@ -227,6 +284,25 @@ struct document_scan
     /// The keys of the materials whose surface reads the lit scene behind it (Refraction, or Scene Texture's Scene
     /// Color), in document order.
     std::vector<std::string> scene_color_materials;
+    /// The particle emitters whose sprites, trails and ribbons cannot draw their Material; each message is the
+    /// material's key.
+    std::vector<entity_problem> emitter_materials;
+    /// The particle emitters that collide while they simulate in Local space, where nothing collides.
+    std::vector<entity_problem> local_space_collisions;
+    /// Each scene's and prefab's particle emitters that collide with physics colliders.
+    std::vector<collider_emitter_use> collider_emitters;
+    /// Each scene's and prefab's particle emitters whose particles collide with scene surfaces.
+    std::vector<scene_surface_emitter_use> scene_surface_emitters;
+    /// The emitters whose Collide With is Scene Surfaces and that ask for what such a contact does not give; each
+    /// message is the issue's (make_scene_contact_message).
+    std::vector<entity_problem> unreported_scene_contacts;
+    /// The emitters whose Ambient Light is Global Illumination and whose material cannot take it; each message is the
+    /// issue's (make_gi_ambient_message).
+    std::vector<entity_problem> gi_ambient_misfits;
+    /// The lines and trails that set a colour their material has no Vertex Color read to show.
+    std::vector<strip_material_problem> unshown_colors;
+    /// The lines and trails whose material is no Surface material: they draw the engine's strip material.
+    std::vector<strip_material_problem> unsuited_strip_materials;
 };
 
 /// A compiler message of the project's scripts.

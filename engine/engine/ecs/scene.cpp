@@ -17,6 +17,8 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/ecs/components/line_component.h>
+#include <engine/rendering/ecs/components/trail_component.h>
 #include <engine/audio/ecs/components/audio_listener_component.h>
 
 #include <engine/animation/ecs/components/animation_component.h>
@@ -480,6 +482,8 @@ scene::scene(const std::string& tag_name)
     on_load<ui_document_component>(*registry).connect<&ui_system::on_load_component>();
 
     on_construct<particle_emitter_component>(*registry).connect<&particle_emitter_component::on_create_component>();
+    on_construct<line_component>(*registry).connect<&line_component::on_create_component>();
+    on_construct<trail_component>(*registry).connect<&trail_component::on_create_component>();
     on_destroy<particle_emitter_component>(*registry).connect<&particle_emitter_component::on_destroy_component>();
 
     // Activation must refresh a probe whose product cubemaps were released while inactive.

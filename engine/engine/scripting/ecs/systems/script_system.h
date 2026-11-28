@@ -194,6 +194,9 @@ struct script_system
         dotnet::method on_collision_enter_method;
         dotnet::method on_collision_exit_method;
         dotnet::method on_joint_break_method;
+        // ScriptComponent.internal_n2m_on_particle_events / _hits(emitter, events)
+        dotnet::method on_particle_events_method;
+        dotnet::method on_particle_hits_method;
         // ScriptComponent.internal_n2m_on_animation_event(name, string, float, int, layer, weight, clip, clip name)
         dotnet::method on_animation_event_method;
         // ScriptComponent.internal_n2m_invoke(method name, encoded arguments) -> JSON, for tools
@@ -406,6 +409,16 @@ private:
      * runs on, and managed code must not be entered from there.
      */
     void dispatch_animation_events(scene& scn);
+
+    /**
+     * @brief Delivers the particle events the particle system holds for scripts: an emitter's events to the scripts
+     * on its entity (or, when it has none, its nearest ancestor with scripts), and, where the emitter asks for it, its
+     * collisions to the scripts of each entity whose colliders were touched (or its nearest ancestor with scripts),
+     * in one call an emitter.
+     *
+     * Runs on the main thread, a frame after the particles' update recorded them.
+     */
+    void dispatch_particle_events(scene& scn);
 
     auto create_compilation_job(rtti::context& ctx, const std::string& protocol, bool debug) -> tpp::job_future<bool>;
 

@@ -33,6 +33,32 @@ auto acceleration_reach(float lifespan, const motion_bounds_params& params) -> f
     return math::max(gamma(earliest), gamma(latest));
 }
 
+/// Bounds of particles that bounce off surfaces the CPU does not know while curves reshape their motion: no further
+/// from where each was spawned than the fastest it can move, sped up by what the curves add after a bounce
+/// (lut_ranges::bounce_speed_gain), for its whole life, any way.
+auto compute_unseen_bounce_bounds(const spawn_history& history, const math::bbox& spawn_region, const motion_bounds_params& params)
+    -> math::bbox
+{
+    math::bbox bounds = spawn_region;
+    const float gain = math::max(params.ranges.bounce_speed_gain, 1.0f);
+    const float curve_speed = (params.has_speed_curve ? params.ranges.speed_factor_max : 1.0f) *
+                              (params.has_ease ? params.ranges.ease_rate_max : 1.0f);
+    const float acceleration = math::length(params.acceleration);
+    float longest_reach = 0.0f;
+    for(const auto& bucket : history.get_buckets())
+    {
+        const float top_speed = bucket.max_speed * curve_speed + acceleration * bucket.max_lifespan;
+        const float reach = top_speed * bucket.max_lifespan * gain;
+        bounds.add_point(bucket.region.min - math::vec3(reach));
+        bounds.add_point(bucket.region.max + math::vec3(reach));
+        longest_reach = math::max(longest_reach, reach);
+    }
+    // New particles reach as far from where they appear.
+    bounds.add_point(spawn_region.min - math::vec3(longest_reach));
+    bounds.add_point(spawn_region.max + math::vec3(longest_reach));
+    return bounds;
+}
+
 } // namespace
 
 void spawn_history::clear()
@@ -94,6 +120,11 @@ auto spawn_history::get_buckets() const -> const std::deque<bucket>&
 auto compute_motion_bounds(const spawn_history& history, const math::bbox& spawn_region, const motion_bounds_params& params)
     -> math::bbox
 {
+    // Curves that reshape the motion go on after a bounce the CPU did not see: the path's own bounds do not hold it.
+    if(params.bounces_unseen && (params.has_ease || params.has_speed_curve))
+    {
+        return compute_unseen_bounce_bounds(history, spawn_region, params);
+    }
     math::bbox bounds = spawn_region;
     float longest_life = 0.0f;
     for(const auto& bucket : history.get_buckets())
@@ -103,8 +134,16 @@ auto compute_motion_bounds(const spawn_history& history, const math::bbox& spawn
         bounds.add_point(bucket.region.max + math::vec3(reach));
         longest_life = math::max(longest_life, bucket.max_lifespan);
     }
-    // The acceleration moves every particle the same way: stretch the box toward where it carries them.
     const math::vec3 drift = params.acceleration * acceleration_reach(longest_life, params);
+    if(params.bounces_unseen)
+    {
+        // A bounce turns what the acceleration gave a particle any way.
+        const math::vec3 reach(math::length(drift));
+        bounds.min -= reach;
+        bounds.max += reach;
+        return bounds;
+    }
+    // The acceleration moves every particle the same way: stretch the box toward where it carries them.
     bounds.min += math::min(drift, math::vec3(0.0f));
     bounds.max += math::max(drift, math::vec3(0.0f));
     return bounds;

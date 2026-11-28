@@ -420,6 +420,38 @@ void script_component::on_animation_event(const dotnet::object& obj, const anima
     }
 }
 
+void script_component::on_particle_events(entt::entity emitter,
+                                          const std::vector<dotnetpp_backend::managed_interface::particle_event>& events)
+{
+    send_particle_events(engine_script_cache().on_particle_events_method, emitter, events);
+}
+
+void script_component::on_particle_hits(entt::entity emitter,
+                                        const std::vector<dotnetpp_backend::managed_interface::particle_event>& hits)
+{
+    send_particle_events(engine_script_cache().on_particle_hits_method, emitter, hits);
+}
+
+void script_component::send_particle_events(const dotnet::method& method,
+                                            entt::entity emitter,
+                                            const std::vector<dotnetpp_backend::managed_interface::particle_event>& events)
+{
+    safe_foreach(script_components_,
+                 [&](auto& script)
+                 {
+                     try
+                     {
+                         auto invoke = dotnet::make_method_invoker<void(
+                             entt::entity, const std::vector<dotnetpp_backend::managed_interface::particle_event>&)>(method, false);
+                         invoke(script.pinned->get_object(), emitter, events);
+                     }
+                     catch(const dotnet::exception& e)
+                     {
+                         script_system::log_exception(e);
+                     }
+                 });
+}
+
 void script_component::on_collision_enter(const dotnet::object& obj,
                                           entt::handle other,
                                           const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds)

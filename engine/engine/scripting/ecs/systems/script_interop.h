@@ -92,6 +92,20 @@ struct manifold_point
 	float impulse{};
 };
 
+/// Managed ParticleEvent: something that happened to a particle (ps_soa::particle_event).
+struct particle_event
+{
+	int32_t type{};
+	vector3 position{};
+	vector3 velocity{};
+	vector3 normal{};
+	vector3 surface_point{};
+	color color{};
+	float size{};
+	/// The entity whose collider was touched; 0: none.
+	entt::entity entity{};
+};
+
 } // namespace managed_interface
 } // namespace dotnetpp_backend
 

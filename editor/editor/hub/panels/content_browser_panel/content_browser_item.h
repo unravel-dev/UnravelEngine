@@ -42,6 +42,8 @@ struct content_card_view
     bool is_focused{};
     /// What a field holds now: a check badged in the thumbnail's top-right corner.
     bool is_current{};
+    /// An entry that does not suit what it is offered for: the card is veiled, and stays a card to press.
+    bool is_dimmed{};
     /// Width of the card in pixels.
     float size{};
 };

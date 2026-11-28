@@ -2,6 +2,7 @@
 
 #include "mcp_tools_common.h"
 #include "mcp_asset_lookup.h"
+#include "mcp_material_utils.h"
 #include "mcp_project_paths.h"
 
 #include <engine/animation/animation.h>
@@ -419,13 +420,90 @@ auto make_bbox_codec() -> value_codec
 auto find_codec(const entt::meta_type& type) -> const value_codec*;
 auto enum_to_json(const entt::meta_any& value) -> hpp::optional<std::string>;
 
-/// A model slot's material instance, read only: its shared material, the values it overrides and whether it still
-/// draws together with the shared material's other models. scene_set_model_material_instances_batch writes overrides.
+/// Reads field @p key of @p fields, which a material instance write may leave out, into @p out. False, with @p error,
+/// when the field is there and is not @p expected.
+template<typename T>
+auto read_instance_field(const simdjson::dom::object& fields, const char* key, const char* expected, T& out, bool& is_given, std::string& error)
+    -> bool
+{
+    const auto field = fields[key];
+    is_given = field.error() != simdjson::NO_SUCH_FIELD;
+    if(is_given && field.get(out) != simdjson::SUCCESS)
+    {
+        error = fmt::format("{} must be {}", key, expected);
+        return false;
+    }
+    return true;
+}
+
+/// Applies what @p fields names to @p instance: revert_all, then overrides, parameters and textures, each by name
+/// (apply_material_instance_properties, apply_material_instance_graph_values). The keys a read adds are let through.
+auto read_material_instance_overrides(rtti::context& ctx,
+                                      const simdjson::dom::object& fields,
+                                      material_instance& instance,
+                                      std::string& error) -> bool
+{
+    for(const auto& field : fields)
+    {
+        const hpp::string_view key(field.key.data(), field.key.size());
+        const bool is_known = key == "revert_all" || key == "overrides" || key == "parameters" || key == "textures" ||
+                              key == "shared_material" || key == "shares_draw";
+        if(!is_known)
+        {
+            error = fmt::format("unknown key '{}' (a material instance takes parameters, textures, overrides and revert_all)",
+                                std::string(key));
+            return false;
+        }
+    }
+    bool revert_all = false;
+    bool has_revert_all = false;
+    simdjson::dom::object overrides;
+    bool has_overrides = false;
+    simdjson::dom::object parameters;
+    bool has_parameters = false;
+    simdjson::dom::object textures;
+    bool has_textures = false;
+    // A field of another type is refused, never read as left out.
+    if(!read_instance_field(fields, "revert_all", "true or false", revert_all, has_revert_all, error) ||
+       !read_instance_field(fields, "overrides", "an object of property values", overrides, has_overrides, error) ||
+       !read_instance_field(fields, "parameters", "an object of values by parameter name", parameters, has_parameters, error) ||
+       !read_instance_field(fields, "textures", "an object of texture keys by node name", textures, has_textures, error))
+    {
+        return false;
+    }
+    if(revert_all)
+    {
+        instance.revert_all();
+    }
+    component_apply_result applied;
+    if(has_overrides && overrides.size() > 0)
+    {
+        applied = apply_material_instance_properties(ctx, instance, overrides);
+    }
+    if(applied.ok)
+    {
+        apply_material_instance_graph_values(ctx, instance, has_parameters ? &parameters : nullptr, has_textures ? &textures : nullptr, applied);
+    }
+    if(!applied.ok)
+    {
+        error = fmt::format("{}", fmt::join(applied.errors, ", "));
+        return false;
+    }
+    return true;
+}
+
+/// A renderer's material instance: its overrides of the parameters, textures and properties of its shared material.
+/// A write overrides or reverts the names it gives and leaves the others; a read also tells the shared material and
+/// whether a model slot still draws with it.
 auto make_material_instance_codec() -> value_codec
 {
     return {.schema_type = "object",
-            .format_hint = "read only: {shared_material, overrides: {property: value}, parameters: {name: [x, y, z, w]}, "
-                           "textures: {node: key}, shares_draw}; scene_set_model_material_instances_batch sets overrides",
+            .format_hint = "{parameters: {name: number or [x, y, z, w]}, textures: {node: key}, overrides: {property: "
+                           "value}}. Each name given is overridden and the others stay. A null value in parameters or "
+                           "textures reverts that one. revert_all true drops every override first. Reads add "
+                           "shared_material, and shares_draw: whether a model slot still draws together with its shared "
+                           "material's other models (emitters draw together whenever their overrides hold the same "
+                           "values). A model's slots are written with scene_set_model_material_instances_batch.",
             .to_json = [](rtti::context& ctx, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 const auto& instance = value.cast<const material_instance&>();
@@ -476,11 +554,23 @@ auto make_material_instance_codec() -> value_codec
                                    textures,
                                    bool_to_json(instance.shares_draw()));
             },
-            .from_json = [](rtti::context&, const simdjson::dom::element&, entt::meta_any&, std::string& error) -> bool
+            .from_json = [](rtti::context& ctx, const simdjson::dom::element& element, entt::meta_any& value, std::string& error)
+                -> bool
             {
-                error = "material instances are read only here: scene_set_model_material_instances_batch overrides "
-                        "their values";
-                return false;
+                simdjson::dom::object fields;
+                if(element.get_object().get(fields) != simdjson::SUCCESS)
+                {
+                    error = "expected {parameters: {name: [x, y, z, w]}, textures: {node: key}}";
+                    return false;
+                }
+                // Edited on a copy over the same shared material: a rejected value changes nothing.
+                auto instance = value.cast<const material_instance&>();
+                if(!read_material_instance_overrides(ctx, fields, instance, error))
+                {
+                    return false;
+                }
+                value = std::move(instance);
+                return true;
             }};
 }
 
@@ -1458,6 +1548,26 @@ auto find_in_flattened_objects(const entt::meta_any& object, const std::string& 
     return spelled;
 }
 
+/// Whether the array @p value fits the list @p current of property @p prop: a list the property keeps at a length of
+/// its own (its "is_fixed_size_array" attribute, as a model's one entry per material slot) takes an array of that
+/// length alone, so no entry is dropped or made up.
+auto fits_fixed_list(const entt::meta_data& prop, entt::meta_any& current, const simdjson::dom::element& value, std::string& error) -> bool
+{
+    simdjson::dom::array items;
+    if(!entt::get_attribute_as<bool>(prop, "is_fixed_size_array") || !current.type().is_sequence_container() ||
+       value.get_array().get(items) != simdjson::SUCCESS)
+    {
+        return true;
+    }
+    const auto size = current.as_sequence_container().size();
+    if(items.size() == size)
+    {
+        return true;
+    }
+    error = fmt::format("the list has {} entries and takes an array of exactly that many, not {}", size, items.size());
+    return false;
+}
+
 /**
  * @brief Writes each of @p properties through its reflected setter.
  *
@@ -1509,6 +1619,12 @@ void write_properties(rtti::context& ctx,
         // The value is edited as a whole and goes back through the property's setter, as an inspector
         // edit of one sub-field does.
         auto current = prop.get(object);
+        std::string length_error;
+        if(!fits_fixed_list(prop, current, field.value, length_error))
+        {
+            fail(length_error);
+            continue;
+        }
         if(!write_value(ctx, current, field.value, key_path, result))
         {
             continue;
@@ -1638,6 +1754,21 @@ auto meta_properties_to_json(rtti::context& ctx,
     return json + "}";
 }
 
+namespace
+{
+/// What took over from a property @p type no longer has, for the error that refuses it: "texture is now set through
+/// material_overrides." Empty when no property of the type replaces @p name.
+auto describe_replaced_property(const entt::meta_type& type, const std::string& name) -> std::string
+{
+    std::vector<std::string> replacing;
+    for(const auto& prop : entt::find_replacing_properties(type, name))
+    {
+        replacing.push_back(entt::get_name(prop));
+    }
+    return replacing.empty() ? std::string{} : fmt::format(" {} is now set through {}.", name, fmt::join(replacing, " and "));
+}
+} // namespace
+
 void apply_meta_properties(rtti::context& ctx,
                            entt::meta_any& object,
                            const simdjson::dom::object& properties,
@@ -1649,9 +1780,14 @@ void apply_meta_properties(rtti::context& ctx,
     {
         // A typo silently ignored reads as success; reject it so the caller sees the name.
         result.ok = false;
-        result.errors.push_back("unknown properties: " + fmt::format("{}", fmt::join(result.unknown, ", ")) +
-                                " (scene_list_components, assets_list_properties and settings_list_properties list the "
-                                "names)");
+        std::string message = "unknown properties: " + fmt::format("{}", fmt::join(result.unknown, ", ")) +
+                              " (scene_list_components, assets_list_properties and settings_list_properties list the "
+                              "names).";
+        for(const auto& name : result.unknown)
+        {
+            message += describe_replaced_property(object.type(), name);
+        }
+        result.errors.push_back(std::move(message));
     }
 }
 

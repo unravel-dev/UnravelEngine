@@ -1,0 +1,33 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "value": [0.0, 0.0, 0.0]},
+    {"pin": "emissive", "link": "glow"},
+    {"pin": "opacity_mask", "link": "alpha"}
+   ], "settings": [{"name": "blend_mode", "value": "additive"}, {"name": "shading_model", "value": "unlit"}, {"name": "particle_use", "value": "on"}]},
+   {"id": "uv", "type": "texcoord"},
+   {"id": "particle", "type": "particle_data"},
+   {"id": "center", "type": "vector2", "inputs": [{"pin": "value", "value": [0.5, 0.5]}]},
+   {"id": "disc", "type": "sphere_mask", "inputs": [
+    {"pin": "position", "link": "uv"}, {"pin": "center", "link": "center"}, {"pin": "radius", "value": [0.5]}, {"pin": "hardness", "value": [0.1]}
+   ]},
+   {"id": "own_offset", "type": "multiply", "inputs": [{"pin": "a", "link": "particle.random"}, {"pin": "b", "value": [17.0]}]},
+   {"id": "own_uv", "type": "add", "inputs": [{"pin": "a", "link": "uv"}, {"pin": "b", "link": "own_offset"}]},
+   {"id": "rise", "type": "panner", "inputs": [{"pin": "uv", "link": "own_uv"}, {"pin": "speed", "value": [0.0, 0.7]}]},
+   {"id": "flames", "type": "noise", "inputs": [{"pin": "uv", "link": "rise"}, {"pin": "scale", "value": [4.0]}, {"pin": "octaves", "value": [3.0]}]},
+   {"id": "body", "type": "multiply", "inputs": [{"pin": "a", "link": "flames"}, {"pin": "b", "link": "disc"}]},
+   {"id": "burn_end", "type": "add", "inputs": [{"pin": "a", "link": "particle.life"}, {"pin": "b", "value": [0.25]}]},
+   {"id": "burn", "type": "smoothstep", "inputs": [{"pin": "min", "link": "particle.life"}, {"pin": "max", "link": "burn_end"}, {"pin": "in", "link": "body"}]},
+   {"id": "outer", "type": "color_parameter", "inputs": [{"pin": "value", "value": [3.0, 0.5, 0.05, 1.0]}],
+    "settings": [{"name": "name", "value": "Outer Color"}]},
+   {"id": "inner", "type": "color_parameter", "inputs": [{"pin": "value", "value": [6.0, 3.5, 0.8, 1.0]}],
+    "settings": [{"name": "name", "value": "Inner Color"}]},
+   {"id": "heat", "type": "lerp", "inputs": [{"pin": "a", "link": "outer.rgb"}, {"pin": "b", "link": "inner.rgb"}, {"pin": "alpha", "link": "burn"}]},
+   {"id": "color", "type": "vertex_color"},
+   {"id": "glow", "type": "multiply", "inputs": [{"pin": "a", "link": "heat"}, {"pin": "b", "link": "color.rgb"}]},
+   {"id": "alpha", "type": "multiply", "inputs": [{"pin": "a", "link": "burn"}, {"pin": "b", "link": "color.a"}]}
+  ]
+ }
+}

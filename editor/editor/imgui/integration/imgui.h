@@ -227,11 +227,19 @@ bool IsReadonly();
 /// Draws an icon so that its drawn shape, not its text box, is centered on the point. The icon
 /// font sits lower in the line than the text fonts, so a centered text box leaves icons off center.
 void RenderIconCentered(ImDrawList* draw_list, const ImVec2& center, const char* icon, ImU32 color);
-///
+/// Opens a scope whose values are shown and not edited: sliders, drags and text inputs take no edit, and text is
+/// drawn muted. A scope inside a read-only one is read only whatever it asks for.
 void PushReadonly(bool _enabled);
 
 ///
 void PopReadonly();
+
+/// Inside a read-only scope, opens one whose widgets work and draw as outside it: for what a read-only view still
+/// lets the user do, such as opening the object somewhere, playing it or choosing what of it to look at.
+void PushReadonlyExempt();
+
+///
+void PopReadonlyExempt();
 ///
 void PushEnabled(bool _enabled);
 

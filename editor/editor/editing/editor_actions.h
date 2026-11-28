@@ -206,7 +206,8 @@ struct editor_actions
     static void recompile_outdated_audio_clips(const std::string& group);
     /// Writes an asset's import settings (@p meta: the asset database's entry, or an edited copy of it) to the
     /// .meta file beside the asset @p key names and gives them to the asset database; the asset watcher then
-    /// imports the asset again with them.
+    /// imports the asset again with them. False for an asset that is not the project's
+    /// (asset_actions::is_project_asset), which keeps the settings it ships with.
     static auto save_import_settings(const std::string& key, const asset_meta& meta) -> bool;
 
     /**
@@ -276,6 +277,19 @@ struct editor_actions
     /// Selects the asset at @p key as a content browser click does, so the inspector shows it. Textures,
     /// materials, meshes, prefabs and scenes.
     static auto select_asset(rtti::context& ctx, const std::string& key, std::string* error = nullptr, bool add = false) -> bool;
+    /// The asset at @p key as the object the editor selects and inspects (its handle); empty while the asset
+    /// database does not know the key, as for a file still being imported. Selects nothing.
+    static auto find_asset_object(rtti::context& ctx, const std::string& key) -> entt::meta_any;
+    /// The key of the asset @p object is a handle of ("engine:/data/materials/standard.mat"); empty for an entity
+    /// and for anything else that is no asset.
+    static auto get_asset_key(const entt::meta_any& object) -> std::string;
+    /**
+     * @brief Copies the asset @p key names into the project with its import settings
+     *        (asset_actions::copy_asset_into_project): into the folder the Content Browser shows, under the asset's
+     *        name or the first free "name (n)", and shows the copy there. A notification says what went wrong.
+     * @return The copy's key, which the asset watcher has still to import; empty when the copy failed.
+     */
+    static auto duplicate_asset_into_project(rtti::context& ctx, const std::string& key) -> std::string;
     /// Shows the file or folder at @p key in the Content Browser, as an asset field's locate button does: the
     /// browser opens the folder that holds it, scrolls to it and rings it. The Content panel comes to the front.
     static auto reveal_in_content_browser(rtti::context& ctx, const std::string& key, std::string* error = nullptr)

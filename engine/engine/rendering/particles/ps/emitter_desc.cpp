@@ -99,6 +99,44 @@ void emitter_emission_desc::reset()
     random_seed = 0;
 }
 
+auto collides_with_colliders(const emitter_desc& desc) -> bool
+{
+    return desc.motion.collision != collision_mode::none && desc.motion.collide_with == collision_source::physics_colliders &&
+           desc.motion.space == simulation_space::world;
+}
+
+auto collides_with_scene_surfaces(const emitter_desc& desc) -> bool
+{
+    return desc.motion.collision != collision_mode::none && desc.motion.collide_with == collision_source::scene_surfaces &&
+           desc.motion.space == simulation_space::world && desc.render.render_mode != render_mode::mesh;
+}
+
+auto estimate_collision_casts_per_second(const emitter_desc& desc, uint32_t capacity) -> float
+{
+    if(!collides_with_colliders(desc))
+    {
+        return 0.0f;
+    }
+    const float lifetime = math::max(math::max(desc.motion.lifetime.min, desc.motion.lifetime.max), 0.0f);
+    const float cycle = math::max(desc.emission.duration, 1.0e-3f);
+    // Particles born a second: the rate, and each burst's firings over a cycle.
+    float born = math::max(desc.emission.particles_per_second, 0.0f);
+    for(const auto& burst : desc.emission.bursts)
+    {
+        const float interval = math::max(burst.interval, 1.0e-2f);
+        const float firings = burst.cycles == 0 ? math::max(cycle / interval, 1.0f) : float(burst.cycles);
+        born += math::max(math::max(burst.count.min, burst.count.max), 0.0f) * firings * math::clamp(burst.probability, 0.0f, 1.0f) / cycle;
+    }
+    // No more are born than die: the emitter holds capacity of them at most.
+    born = lifetime > 0.0f ? math::min(born, float(capacity) / lifetime) : born;
+    // Each is swept a stretch at a time, once at least, and a path that bends takes several casts a stretch.
+    constexpr float bent_path_casts = 4.0f;
+    const float sweep_seconds = float(get_collision_sweep_seconds(desc.motion.collision_quality));
+    const bool bends = desc.motion.gravity_scale != 0.0f || desc.motion.acceleration != math::vec3(0.0f) ||
+                       desc.motion.turbulence_strength > 0.0f;
+    return born * math::max(lifetime / sweep_seconds, 1.0f) * (bends ? bent_path_casts : 1.0f);
+}
+
 void emitter_motion_desc::reset()
 {
     space = simulation_space::world;
@@ -122,6 +160,13 @@ void emitter_motion_desc::reset()
     friction = 0.2f;
     max_bounces = 3;
     collision_radius_scale = 1.0f;
+    collide_with = collision_source::planes;
+    collision_layers = -1;
+    collision_quality = collision_quality::medium;
+    rest_speed = 0.0f;
+    lifetime_loss = 0.0f;
+    bounce_scatter = 0.0f;
+    align_to_surface = false;
     spawn_along_path = 1.0f;
     motion_easing = bx::Easing::Linear;
     lifetime_by_emitter_speed_curve = math::gradient<float>();
@@ -158,11 +203,12 @@ void emitter_appearance_desc::reset()
     random_between_gradients = false;
     color_gradient_b = color_gradient;
     intensity_over_life = make_flat_curve(1.0f);
+    custom_data_x = make_flat_curve(0.0f);
+    custom_data_y = make_flat_curve(0.0f);
 }
 
 void emitter_render_desc::reset()
 {
-    texture_mode = texture_mode::multi_channel;
     render_mode = render_mode::billboard;
     blend_mode = blend_mode::normal;
     align_to_direction = false;
@@ -194,6 +240,8 @@ void emitter_render_desc::reset()
     ribbon_texture_mode = ribbon_texture_mode::age;
     ribbon_tile_time = 0.25f;
     ribbon_facing = ribbon_facing::camera;
+    ribbon_count = 1;
+    ribbon_smoothing = ribbon_smoothing::none;
     stretch_length_scale = 1.0f;
     stretch_speed_scale = 0.1f;
     stretch_camera_velocity_scale = 0.0f;
@@ -202,6 +250,7 @@ void emitter_render_desc::reset()
     camera_fade_range = frange_t(0.0f, 0.0f);
     max_screen_size = 0.0f;
     lighting = particle_lighting::unlit;
+    ambient = particle_ambient::sky;
     lighting_wrap = 0.5f;
     receive_shadows = true;
     light_count = 0;
@@ -368,6 +417,7 @@ void emitter_sim_state::reset()
     temporal_positions.fill(math::vec3(0.0f));
     temporal_dts.fill(0.0f);
     world_bounds = math::bbox(math::vec3(-1.0f), math::vec3(1.0f));
+    lit_bounds = world_bounds;
 }
 
 void emitter_sim_state::push_temporal_sample(const math::vec3& position, float dt)

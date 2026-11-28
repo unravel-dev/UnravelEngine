@@ -1,0 +1,39 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "value": [0.0, 0.0, 0.0]},
+    {"pin": "emissive", "link": "seen"},
+    {"pin": "opacity_mask", "link": "alpha"}
+   ], "settings": [{"name": "blend_mode", "value": "translucent"}, {"name": "shading_model", "value": "unlit"}, {"name": "particle_use", "value": "on"}]},
+   {"id": "uv", "type": "texcoord"},
+   {"id": "particle", "type": "particle_data"},
+   {"id": "polar", "type": "polar_coordinates", "inputs": [{"pin": "uv", "link": "uv"}]},
+   {"id": "radius", "type": "multiply", "inputs": [{"pin": "a", "link": "particle.life"}, {"pin": "b", "value": [0.85]}]},
+   {"id": "from_ring", "type": "subtract", "inputs": [{"pin": "a", "link": "polar.distance"}, {"pin": "b", "link": "radius"}]},
+   {"id": "away", "type": "abs", "inputs": [{"pin": "in", "link": "from_ring"}]},
+   {"id": "outside", "type": "smoothstep", "inputs": [{"pin": "min", "value": [0.0]}, {"pin": "max", "value": [0.15]}, {"pin": "in", "link": "away"}]},
+   {"id": "ring", "type": "one_minus", "inputs": [{"pin": "in", "link": "outside"}]},
+   {"id": "remaining", "type": "one_minus", "inputs": [{"pin": "in", "link": "particle.life"}]},
+   {"id": "color", "type": "vertex_color"},
+   {"id": "fade", "type": "multiply", "inputs": [{"pin": "a", "link": "remaining"}, {"pin": "b", "link": "color.a"}]},
+   {"id": "alpha", "type": "multiply", "inputs": [{"pin": "a", "link": "ring"}, {"pin": "b", "link": "fade"}]},
+   {"id": "center", "type": "vector2", "inputs": [{"pin": "value", "value": [0.5, 0.5]}]},
+   {"id": "outward", "type": "subtract", "inputs": [{"pin": "a", "link": "uv"}, {"pin": "b", "link": "center"}]},
+   {"id": "amount", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [0.25]}],
+    "settings": [{"name": "name", "value": "Distortion"}]},
+   {"id": "push_amount", "type": "multiply", "inputs": [{"pin": "a", "link": "alpha"}, {"pin": "b", "link": "amount"}]},
+   {"id": "push", "type": "multiply", "inputs": [{"pin": "a", "link": "outward"}, {"pin": "b", "link": "push_amount"}]},
+   {"id": "screen", "type": "screen_position"},
+   {"id": "pushed", "type": "add", "inputs": [{"pin": "a", "link": "screen"}, {"pin": "b", "link": "push"}]},
+   {"id": "scene", "type": "scene_texture", "inputs": [{"pin": "uv", "link": "pushed"}],
+    "settings": [{"name": "source", "value": "scene_color"}]},
+   {"id": "tint", "type": "color_parameter", "inputs": [{"pin": "value", "value": [0.5, 0.75, 1.0, 1.0]}],
+    "settings": [{"name": "name", "value": "Ring Color"}]},
+   {"id": "ring_tint", "type": "multiply", "inputs": [{"pin": "a", "link": "tint.rgb"}, {"pin": "b", "link": "color.rgb"}]},
+   {"id": "ring_glow", "type": "multiply", "inputs": [{"pin": "a", "link": "ring_tint"}, {"pin": "b", "value": [0.25]}]},
+   {"id": "seen", "type": "add", "inputs": [{"pin": "a", "link": "scene.rgb"}, {"pin": "b", "link": "ring_glow"}]}
+  ]
+ }
+}

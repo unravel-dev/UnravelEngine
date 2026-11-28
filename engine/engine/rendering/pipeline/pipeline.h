@@ -6,6 +6,7 @@
 #include <engine/rendering/model.h>
 #include <engine/rendering/batch_collector.h>
 #include <engine/rendering/feature_limits.h>
+#include <engine/rendering/material_graph/graph_material_programs.h>
 #include <engine/rendering/render_feature_support.h>
 #include <engine/rendering/particles/ps/particle_types.h>
 #include <graphics/frame_buffer.h>
@@ -66,8 +67,10 @@ namespace unravel
 namespace ps_soa
 {
 struct render_batch;
+struct material_draw;
 } // namespace ps_soa
 class gi_radiance_cache;
+class particle_emitter_component;
 
 namespace rendering
 {
@@ -124,6 +127,12 @@ struct pipeline_stats
     uint32_t skipped_particles = 0;
     /// Particle sort keys this camera sorted (on the GPU, the sorted range rounded up to a power of two).
     uint32_t sorted_particle_keys = 0;
+    /// Particle slots this camera tested against its scene surfaces (collision_source::scene_surfaces): every slot up
+    /// to the highest in use of the emitters it drew.
+    uint32_t scene_collision_particles = 0;
+    /// Emitters this camera drew with the program that takes the GI's light around their particles
+    /// (particle_ambient::global_illumination).
+    uint32_t gi_lit_particle_emitters = 0;
 
     /// Decals the camera drew after culling and fading, the instanced draws they took, and the camera runs that
     /// took the decal buffers' path (a decal writing a normal, metallic or roughness).
@@ -135,6 +144,10 @@ struct pipeline_stats
     /// Models the translucency pass drew surfaces of, and the submesh draws it took (two for a two-sided one).
     uint32_t drawn_translucent_models = 0;
     uint32_t drawn_translucent_submeshes = 0;
+    /// Lines and trails: the ones in view, and the draws their geometry took (one per material in the
+    /// G-buffer, one per renderer with a see-through material in the translucency pass).
+    uint32_t drawn_dynamic_renderers = 0;
+    uint32_t drawn_dynamic_batches = 0;
 
     // Static mesh batching statistics
     batch_stats batching_stats;
@@ -521,12 +534,13 @@ public:
     auto downsample_scene_copy(gfx::render_view& rview, const gfx::texture::ptr& source, const std::string& name)
         -> gfx::texture::ptr;
 
-    /// Takes what @p meshes read of the scene behind them: the depth (Hi-Z or a copy), a copy of the lit scene while
-    /// @p limits allow it, and its blurred copy for rough refraction; invalid handles otherwise.
+    /// Takes what the pass's surfaces and particle materials read of the scene behind them (@p scene_textures,
+    /// material_scene_texture_bits): the depth (Hi-Z or a copy), a copy of the lit scene while @p limits allow it, and
+    /// its blurred copy for rough refraction; invalid handles otherwise.
     void prepare_forward_scene_reads(gfx::render_view& rview,
                                      const gfx::frame_buffer::ptr& lbuffer_depth,
                                      const gfx::texture::ptr& hiz_depth,
-                                     const translucent_mesh_list& meshes,
+                                     uint32_t scene_textures,
                                      const feature_limits& limits);
 
     /**
@@ -548,8 +562,44 @@ public:
     /// The share of the view's height @p bounds cover from @p eye (the particle budget's measure).
     static auto get_particle_screen_size(const camera& camera, const math::bbox& bounds, const math::vec3& eye) -> float;
 
-    /// Binds what a lit particle batch reads: the sky, the sun and its shadow, the brightest nearby lights.
-    void bind_particle_lighting(const particle_scene_lighting& lighting, const ps_soa::render_batch& batch);
+    /// Binds what a lit particle batch reads: the sky, the sun and its shadow, the brightest nearby lights, and for a
+    /// batch that draws_particles_with_gi the radiance cache. True for such a batch.
+    auto bind_particle_lighting(const particle_scene_lighting& lighting, const ps_soa::render_batch& batch) -> bool;
+
+    /// An emitter whose particles can take the GI's light, with the box they fill.
+    struct particle_gi_emitter
+    {
+        ps_soa::emitter_handle handle;
+        math::bbox bounds;
+    };
+    /// Whether @p emitter's sprites, trails and ribbons can take the GI's light around them in place of the sky's: its
+    /// Ambient Light asks for it, the scene lights its material, the material leaves the radiance cache its two
+    /// stages (fits_material_graph_particle_gi) and the particles' data is in buffers, as the cache's is.
+    static auto can_light_particles_with_gi(const particle_emitter_component& emitter) -> bool;
+    /// The emitters @p camera draws this frame of @p dt that can (can_light_particles_with_gi): the pipeline that
+    /// runs the GI marks the radiance cache's probes around them and names the ones that fit
+    /// (set_particle_gi_emitters).
+    static void collect_particle_gi_emitters(scene& scn,
+                                             const camera& camera,
+                                             delta_t dt,
+                                             const layer_mask& render_mask,
+                                             std::vector<particle_gi_emitter>& emitters);
+    /// Names the emitters whose particles read the radiance cache in this run (get_forward_gi_cache): the ones it
+    /// keeps probes around. None before the run's GI has marked any.
+    void set_particle_gi_emitters(const std::vector<ps_soa::emitter_handle>& emitters);
+    /// Whether @p batch's particles draw with the GI's light: one emitter that set_particle_gi_emitters named, in a
+    /// run whose radiance cache keeps its probes' SH.
+    auto draws_particles_with_gi(const ps_soa::render_batch& batch) const -> bool;
+
+    /// The program of a particle batch that draws with a material, begun with what the material reads bound: its
+    /// textures at their particle stages, its parameters, the camera of @p view_camera and the copy of the lit scene
+    /// where it reads it. An invalid handle while the material's shader is not there.
+    auto begin_particle_material(const ps_soa::render_batch& batch, const ps_soa::material_draw& draw, const camera& view_camera)
+        -> bgfx::ProgramHandle;
+
+    /// u_camera_clip_planes of @p view_camera for a graph material's draw: near, far, and the texture mip bias while
+    /// TAA jitters the view (the jitter integrates the slightly sharper mip's detail instead of aliasing it).
+    static auto get_material_clip_planes(const camera& view_camera) -> math::vec4;
 
     virtual auto create_run_params(entt::handle camera_ent) const -> rendering::pipeline::run_params;
     virtual auto create_run_params(entt::handle camera_ent, scene* scn, const camera* cam) const -> rendering::pipeline::run_params;
@@ -597,18 +647,13 @@ protected:
     scene_history_pass scene_history_pass_{}; ///< PREV_SCENE_HDR, view depth in alpha
     particle_half_res_pass particle_half_res_pass_{}; ///< Half-resolution particles and their composite
 
-    std::unique_ptr<gpu_program> particle_program_{};
-    std::unique_ptr<gpu_program> particle_program_mask_{};
-    /// Lit particles (particle_lighting.sh): their programs, the light they read per draw, and the stand-ins for a
-    /// missing sky (zero SH) or sun shadow (far depth).
-    std::unique_ptr<gpu_program> particle_program_lit_{};
-    std::unique_ptr<gpu_program> particle_program_lit_mask_{};
+    /// Lit particles (particle_lighting.sh): the light they read per draw, and the stand-ins for a missing sky (zero
+    /// SH) or sun shadow (far depth).
     gfx::program::uniform_ptr particle_sun_direction_uniform_{};
     gfx::program::uniform_ptr particle_sun_color_uniform_{};
     gfx::program::uniform_ptr particle_lighting_uniform_{};
     gfx::program::uniform_ptr particle_lights_uniform_{};
     gfx::program::uniform_ptr particle_irradiance_sampler_{};
-    gfx::program::uniform_ptr particle_normal_sampler_{};
     std::array<gfx::program::uniform_ptr, 4> particle_shadow_samplers_{};
     std::shared_ptr<gfx::texture> particle_no_sky_{};
     std::shared_ptr<gfx::texture> particle_no_shadow_{};
@@ -648,6 +693,8 @@ protected:
     const gi_radiance_cache* forward_gi_cache_{nullptr};
     float forward_gi_intensity_{1.0f};
     gfx::program::uniform_ptr forward_gi_uniform_{};
+    /// set_particle_gi_emitters' emitters, by handle index, sorted.
+    std::vector<uint16_t> particle_gi_emitters_{};
     /// The view's reflections are the GI's this run: surfaces with GI Reflections draw their "gi_reflect" variants, which
     /// never read the reflection probe (only the sky's would be drawn).
     bool forward_uses_gi_reflections_{false};
@@ -689,8 +736,8 @@ protected:
     gfx::program::uniform_ptr scene_downsample_sampler_{};
     gfx::program::uniform_ptr scene_downsample_params_{};
     gfx::program::uniform_ptr forward_scene_uniform_{};
-    /// Motion vectors of the particles that write them; u_prev_view_proj is last frame's view-projection.
-    std::unique_ptr<gpu_program> particle_velocity_program_{};
+    /// Motion vectors of the particles that write them (their materials' velocity variants): u_prev_view_proj is last
+    /// frame's view-projection.
     gfx::program::uniform_ptr particle_prev_view_proj_uniform_{};
     /// The particle overdraw debug view: when set, the particle pass also counts the layers each pixel shades
     /// into PARTICLE_OVERDRAW (R16F, cleared every frame), with its own program.
@@ -698,7 +745,18 @@ protected:
     std::unique_ptr<gpu_program> particle_overdraw_program_{};
     /// Emitter handles of a view's particle draws (run_particle_pass scratch).
     std::vector<ps_soa::emitter_handle> particle_handles_scratch_{};
-    /// u_pre_exposure of both particle programs: particles are scene lighting.
+    /// Emitter handles of the view's emitters that collide with its scene surfaces (run_particle_pass scratch).
+    std::vector<ps_soa::emitter_handle> particle_collision_scratch_{};
+    /// The programs of the emitters' materials: vs_particle.eshader's graph variants with each material's particle
+    /// variants (fs_material_graph_particle.sh), and what such a draw reads besides its graph.
+    graph_material_programs particle_material_programs_{};
+    /// The graph variants' names in the particles' data storage: unlit, lit, velocity, and lit by the GI (which only
+    /// buffers hold).
+    std::array<std::string, 4> particle_material_variants_{};
+    gfx::program::uniform_ptr particle_clip_planes_uniform_{};
+    gfx::program::uniform_ptr particle_scene_uniform_{};
+    gfx::program::uniform_ptr particle_scene_color_sampler_{};
+    /// u_pre_exposure of every particle draw: particles are scene lighting.
     gfx::program::uniform_ptr particle_pre_exposure_uniform_{};
     std::unique_ptr<gpu_program> world_quad_program_{};
 

@@ -2,6 +2,7 @@
 
 #include "mcp_tools_common.h"
 
+#include <editor/assets/asset_actions.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <filesystem/filesystem.h>
 #include <uuid/uuid.h>
@@ -229,11 +230,10 @@ auto to_readable_file_key(const std::string& input,
 
 auto require_project_data_asset(const std::string& key, std::string& error) -> bool
 {
-    std::vector<std::string> segments;
-    if(!starts_with(key, k_app_prefix) || !split_segments(key.substr(std::strlen(k_app_prefix)), segments) ||
-       segments.empty() || segments.front() != k_data_folder)
+    if(!asset_actions::is_project_asset(key))
     {
-        error = key + " is not a project asset: MCP edits only assets in the project's data folder (app:/data/...)";
+        error = key + " is not a project asset: MCP edits only assets in the project's data folder (app:/data/...). "
+                      "assets_copy_to_project_batch copies it there, and the copy can be edited";
         return false;
     }
     return true;

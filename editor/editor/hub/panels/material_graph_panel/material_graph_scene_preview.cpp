@@ -7,6 +7,7 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/decal_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/ecs/components/post_process_material_component.h>
 #include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
@@ -39,6 +40,28 @@ constexpr float PREVIEW_DECAL_DEPTH_IN_RADII = 2.2f;
 
 /// The camera never looks straight down or up, where the orbit's up turns over.
 constexpr float MAX_PREVIEW_PITCH = 85.0f;
+
+/// The Particles shape: sprites this large, in metres at birth and at death, rise this fast for this long from a ball
+/// of this radius, so a dozen of them fill the view at any moment.
+constexpr float PREVIEW_PARTICLE_BIRTH_SIZE = 0.55f;
+constexpr float PREVIEW_PARTICLE_DEATH_SIZE = 0.85f;
+constexpr float PREVIEW_PARTICLE_MIN_SPEED = 0.25f;
+constexpr float PREVIEW_PARTICLE_MAX_SPEED = 0.4f;
+constexpr float PREVIEW_PARTICLE_LIFETIME = 2.0f;
+constexpr float PREVIEW_PARTICLE_RATE = 6.0f;
+constexpr float PREVIEW_PARTICLE_SOURCE_RADIUS = 0.25f;
+constexpr float PREVIEW_PARTICLE_SPREAD_DEGREES = 20.0f;
+/// The sphere the camera frames around the emitter: the middle of the sprites' rise, and its reach.
+constexpr float PREVIEW_PARTICLE_VIEW_HEIGHT = 0.4f;
+constexpr float PREVIEW_PARTICLE_VIEW_RADIUS = 1.0f;
+/// The floor under the emitter: this many tiles a side, each this wide in metres, this far below the emitter, in
+/// these two linear greys.
+constexpr int PREVIEW_FLOOR_TILES = 6;
+constexpr float PREVIEW_FLOOR_TILE_SIZE = 0.5f;
+constexpr float PREVIEW_FLOOR_DEPTH = 0.3f;
+constexpr float PREVIEW_FLOOR_DARK = 0.03f;
+constexpr float PREVIEW_FLOOR_LIGHT = 0.18f;
+constexpr const char* PREVIEW_FLOOR_COLOR_PARAMETER = "Base Color";
 
 auto get_shape_mesh_name(material_graph_scene_preview::shape value) -> const char*
 {
@@ -125,6 +148,22 @@ void material_graph_scene_preview::draw(const ImVec2& size)
 void material_graph_scene_preview::set_shape(shape value)
 {
     shape_ = value;
+    if(value != shape::particles)
+    {
+        mesh_shape_ = value;
+    }
+}
+
+void material_graph_scene_preview::pick_shape_for(bool draws_particles)
+{
+    if(draws_particles)
+    {
+        shape_ = shape::particles;
+    }
+    else if(shape_ == shape::particles)
+    {
+        shape_ = mesh_shape_;
+    }
 }
 
 auto material_graph_scene_preview::get_shape() const -> shape
@@ -164,15 +203,72 @@ void material_graph_scene_preview::create_object(rtti::context& ctx)
     {
         scene::destroy_entity(object_);
     }
-    object_ = defaults::create_built_in_mesh_entity(ctx, scene_, get_shape_mesh_name(shape_));
     object_shape_ = shape_;
     material_ = {};
+    if(shape_ == shape::particles)
+    {
+        create_emitter(ctx);
+        return;
+    }
+    object_ = defaults::create_built_in_mesh_entity(ctx, scene_, get_shape_mesh_name(shape_));
     if(!object_)
     {
         return;
     }
     object_.get<model_component>().set_casts_shadow(false);
     frame_object();
+}
+
+void material_graph_scene_preview::create_emitter(rtti::context& ctx)
+{
+    object_ = defaults::create_particle_emitter_entity(ctx, scene_, "Preview Particles");
+    if(!object_)
+    {
+        return;
+    }
+    auto& emitter = object_.get<particle_emitter_component>();
+    math::gradient<frange_t> size;
+    size.add_point(frange_t(PREVIEW_PARTICLE_BIRTH_SIZE, PREVIEW_PARTICLE_BIRTH_SIZE), 0.0f);
+    size.add_point(frange_t(PREVIEW_PARTICLE_DEATH_SIZE, PREVIEW_PARTICLE_DEATH_SIZE), 1.0f);
+    emitter.set_size_over_life(size);
+    emitter.set_start_speed(frange_t(PREVIEW_PARTICLE_MIN_SPEED, PREVIEW_PARTICLE_MAX_SPEED));
+    emitter.set_lifetime(frange_t(PREVIEW_PARTICLE_LIFETIME, PREVIEW_PARTICLE_LIFETIME));
+    emitter.set_emission_rate(PREVIEW_PARTICLE_RATE);
+    emitter.set_shape_scale(math::vec3(PREVIEW_PARTICLE_SOURCE_RADIUS));
+    emitter.set_direction_spread(PREVIEW_PARTICLE_SPREAD_DEGREES);
+    emitter.set_prewarm(true);
+    emitter.set_lighting(ps_soa::particle_lighting::surface);
+    create_floor(ctx);
+    target_ = math::vec3(0.0f, PREVIEW_PARTICLE_VIEW_HEIGHT, 0.0f);
+    radius_ = PREVIEW_PARTICLE_VIEW_RADIUS;
+}
+
+void material_graph_scene_preview::create_floor(rtti::context& ctx)
+{
+    const float first = -0.5f * PREVIEW_FLOOR_TILE_SIZE * float(PREVIEW_FLOOR_TILES - 1);
+    for(int row = 0; row < PREVIEW_FLOOR_TILES; ++row)
+    {
+        for(int column = 0; column < PREVIEW_FLOOR_TILES; ++column)
+        {
+            auto tile = defaults::create_built_in_mesh_entity(ctx, scene_, "Plane");
+            if(!tile)
+            {
+                return;
+            }
+            const auto bounds = defaults::calc_bounds_global(tile);
+            const float width = std::max(bounds.get_dimensions().x, math::epsilon<float>());
+            auto& transform = tile.get<transform_component>();
+            transform.set_scale_local(math::vec3(PREVIEW_FLOOR_TILE_SIZE / width));
+            transform.set_position_local(math::vec3(first + PREVIEW_FLOOR_TILE_SIZE * float(column),
+                                                    -PREVIEW_FLOOR_DEPTH,
+                                                    first + PREVIEW_FLOOR_TILE_SIZE * float(row)));
+            transform.set_parent(object_);
+            const float grey = (row + column) % 2 == 0 ? PREVIEW_FLOOR_DARK : PREVIEW_FLOOR_LIGHT;
+            auto& model = tile.get<model_component>();
+            model.set_casts_shadow(false);
+            model.set_material_instance_parameter(0, PREVIEW_FLOOR_COLOR_PARAMETER, math::vec4(grey, grey, grey, 1.0f));
+        }
+    }
 }
 
 void material_graph_scene_preview::frame_object()
@@ -196,10 +292,18 @@ void material_graph_scene_preview::set_material(rtti::context& ctx, const asset_
     }
     material_ = mat;
     shown_domain_ = domain;
-    const auto surface = domain == material_domain::surface
-                             ? mat
-                             : ctx.get_cached<asset_manager>().get_asset<material>(STANDARD_MATERIAL_KEY);
-    object_.get<model_component>().set_shared_material(surface, 0);
+    if(auto* emitter = object_.try_get<particle_emitter_component>())
+    {
+        // A material that is no surface leaves the sprites the engine's plain particle material.
+        emitter->set_render_material(domain == material_domain::surface ? mat : asset_handle<material>{});
+    }
+    else
+    {
+        const auto surface = domain == material_domain::surface
+                                 ? mat
+                                 : ctx.get_cached<asset_manager>().get_asset<material>(STANDARD_MATERIAL_KEY);
+        object_.get<model_component>().set_shared_material(surface, 0);
+    }
     if(decal_)
     {
         scene::destroy_entity(decal_);
@@ -224,12 +328,14 @@ void material_graph_scene_preview::create_decal(rtti::context& ctx, const asset_
     {
         return;
     }
-    // From the first view, where the camera starts; straight down onto the plane, which the first view grazes.
+    // From the first view, where the camera starts; straight down onto the plane, which the first view grazes, and
+    // onto the floor under the particles.
     const float yaw = math::radians(INITIAL_YAW);
     const float pitch = math::radians(INITIAL_PITCH);
+    const bool is_laid_down = object_shape_ == shape::plane || object_shape_ == shape::particles;
     const math::vec3 toward_view =
-        object_shape_ == shape::plane ? math::vec3(0.0f, 1.0f, 0.0f)
-                                      : math::vec3(std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw));
+        is_laid_down ? math::vec3(0.0f, 1.0f, 0.0f)
+                     : math::vec3(std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw));
     auto& decal = decal_.get<decal_component>();
     decal.size = math::vec2(radius_ * PREVIEW_DECAL_SIZE_IN_RADII);
     decal.depth = radius_ * PREVIEW_DECAL_DEPTH_IN_RADII;

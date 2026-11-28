@@ -476,6 +476,19 @@ auto make_output_node() -> material_node_def
                              "of the surface and the reflection passes again over its part of the view. It takes effect "
                              "on a lit Translucent or Premultiplied surface with at most five textures and scene reads. "
                              "The project's Translucent GI Reflections setting turns it off everywhere.";
+    material_setting_def particle_use;
+    particle_use.name = MATERIAL_PARTICLE_USE_SETTING;
+    particle_use.label = "Particle Use";
+    particle_use.kind = material_setting_kind::choice;
+    particle_use.choices = {"off", MATERIAL_SETTING_ON};
+    particle_use.choice_labels = {"Off", "On"};
+    particle_use.default_value = "off";
+    particle_use.tooltip = "Also compiles the surface for particle emitters, whose sprites, trails and ribbons then draw "
+                           "it as their Material. On a particle, Vertex Color reads the particle's color and the "
+                           "Particle nodes its age, random number, texture sheet frame and Custom Data. A lit particle "
+                           "takes the emitter's Lighting: Base Color, Normal, Ambient Occlusion and "
+                           "Emissive show, and the other channels do not. A particle reads fewer textures than a "
+                           "mesh: 4 when lit and 7 when unlit, one fewer with a Scene Color read.";
     def.settings = {workflow,
                     blend_mode,
                     shading_model,
@@ -484,6 +497,7 @@ auto make_output_node() -> material_node_def
                     depth_prepass,
                     write_velocity,
                     gi_reflections,
+                    particle_use,
                     cast_shadow,
                     taa_response,
                     two_sided,
@@ -698,6 +712,69 @@ void add_view_nodes(std::vector<material_node_def>& nodes)
     nodes.push_back(in_domains(as_inline(with_keywords(exposure, "eye adaptation brightness ev")), {material_domain::post_process}));
 }
 
+/// What a material drawn by a particle emitter reads of each particle (fs_material_graph_particle.sh). On a mesh the
+/// values are 0 and the texture sheet's coordinates the first texture coordinates.
+void add_particle_nodes(std::vector<material_node_def>& nodes)
+{
+    const char* keywords = "particle emitter sprite vfx";
+    const auto add = [&](material_node_def def)
+    {
+        nodes.push_back(in_domains(as_inline(with_keywords(std::move(def), keywords)), {material_domain::surface}));
+    };
+    add(make_fixed("particle_data",
+                   "Particle Data",
+                   category::input,
+                   "The particle this pixel is drawn for: its Age in seconds, its Life from 0 at birth to 1 at death, a "
+                   "Random number between 0 and 1 that stays its own for its whole life, and its Speed in metres per "
+                   "second. On a mesh all four are 0.",
+                   {},
+                   {out("age", "Age", vt::float1, ".x"),
+                    out("life", "Life", vt::float1, ".y"),
+                    out("random", "Random", vt::float1, ".z"),
+                    out("speed", "Speed", vt::float1, ".w")},
+                   vt::float4,
+                   "i.particle_data"));
+    add(make_fixed("particle_custom_data",
+                   "Particle Custom Data",
+                   category::input,
+                   "The emitter's Custom Data X and Y curves at the particle's life: two values the emitter animates and "
+                   "the material gives a meaning, such as a dissolve amount or a glow. On a mesh both are 0.",
+                   {},
+                   {out("xy", "XY", vt::float2), out("x", "X", vt::float1, ".x"), out("y", "Y", vt::float1, ".y")},
+                   vt::float2,
+                   "i.particle_custom.xy"));
+    add(make_fixed("particle_sub_uv",
+                   "Particle Sub UV",
+                   category::input,
+                   "The texture coordinates of the particle's texture sheet frame (UV) and of the frame after it (Next "
+                   "UV), as the emitter's Sheet rows play them. Sample a sheet at both and mix by Particle Frame Blend "
+                   "for a smooth flipbook. On a mesh both are its first texture coordinates.",
+                   {},
+                   {out("uv", "UV", vt::float2, ".xy"), out("next_uv", "Next UV", vt::float2, ".zw")},
+                   vt::float4,
+                   "i.particle_sheet_uv"));
+    add(make_fixed("particle_frame_blend",
+                   "Particle Frame Blend",
+                   category::input,
+                   "How far the particle's texture sheet is between its frame and the next, 0 to 1, with the emitter's "
+                   "Frame Blending on. Without it, and on a mesh, it is 0.",
+                   {},
+                   {out("out", "", vt::float1)},
+                   vt::float1,
+                   "i.particle_custom.z"));
+    add(make_fixed("particle_erosion",
+                   "Particle Erosion",
+                   category::input,
+                   "Dissolves Alpha by the emitter's Erosion Over Life: texels whose alpha is below the curve's value at the "
+                   "particle's life vanish and the rest rescale to stay whole at 1, so smoke and fire dissolve along their "
+                   "shapes. Threshold is the curve's value, 0 to 1. Scale is the eroded alpha over Alpha, for a colour that "
+                   "carries its alpha already. Without the curve and on a mesh the Alpha passes through.",
+                   {in("alpha", "Alpha", vt::float1, math::vec4(1.0f))},
+                   {out("out", "Alpha", vt::float1, ".x"), out("threshold", "Threshold", vt::float1, ".y"), out("scale", "Scale", vt::float1, ".z")},
+                   vt::float3,
+                   "mg_particle_erosion({alpha}, i.particle_custom.w)"));
+}
+
 void add_input_nodes(std::vector<material_node_def>& nodes)
 {
     auto texcoord = make_fixed("texcoord",
@@ -741,7 +818,8 @@ void add_input_nodes(std::vector<material_node_def>& nodes)
                                    category::input,
                                    "The mesh's vertex colour as its file stores it, interpolated across the triangle: white "
                                    "on a mesh without colours. Read in the vertex stage too, as a mask for World Position "
-                                   "Offset.",
+                                   "Offset. On a particle it is the particle's own colour, linear, with the emitter's "
+                                   "Opacity in its alpha: multiply it in for the emitter's Color to show.",
                                    {},
                                    {out("rgba", "RGBA", vt::float4),
                                     out("rgb", "RGB", vt::float3, ".rgb"),
@@ -759,8 +837,9 @@ void add_input_nodes(std::vector<material_node_def>& nodes)
                                                  "How the stored colours are read: as they are, or decoded from sRGB to "
                                                  "linear, for colours painted as display colours in a modelling tool. "
                                                  "Masks and other data stay Linear.")};
-    nodes.push_back(in_domains(as_inline(with_keywords(vertex_color, "vertex colour color paint rgba mask tint")),
+    nodes.push_back(in_domains(as_inline(with_keywords(vertex_color, "vertex colour color paint rgba mask tint particle")),
                                {material_domain::surface}));
+    add_particle_nodes(nodes);
     nodes.push_back(as_inline(with_keywords(make_fixed("view_direction",
                                                        "View Direction",
                                                        category::input,
@@ -983,7 +1062,7 @@ auto make_sampler_settings() -> std::vector<material_setting_def>
                                 "Clamp: its edge texels stretch out (decals, gradients). Mirror: it repeats flipped."),
             make_choice_setting(MATERIAL_TEXTURE_FILTER_SETTING,
                                 "Filter",
-                                {MATERIAL_TEXTURE_FILTER_ANISOTROPIC, "trilinear", "point"},
+                                {MATERIAL_TEXTURE_FILTER_ANISOTROPIC, MATERIAL_TEXTURE_FILTER_TRILINEAR, "point"},
                                 {"Anisotropic", "Trilinear", "Point"},
                                 MATERIAL_TEXTURE_FILTER_ANISOTROPIC,
                                 "How texels blend. Anisotropic: sharp at grazing angles, the default. Trilinear: cheaper, "
@@ -1064,6 +1143,23 @@ void add_texture_nodes(std::vector<material_node_def>& nodes)
     triplanar.outputs = texel_outputs();
     triplanar.settings = make_texture_settings();
     nodes.push_back(with_keywords(triplanar, "world projection box mapping cube projection"));
+    auto flipbook = make_node("flipbook_sample",
+                              "Flipbook Sample",
+                              category::texture,
+                              "Reads a texture sheet at a frame and, while Blend is above 0, at the next frame too, mixed by "
+                              "Blend: a smooth flipbook that costs one read while nothing blends. Left alone, UV, Next UV and "
+                              "Blend are the particle's (Particle Sub UV, Particle Frame Blend). On a mesh it reads the texture "
+                              "at the first texture coordinates.");
+    flipbook.code = material_node_code::flipbook_sample;
+    flipbook.value_type = vt::float4;
+    flipbook.inputs = {in_code("uv", "UV", vt::float2, "i.particle_sheet_uv.xy"),
+                       in_code("next_uv", "Next UV", vt::float2, "i.particle_sheet_uv.zw"),
+                       in_code("blend", "Blend", vt::float1, "i.particle_custom.z"),
+                       make_texture_input(vt::texture2d)};
+    flipbook.outputs = texel_outputs();
+    flipbook.settings = make_texture_settings();
+    nodes.push_back(in_domains(with_keywords(flipbook, "particle sheet sub uv sprite animation frames texture sampler"),
+                               {material_domain::surface}));
     auto cube = make_node("sample_cubemap",
                           "Sample Cubemap",
                           category::texture,
@@ -2070,7 +2166,7 @@ void add_object_nodes(std::vector<material_node_def>& nodes)
     nodes.push_back(in_domains(with_keywords(interpolator, "varying vertex per vertex interpolate custom interpolator"), {material_domain::surface}));
 }
 
-/// Polar Coordinates, Twirl, Spherize, Flipbook and Bump Offset: UVs reshaped.
+/// Polar Coordinates, Twirl, Spherize, Flipbook, Flipbook Motion and Bump Offset: UVs reshaped.
 void add_uv_nodes(std::vector<material_node_def>& nodes)
 {
     nodes.push_back(with_keywords(make_fixed("polar_coordinates",
@@ -2131,6 +2227,28 @@ void add_uv_nodes(std::vector<material_node_def>& nodes)
                                              "top",
                                              "Which row of the sheet the first frame is on.")};
     nodes.push_back(with_keywords(flipbook, "sprite sheet atlas animation frames subuv"));
+    nodes.push_back(in_domains(
+        with_keywords(make_fixed("flipbook_motion",
+                                 "Flipbook Motion",
+                                 category::uv,
+                                 "Pulls the two frames a flipbook blends toward each other by the sheet's motion vectors, so a "
+                                 "slow flipbook of few frames flows instead of cross-fading. Motion and Next Motion are the "
+                                 "sheet's motion texture read at UV and at Next UV: red moves along U and green along V, and "
+                                 "0.5 is no motion, so import that texture with Color Space Linear (Data). Strength is how far "
+                                 "a full red or green moves, in texture coordinates. "
+                                 "Feed the outputs to a Flipbook Sample's UV and Next UV. Left alone, UV, Next UV and Blend are "
+                                 "the particle's.",
+                                 {in_code("uv", "UV", vt::float2, "i.particle_sheet_uv.xy"),
+                                  in_code("next_uv", "Next UV", vt::float2, "i.particle_sheet_uv.zw"),
+                                  in_code("blend", "Blend", vt::float1, "i.particle_custom.z"),
+                                  in("motion", "Motion", vt::float2, math::vec4(0.5f)),
+                                  in("next_motion", "Next Motion", vt::float2, math::vec4(0.5f)),
+                                  in("strength", "Strength", vt::float1, math::vec4(0.01f))},
+                                 {out("uv", "UV", vt::float2, ".xy"), out("next_uv", "Next UV", vt::float2, ".zw")},
+                                 vt::float4,
+                                 "mg_flipbook_motion({uv}, {next_uv}, {blend}, {motion}, {next_motion}, {strength})"),
+                      "motion vectors optical flow smooth sprite sheet animation frames interpolation particle"),
+        {material_domain::surface}));
     nodes.push_back(with_keywords(make_fixed("bump_offset",
                                              "Bump Offset",
                                              category::uv,
@@ -2666,7 +2784,8 @@ auto find_material_pin_def(const std::vector<material_pin_def>& pins, hpp::strin
 auto is_material_texture_node(const material_node_def& def) -> bool
 {
     return def.code == material_node_code::texture_sample || def.code == material_node_code::normal_map ||
-           def.code == material_node_code::triplanar_sample || def.code == material_node_code::texture_object ||
+           def.code == material_node_code::triplanar_sample || def.code == material_node_code::flipbook_sample ||
+           def.code == material_node_code::texture_object ||
            def.code == material_node_code::parallax_occlusion || def.code == material_node_code::normal_from_texture;
 }
 

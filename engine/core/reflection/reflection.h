@@ -87,6 +87,12 @@ REFLECTION_EXPORT auto get_name(const meta_custom& prop) -> std::string;
 REFLECTION_EXPORT auto get_former_name(const meta_data& prop) -> std::string;
 /// The property of @p type whose former name is @p former_name; empty when no property was renamed from it.
 REFLECTION_EXPORT auto find_renamed_property(const meta_type& type, const std::string& former_name) -> meta_data;
+/// The names saved files and tools may use for values @p prop holds in another shape (its "replaces" attribute, a
+/// list of names of properties the type does not have). Empty for most properties.
+REFLECTION_EXPORT auto get_replaced_names(const meta_data& prop) -> std::vector<std::string>;
+/// The properties of @p type that hold what a saved file or a tool names @p former_name, in the order the type lists
+/// them; empty when none does. One such name may stand for values of several properties.
+REFLECTION_EXPORT auto find_replacing_properties(const meta_type& type, const std::string& former_name) -> std::vector<meta_data>;
 
 template<typename T>
 using property_predicate_t = std::function<T(const meta_any&)>;

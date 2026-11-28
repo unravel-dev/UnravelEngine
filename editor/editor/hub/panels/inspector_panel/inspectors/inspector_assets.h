@@ -2,6 +2,7 @@
 
 #include "animation_clip_timeline.h"
 #include "inspector.h"
+#include "material_graph_edit.h"
 #include <engine/assets/asset_handle.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/scene.h>

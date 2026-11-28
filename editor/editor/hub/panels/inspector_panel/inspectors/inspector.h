@@ -6,6 +6,10 @@
 
 #include <editor/imgui/integration/imgui.h>
 
+#include <functional>
+#include <string>
+#include <vector>
+
 namespace unravel
 {
 
@@ -187,6 +191,129 @@ private:
     entt::meta_any object_{};
     /// The path a row drawn by name is marked by; empty for none.
     std::string mixed_path_;
+};
+
+/**
+ * @brief A tinted note above an object's values: @p icon in @p color, a bold @p title over a muted, wrapped
+ * @p message, then what @p draw_actions draws under them (the note's buttons). For what holds for the whole object:
+ * where an asset comes from, why its values cannot be changed.
+ */
+void draw_inspector_banner(const char* id,
+                           const char* icon,
+                           ImU32 color,
+                           const std::string& title,
+                           const std::string& message,
+                           const std::function<void()>& draw_actions = {});
+
+/**
+ * @brief What an object's inspector says about one of the rows it draws: that the row's value does not do what it
+ * asks for (a warning), or what the value means here. Drawn under the row's value, where the eye is when the value is
+ * edited. A warning also colors the row's label and outlines the row's asset field. With a fix, a button under the
+ * text runs it.
+ */
+struct row_note
+{
+    bool is_warning{true};
+    /// Full sentences.
+    std::string text;
+    /// The button under the text: its label, its tooltip and what it runs. No button without a label.
+    std::string fix_label;
+    std::string fix_tooltip;
+    std::function<void()> fix;
+};
+
+/// Whether an asset suits the row that would hold it.
+struct asset_fit
+{
+    enum class state
+    {
+        /// Not known yet: the asset still loads.
+        unknown,
+        fits,
+        unfit,
+    };
+    state is{state::unknown};
+    /// A sentence saying what it does in the row, or why it does not suit it.
+    std::string reason;
+};
+
+/// How the picker of an asset row tells the assets that suit the row from the rest.
+struct asset_fit_rule
+{
+    /// What the row needs its asset for, as the picker names the ones that suit: "Particles".
+    std::string use;
+    /// Whether the asset with this key suits the row.
+    std::function<asset_fit(const std::string& key)> get_fit;
+};
+
+/**
+ * @brief The notes and fit rules of an object's rows, by property name. The object's inspector fills one before it
+ * draws the object's properties and keeps it alive while they are drawn: each row then shows its notes, and its asset
+ * picker follows its fit rule.
+ *
+ * The rows that show them are the ones inspect_property draws as one value: an enum, or a type with an inspector of
+ * its own (numbers, asset fields, curves). A list, a map, a sub-object and a row a custom drawer takes show none.
+ */
+class row_notes
+{
+public:
+    /// @param object The object whose rows the notes are about, as the rows hold it.
+    explicit row_notes(const void* object);
+    ~row_notes();
+    row_notes(const row_notes&) = delete;
+    auto operator=(const row_notes&) -> row_notes& = delete;
+
+    /// Puts @p note on the row of @p property; a row shows its notes in the order they were added.
+    void add(std::string property, row_note note);
+    /// Gives the picker of the asset row of @p property its fit rule.
+    void set_fit_rule(std::string property, asset_fit_rule rule);
+    /// A sentence naming the rows that carry a warning, each name a link that scrolls to its row and drops the
+    /// inspector's filter, which may hide it; nothing without a warning. @p type gives the rows their names, with
+    /// their group where the name alone does not say it ("Collision > Mode").
+    void draw_summary(const entt::meta_type& type) const;
+
+    /// The notes of the row showing @p property of @p object; null without any.
+    static auto find_notes(const void* object, const std::string& property) -> const std::vector<row_note>*;
+    /// The fit rule of that row; null without one.
+    static auto find_fit_rule(const void* object, const std::string& property) -> const asset_fit_rule*;
+    /// Whether one of that row's notes is a warning.
+    static auto has_warning(const void* object, const std::string& property) -> bool;
+
+private:
+    struct row
+    {
+        std::string property;
+        std::vector<row_note> notes;
+        hpp::optional<asset_fit_rule> fit_rule;
+    };
+
+    auto get_row(std::string property) -> row&;
+    static auto find_row(const void* object, const std::string& property) -> const row*;
+
+    const void* object_{};
+    std::vector<row> rows_;
+};
+
+/**
+ * @brief The row inspect_property draws, for what the row's value asks row_notes about: the asset field whether to
+ * outline itself and which assets suit it. Scrolls the inspector to the row when a summary's link asked for it.
+ */
+class current_row_scope
+{
+public:
+    /// @param object The object the row belongs to, @p property the row's, @p value the value the row draws: only
+    /// the widget of that value is the row's, not the fields of values nested in it.
+    current_row_scope(const void* object, std::string property, const void* value);
+    ~current_row_scope();
+    current_row_scope(const current_row_scope&) = delete;
+    auto operator=(const current_row_scope&) -> current_row_scope& = delete;
+
+    /// Whether @p value is the value of the row being drawn and that row carries a warning.
+    static auto has_warning(const void* value) -> bool;
+    /// The fit rule of the row being drawn when @p value is its value; null without one.
+    static auto get_fit_rule(const void* value) -> const asset_fit_rule*;
+    /// Draws the notes of the row being drawn, under its value.
+    static void draw_notes();
 };
 
 /**

@@ -60,8 +60,11 @@ auto inspector_curve<T>::inspect(rtti::context& /*ctx*/,
     bool linked = data.is_linked();
     view.is_linked = &linked;
 
+    // The editor is a widget of its own that the read-only flag does not reach: read only, it takes no input.
     ImGui::PushReadonly(info.read_only);
+    ImGui::BeginDisabled(info.read_only);
     const auto edit = curve_editor::draw("##curve", view);
+    ImGui::EndDisabled();
     ImGui::PopReadonly();
 
     if(linked != data.is_linked())

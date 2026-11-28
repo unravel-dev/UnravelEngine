@@ -444,12 +444,14 @@ auto inspector_string::inspect(rtti::context& ctx,
 
     if(!example.empty())
     {
+        ImGui::BeginDisabled(info.read_only);
         if(ImGui::Button(ICON_MDI_NOTE_TEXT))
         {
             data = example;
             result.changed = true;
             result.edit_finished = true;
         }
+        ImGui::EndDisabled();
 
         ImGui::SetItemTooltipEx("Example Text.");
     }

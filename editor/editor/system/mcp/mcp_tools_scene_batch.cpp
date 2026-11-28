@@ -501,7 +501,8 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
         {.name = "scene_get_bounds_batch",
          .description =
              "Get world-space AABB for one entity_id or many entity_ids (union). Optional depth "
-             "(-1 = full hierarchy). Entities with nothing to measure (no model, a mesh still loading) are listed in "
+             "(-1 = full hierarchy). Models, particles, lines, trails and world-space UI documents are measured. Entities "
+             "with nothing to measure (none of those, a mesh still loading) are listed in "
              "unmeasured and left out; bounds is null when none had any. Allowed in play mode.",
          .input_schema_json =
              R"json({"type":"object","properties":{"entity_id":{"type":"string"},"entity_ids":{"type":"array","minItems":1,"items":{"type":"string"}},"depth":{"type":"integer","minimum":-1,"description":"Levels of children to include; -1 (default) all"}}})json",

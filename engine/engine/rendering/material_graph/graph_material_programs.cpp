@@ -117,10 +117,11 @@ auto get_material_graph_time() -> float
     return get_material_graph_times().x;
 }
 
-void graph_material_programs::init(asset_handle<gfx::shader> vertex_shader, material_domain domain)
+void graph_material_programs::init(asset_handle<gfx::shader> vertex_shader, material_domain domain, bool uses_material_vertex_stage)
 {
     vertex_shader_ = std::move(vertex_shader);
     domain_ = domain;
+    uses_material_vertex_stage_ = uses_material_vertex_stage;
     samplers_.resize(MATERIAL_GRAPH_MAX_TEXTURES);
     for(uint32_t i = 0; i < MATERIAL_GRAPH_MAX_TEXTURES; ++i)
     {
@@ -154,9 +155,9 @@ auto graph_material_programs::begin(const graph_material& mat,
     {
         return nullptr;
     }
-    const auto own_shader = find_own_vertex_shader(mat, vertex_variant);
+    const auto own_shader = uses_material_vertex_stage_ ? find_own_vertex_shader(mat, vertex_variant) : nullptr;
     // Pixels reading what only the graph's vertex shader writes cannot pair with the renderer's.
-    if(!own_shader && mat.reads_vertex_outputs())
+    if(!own_shader && uses_material_vertex_stage_ && mat.reads_vertex_outputs())
     {
         return nullptr;
     }
@@ -229,6 +230,20 @@ void graph_material_programs::submit_values(const graph_material& mat) const
 void graph_material_programs::submit_values(const std::vector<math::vec4>& registers,
                                             const std::vector<material_graph_texture>& textures) const
 {
+    submit_values(registers, textures, texture_stages::compiled);
+}
+
+void graph_material_programs::submit_particle_values(const graph_material& mat, uint32_t address_mask, uint32_t address_flags) const
+{
+    submit_values(mat.get_parameter_registers(), mat.get_textures(), texture_stages::particle, address_mask, address_flags);
+}
+
+void graph_material_programs::submit_values(const std::vector<math::vec4>& registers,
+                                            const std::vector<material_graph_texture>& textures,
+                                            texture_stages stages,
+                                            uint32_t address_mask,
+                                            uint32_t address_flags) const
+{
     std::array<math::vec4, MATERIAL_GRAPH_NORMAL_CHANNEL_REGISTERS> normal_channels{};
     bool binds_normal_map = false;
     for(size_t i = 0; i < textures.size() && i < samplers_.size(); ++i)
@@ -248,12 +263,16 @@ void graph_material_programs::submit_values(const std::vector<math::vec4>& regis
                 loaded = (texture.is_normal_map ? material::default_normal_map() : material::default_color_map()).get();
             }
         }
+        const uint8_t stage = stages == texture_stages::particle ? get_material_graph_particle_texture_stage(uint32_t(i))
+                                                                 : uint8_t(texture.stage);
+        uint32_t sampler_flags = get_material_sampler_flags(loaded, texture.address, texture.filter);
+        if(texture.address == material_texture_address::texture)
+        {
+            // The draw's own addressing, where the node leaves it to the texture.
+            sampler_flags = (sampler_flags & ~address_mask) | (address_flags & address_mask);
+        }
         // Graph nodes sample by UV, so a texture short of GPU memory binds its resident mips and never allocates.
-        gfx::set_texture(samplers_[i],
-                         uint8_t(texture.stage),
-                         loaded,
-                         get_material_sampler_flags(loaded, texture.address, texture.filter),
-                         gfx::texture_read::any_level);
+        gfx::set_texture(samplers_[i], stage, loaded, sampler_flags, gfx::texture_read::any_level);
         if(texture.is_normal_map && loaded)
         {
             normal_channels[i / REGISTER_COMPONENTS][int(i % REGISTER_COMPONENTS)] = float(loaded->get_normal_map_channels());

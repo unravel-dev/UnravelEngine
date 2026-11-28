@@ -986,6 +986,108 @@ void register_asset_tools(mcp_tool_registry& registry)
          .writes_project_files = true});
 
     registry.add(
+        {.name = "assets_copy_to_project_batch",
+         .description =
+             "Copy assets into the project with their import settings; each copy gets an id of its own. This is "
+             "how an asset the engine ships (engine:/...) becomes editable: no tool edits the engine's own, so "
+             "copy it and edit the copy. Each item: asset (a key in any folder: engine:/..., app:/data/...) and "
+             "optionally to (an app:/data/... key or a path relative to app:/data; a to that is a folder, or ends "
+             "with /, takes the asset under its own name; without to the copy goes into app:/data). A to that "
+             "exists is refused. Waits up to wait_ms (default 15000; 0: no wait) for the copies to load.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","minItems":1,"items":{"type":"object","properties":{"asset":{"type":"string"},"to":{"type":"string"}},"required":["asset"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             const auto wait_ms = read_wait_ms(args, 15000);
+             simdjson::dom::array items;
+             std::string error;
+             if(!read_required_array(args, "items", items, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::vector<std::pair<std::string, std::string>> copies;
+             for(auto element : items)
+             {
+                 simdjson::dom::object item;
+                 auto& copy = copies.emplace_back();
+                 if(!read_object(element, item, error) || !read_string(item, "asset", copy.first))
+                 {
+                     return {.text = "Each item needs asset", .is_error = true};
+                 }
+                 read_string(item, "to", copy.second);
+             }
+             struct outcome_t
+             {
+                 std::string source;
+                 std::string copy;
+                 std::string error;
+             };
+             auto outcomes = mcp.invoke_on_main(
+                 [&ctx, copies]() -> std::vector<outcome_t>
+                 {
+                     std::vector<outcome_t> results;
+                     auto& am = ctx.get_cached<asset_manager>();
+                     for(const auto& [asset, to] : copies)
+                     {
+                         auto& outcome = results.emplace_back();
+                         outcome.source = to_asset_key(asset);
+                         // Only what the asset database knows is copied: an asset, not any file a key reaches.
+                         const bool is_asset = outcome.source.find("..") == std::string::npos &&
+                                               !am.get_metadata_for_key(outcome.source).meta.uid.is_nil();
+                         if(!is_asset)
+                         {
+                             outcome.error = "No asset at " + outcome.source;
+                             continue;
+                         }
+                         std::string target;
+                         if(!to_move_destination(ctx, outcome.source, to.empty() ? std::string("app:/data/") : to, target, outcome.error))
+                         {
+                             continue;
+                         }
+                         outcome.copy = asset_actions::copy_asset_into_project(ctx,
+                                                                               outcome.source,
+                                                                               fs::absolute(fs::resolve_protocol(target)),
+                                                                               &outcome.error);
+                     }
+                     return results;
+                 });
+             if(!outcomes)
+             {
+                 return {.text = "Timed out copying assets on the main thread", .is_error = true};
+             }
+             std::vector<std::string> keys;
+             std::vector<bool> is_copied;
+             for(const auto& outcome : *outcomes)
+             {
+                 keys.push_back(outcome.copy);
+                 is_copied.push_back(!outcome.copy.empty());
+             }
+             const auto report = wait_for_assets(ctx, keys, is_copied, wait_ms);
+             std::string results = "[";
+             size_t ok_count = 0;
+             for(size_t i = 0; i < keys.size(); ++i)
+             {
+                 const auto& outcome = (*outcomes)[i];
+                 ok_count += outcome.error.empty() ? 1 : 0;
+                 results += fmt::format(R"({}{{"ok":{},"asset":{},"copy":{}{}{}}})",
+                                        i > 0 ? "," : "",
+                                        bool_to_json(outcome.error.empty()),
+                                        make_json_string(outcome.source),
+                                        make_json_string(outcome.copy),
+                                        report.state_fields[i],
+                                        outcome.error.empty() ? "" : R"(,"error":)" + make_json_string(outcome.error));
+             }
+             results += "]";
+             return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{}}})", results, ok_count, keys.size()),
+                     .is_error = ok_count == 0};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false,
+         .writes_project_files = true});
+
+    registry.add(
         {.name = "assets_import_batch",
          .description =
              "Import absolute paths of files or directories outside the project into folder (an app:/data/... key "

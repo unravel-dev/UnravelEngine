@@ -37,6 +37,8 @@
 #include "post_process_material_component.hpp"
 #include "text_component.hpp"
 #include "particle_emitter_component.hpp"
+#include "line_component.hpp"
+#include "trail_component.hpp"
 #include "../../ui/ecs/components/ui_document_component.hpp"
 #include <tuple>
 
@@ -87,6 +89,8 @@ using all_serializeable_components = std::tuple<
     audio_listener_component,
     text_component,
     particle_emitter_component,
+    line_component,
+    trail_component,
     ui_document_component,
     script_component
     >;
@@ -135,6 +139,8 @@ using all_inspectable_components = std::tuple<
     audio_listener_component,
     text_component,
     particle_emitter_component,
+    line_component,
+    trail_component,
     ui_document_component
     >;
 
@@ -174,6 +180,8 @@ using all_addable_components = std::tuple<
     audio_listener_component,
     text_component,
     particle_emitter_component,
+    line_component,
+    trail_component,
     ui_document_component
     >;
 

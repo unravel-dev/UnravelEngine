@@ -7,8 +7,11 @@
 #include "../panels_defs.h"
 #include "inspectors/inspectors.h"
 
+#include <editor/assets/asset_actions.h>
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/editor_actions.h>
 #include <editor/imgui/integration/imgui.h>
+#include <editor/imgui/integration/imgui_style.h>
 #include <engine/ecs/components/prefab_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/components/tag_component.h>
@@ -17,6 +20,7 @@
 #include <engine/meta/ecs/entity.hpp>
 #include <uuid/uuid.h>
 #include <engine/assets/asset_manager.h>
+#include <engine/assets/impl/asset_extensions.h>
 #include <algorithm>
 #include <cctype>
 #include <functional>
@@ -33,6 +37,8 @@ constexpr const char* INSPECTOR_SEARCH_TOOLTIP =
     "it shows whole.";
 constexpr const char* INSPECTOR_OVERRIDDEN_TOOLTIP =
     "Shows only the values something overrides: the prefab, a settings profile or a material instance.";
+/// Seconds the Inspector waits for the import of a copy it made before it gives up selecting it.
+constexpr double SHIPPED_COPY_IMPORT_SECONDS = 60.0;
 
 auto should_use_prefab_inspection(entt::meta_any& selected) -> bool
 {
@@ -119,8 +125,15 @@ auto inspector_panel::get_window_flags() const -> ImGuiWindowFlags
 void inspector_panel::draw_ui(rtti::context& ctx)
 {
     auto& em = ctx.get_cached<editing_manager>();
+    select_pending_copy(ctx);
     auto& selected = em.get_active_selection();
     auto& inspector_ctx = ctx.get_cached<inspector_context>();
+    if(inspector_ctx.is_filter_reset_requested)
+    {
+        search_.Clear();
+        only_overridden_ = false;
+        inspector_ctx.is_filter_reset_requested = false;
+    }
     draw_toolbar(selected, inspector_ctx);
     if(debug_)
     {
@@ -239,7 +252,7 @@ void inspector_panel::draw_inspected_object(rtti::context& ctx, entt::meta_any& 
     follow_shown_object(ctx, shown);
     if(locked_object_)
     {
-        inspect_object_with_prefab_check(ctx, locked_object_);
+        inspect_object(ctx, locked_object_);
         return;
     }
     if(selections_count > 1)
@@ -249,8 +262,97 @@ void inspector_panel::draw_inspected_object(rtti::context& ctx, entt::meta_any& 
     }
     if(selected)
     {
-        inspect_object_with_prefab_check(ctx, selected);
+        inspect_object(ctx, selected);
     }
+}
+
+void inspector_panel::inspect_object(rtti::context& ctx, entt::meta_any& object)
+{
+    const std::string key = editor_actions::get_asset_key(object);
+    const bool is_shipped = !key.empty() && !asset_actions::is_project_asset(key);
+    if(is_shipped)
+    {
+        draw_shipped_asset_banner(ctx, key);
+    }
+    ImGui::PushReadonly(is_shipped);
+    inspect_object_with_prefab_check(ctx, object);
+    ImGui::PopReadonly();
+}
+
+void inspector_panel::draw_shipped_asset_banner(rtti::context& ctx, const std::string& key)
+{
+    const std::string shipper = asset_actions::get_asset_shipper(key);
+    const std::string obstacle = asset_actions::find_project_copy_obstacle(key);
+    std::string message = "Every project shares this asset, and an update replaces it, so its values are shown here and "
+                          "cannot be changed.";
+    message += obstacle.empty() ? std::string(" Duplicate it into the project to edit a copy.") : " " + obstacle;
+    // A material's values need no copy to differ on one object: its users override them.
+    if(ex::is_format<material>(fs::path(key).extension().string()))
+    {
+        message += " A model that uses it overrides its values and textures in its own material slot, without a copy.";
+    }
+    const auto draw_actions = [&]()
+    {
+        const bool is_importing = pending_copy_.source == key;
+        ImGui::BeginDisabled(is_importing);
+        if(ImGui::Button(ICON_MDI_CONTENT_DUPLICATE " Duplicate Into Project"))
+        {
+            const std::string copy = editor_actions::duplicate_asset_into_project(ctx, key);
+            if(!copy.empty())
+            {
+                pending_copy_ = {copy, key, ImGui::GetTime() + SHIPPED_COPY_IMPORT_SECONDS};
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltipEx("Copies it, with its import settings, into the folder the Content Browser shows. The "
+                                "Inspector shows the copy once it is imported.");
+        if(is_importing)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("Importing the copy...");
+        }
+    };
+    draw_inspector_banner("##shipped_asset_banner",
+                          ICON_MDI_LOCK_OUTLINE,
+                          imgui_style::get_muted_text_color_u32(),
+                          "Ships with " + shipper,
+                          message,
+                          obstacle.empty() ? std::function<void()>(draw_actions) : std::function<void()>{});
+}
+
+void inspector_panel::select_pending_copy(rtti::context& ctx)
+{
+    if(pending_copy_.key.empty())
+    {
+        return;
+    }
+    // The copy takes the place of the asset it was made of. An Inspector that shows something else by now, or a
+    // copy that never arrived, leaves the selection alone.
+    auto& em = ctx.get_cached<editing_manager>();
+    const entt::meta_any& shown = locked_object_ ? locked_object_ : em.get_active_selection();
+    const bool shows_source = editor_actions::get_asset_key(shown) == pending_copy_.source;
+    if(!shows_source || ImGui::GetTime() > pending_copy_.deadline)
+    {
+        pending_copy_ = {};
+        return;
+    }
+    // There is no asset to show until the asset watcher has imported the file.
+    if(locked_object_)
+    {
+        // A locked Inspector shows what it is locked on, whatever is selected: it locks on the copy, and the
+        // selection, which the user may have moved since, stays.
+        entt::meta_any copy = editor_actions::find_asset_object(ctx, pending_copy_.key);
+        if(!copy)
+        {
+            return;
+        }
+        locked_object_ = std::move(copy);
+    }
+    else if(!editor_actions::select_asset(ctx, pending_copy_.key))
+    {
+        return;
+    }
+    pending_copy_ = {};
 }
 
 namespace
@@ -283,15 +385,18 @@ void inspector_panel::inspect_selected_assets(rtti::context& ctx, entt::meta_any
     auto& em = ctx.get_cached<editing_manager>();
     std::vector<multi_edit::asset_identity> others;
     const auto shown = get_import_asset_identity(selected);
+    // An asset the project does not own keeps its settings: a selection holding one has no common Apply.
+    bool has_shipped = shown && !asset_actions::is_project_asset(shown->key);
     for(const auto& object : em.get_selections())
     {
         const auto other = object.type() == selected.type() ? get_import_asset_identity(object) : hpp::nullopt;
         if(other && shown && other->uid != shown->uid)
         {
+            has_shipped = has_shipped || !asset_actions::is_project_asset(other->key);
             others.push_back(*other);
         }
     }
-    if(!shown || others.size() + 1 != selections_count)
+    if(!shown || has_shipped || others.size() + 1 != selections_count)
     {
         ImGui::Text("%d Items Selected.", static_cast<int>(selections_count));
         return;
@@ -299,7 +404,7 @@ void inspector_panel::inspect_selected_assets(rtti::context& ctx, entt::meta_any
     ImGui::TextDisabled("%d assets selected: Apply of import settings reaches every one of them.",
                         static_cast<int>(selections_count));
     multi_edit::begin_assets(std::move(others));
-    inspect_object_with_prefab_check(ctx, selected);
+    inspect_object(ctx, selected);
     multi_edit::end_assets();
 }
 

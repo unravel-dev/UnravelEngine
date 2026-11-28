@@ -126,6 +126,11 @@ Update gates (what refreshes each store):
   150 more (High 100, x update speed in [0.5, 4], x10 while editing) re-trace oldest first; an unused probe keeps
   its slot 8 frames. A global lighting change (sun or sky brightness 4x either way, `has_global_lighting_change`)
   rebuilds it.
+- Radiance cache lattice: a clipmap's probes sit on the whole multiples of its cell (the grid's corner is half a cell
+  off them), so a lookup at `p` reads probes `floor(p / cell)` and the next along each axis, in the finest clipmap
+  that covers `p`. A marking point (`surface_points`) takes its clipmap the same way: one meant for a coarser clipmap
+  sits where the finer one does not reach (`gi_radiance_cache::make_volume_points`). The pool is spent in probes, a
+  point marks eight: a budget counts probes (`gi_radiance_cache::volume_marks`).
 - Gather temporal: at most `GI_TEMPORAL_MAX_FRAMES` (10) / sqrt(update speed), halved while editing. Rays whose
   hit moved (screen hits through the velocity buffer, SDF hits through the hit instance's motion in the instance
   table) shorten the history (the fast update). A camera cut or a global lighting change starts it over.

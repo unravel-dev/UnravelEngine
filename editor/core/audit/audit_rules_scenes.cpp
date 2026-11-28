@@ -30,6 +30,7 @@ auto audit::is_feature_allowed(const feature_limits& limits, limited_feature fea
         case limited_feature::bloom:
             return limits.bloom;
         case limited_feature::decals:
+        case limited_feature::collision_decals:
             return limits.decals;
         case limited_feature::post_process_materials:
             return limits.post_process_materials;
@@ -56,6 +57,7 @@ auto audit::get_feature_setting_path(limited_feature feature) -> const char*
         case limited_feature::bloom:
             return "graphics/limits/bloom";
         case limited_feature::decals:
+        case limited_feature::collision_decals:
             return "graphics/limits/decals";
         case limited_feature::post_process_materials:
             return "graphics/limits/post_process_materials";
@@ -86,6 +88,10 @@ auto audit::get_feature_off_effect(limited_feature feature, bool is_plural) -> s
             return fmt::format("{} no effect, because Graphics > Allowed Features > Bloom is off", has);
         case limited_feature::decals:
             return fmt::format("{} nothing, because Graphics > Allowed Features > Decals is off", is_plural ? "draw" : "draws");
+        case limited_feature::collision_decals:
+            return fmt::format("{} no decals where {} particles land, because Graphics > Allowed Features > Decals is off",
+                               is_plural ? "leave" : "leaves",
+                               is_plural ? "their" : "its");
         case limited_feature::post_process_materials:
             return fmt::format("{} none of {} materials, because Graphics > Allowed Features > Post Process Materials is off",
                                is_plural ? "run" : "runs",
@@ -108,6 +114,8 @@ namespace
 
 /// How many entity paths an issue lists before it counts the rest.
 constexpr std::size_t LISTED_ENTITIES = 10;
+/// The frame rate a profile's collision cast limit is weighed at.
+constexpr double CAST_LIMIT_FRAME_RATE = 60.0;
 
 /// The document, or the entity of the document when there is one: its uid is the id, its path the label.
 auto make_document_subject(const std::string& document, const std::string& entity_id, const std::string& entity_path)
@@ -212,6 +220,155 @@ void check_features(rule_context& context, const document_scan& scan)
     }
 }
 
+void check_emitter_materials(rule_context& context, const document_scan& scan)
+{
+    for(const auto& emitter : scan.emitter_materials)
+    {
+        context.add(context.make(rules::EMITTER_MATERIAL,
+                                 make_document_subject(emitter.document, emitter.entity_id, emitter.entity),
+                                 fmt::format("The Particle Emitter's Material {} cannot draw particles, so they draw the "
+                                             "engine's plain particle material.",
+                                             emitter.message)));
+    }
+}
+
+void check_local_space_collisions(rule_context& context, const document_scan& scan)
+{
+    for(const auto& emitter : scan.local_space_collisions)
+    {
+        context.add(context.make(rules::LOCAL_SPACE_COLLISION,
+                                 make_document_subject(emitter.document, emitter.entity_id, emitter.entity),
+                                 "The Particle Emitter's Collision does nothing, because its particles simulate in Local "
+                                 "space."));
+    }
+}
+
+void check_collision_casts(rule_context& context, const document_scan& scan)
+{
+    for(const auto& use : scan.collider_emitters)
+    {
+        const auto casts_per_frame = std::uint64_t(std::ceil(use.casts_per_second / CAST_LIMIT_FRAME_RATE));
+        for(const auto& profile : context.get_input().profiles)
+        {
+            const std::uint32_t limit = profile.resolved.graphics.particles.max_collision_casts;
+            if(casts_per_frame <= limit || !is_shipped_by(profile, use.document))
+            {
+                continue;
+            }
+            const bool is_one = use.entities.size() == 1;
+            auto item = context.make(rules::COLLISION_CASTS,
+                                     make_document_subject(use.document, {}, {}),
+                                     fmt::format("{} Particle {} with physics colliders {} about {} casts a frame at 60 "
+                                                 "frames a second, and Graphics > Particles > Max Collision Casts allows "
+                                                 "{}. Contacts past the limit come late.",
+                                                 use.entities.size(),
+                                                 is_one ? "Emitter that collides" : "Emitters that collide",
+                                                 is_one ? "needs" : "need",
+                                                 casts_per_frame,
+                                                 limit));
+            item.details = list_entities(use.entities);
+            item.profiles.push_back(profile.name);
+            context.add(std::move(item));
+        }
+    }
+}
+
+/// Whether a profile's builds carry WebGL 2 shaders: WebGL 2 maps clip depth through -1..1, which keeps less precision
+/// than the other backends (desktop OpenGL clips depth 0..1 where the driver has clip control).
+auto ships_webgl2(const profile_record& profile) -> bool
+{
+    const auto renderers = deployment::get_shader_variants(profile.deploy);
+    return renderers.count(gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGLES)) != 0;
+}
+
+void check_unreported_scene_contacts(rule_context& context, const document_scan& scan)
+{
+    for(const auto& emitter : scan.unreported_scene_contacts)
+    {
+        context.add(context.make(rules::SCENE_CONTACT_UNREPORTED,
+                                 make_document_subject(emitter.document, emitter.entity_id, emitter.entity),
+                                 emitter.message));
+    }
+}
+
+/// Why a profile's builds do not collide particles with scene surfaces and where that shows, as the end of the
+/// issue's message from "and" on; empty when they collide.
+auto get_scene_collision_gap(const profile_record& profile) -> std::string
+{
+    if(profile.resolved.graphics.particles.scene_collision == ps_soa::scene_collision::off)
+    {
+        return "and the profile's Graphics > Particles > Scene Collision is Off. In its builds the particles pass "
+               "through every surface.";
+    }
+    if(ships_webgl2(profile))
+    {
+        return "and the profile's builds can run on WebGL 2, which has no compute shaders. Where a browser runs WebGL 2, "
+               "the particles pass through every surface.";
+    }
+    return {};
+}
+
+void check_scene_collision_profiles(rule_context& context, const document_scan& scan)
+{
+    for(const auto& use : scan.scene_surface_emitters)
+    {
+        for(const auto& profile : context.get_input().profiles)
+        {
+            const std::string gap = get_scene_collision_gap(profile);
+            if(gap.empty() || !is_shipped_by(profile, use.document))
+            {
+                continue;
+            }
+            const bool is_one = use.entities.size() == 1;
+            auto item = context.make(rules::SCENE_COLLISION_OFF,
+                                     make_document_subject(use.document, {}, {}),
+                                     fmt::format("{} Particle {} with Scene Surfaces, {}",
+                                                 use.entities.size(),
+                                                 is_one ? "Emitter collides" : "Emitters collide",
+                                                 gap));
+            item.details = list_entities(use.entities);
+            item.profiles.push_back(profile.name);
+            context.add(std::move(item));
+        }
+    }
+}
+
+void check_gi_ambient_materials(rule_context& context, const document_scan& scan)
+{
+    for(const auto& emitter : scan.gi_ambient_misfits)
+    {
+        context.add(context.make(rules::GI_AMBIENT_NOT_TAKEN,
+                                 make_document_subject(emitter.document, emitter.entity_id, emitter.entity),
+                                 emitter.message));
+    }
+}
+
+void check_unshown_colors(rule_context& context, const document_scan& scan)
+{
+    for(const auto& unshown : scan.unshown_colors)
+    {
+        context.add(context.make(rules::COLOR_NOT_SHOWN,
+                                 make_document_subject(unshown.document, unshown.entity_id, unshown.entity),
+                                 fmt::format("The {}'s Color Over Length changes nothing on screen, because its Material {} "
+                                             "has no Vertex Color node.",
+                                             unshown.component,
+                                             unshown.material)));
+    }
+}
+
+void check_strip_materials(rule_context& context, const document_scan& scan)
+{
+    for(const auto& unsuited : scan.unsuited_strip_materials)
+    {
+        context.add(context.make(rules::STRIP_MATERIAL,
+                                 make_document_subject(unsuited.document, unsuited.entity_id, unsuited.entity),
+                                 fmt::format("The {}'s Material {} is no Surface material, so the strip draws the engine's strip "
+                                             "material.",
+                                             unsuited.component,
+                                             unsuited.material)));
+    }
+}
+
 void check_scene_color_reads(rule_context& context, const document_scan& scan)
 {
     for(const auto& key : scan.scene_color_materials)
@@ -244,14 +401,6 @@ auto find_script_named_assets(const input& in) -> std::unordered_set<std::string
         }
     }
     return named;
-}
-
-/// Whether a profile's builds carry WebGL 2 shaders: WebGL 2 maps clip depth through -1..1, which keeps less precision
-/// than the other backends (desktop OpenGL clips depth 0..1 where the driver has clip control).
-auto ships_webgl2(const profile_record& profile) -> bool
-{
-    const auto renderers = deployment::get_shader_variants(profile.deploy);
-    return renderers.count(gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGLES)) != 0;
 }
 
 void check_camera_depth_ranges(rule_context& context, const document_scan& scan)
@@ -368,9 +517,77 @@ void check_scenes(rule_context& context)
     check_joints(context, scan);
     check_features(context, scan);
     check_scene_color_reads(context, scan);
+    check_emitter_materials(context, scan);
+    check_local_space_collisions(context, scan);
+    check_collision_casts(context, scan);
+    check_unreported_scene_contacts(context, scan);
+    check_scene_collision_profiles(context, scan);
+    check_gi_ambient_materials(context, scan);
+    check_unshown_colors(context, scan);
+    check_strip_materials(context, scan);
     check_stereo_spatial(context, scan);
     check_camera_depth_ranges(context, scan);
     check_far_content(context, scan);
 }
 
 } // namespace unravel::audit::detail
+
+namespace unravel::audit
+{
+
+auto make_scene_contact_message(const scene_contact_needs& needs) -> std::string
+{
+    if(needs.draws_meshes)
+    {
+        return "The Particle Emitter's Collide With is Scene Surfaces, and its particles are meshes, which do not touch "
+               "scene surfaces. Its Collision does nothing.";
+    }
+    std::string losses;
+    if(needs.fires_on_collision)
+    {
+        losses += " Its sub-emitter on Collision never fires.";
+    }
+    if(needs.fires_on_death)
+    {
+        losses += " Its sub-emitter on Death fires where the particle would be without its contacts.";
+    }
+    if(needs.sends_death_events)
+    {
+        losses += " Its death events give the place the particle would be without its contacts.";
+    }
+    if(needs.lights_scene)
+    {
+        losses += " Its particle lights follow the paths the particles would take without their contacts.";
+    }
+    if(losses.empty())
+    {
+        return {};
+    }
+    return "The Particle Emitter collides with Scene Surfaces, and the game is told of no such contact." + losses;
+}
+
+auto make_gi_ambient_message(const std::string& material, std::uint32_t texture_count, bool reads_scene_color, std::uint32_t max_textures)
+    -> std::string
+{
+    const bool has_too_many = texture_count > max_textures;
+    if(!has_too_many && !reads_scene_color)
+    {
+        return {};
+    }
+    std::string reads;
+    if(has_too_many)
+    {
+        reads = fmt::format("{} textures", texture_count);
+    }
+    if(reads_scene_color)
+    {
+        reads += has_too_many ? " and the Scene Color" : "the Scene Color";
+    }
+    return fmt::format("The Particle Emitter's Ambient Light is Global Illumination, and its Material {} reads {}. A material "
+                       "lit that way reads at most {} textures and no Scene Color, so these particles keep the sky's light.",
+                       material,
+                       reads,
+                       max_textures);
+}
+
+} // namespace unravel::audit

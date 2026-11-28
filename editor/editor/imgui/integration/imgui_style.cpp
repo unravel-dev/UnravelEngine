@@ -50,6 +50,21 @@ auto get_mixed_value_color() -> ImVec4
 
 namespace
 {
+constexpr ImU32 STYLE_WARNING_COLOR = IM_COL32(255, 191, 77, 255);
+} // namespace
+
+auto get_warning_color() -> ImVec4
+{
+    return ImGui::ColorConvertU32ToFloat4(STYLE_WARNING_COLOR);
+}
+
+auto get_warning_color_u32() -> ImU32
+{
+    return STYLE_WARNING_COLOR;
+}
+
+namespace
+{
 /// The content browser's Material accent: the assets imports write are materials.
 constexpr ImU32 IMPORTED_ASSET_COLOR = IM_COL32(86, 180, 168, 255);
 /// The amber of the inspector's notes.

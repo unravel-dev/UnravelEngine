@@ -5,7 +5,8 @@ namespace Unravel.Core
 {
     /// <summary>
     /// Overrides of a shared material: one renderer's, of one model slot (from
-    /// <see cref="ModelComponent.GetMaterialInstance"/>), or of no renderer, created from a material
+    /// <see cref="ModelComponent.GetMaterialInstance"/>) or of a Line or a Trail
+    /// (<see cref="DynamicRendererComponent.materialInstance"/>), or of no renderer, created from a material
     /// (<see cref="MaterialInstance(Material)"/>) for instanced draws (<see cref="Graphics"/>).
     /// </summary>
     /// <remarks>
@@ -31,8 +32,18 @@ namespace Unravel.Core
         /// Mirrors DECAL_MATERIAL_INSTANCE_SLOT in model_component_bindings.cpp.</summary>
         internal const uint DecalSlot = uint.MaxValue;
 
+        /// <summary>The slot a particle emitter's instance passes to the native calls: an emitter has one instance, of
+        /// its material. Mirrors PARTICLE_EMITTER_MATERIAL_INSTANCE_SLOT in model_component_bindings.cpp.</summary>
+        internal const uint ParticleEmitterSlot = uint.MaxValue - 1;
+
+        /// <summary>The slots the instance of a Line and a Trail pass to the native calls: each has one instance, of
+        /// its material. Mirror LINE_ and TRAIL_MATERIAL_INSTANCE_SLOT in dynamic_renderer_script_helpers.h.</summary>
+        internal const uint LineSlot = uint.MaxValue - 2;
+        internal const uint TrailSlot = uint.MaxValue - 3;
+
         /// <summary>Whether the instance is a post-process material entry's (PostProcessMaterialComponent.GetInstance).</summary>
-        private bool isPostProcessEntry => slot >= PostProcessMaterialComponent.InstanceSlotBase && slot != DecalSlot;
+        private bool isPostProcessEntry =>
+            slot >= PostProcessMaterialComponent.InstanceSlotBase && slot < TrailSlot;
 
         internal MaterialInstance(Entity owner, uint slot)
         {
@@ -61,7 +72,8 @@ namespace Unravel.Core
         }
 
         /// <summary>The model slot this instance belongs to; 0 for an instance of no renderer, the largest value for a
-        /// decal's, and from 0xFF000000 on for a post-process material entry's.</summary>
+        /// decal's, the one below it for a particle emitter's, the two below that for a line's and a trail's, and
+        /// from 0xFF000000 on for a post-process material entry's.</summary>
         public uint slot { get; }
 
         /// <summary>The shared material this instance overrides, or null when the slot has none.</summary>
@@ -77,6 +89,16 @@ namespace Unravel.Core
                 {
                     var decalMaterial = DecalComponent.internal_m2n_decal_get_material(owner);
                     return decalMaterial == Guid.Empty ? null : new Material { uid = decalMaterial };
+                }
+                if (slot == ParticleEmitterSlot)
+                {
+                    var emitterMaterial = ParticleEmitterComponent.internal_m2n_particle_emitter_get_render_material(owner);
+                    return emitterMaterial == Guid.Empty ? null : new Material { uid = emitterMaterial };
+                }
+                if (slot == LineSlot || slot == TrailSlot)
+                {
+                    var rendererMaterial = DynamicRendererComponent.internal_m2n_dynamic_renderer_get_material(owner, slot);
+                    return rendererMaterial == Guid.Empty ? null : new Material { uid = rendererMaterial };
                 }
                 if (isPostProcessEntry)
                 {

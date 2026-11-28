@@ -651,6 +651,36 @@ auto get_material_graph_shading_model(const material_graph& graph) -> material_s
     return output >= 0 ? get_material_shading_model(graph.nodes[size_t(output)]) : material_shading_model::default_lit;
 }
 
+auto is_material_particle_use(const material_graph_node& output) -> bool
+{
+    const auto* value = find_material_graph_setting(output, MATERIAL_PARTICLE_USE_SETTING);
+    return value != nullptr && *value == MATERIAL_SETTING_ON && is_material_blend_mode_forward(get_material_blend_mode(output));
+}
+
+auto is_material_graph_particle_use(const material_graph& graph) -> bool
+{
+    const int output = find_material_graph_output(graph);
+    return output >= 0 && is_material_particle_use(graph.nodes[size_t(output)]);
+}
+
+auto set_material_graph_particle_use(material_graph& graph, bool is_on) -> bool
+{
+    const int output = find_material_graph_output(graph);
+    if(output < 0)
+    {
+        return false;
+    }
+    auto& node = graph.nodes[size_t(output)];
+    const auto* value = find_material_graph_setting(node, MATERIAL_PARTICLE_USE_SETTING);
+    const bool was_on = value != nullptr && *value == MATERIAL_SETTING_ON;
+    if(was_on == is_on)
+    {
+        return false;
+    }
+    set_material_graph_setting(node, MATERIAL_PARTICLE_USE_SETTING, is_on ? MATERIAL_SETTING_ON : "off");
+    return true;
+}
+
 auto is_material_output_pin_used(const material_graph_node& output, hpp::string_view pin) -> bool
 {
     const material_blend_mode mode = get_material_blend_mode(output);
@@ -687,7 +717,7 @@ namespace
 auto is_translucency_pass_setting(hpp::string_view setting) -> bool
 {
     return setting == MATERIAL_TAA_RESPONSE_SETTING || setting == MATERIAL_CAST_SHADOW_SETTING ||
-           setting == MATERIAL_WRITE_VELOCITY_SETTING;
+           setting == MATERIAL_WRITE_VELOCITY_SETTING || setting == MATERIAL_PARTICLE_USE_SETTING;
 }
 
 /// Whether @p setting belongs to the order-dependent blends alone (Translucent, Premultiplied).

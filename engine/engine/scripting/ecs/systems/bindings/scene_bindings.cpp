@@ -533,6 +533,8 @@ int register_componetns = []()
     native_comp_lut::register_native_component<character_controller_component>("Unravel.Core.CharacterControllerComponent");
     native_comp_lut::register_native_component<volume_component>("Unravel.Core.VolumeComponent");
     native_comp_lut::register_native_component<decal_component>("Unravel.Core.DecalComponent");
+    native_comp_lut::register_native_component<line_component>("Unravel.Core.LineComponent");
+    native_comp_lut::register_native_component<trail_component>("Unravel.Core.TrailComponent");
     native_comp_lut::register_native_component<post_process_material_component>("Unravel.Core.PostProcessMaterialComponent");
     native_comp_lut::register_native_component<two_bone_ik_component>("Unravel.Core.TwoBoneIKComponent");
     native_comp_lut::register_native_component<chain_ik_component>("Unravel.Core.ChainIKComponent");

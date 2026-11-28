@@ -2,7 +2,9 @@
 #include "animation_controller_inspectors.h"
 #include "../panels_defs.h"
 
+#include <editor/assets/asset_actions.h>
 #include <editor/editing/editing_manager.h>
+#include <editor/imgui/integration/imgui_notify.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <editor/shortcuts.h>
 #include <engine/animation/animation_controller_instance.h>
@@ -133,6 +135,15 @@ void animation_panel::show(bool s)
 
 void animation_panel::open(const asset_handle<animation_controller>& controller)
 {
+    // The window edits what it opens and saves every edit, so it opens the project's controllers only.
+    if(controller && !asset_actions::is_project_asset(controller.id()))
+    {
+        ImGui::PushNotification(ImGuiToast(ImGuiToastType_Warning,
+                                           6000,
+                                           "%s Duplicate it into the project from the Inspector to edit a copy.",
+                                           asset_actions::get_shipped_asset_note(controller.id()).c_str()));
+        return;
+    }
     if(controller_ != controller)
     {
         flush_changes();
@@ -342,7 +353,7 @@ void animation_panel::reset_selection()
 
 void animation_panel::save()
 {
-    if(!controller_ || !shown_)
+    if(!controller_ || !shown_ || !asset_actions::is_project_asset(controller_.id()))
     {
         return;
     }

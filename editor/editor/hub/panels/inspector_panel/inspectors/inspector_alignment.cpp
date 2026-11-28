@@ -40,6 +40,7 @@ auto inspector_alignment::inspect(rtti::context& ctx,
     // fetch current
     uint32_t alignment = data.flags;
 
+    ImGui::BeginDisabled(info.read_only);
     // Horizontal row
     for(auto [icon, flag, tooltip] : haligns)
     {
@@ -75,6 +76,7 @@ auto inspector_alignment::inspect(rtti::context& ctx,
 
         ImGui::SameLine();
     }
+    ImGui::EndDisabled();
 
     inspect_result result{};
     // write back if changed
@@ -119,6 +121,7 @@ auto inspector_text_style_flags::inspect(rtti::context& ctx,
     auto data = var.cast<text_style_flags>();
 
     inspect_result result;
+    ImGui::BeginDisabled(info.read_only);
     for(auto [icon, flag, tooltip] : style_flags)
     {
         bool active = (data.flags & flag) != 0;
@@ -132,6 +135,7 @@ auto inspector_text_style_flags::inspect(rtti::context& ctx,
         ImGui::SetItemTooltipEx("%s", tooltip);
         ImGui::SameLine();
     }
+    ImGui::EndDisabled();
 
     if(result.changed)
     {

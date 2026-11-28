@@ -416,6 +416,16 @@ void material_graph_view::set_previews(const material_graph_previews* previews, 
     are_swatches_shown_ = are_shown && previews != nullptr;
 }
 
+void material_graph_view::set_read_only(bool is_read_only)
+{
+    if(is_read_only_ == is_read_only)
+    {
+        return;
+    }
+    is_read_only_ = is_read_only;
+    cancel_interaction();
+}
+
 void material_graph_view::cancel_interaction()
 {
     interaction_ = interaction::none;
@@ -1099,9 +1109,10 @@ auto material_graph_view::draw(material_graph& graph, const material_graph_compi
         if(is_material_graph_never_laid_out(graph))
         {
             layout_material_graph(graph, get_layout_metrics());
-            out.begin_edit = true;
-            out.layout_changed = true;
-            out.finished = true;
+            // A read-only canvas lays the graph out for the eye alone: its owner has nothing to save.
+            out.begin_edit = !is_read_only_;
+            out.layout_changed = !is_read_only_;
+            out.finished = !is_read_only_;
         }
         frame_all(graph);
     }
@@ -1109,7 +1120,10 @@ auto material_graph_view::draw(material_graph& graph, const material_graph_compi
     ImGui::InvisibleButton("##material_graph_canvas",
                            size_,
                            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
-    handle_drop(graph, selection, out);
+    if(!is_read_only_)
+    {
+        handle_drop(graph, selection, out);
+    }
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     draw_list->PushClipRect(origin_, origin_ + size_, true);
     draw_grid(draw_list);
@@ -1120,10 +1134,18 @@ auto material_graph_view::draw(material_graph& graph, const material_graph_compi
     draw_empty_hint(draw_list, graph);
     draw_list->PopClipRect();
     draw_tooltip(graph);
-    handle_input(graph, selection, out);
-    draw_search_popup(graph, selection, out);
-    draw_value_popup(graph, out);
-    draw_context_menus(graph, selection, out);
+    if(is_read_only_)
+    {
+        // The popups and menus all edit: a read-only canvas opens none and draws none.
+        handle_view_only_input(graph, selection);
+    }
+    else
+    {
+        handle_input(graph, selection, out);
+        draw_search_popup(graph, selection, out);
+        draw_value_popup(graph, out);
+        draw_context_menus(graph, selection, out);
+    }
     compiled_ = nullptr;
     return out;
 }
@@ -1534,7 +1556,7 @@ void material_graph_view::draw_interaction(ImDrawList* draw_list, const material
 
 void material_graph_view::draw_empty_hint(ImDrawList* draw_list, const material_graph& graph) const
 {
-    if(graph.nodes.size() > 1)
+    if(graph.nodes.size() > 1 || is_read_only_)
     {
         return;
     }
@@ -1557,6 +1579,16 @@ void material_graph_view::draw_tooltip(const material_graph& graph) const
         const auto& pin_def = pin.side == pin_side::input ? def.inputs[size_t(pin.pin)] : def.outputs[size_t(pin.pin)];
         const auto* slot = find_slot(pin);
         const std::string label = slot && !slot->label.empty() ? slot->label : std::string(pin.side == pin_side::input ? "Input" : "Output");
+        // A read-only canvas names the pin and what it carries, without the ways to edit it.
+        if(is_read_only_)
+        {
+            show_wrapped_tooltip("%s: %s%s%s",
+                              label.c_str(),
+                              get_material_value_type_name(get_pin_type(pin)),
+                              pin_def.tooltip.empty() ? "" : "\n",
+                              pin_def.tooltip.c_str());
+            return;
+        }
         const char* hint = can_split_material_pin(pin_def) ? "\nDouble-click to split it into components, or join them again." : "";
         show_wrapped_tooltip("%s: %s%s%s\n%s%s",
                           label.c_str(),
@@ -1570,7 +1602,10 @@ void material_graph_view::draw_tooltip(const material_graph& graph) const
     }
     if(hit_chip(mouse).is_valid())
     {
-        show_wrapped_tooltip("Drag sideways to change (Shift faster, Ctrl finer). Click to type a value.");
+        if(!is_read_only_)
+        {
+            show_wrapped_tooltip("Drag sideways to change (Shift faster, Ctrl finer). Click to type a value.");
+        }
         return;
     }
     const int node = hit_node(mouse);
@@ -1582,15 +1617,15 @@ void material_graph_view::draw_tooltip(const material_graph& graph) const
     if(geometry.has_preview && geometry.preview.Contains(mouse) && !shows_texture_preview(graph.nodes[size_t(node)]))
     {
         show_wrapped_tooltip("The node's value over a flat patch facing you, its UV running across it: a float shows as "
-                          "grey, a vector's first three components as a colour, clamped to 0..1.\nRight-click "
-                          "the node to hide its preview.");
+                          "grey, a vector's first three components as a colour, clamped to 0..1.%s",
+                          is_read_only_ ? "" : "\nRight-click the node to hide its preview.");
         return;
     }
     if(geometry.has_preview && geometry.preview.Contains(mouse))
     {
         const auto& texture = graph.nodes[size_t(node)].texture;
         const std::string name = texture ? texture.id() : std::string("No texture.");
-        show_wrapped_tooltip("%s\nDrop a texture here to use it.", name.c_str());
+        show_wrapped_tooltip("%s%s", name.c_str(), is_read_only_ ? "" : "\nDrop a texture here to use it.");
         return;
     }
     if(!geometry.header.Contains(mouse))
@@ -1642,6 +1677,127 @@ void material_graph_view::handle_input(material_graph& graph, material_graph_sel
     if(!is_geometry_stale_)
     {
         handle_keys(graph, selection, out);
+    }
+}
+
+namespace
+{
+/// The canvas's keys work while it has focus (the last click was on it), not while a field or menu has it.
+auto has_canvas_key_focus() -> bool
+{
+    return ImGui::IsWindowFocused() && !ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen(ImGuiID(0), ImGuiPopupFlags_AnyPopup);
+}
+
+void select_all_graph_nodes(const material_graph& graph, material_graph_selection& selection)
+{
+    selection.clear();
+    for(const auto& node : graph.nodes)
+    {
+        selection.nodes.push_back(node.id);
+    }
+}
+} // namespace
+
+void material_graph_view::handle_view_only_input(const material_graph& graph, material_graph_selection& selection)
+{
+    handle_zoom_and_pan();
+    if(is_geometry_stale_)
+    {
+        return;
+    }
+    const auto& io = ImGui::GetIO();
+    // Alt and a drag of the left button pans.
+    if(ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt)
+    {
+        press_position_ = io.MousePos;
+        has_dragged_ = false;
+        select_pressed(graph, selection);
+    }
+    if(interaction_ == interaction::box_selecting)
+    {
+        has_dragged_ = has_dragged_ || measure_screen_length(io.MousePos - press_position_) > DRAG_THRESHOLD;
+        if(!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            if(has_dragged_)
+            {
+                select_nodes_in_box(graph, selection);
+            }
+            interaction_ = interaction::none;
+        }
+    }
+    handle_view_only_keys(graph, selection);
+}
+
+void material_graph_view::select_pressed(const material_graph& graph, material_graph_selection& selection)
+{
+    const auto& io = ImGui::GetIO();
+    const ImVec2 mouse = io.MousePos;
+    const bool is_adding = io.KeyCtrl || io.KeyShift;
+    // A pin is a part of its node here: nothing links.
+    const pin_ref pin = hit_pin(mouse);
+    const int node = pin.is_valid() ? pin.node : hit_node(mouse);
+    if(node >= 0)
+    {
+        const std::string& id = graph.nodes[size_t(node)].id;
+        selection.comment = -1;
+        selection.link.clear();
+        if(!is_adding)
+        {
+            selection.nodes = {id};
+        }
+        else if(io.KeyCtrl && selection.has_node(id))
+        {
+            selection.nodes.erase(std::remove(selection.nodes.begin(), selection.nodes.end(), id), selection.nodes.end());
+        }
+        else if(!selection.has_node(id))
+        {
+            selection.nodes.push_back(id);
+        }
+        return;
+    }
+    comment_part part = comment_part::none;
+    const int comment = hit_comment(graph, mouse, part);
+    if(comment >= 0)
+    {
+        selection.clear();
+        selection.comment = comment;
+        return;
+    }
+    const int link = hit_link(mouse);
+    if(link >= 0)
+    {
+        selection.clear();
+        selection.link = graph.nodes[size_t(links_[size_t(link)].to.node)].id + "." + links_[size_t(link)].entry;
+        return;
+    }
+    if(!is_adding)
+    {
+        selection.clear();
+    }
+    interaction_ = interaction::box_selecting;
+}
+
+void material_graph_view::handle_view_only_keys(const material_graph& graph, material_graph_selection& selection)
+{
+    if(!has_canvas_key_focus())
+    {
+        return;
+    }
+    if(ImGui::IsKeyPressed(shortcuts::item_cancel))
+    {
+        selection.clear();
+    }
+    else if(ImGui::IsCombinationKeyPressed(shortcuts::copy))
+    {
+        copy_selection(graph, selection);
+    }
+    else if(ImGui::IsCombinationKeyPressed(shortcuts::select_all))
+    {
+        select_all_graph_nodes(graph, selection);
+    }
+    else if(!ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(shortcuts::focus_selected))
+    {
+        frame_selection(graph, selection);
     }
 }
 
@@ -2097,10 +2253,7 @@ void material_graph_view::handle_context_click(material_graph& graph, material_g
 
 void material_graph_view::handle_keys(material_graph& graph, material_graph_selection& selection, result& out)
 {
-    // The canvas's keys work while it has focus (the last click was on it), not while a field or menu has it.
-    const bool canvas_focused = ImGui::IsWindowFocused() && !ImGui::GetIO().WantTextInput &&
-                                !ImGui::IsPopupOpen(ImGuiID(0), ImGuiPopupFlags_AnyPopup);
-    if(!canvas_focused)
+    if(!has_canvas_key_focus())
     {
         return;
     }
@@ -2137,11 +2290,7 @@ void material_graph_view::handle_keys(material_graph& graph, material_graph_sele
     }
     else if(ImGui::IsCombinationKeyPressed(shortcuts::select_all))
     {
-        selection.clear();
-        for(const auto& node : graph.nodes)
-        {
-            selection.nodes.push_back(node.id);
-        }
+        select_all_graph_nodes(graph, selection);
     }
     else if(!io.KeyCtrl && ImGui::IsKeyPressed(shortcuts::focus_selected))
     {

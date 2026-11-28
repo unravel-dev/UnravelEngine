@@ -30,6 +30,8 @@ constexpr float PICKER_PREVIEW_ROUNDING = 0.3f;
 constexpr float PICKER_FIELD_TEXT_PADDING = 0.5f;
 constexpr float PICKER_EMPTY_ICON_SCALE = 1.6f;
 constexpr float PICKER_DROP_BORDER = 2.0f;
+/// Pixels between a field and the outline that says its asset is wrong for it, where the row leaves that much.
+constexpr float PICKER_PROBLEM_OUTLINE_GAP = 3.0f;
 constexpr float PICKER_MUTED_ALPHA = 0.55f;
 constexpr ImU32 PICKER_PREVIEW_COLOR = IM_COL32(0, 0, 0, 40);
 constexpr ImU32 PICKER_PREVIEW_HOVERED_BORDER_COLOR = IM_COL32(255, 255, 255, 60);
@@ -73,6 +75,8 @@ constexpr ImU32 PICKER_WELL_COLOR = IM_COL32(0, 0, 0, 56);
 constexpr ImU32 PICKER_PANE_COLOR = IM_COL32(0, 0, 0, 38);
 constexpr ImU32 PICKER_ROW_HOVERED_COLOR = IM_COL32(255, 255, 255, 22);
 constexpr ImU32 PICKER_ROW_HELD_COLOR = IM_COL32(255, 255, 255, 34);
+/// How much of the window's color covers the thumbnail of a list row that does not suit the field.
+constexpr float PICKER_UNFIT_VEIL = 0.6f;
 /// Picks remembered per type of asset for the Recent list, newest first.
 constexpr std::size_t PICKER_RECENT_MAX = 12;
 /// Frames the highlight is scrolled into view for after the window opens, while the panes settle their sizes.
@@ -160,6 +164,11 @@ void set_pick_tooltip(const field_content& content)
 {
     const bool has_asset = !content.name.empty();
     const std::string subject = has_asset ? content.path : fmt::format("None ({})", content.type);
+    if(content.is_read_only)
+    {
+        ImGui::SetItemTooltipEx("%s", subject.c_str());
+        return;
+    }
     ImGui::SetItemTooltipEx("%s\n\nClick to pick another %s.", subject.c_str(), content.type.c_str());
 }
 
@@ -182,20 +191,26 @@ void set_preview_tooltip(const field_content& content)
         set_pick_tooltip(content);
         return;
     }
+    if(content.is_read_only)
+    {
+        ImGui::SetItemTooltipEx("%s\n\nDouble-click to open it in %s.", content.path.c_str(), content.open_in.c_str());
+        return;
+    }
     ImGui::SetItemTooltipEx("%s\n\nDouble-click to open it in %s. Click the name to pick another %s.",
                             content.path.c_str(),
                             content.open_in.c_str(),
                             content.type.c_str());
 }
 
-/// The field naming the asset, drawn as an input field with the picker icon at its right end.
+/// The field naming the asset, drawn as an input field with the picker icon at its right end. A read-only field
+/// names its asset and picks nothing.
 auto draw_pick_field(const field_content& content) -> bool
 {
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const ImVec2 size(ImGui::GetContentRegionAvail().x, ImGui::GetFrameHeight());
-    const bool is_pressed = ImGui::InvisibleButton("##pick", size);
-    const bool is_hovered = ImGui::IsItemHovered();
-    const bool is_active = ImGui::IsItemActive();
+    const bool is_pressed = ImGui::InvisibleButton("##pick", size) && !content.is_read_only;
+    const bool is_hovered = ImGui::IsItemHovered() && !content.is_read_only;
+    const bool is_active = ImGui::IsItemActive() && !content.is_read_only;
 
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     const ImRect rect(min, min + size);
@@ -203,10 +218,13 @@ auto draw_pick_field(const field_content& content) -> bool
     draw_list->AddRectFilled(rect.Min, rect.Max, ImGui::GetColorU32(fill), ImGui::GetStyle().FrameRounding);
 
     const float side = size.y;
-    ImGui::RenderIconCentered(draw_list,
-                              ImVec2(rect.Max.x - side * 0.5f, rect.GetCenter().y),
-                              ICON_MDI_TARGET,
-                              is_hovered ? ImGui::GetColorU32(ImGuiCol_Text) : get_muted_color());
+    if(!content.is_read_only)
+    {
+        ImGui::RenderIconCentered(draw_list,
+                                  ImVec2(rect.Max.x - side * 0.5f, rect.GetCenter().y),
+                                  ICON_MDI_TARGET,
+                                  is_hovered ? ImGui::GetColorU32(ImGuiCol_Text) : get_muted_color());
+    }
 
     const bool has_asset = !content.name.empty();
     const std::string text = has_asset ? content.name : fmt::format("None ({})", content.type);
@@ -229,7 +247,9 @@ void draw_field_actions(const field_content& content, field_request& request)
     ImGui::BeginDisabled(!has_asset);
     request.is_locate_pressed |= draw_inline_icon_button("##locate", ICON_MDI_CROSSHAIRS_GPS, "Show in the content browser");
     ImGui::SameLine(0.0f, 0.0f);
+    ImGui::BeginDisabled(content.is_read_only);
     request.is_clear_pressed = draw_inline_icon_button("##clear", ICON_MDI_CLOSE_CIRCLE_OUTLINE, "Clear");
+    ImGui::EndDisabled();
     if(!content.open_in.empty())
     {
         ImGui::SameLine(0.0f, 0.0f);
@@ -268,6 +288,8 @@ enum class picker_scope
     recent,
     /// The entries in a folder and the folders under it.
     folder,
+    /// The entries that suit the field (window_content::fit_use).
+    suited,
 };
 
 /// What the open picker keeps between frames.
@@ -595,10 +617,23 @@ struct picker_frame
     hpp::optional<std::size_t> highlighted;
     /// The position of the highlighted entry in shown.
     hpp::optional<std::size_t> highlighted_position;
+    /// Per entry, whether it suits the field; empty for a field that takes every entry alike.
+    std::vector<entry_fit> fits;
 
     auto is_searching() const -> bool
     {
         return !terms.empty();
+    }
+
+    /// Whether the field tells the entries that suit it from the rest.
+    auto has_fit_rule() const -> bool
+    {
+        return !fits.empty();
+    }
+
+    auto get_fit_state(std::size_t index) const -> fit_state
+    {
+        return has_fit_rule() ? fits[index].state : fit_state::fits;
     }
 };
 
@@ -639,6 +674,14 @@ auto is_in_scope(const picker_frame& frame, std::size_t index) -> bool
     {
         case picker_scope::folder:
             return is_in_folder(frame.infos[index], g_picker.folder);
+        case picker_scope::suited:
+            // None clears the field, which every field takes. What the field holds shows whether it suits or not:
+            // the window opens on it, veiled, with why it does not suit, and Enter keeps it.
+            if(is_none)
+            {
+                return !frame.is_searching();
+            }
+            return frame.get_fit_state(index) != fit_state::unfit || frame.content.current == index;
         case picker_scope::all:
         default:
             // None clears the field; it stands first while nothing is searched.
@@ -723,6 +766,18 @@ auto make_frame(const window_content& content, const std::vector<entry>& entries
     {
         g_picker.scope = picker_scope::all;
     }
+    if(source.get_fit && !content.fit_use.empty())
+    {
+        frame.fits.reserve(entries.size());
+        for(std::size_t index = 0; index < entries.size(); ++index)
+        {
+            frame.fits.push_back(entries[index].path.empty() ? entry_fit{fit_state::fits, {}} : source.get_fit(index));
+        }
+    }
+    else if(g_picker.scope == picker_scope::suited)
+    {
+        g_picker.scope = picker_scope::all;
+    }
     frame.shown = collect_shown(frame);
     return frame;
 }
@@ -769,7 +824,10 @@ void update_highlight(picker_frame& frame)
             }
         }
     }
-    highlight_position(frame, 0);
+    // The first asset shown, and None only where it stands alone: Enter then never clears a field whose own asset the
+    // results do not show.
+    const bool starts_with_none = frame.entries[frame.shown.front()].path.empty();
+    highlight_position(frame, starts_with_none && frame.shown.size() > 1 ? 1 : 0);
     request_reveal(false);
 }
 
@@ -778,7 +836,8 @@ void start_picker(const window_content& content, const std::vector<entry>& entri
 {
     g_picker.search.Clear();
     g_picker.last_search.clear();
-    g_picker.scope = picker_scope::all;
+    // A field that only some assets suit opens on those: the others are a click on All away.
+    g_picker.scope = content.fit_use.empty() ? picker_scope::all : picker_scope::suited;
     g_picker.folder.clear();
     g_picker.highlighted.reset();
     if(content.current && *content.current < entries.size())
@@ -1035,6 +1094,31 @@ void draw_sidebar(const picker_frame& frame, float height)
             request_reveal(false);
         }
         ImGui::SetItemTooltipEx("%s", "Shows the assets of every folder.");
+        if(frame.has_fit_rule())
+        {
+            // The assets the row's scope shows: the ones that suit, and what the field holds.
+            std::size_t suited_count = 0;
+            for(std::size_t index = 0; index < frame.entries.size(); ++index)
+            {
+                const bool is_asset = !frame.entries[index].path.empty();
+                const bool is_shown = frame.fits[index].state != fit_state::unfit || frame.content.current == index;
+                suited_count += is_asset && frame.matched[index] && is_shown ? 1 : 0;
+            }
+            const std::string label = fmt::format("For {}", frame.content.fit_use);
+            if(draw_sidebar_row("scope:suited",
+                                ICON_MDI_CHECK_DECAGRAM,
+                                label,
+                                suited_count,
+                                g_picker.scope == picker_scope::suited,
+                                true,
+                                frame.is_searching() && suited_count == 0,
+                                is_open))
+            {
+                g_picker.scope = picker_scope::suited;
+                request_reveal(false);
+            }
+            ImGui::SetItemTooltipEx("%s", "Shows the assets that suit this field. All shows the others too, veiled.");
+        }
         if(!frame.recent.empty())
         {
             const auto recent_count = static_cast<std::size_t>(std::count_if(frame.recent.begin(),
@@ -1083,7 +1167,20 @@ auto get_preview(const picker_frame& frame, std::size_t index) -> preview
 auto get_summary(const picker_frame& frame, std::size_t index) -> std::string
 {
     const bool is_none = frame.entries[index].path.empty();
-    return frame.source.get_summary && !is_none ? frame.source.get_summary(index) : std::string{};
+    std::string summary = frame.source.get_summary && !is_none ? frame.source.get_summary(index) : std::string{};
+    // An entry that suits a field only some suit is tagged with what the field uses it for, where it has no fact
+    // of its own to badge.
+    if(summary.empty() && !is_none && frame.has_fit_rule() && frame.fits[index].state == fit_state::fits)
+    {
+        summary = frame.content.fit_use;
+    }
+    return summary;
+}
+
+/// Whether the entry does not suit the field: its card and row are veiled.
+auto is_unfit(const picker_frame& frame, std::size_t index) -> bool
+{
+    return frame.get_fit_state(index) == fit_state::unfit;
 }
 
 /// Reads the pointer on the entry drawn last, scrolls it into view when asked, and gives it a tooltip.
@@ -1124,6 +1221,7 @@ auto draw_entry_card(const picker_frame& frame, std::size_t index, float width) 
     card.is_loading = thumbnail.is_loading;
     card.is_selected = frame.highlighted == index;
     card.is_current = frame.content.current == index;
+    card.is_dimmed = is_unfit(frame, index);
     card.size = width;
     const bool is_pressed = draw_content_card(card, ImGui::GetID("##card"));
     return read_entry_events(frame, index, is_pressed);
@@ -1206,10 +1304,17 @@ auto draw_entry_row(const picker_frame& frame, std::size_t index, float width, f
 
     const float text_x = thumbnail_rect.Max.x + style.ItemSpacing.x;
     const std::string& folder = frame.infos[index].folder_label;
+    // An entry that does not suit the field is named in the muted color, its thumbnail veiled.
+    const bool is_veiled = is_unfit(frame, index);
+    const ImU32 name_color = is_veiled ? get_muted_color() : ImGui::GetColorU32(ImGuiCol_Text);
+    if(is_veiled)
+    {
+        draw_list->AddRectFilled(thumbnail_rect.Min, thumbnail_rect.Max, ImGui::GetColorU32(ImGuiCol_PopupBg, PICKER_UNFIT_VEIL), rounding);
+    }
     if(folder.empty())
     {
         const float y = rect.GetCenter().y - line_height * 0.5f;
-        draw_clipped_text(draw_list, ImVec2(text_x, y), ImVec2(right_x, y + line_height), item.name.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
+        draw_clipped_text(draw_list, ImVec2(text_x, y), ImVec2(right_x, y + line_height), item.name.c_str(), name_color);
         return read_entry_events(frame, index, is_pressed);
     }
     const float caption_size = ImGui::GetFontSize() * PICKER_ROW_CAPTION_SCALE;
@@ -1218,7 +1323,7 @@ auto draw_entry_row(const picker_frame& frame, std::size_t index, float width, f
                       ImVec2(text_x, text_top),
                       ImVec2(right_x, text_top + line_height),
                       item.name.c_str(),
-                      ImGui::GetColorU32(ImGuiCol_Text));
+                      name_color);
     ImGui::PushFont(nullptr, ImGui::GetCurrentContext()->FontSizeBase * PICKER_ROW_CAPTION_SCALE);
     const float caption_y = text_top + line_height;
     draw_clipped_text(draw_list, ImVec2(text_x, caption_y), ImVec2(right_x, caption_y + caption_size), folder.c_str(), get_muted_color());
@@ -1341,8 +1446,9 @@ void draw_empty_results(const picker_frame& frame)
     {
         icon = ICON_MDI_MAGNIFY_CLOSE;
         title = fmt::format("Nothing matches \"{}\".", g_picker.search.InputBuf);
-        note = g_picker.scope == picker_scope::all ? "The search looks at the names and folders of the assets."
-                                                   : "Choose All on the left to search every folder.";
+        note = g_picker.scope == picker_scope::all      ? "The search looks at the names and folders of the assets."
+               : g_picker.scope == picker_scope::suited ? "Choose All on the left to search the assets that do not suit this field too."
+                                                        : "Choose All on the left to search every folder.";
     }
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const float icon_size = ImGui::GetFontSize() * PICKER_EMPTY_STATE_ICON_SCALE;
@@ -1429,6 +1535,16 @@ void draw_details_content(const picker_frame& frame, std::size_t index)
     {
         deploy_widgets::draw_gap(PICKER_LINE_GAP);
         deploy_widgets::draw_icon_line(ICON_MDI_CHECK_BOLD, get_accent_color(), "The field holds this now.", get_muted_color());
+    }
+    // Whether it suits the field, and why not: the reason a veiled card is veiled.
+    if(frame.has_fit_rule() && !frame.fits[index].reason.empty() && frame.fits[index].state != fit_state::unknown)
+    {
+        const bool fits = frame.fits[index].state == fit_state::fits;
+        deploy_widgets::draw_gap(PICKER_LINE_GAP);
+        deploy_widgets::draw_icon_line(fits ? ICON_MDI_CHECK_DECAGRAM : ICON_MDI_ALERT,
+                                       fits ? get_accent_color() : imgui_style::get_warning_color_u32(),
+                                       frame.fits[index].reason.c_str(),
+                                       fits ? get_muted_color() : imgui_style::get_warning_color_u32());
     }
     if(frame.source.collect_details)
     {
@@ -1612,6 +1728,10 @@ auto make_status_text(const picker_frame& frame) -> std::string
     {
         where = " picked recently";
     }
+    else if(g_picker.scope == picker_scope::suited)
+    {
+        where = fmt::format(" for {}", frame.content.fit_use);
+    }
     return frame.is_searching() ? fmt::format("{} {} match the search{}", count, noun, where) : fmt::format("{} {}{}", count, noun, where);
 }
 
@@ -1676,11 +1796,21 @@ auto draw_field(const field_content& content) -> field_request
 
     ImGui::SameLine();
     ImGui::BeginGroup();
-    request.is_pick_pressed = draw_pick_field(content) || (is_preview_pressed && !is_opening_preview);
+    request.is_pick_pressed = draw_pick_field(content) || (is_preview_pressed && !is_opening_preview && !content.is_read_only);
     request.is_open_pressed = is_preview_pressed && is_opening_preview;
     draw_field_actions(content, request);
     ImGui::EndGroup();
     ImGui::EndGroup();
+    if(content.has_problem)
+    {
+        // Inside the row's cell, whose padding is all the room a table leaves around the field.
+        const float gap = ImMin(PICKER_PROBLEM_OUTLINE_GAP, ImMax(0.0f, style.CellPadding.y - 1.0f));
+        const ImVec2 grow(gap, gap);
+        draw_list->AddRect(ImGui::GetItemRectMin() - grow,
+                           ImGui::GetItemRectMax() + grow,
+                           imgui_style::get_warning_color_u32(),
+                           to_pixels(PICKER_PREVIEW_ROUNDING));
+    }
     return request;
 }
 

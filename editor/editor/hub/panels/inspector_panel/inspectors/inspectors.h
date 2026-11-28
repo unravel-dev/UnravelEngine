@@ -121,6 +121,9 @@ struct inspector_context
     entt::registry* inspected_registry{};
     /// The toolbar's filter, set while the inspector panel draws the inspected object.
     inspector_filter filter;
+    /// A link to a row asks for the filter to go, since it may hide the row: the inspector panel drops its search
+    /// and its overridden toggle before it draws again.
+    bool is_filter_reset_requested{};
     /// Open state every component header drawn in this frame takes: expand and collapse all of
     /// the inspector toolbar. The inspector panel drops it once it drew the inspected object.
     hpp::optional<bool> component_headers_open_request;

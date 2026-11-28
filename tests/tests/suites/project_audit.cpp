@@ -31,6 +31,7 @@
 #include <deploy/profile.h>
 #include <dotnetpp/dotnet_jit.h>
 #include <engine/meta/assets/asset_database.hpp>
+#include <engine/rendering/material_graph/material_graph_compiler.h>
 #include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <filesystem/filesystem.h>
@@ -685,6 +686,146 @@ void test_scene_rules()
               contains(glass->message, "refracts nothing"),
           "only the profile without the scene copy reports it, saying what happens");
 
+    in.scan.emitter_materials.push_back({"app:/data/Main.spfb", "uid-fire", "Root/Fire", "app:/data/Materials/Rock.mat"});
+    const auto emitter_issues = check_with(in, &audit::detail::check_scenes);
+    const auto* emitter = find_rule_issue(emitter_issues, audit::rules::EMITTER_MATERIAL);
+    require(emitter != nullptr, "an emitter whose material cannot draw particles is reported");
+    check(emitter->where.detail == "uid-fire" && emitter->where.label == "Root/Fire" && emitter->level == audit::severity::warning &&
+              contains(emitter->message, "app:/data/Materials/Rock.mat") && contains(emitter->message, "plain particle material"),
+          "the issue names the entity and the material, and says what draws in its place");
+
+    audit::feature_use splats;
+    splats.document = "app:/data/Main.spfb";
+    splats.component = "Particle Emitter";
+    splats.feature = audit::limited_feature::collision_decals;
+    splats.entities = {"Root/Paint"};
+    in.scan.features.push_back(splats);
+    const auto splat_issues = check_with(in, &audit::detail::check_scenes);
+    bool reports_splats = false;
+    for(const auto& item : splat_issues)
+    {
+        reports_splats = reports_splats ||
+                         (item.rule == audit::rules::FEATURE_OFF && item.profiles == std::vector<std::string>{"Android"} &&
+                          contains(item.message, "1 Particle Emitter component leaves no decals where its particles land"));
+    }
+    check(reports_splats, "an emitter whose contacts leave decals is reported where the profile turns decals off");
+
+    in.scan.local_space_collisions.push_back({"app:/data/Main.spfb", "uid-rain", "Root/Rain", {}});
+    in.scan.collider_emitters.push_back({"app:/data/Main.spfb", {"Root/Sparks", "Root/Debris"}, 60.0 * 1500.0});
+    in.profiles[0].resolved.graphics.particles.max_collision_casts = 2048;
+    in.profiles[1].resolved.graphics.particles.max_collision_casts = 512;
+    const auto collision_issues = check_with(in, &audit::detail::check_scenes);
+    const auto* local_collision = find_rule_issue(collision_issues, audit::rules::LOCAL_SPACE_COLLISION);
+    require(local_collision != nullptr, "an emitter that collides in Local space is reported");
+    check(local_collision->where.detail == "uid-rain" && local_collision->level == audit::severity::warning &&
+              contains(local_collision->message, "Collision does nothing") && contains(local_collision->message, "Local space"),
+          "the issue names the entity and says why nothing collides");
+    const auto* casts = find_rule_issue(collision_issues, audit::rules::COLLISION_CASTS);
+    require(casts != nullptr, "emitters that need more casts than a profile allows are reported");
+    check(count_rule(collision_issues, audit::rules::COLLISION_CASTS) == 1 && casts->profiles == std::vector<std::string>{"Android"} &&
+              contains(casts->message, "2 Particle Emitters that collide with physics colliders need about 1500 casts a frame") &&
+              contains(casts->message, "allows 512") && casts->details.size() == 2,
+          "only the profile whose limit is lower reports it, with the casts, the limit and the emitters");
+
+    // What an emitter on Scene Surfaces asks for that no such contact gives: every loss is named, a mesh emitter's
+    // alone, and an emitter that asks for none of it is not reported.
+    audit::scene_contact_needs hail_needs;
+    check(audit::make_scene_contact_message(hail_needs).empty(), "an emitter that waits for nothing of its contacts is not reported");
+    hail_needs.fires_on_death = true;
+    hail_needs.lights_scene = true;
+    const std::string hail_message = audit::make_scene_contact_message(hail_needs);
+    check(contains(hail_message, "collides with Scene Surfaces") && contains(hail_message, "sub-emitter on Death fires where") &&
+              contains(hail_message, "particle lights follow") && !contains(hail_message, "on Collision") &&
+              !contains(hail_message, "death events"),
+          "the message names each thing the emitter asks for, and nothing it does not");
+    audit::scene_contact_needs every_need = hail_needs;
+    every_need.fires_on_collision = true;
+    every_need.sends_death_events = true;
+    const std::string every_message = audit::make_scene_contact_message(every_need);
+    check(contains(every_message, "on Collision never fires") && contains(every_message, "death events give") &&
+              contains(every_message, "on Death fires where") && contains(every_message, "particle lights follow"),
+          "an emitter that asks for all of it reads of all of it in one issue");
+    audit::scene_contact_needs mesh_needs = every_need;
+    mesh_needs.draws_meshes = true;
+    const std::string mesh_message = audit::make_scene_contact_message(mesh_needs);
+    check(contains(mesh_message, "meshes, which do not touch scene surfaces") && contains(mesh_message, "Collision does nothing") &&
+              !contains(mesh_message, "sub-emitter"),
+          "a mesh emitter reads that nothing collides, not of contacts it never has");
+    in.scan.unreported_scene_contacts.push_back({"app:/data/Main.spfb", "uid-hail", "Root/Hail", hail_message});
+    in.scan.scene_surface_emitters.push_back({"app:/data/Main.spfb", {"Root/Hail", "Root/Embers"}});
+    in.profiles[1].resolved.graphics.particles.scene_collision = unravel::ps_soa::scene_collision::off;
+    const auto scene_collision_issues = check_with(in, &audit::detail::check_scenes);
+    const auto* unreported = find_rule_issue(scene_collision_issues, audit::rules::SCENE_CONTACT_UNREPORTED);
+    require(unreported != nullptr, "an emitter that waits for contacts with scene surfaces is reported");
+    check(unreported->where.detail == "uid-hail" && unreported->level == audit::severity::warning &&
+              unreported->message == hail_message,
+          "the issue names the entity and carries the message");
+    const auto* collision_off = find_rule_issue(scene_collision_issues, audit::rules::SCENE_COLLISION_OFF);
+    require(collision_off != nullptr, "emitters that collide with scene surfaces are reported where a profile turns that off");
+    check(count_rule(scene_collision_issues, audit::rules::SCENE_COLLISION_OFF) == 1 &&
+              collision_off->profiles == std::vector<std::string>{"Android"} &&
+              collision_off->level == audit::severity::info &&
+              contains(collision_off->message, "2 Particle Emitters collide with Scene Surfaces, and the profile's") &&
+              contains(collision_off->message, "Scene Collision is Off. In its builds") && collision_off->details.size() == 2,
+          "only the profile that turns it off reports it, with the emitters");
+    in.profiles[1].resolved.graphics.particles.scene_collision = unravel::ps_soa::scene_collision::depth_buffer;
+
+    // An emitter that asks for the Global Illumination's light with a material that leaves it no place: the message
+    // names what the material reads, and a material that fits is not reported.
+    const std::string smoke_material = "app:/data/Materials/Smoke.mat";
+    check(audit::make_gi_ambient_message(smoke_material, 2, false, 2).empty() && audit::make_gi_ambient_message(smoke_material, 0, false, 2).empty(),
+          "a material of two textures or fewer that reads no Scene Color is not reported");
+    const std::string heavy_message = audit::make_gi_ambient_message(smoke_material, 3, false, 2);
+    check(contains(heavy_message, "Material app:/data/Materials/Smoke.mat reads 3 textures.") &&
+              contains(heavy_message, "at most 2 textures") && contains(heavy_message, "keep the sky's light"),
+          "a material of three textures reads how many it has and how many fit");
+    check(contains(audit::make_gi_ambient_message(smoke_material, 1, true, 2), "reads the Scene Color.") &&
+              contains(audit::make_gi_ambient_message(smoke_material, 4, true, 2), "reads 4 textures and the Scene Color."),
+          "a read of the Scene Color is named alone and beside the textures");
+    // The audit reports exactly the materials the renderer refuses.
+    bool agrees_with_renderer = true;
+    for(std::uint32_t textures = 0; textures <= unravel::MATERIAL_GRAPH_MAX_PARTICLE_GI_TEXTURES + 2; ++textures)
+    {
+        for(const bool reads_scene_color : {false, true})
+        {
+            const bool is_reported = !audit::make_gi_ambient_message(smoke_material,
+                                                                      textures,
+                                                                      reads_scene_color,
+                                                                      unravel::MATERIAL_GRAPH_MAX_PARTICLE_GI_TEXTURES)
+                                          .empty();
+            const bool fits = unravel::fits_material_graph_particle_gi(textures,
+                                                                       reads_scene_color ? unravel::material_scene_texture_color : 0u);
+            agrees_with_renderer = agrees_with_renderer && is_reported != fits;
+        }
+    }
+    check(agrees_with_renderer, "the audit reports a material exactly when a particle draw cannot give it the Global Illumination's light");
+    in.scan.gi_ambient_misfits.push_back({"app:/data/Main.spfb", "uid-smoke", "Root/Smoke", heavy_message});
+    const auto ambient_issues = check_with(in, &audit::detail::check_scenes);
+    const auto* misfit = find_rule_issue(ambient_issues, audit::rules::GI_AMBIENT_NOT_TAKEN);
+    require(misfit != nullptr, "an emitter whose material cannot take the Global Illumination's light is reported");
+    check(count_rule(ambient_issues, audit::rules::GI_AMBIENT_NOT_TAKEN) == 1 && misfit->where.detail == "uid-smoke" &&
+              misfit->level == audit::severity::warning && misfit->message == heavy_message,
+          "the issue names the entity and carries the message");
+
+    in.scan.unshown_colors.push_back({"app:/data/Main.spfb", "uid-rope", "Root/Rope", "Line", "app:/data/Materials/Rock.mat"});
+    in.scan.unshown_colors.push_back({"app:/data/Main.spfb", "uid-arc", "Root/Arc", "Trail", "app:/data/Materials/Rock.mat"});
+    const auto color_issues = check_with(in, &audit::detail::check_scenes);
+    const auto* unshown = find_rule_issue(color_issues, audit::rules::COLOR_NOT_SHOWN);
+    require(unshown != nullptr, "a line whose colour its material never shows is reported");
+    check(count_rule(color_issues, audit::rules::COLOR_NOT_SHOWN) == 2 && unshown->where.detail == "uid-rope" &&
+              unshown->level == audit::severity::info && contains(unshown->message, "Line's Color Over Length") &&
+              contains(unshown->message, "app:/data/Materials/Rock.mat") && contains(unshown->message, "Vertex Color"),
+          "each one is an issue that names the component's setting, the material and the node it lacks");
+
+    in.scan.unsuited_strip_materials.push_back({"app:/data/Main.spfb", "uid-rope", "Root/Rope", "Line", "app:/data/Materials/Stain.mat"});
+    const auto strip_issues = check_with(in, &audit::detail::check_scenes);
+    const auto* unsuited = find_rule_issue(strip_issues, audit::rules::STRIP_MATERIAL);
+    require(unsuited != nullptr, "a line whose material is no Surface material is reported");
+    check(unsuited->where.detail == "uid-rope" && unsuited->level == audit::severity::warning &&
+              contains(unsuited->message, "The Line's Material app:/data/Materials/Stain.mat") &&
+              contains(unsuited->message, "engine's strip material"),
+          "the issue names the component and the material, and says what draws in its place");
+
     in.scan.cameras.push_back({"app:/data/Main.spfb", "uid-cam", "Root/Close Camera", 0.001f, 1000.0f});
     in.scan.cameras.push_back({"app:/data/Main.spfb", "uid-wide", "Root/Wide Camera", 0.1f, 1000.0f});
     auto web_gpu = make_profile("WebGPU", target_platform::web, {"app:/data/Main.spfb"});
@@ -697,6 +838,11 @@ void test_scene_rules()
     const auto camera_issues = check_with(in, &audit::detail::check_scenes);
     const auto* camera = find_rule_issue(camera_issues, audit::rules::CAMERA_DEPTH_RANGE);
     require(camera != nullptr, "a camera whose far clip is a million times its near clip is reported where WebGL 2 ships");
+    const auto* no_compute = find_rule_issue(camera_issues, audit::rules::SCENE_COLLISION_OFF);
+    check(count_rule(camera_issues, audit::rules::SCENE_COLLISION_OFF) == 1 && no_compute != nullptr &&
+              no_compute->profiles == std::vector<std::string>{"WebGL"} &&
+              contains(no_compute->message, "can run on WebGL 2, which has no compute shaders. Where a browser runs WebGL 2"),
+          "emitters that collide with scene surfaces are reported where WebGL 2 ships, which has no compute shaders");
     check(count_rule(camera_issues, audit::rules::CAMERA_DEPTH_RANGE) == 1 && camera->profiles == std::vector<std::string>{"WebGL"},
           "only the profile shipping WebGL 2 reports it, and a 10000 to 1 camera is not reported");
     check(camera->where.detail == "uid-cam" && contains(camera->message, "1000000 times"),

@@ -7,6 +7,7 @@
 #include <graphics/utils/bgfx_utils.h>
 #include <engine/ecs/ecs_utils.h>
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_graph/graph_material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/instanced_mesh_utils.h>
 #include <engine/ecs/components/transform_component.h>
@@ -31,6 +32,12 @@ constexpr float k_min_duration = 0.05f;
 /// Most bounces a particle counts (the simulation keeps the count in a byte) and most collision planes.
 constexpr uint32_t k_max_bounces = 255;
 constexpr size_t k_max_collision_planes = 16;
+/// Widest bounce scatter, degrees: a quarter turn off the bounce's own direction.
+constexpr float k_max_bounce_scatter_degrees = 90.0f;
+/// Most decals an emitter's contacts leave a frame.
+constexpr uint32_t k_max_collision_decals_per_frame = 32;
+/// Smallest collision decal, metres.
+constexpr float k_min_collision_decal_size = 0.001f;
 /// Shortest time between two firings of one burst, seconds (the simulation's floor too).
 constexpr float k_min_burst_interval = 0.01f;
 /// Ranges the inspector offers, held by the setters as well so every writer stays inside them.
@@ -134,6 +141,8 @@ void particle_emitter_component::on_create_component(entt::registry& r, entt::en
     auto& component = entity.get<particle_emitter_component>();
     component.set_owner(entity);
     component.desc_.reset();
+    // A new emitter draws the plain particle material: its Texture is the first thing to set.
+    component.material_.set_shared_material(default_material());
     component.recreate_emitter();
 }
 
@@ -676,43 +685,191 @@ auto particle_emitter_component::get_updated_world_bounds(const math::transform&
     return bounds;
 }
 
+auto get_particle_blend_mode(material_blend_mode mode) -> ps_soa::blend_mode
+{
+    switch(mode)
+    {
+        case material_blend_mode::additive:
+            return ps_soa::blend_mode::additive;
+        case material_blend_mode::modulate:
+            return ps_soa::blend_mode::multiply;
+        case material_blend_mode::premultiplied:
+            return ps_soa::blend_mode::premultiplied;
+        default:
+            return ps_soa::blend_mode::normal;
+    }
+}
+
+auto get_material_blend_mode(ps_soa::blend_mode mode) -> material_blend_mode
+{
+    switch(mode)
+    {
+        case ps_soa::blend_mode::additive:
+            return material_blend_mode::additive;
+        case ps_soa::blend_mode::multiply:
+            return material_blend_mode::modulate;
+        case ps_soa::blend_mode::premultiplied:
+            return material_blend_mode::premultiplied;
+        default:
+            return material_blend_mode::translucent;
+    }
+}
+
+namespace
+{
+/// Whether @p handle names an asset, loaded or not: a handle is valid only once its asset has a load, and one whose
+/// compiled file does not exist yet names its asset all the same.
+template<typename T>
+auto names_emitter_asset(const asset_handle<T>& handle) -> bool
+{
+    return !handle.uid().is_nil() || !handle.id().empty();
+}
+
+/// Whether an emitter's sprites, trails and ribbons can draw @p graph: a material with Particle Use whose shader
+/// compiled. One without a shader would draw nothing.
+auto draws_emitter_particles(const graph_material* graph) -> bool
+{
+    return graph != nullptr && graph->is_particle_use() && graph->get_shader().is_valid();
+}
+} // namespace
+
+auto particle_emitter_component::find_material_problem(const material& mat) -> particle_material_problem
+{
+    const auto* graph = mat.safe_cast<graph_material>();
+    if(draws_emitter_particles(graph))
+    {
+        return particle_material_problem::none;
+    }
+    if(graph == nullptr || graph->get_domain() != material_domain::surface)
+    {
+        return particle_material_problem::not_surface;
+    }
+    if(!graph->is_forward())
+    {
+        return particle_material_problem::not_forward;
+    }
+    return graph->is_particle_use() ? particle_material_problem::no_shader : particle_material_problem::particle_use_off;
+}
+
+auto particle_emitter_component::default_material() -> asset_handle<material>&
+{
+    static asset_handle<material> plain;
+    return plain;
+}
+
+auto particle_emitter_component::find_standard_surface() const -> hpp::optional<particle_surface>
+{
+    const auto& shared = material_.get_shared_material();
+    return names_emitter_asset(shared) ? find_shipped_particle_surface(shared.id()) : particle_surface{};
+}
+
+void particle_emitter_component::set_standard_surface(const particle_surface& surface)
+{
+    particle_surface wanted = surface;
+    // The one that reads a normal map while the emitter has one, where the surface is lit.
+    wanted.has_normal_map = has_texture_override(PARTICLE_NORMAL_MAP_NAME);
+    auto& am = engine::context().get_cached<asset_manager>();
+    assign_render_material(am.get_asset<material>(get_particle_material_key(wanted)));
+}
+
+auto particle_emitter_component::has_texture_override(hpp::string_view name) const -> bool
+{
+    for(const auto& entry : material_.get_graph_texture_overrides())
+    {
+        if(entry.name == name)
+        {
+            return names_emitter_asset(entry.texture);
+        }
+    }
+    return false;
+}
+
+auto particle_emitter_component::find_material_texture(hpp::string_view name) const -> asset_handle<gfx::texture>
+{
+    for(const auto& entry : material_.get_graph_texture_overrides())
+    {
+        if(entry.name == name)
+        {
+            return entry.texture;
+        }
+    }
+    // Kept alive while it is read: the asset may reload on another thread.
+    const auto own = find_own_material();
+    const auto* graph = own ? own->safe_cast<graph_material>() : nullptr;
+    return graph != nullptr ? graph->get_texture(name) : asset_handle<gfx::texture>{};
+}
+
 void particle_emitter_component::set_texture(const asset_handle<gfx::texture>& texture)
 {
-    texture_ = texture;
-}
-
-auto particle_emitter_component::get_texture() const -> const asset_handle<gfx::texture>&
-{
-    return texture_;
-}
-
-auto particle_emitter_component::get_drawn_texture() const -> const asset_handle<gfx::texture>&
-{
-    if(texture_.is_valid())
+    if(names_emitter_asset(texture))
     {
-        return texture_;
+        if(!names_emitter_asset(material_.get_shared_material()))
+        {
+            // The overrides are of a material: the plain one an emitter without a material draws.
+            set_standard_surface({});
+        }
+        material_.set_known_graph_texture(PARTICLE_TEXTURE_NAME, texture);
     }
-    return material::default_color_map();
+    else
+    {
+        // No texture of its own: the material's.
+        material_.revert_graph_texture(PARTICLE_TEXTURE_NAME);
+    }
+    is_render_mesh_dirty_ = true;
+}
+
+auto particle_emitter_component::get_texture() const -> asset_handle<gfx::texture>
+{
+    return find_material_texture(PARTICLE_TEXTURE_NAME);
 }
 
 void particle_emitter_component::set_normal_texture(const asset_handle<gfx::texture>& value)
 {
-    normal_texture_ = value;
+    if(names_emitter_asset(value))
+    {
+        material_.set_known_graph_texture(PARTICLE_NORMAL_MAP_NAME, value);
+    }
+    else
+    {
+        material_.revert_graph_texture(PARTICLE_NORMAL_MAP_NAME);
+    }
+    if(const auto surface = find_standard_surface())
+    {
+        set_standard_surface(*surface);
+    }
+    is_render_mesh_dirty_ = true;
 }
 
-auto particle_emitter_component::get_normal_texture() const -> const asset_handle<gfx::texture>&
+auto particle_emitter_component::get_normal_texture() const -> asset_handle<gfx::texture>
 {
-    return normal_texture_;
+    return find_material_texture(PARTICLE_NORMAL_MAP_NAME);
 }
 
 void particle_emitter_component::set_texture_mode(ps_soa::texture_mode mode)
 {
-    desc_.render.texture_mode = mode;
+    auto surface = find_standard_surface();
+    if(!surface)
+    {
+        return;
+    }
+    const bool is_mask = mode == ps_soa::texture_mode::mask;
+    if(is_mask && !surface->is_mask)
+    {
+        is_mask_premultiplied_ = surface->blend == material_blend_mode::premultiplied;
+    }
+    else if(!is_mask && surface->is_mask && is_mask_premultiplied_ && surface->blend == material_blend_mode::translucent)
+    {
+        // A mask's one alpha-blended material stood for the blend the emitter was given.
+        surface->blend = material_blend_mode::premultiplied;
+    }
+    surface->is_mask = is_mask;
+    set_standard_surface(*surface);
 }
 
 auto particle_emitter_component::get_texture_mode() const -> ps_soa::texture_mode
 {
-    return desc_.render.texture_mode;
+    const auto surface = find_standard_surface();
+    return surface && surface->is_mask ? ps_soa::texture_mode::mask : ps_soa::texture_mode::multi_channel;
 }
 
 void particle_emitter_component::set_render_mode(ps_soa::render_mode mode)
@@ -727,11 +884,27 @@ auto particle_emitter_component::get_render_mode() const -> ps_soa::render_mode
 
 void particle_emitter_component::set_blend_mode(ps_soa::blend_mode mode)
 {
+    auto surface = find_standard_surface();
+    if(!surface)
+    {
+        return;
+    }
+    surface->blend = get_material_blend_mode(mode);
+    set_standard_surface(*surface);
+    is_mask_premultiplied_ = mode == ps_soa::blend_mode::premultiplied;
+    // What the simulation sorts and culls by, before the material has loaded.
     desc_.render.blend_mode = mode;
 }
 
 auto particle_emitter_component::get_blend_mode() const -> ps_soa::blend_mode
 {
+    if(const auto surface = find_standard_surface())
+    {
+        // A mask's one alpha-blended material answers as the blend the emitter was given.
+        const bool is_premultiplied_mask =
+            surface->is_mask && surface->blend == material_blend_mode::translucent && is_mask_premultiplied_;
+        return is_premultiplied_mask ? ps_soa::blend_mode::premultiplied : get_particle_blend_mode(surface->blend);
+    }
     return desc_.render.blend_mode;
 }
 
@@ -1045,6 +1218,28 @@ auto particle_emitter_component::get_ribbon_facing() const -> ps_soa::ribbon_fac
     return desc_.render.ribbon_facing;
 }
 
+void particle_emitter_component::set_ribbon_count(uint32_t count)
+{
+    desc_.render.ribbon_count = math::clamp(count, 1u, ps_soa::k_max_ribbon_count);
+}
+
+auto particle_emitter_component::get_ribbon_count() const -> uint32_t
+{
+    return desc_.render.ribbon_count;
+}
+
+void particle_emitter_component::set_ribbon_smoothing(ps_soa::ribbon_smoothing smoothing)
+{
+    // A value a file holds that is no smoothing draws as the nearest one.
+    const int level = math::clamp(int(smoothing), int(ps_soa::ribbon_smoothing::none), int(ps_soa::ribbon_smoothing::high));
+    desc_.render.ribbon_smoothing = ps_soa::ribbon_smoothing(level);
+}
+
+auto particle_emitter_component::get_ribbon_smoothing() const -> ps_soa::ribbon_smoothing
+{
+    return desc_.render.ribbon_smoothing;
+}
+
 void particle_emitter_component::set_restitution(float value)
 {
     desc_.motion.restitution = math::clamp(value, 0.0f, 1.0f);
@@ -1088,6 +1283,7 @@ auto particle_emitter_component::get_collision_radius_scale() const -> float
 void particle_emitter_component::set_collision(ps_soa::collision_mode mode)
 {
     desc_.motion.collision = mode;
+    refresh_event_mask();
 }
 
 auto particle_emitter_component::get_collision() const -> ps_soa::collision_mode
@@ -1114,14 +1310,108 @@ auto particle_emitter_component::get_collision_planes() const -> const std::vect
     return desc_.motion.collision_planes;
 }
 
+void particle_emitter_component::set_collide_with(ps_soa::collision_source source)
+{
+    desc_.motion.collide_with = source;
+    refresh_event_mask();
+}
+
+auto particle_emitter_component::get_collide_with() const -> ps_soa::collision_source
+{
+    return desc_.motion.collide_with;
+}
+
+void particle_emitter_component::set_collision_layers(layer_mask layers)
+{
+    desc_.motion.collision_layers = layers.mask;
+}
+
+auto particle_emitter_component::get_collision_layers() const -> layer_mask
+{
+    return layer_mask{desc_.motion.collision_layers};
+}
+
+void particle_emitter_component::set_collision_quality(ps_soa::collision_quality quality)
+{
+    desc_.motion.collision_quality = quality;
+}
+
+auto particle_emitter_component::get_collision_quality() const -> ps_soa::collision_quality
+{
+    return desc_.motion.collision_quality;
+}
+
+void particle_emitter_component::set_rest_speed(float value)
+{
+    desc_.motion.rest_speed = math::max(value, 0.0f);
+}
+
+auto particle_emitter_component::get_rest_speed() const -> float
+{
+    return desc_.motion.rest_speed;
+}
+
+void particle_emitter_component::set_lifetime_loss(float value)
+{
+    desc_.motion.lifetime_loss = math::clamp(value, 0.0f, 1.0f);
+}
+
+auto particle_emitter_component::get_lifetime_loss() const -> float
+{
+    return desc_.motion.lifetime_loss;
+}
+
+void particle_emitter_component::set_bounce_scatter(float value)
+{
+    desc_.motion.bounce_scatter = math::clamp(value, 0.0f, k_max_bounce_scatter_degrees);
+}
+
+auto particle_emitter_component::get_bounce_scatter() const -> float
+{
+    return desc_.motion.bounce_scatter;
+}
+
+void particle_emitter_component::set_align_to_surface(bool value)
+{
+    desc_.motion.align_to_surface = value;
+}
+
+auto particle_emitter_component::get_align_to_surface() const -> bool
+{
+    return desc_.motion.align_to_surface;
+}
+
+auto particle_emitter_component::get_waiting_sweeps() const -> uint32_t
+{
+    return ps_soa::is_valid(emitter_handle_) ? ps_soa::get_waiting_sweeps(emitter_handle_) : 0u;
+}
+
+auto particle_emitter_component::sweeps_colliders() const -> bool
+{
+    return ps_soa::is_valid(emitter_handle_) && enabled_ &&
+           (ps_soa::collides_with_colliders(desc_) || ps_soa::get_waiting_sweeps(emitter_handle_) > 0);
+}
+
+auto particle_emitter_component::resolve_collisions(const ps_soa::particle_sweep& sweep, uint32_t max_casts)
+    -> ps_soa::collision_resolve_stats
+{
+    if(!ps_soa::is_valid(emitter_handle_))
+    {
+        return {};
+    }
+    const ps_soa::collision_resolve_stats resolved = ps_soa::resolve_collisions(emitter_handle_, desc_, sweep, max_casts);
+    if(resolved.contacts > 0)
+    {
+        // The update placed the mesh particles before these contacts moved, stopped or ended some of them.
+        update_mesh_instances();
+    }
+    return resolved;
+}
+
 void particle_emitter_component::set_sub_emitters(const std::vector<particle_sub_emitter>& sub_emitters)
 {
     sub_emitters_ = sub_emitters;
-    desc_.event_mask = 0;
-    for(const auto& sub_emitter : sub_emitters_)
-    {
-        desc_.event_mask |= static_cast<uint32_t>(sub_emitter.trigger);
-    }
+    refresh_event_mask();
 }
 
 auto particle_emitter_component::get_sub_emitters() const -> const std::vector<particle_sub_emitter>&
@@ -1129,21 +1419,199 @@ auto particle_emitter_component::get_sub_emitters() const -> const std::vector<p
     return sub_emitters_;
 }
 
-void particle_emitter_component::fire_sub_emitters()
+void particle_emitter_component::refresh_event_mask()
 {
-    if(sub_emitters_.empty() || !ps_soa::is_valid(emitter_handle_))
+    uint32_t mask = send_events_;
+    for(const auto& sub_emitter : sub_emitters_)
+    {
+        mask |= static_cast<uint32_t>(sub_emitter.trigger);
+    }
+    if(tells_hit_entities() || collision_decal_.enabled)
+    {
+        mask |= static_cast<uint32_t>(ps_soa::particle_event_type::collision);
+    }
+    desc_.event_mask = mask;
+}
+
+auto particle_emitter_component::tells_hit_entities() const -> bool
+{
+    return notify_hit_entities_ && ps_soa::collides_with_colliders(desc_);
+}
+
+void particle_emitter_component::set_send_events(uint32_t mask)
+{
+    constexpr uint32_t known = static_cast<uint32_t>(ps_soa::particle_event_type::birth) |
+                               static_cast<uint32_t>(ps_soa::particle_event_type::death) |
+                               static_cast<uint32_t>(ps_soa::particle_event_type::collision);
+    send_events_ = mask & known;
+    refresh_event_mask();
+}
+
+auto particle_emitter_component::get_send_events() const -> uint32_t
+{
+    return send_events_;
+}
+
+void particle_emitter_component::set_send_birth_events(bool value)
+{
+    constexpr auto bit = static_cast<uint32_t>(ps_soa::particle_event_type::birth);
+    set_send_events(value ? send_events_ | bit : send_events_ & ~bit);
+}
+
+auto particle_emitter_component::get_send_birth_events() const -> bool
+{
+    return (send_events_ & static_cast<uint32_t>(ps_soa::particle_event_type::birth)) != 0u;
+}
+
+void particle_emitter_component::set_send_death_events(bool value)
+{
+    constexpr auto bit = static_cast<uint32_t>(ps_soa::particle_event_type::death);
+    set_send_events(value ? send_events_ | bit : send_events_ & ~bit);
+}
+
+auto particle_emitter_component::get_send_death_events() const -> bool
+{
+    return (send_events_ & static_cast<uint32_t>(ps_soa::particle_event_type::death)) != 0u;
+}
+
+void particle_emitter_component::set_send_collision_events(bool value)
+{
+    constexpr auto bit = static_cast<uint32_t>(ps_soa::particle_event_type::collision);
+    set_send_events(value ? send_events_ | bit : send_events_ & ~bit);
+}
+
+auto particle_emitter_component::get_send_collision_events() const -> bool
+{
+    return (send_events_ & static_cast<uint32_t>(ps_soa::particle_event_type::collision)) != 0u;
+}
+
+void particle_emitter_component::set_notify_hit_entities(bool value)
+{
+    notify_hit_entities_ = value;
+    refresh_event_mask();
+}
+
+auto particle_emitter_component::get_notify_hit_entities() const -> bool
+{
+    return notify_hit_entities_;
+}
+
+void particle_emitter_component::set_collision_decal(const particle_collision_decal& decal)
+{
+    collision_decal_ = decal;
+    const float low = math::max(math::min(decal.size.min, decal.size.max), k_min_collision_decal_size);
+    const float high = math::max(math::max(decal.size.min, decal.size.max), k_min_collision_decal_size);
+    collision_decal_.size = frange_t(low, high);
+    collision_decal_.lifetime = math::max(decal.lifetime, 0.0f);
+    collision_decal_.fade_out = math::max(decal.fade_out, 0.0f);
+    collision_decal_.probability = math::clamp(decal.probability, 0.0f, 1.0f);
+    refresh_event_mask();
+}
+
+auto particle_emitter_component::get_collision_decal() const -> const particle_collision_decal&
+{
+    return collision_decal_;
+}
+
+void particle_emitter_component::dispatch_events(const particle_event_outputs& outputs)
+{
+    if(desc_.event_mask == 0 || !ps_soa::is_valid(emitter_handle_))
     {
         return;
     }
-    sub_emitter_events_.clear();
-    ps_soa::take_particle_events(emitter_handle_, sub_emitter_events_);
-    if(!is_sub_emitter_rng_seeded_)
+    frame_events_.clear();
+    ps_soa::take_particle_events(emitter_handle_, frame_events_);
+    if(frame_events_.empty())
     {
-        // Each emitter draws its own sequence, so emitters with the same probabilities do not fire in step.
-        const auto seed = uint32_t(reinterpret_cast<uintptr_t>(this) >> 4u);
-        sub_emitter_rng_.reset(seed | 1u, (seed * 2654435761u) | 1u);
-        is_sub_emitter_rng_seeded_ = true;
+        return;
     }
+    seed_event_rng();
+    fire_sub_emitters();
+    if(outputs.script_events != nullptr)
+    {
+        hand_out_script_events(*outputs.script_events);
+    }
+    if(outputs.decals != nullptr)
+    {
+        request_collision_decals(*outputs.decals);
+    }
+}
+
+void particle_emitter_component::seed_event_rng()
+{
+    if(is_event_rng_seeded_)
+    {
+        return;
+    }
+    // Each emitter draws its own sequence, so emitters with the same probabilities do not fire in step.
+    const auto seed = uint32_t(reinterpret_cast<uintptr_t>(this) >> 4u);
+    event_rng_.reset(seed | 1u, (seed * 2654435761u) | 1u);
+    is_event_rng_seeded_ = true;
+}
+
+void particle_emitter_component::hand_out_script_events(std::vector<particle_script_events>& out_events)
+{
+    const bool tells_hits = tells_hit_entities();
+    const uint32_t wanted = send_events_ | (tells_hits ? static_cast<uint32_t>(ps_soa::particle_event_type::collision) : 0u);
+    if(wanted == 0u)
+    {
+        return;
+    }
+    particle_script_events batch;
+    for(const auto& event : frame_events_)
+    {
+        if((static_cast<uint32_t>(event.type) & wanted) != 0u)
+        {
+            batch.events.push_back(event);
+        }
+    }
+    if(batch.events.empty())
+    {
+        return;
+    }
+    batch.emitter = get_owner().entity();
+    batch.sent_kinds = send_events_;
+    batch.notifies_hit_entities = tells_hits;
+    out_events.push_back(std::move(batch));
+}
+
+void particle_emitter_component::request_collision_decals(std::vector<particle_decal_spawn>& out_decals)
+{
+    if(!collision_decal_.enabled)
+    {
+        return;
+    }
+    uint32_t asked = 0;
+    for(const auto& event : frame_events_)
+    {
+        if(asked >= k_max_collision_decals_per_frame)
+        {
+            break;
+        }
+        if(event.type != ps_soa::particle_event_type::collision ||
+           (collision_decal_.probability < 1.0f && bx::frnd(&event_rng_) >= collision_decal_.probability))
+        {
+            continue;
+        }
+        particle_decal_spawn spawn;
+        spawn.material = collision_decal_.material;
+        spawn.point = event.surface_point;
+        spawn.normal = event.normal;
+        spawn.size = math::mix(collision_decal_.size.min, collision_decal_.size.max, bx::frnd(&event_rng_));
+        spawn.roll_degrees = 360.0f * bx::frnd(&event_rng_);
+        spawn.lifetime = collision_decal_.lifetime;
+        spawn.fade_out = collision_decal_.fade_out;
+        if(collision_decal_.attach_to_entity && event.entity != ps_soa::no_particle_entity)
+        {
+            spawn.attach_to = entt::entity(event.entity);
+        }
+        out_decals.push_back(spawn);
+        ++asked;
+    }
+}
+
+void particle_emitter_component::fire_sub_emitters()
+{
     for(const auto& sub_emitter : sub_emitters_)
     {
         auto* target = sub_emitter.target ? sub_emitter.target.try_get<particle_emitter_component>() : nullptr;
@@ -1161,16 +1629,16 @@ void particle_emitter_component::fire_sub_emitters()
                 world_to_target = glm::inverse(math::mat4(transform->get_transform_global().get_matrix()));
             }
         }
-        for(const auto& event : sub_emitter_events_)
+        for(const auto& event : frame_events_)
         {
             if(event.type != sub_emitter.trigger ||
-               (sub_emitter.probability < 1.0f && bx::frnd(&sub_emitter_rng_) >= sub_emitter.probability))
+               (sub_emitter.probability < 1.0f && bx::frnd(&event_rng_) >= sub_emitter.probability))
             {
                 continue;
             }
             const float low = math::max(math::min(sub_emitter.count.min, sub_emitter.count.max), 0.0f);
             const float high = math::max(sub_emitter.count.min, sub_emitter.count.max);
-            const uint32_t count = uint32_t(math::floor(low + bx::frnd(&sub_emitter_rng_) * (high - low + 1.0f)));
+            const uint32_t count = uint32_t(math::floor(low + bx::frnd(&event_rng_) * (high - low + 1.0f)));
             if(count == 0)
             {
                 continue;
@@ -1257,6 +1725,16 @@ void particle_emitter_component::set_lighting(ps_soa::particle_lighting lighting
 auto particle_emitter_component::get_lighting() const -> ps_soa::particle_lighting
 {
     return desc_.render.lighting;
+}
+
+void particle_emitter_component::set_ambient_light(ps_soa::particle_ambient ambient)
+{
+    desc_.render.ambient = ambient;
+}
+
+auto particle_emitter_component::get_ambient_light() const -> ps_soa::particle_ambient
+{
+    return desc_.render.ambient;
 }
 
 void particle_emitter_component::set_receive_shadows(bool value)
@@ -1458,6 +1936,28 @@ auto particle_emitter_component::get_intensity_over_life() const -> const math::
     return desc_.appearance.intensity_over_life;
 }
 
+void particle_emitter_component::set_custom_data_x(const math::gradient<float>& value)
+{
+    desc_.appearance.custom_data_x = value;
+    desc_.appearance.custom_data_x.bake(ps_soa::curve_bake_resolution);
+}
+
+auto particle_emitter_component::get_custom_data_x() const -> const math::gradient<float>&
+{
+    return desc_.appearance.custom_data_x;
+}
+
+void particle_emitter_component::set_custom_data_y(const math::gradient<float>& value)
+{
+    desc_.appearance.custom_data_y = value;
+    desc_.appearance.custom_data_y.bake(ps_soa::curve_bake_resolution);
+}
+
+auto particle_emitter_component::get_custom_data_y() const -> const math::gradient<float>&
+{
+    return desc_.appearance.custom_data_y;
+}
+
 void particle_emitter_component::set_spin_over_life(const math::gradient<float>& value)
 {
     desc_.render.spin_over_life = value;
@@ -1576,13 +2076,171 @@ auto particle_emitter_component::get_render_mesh() const -> const asset_handle<m
 
 void particle_emitter_component::set_render_material(const asset_handle<material>& value)
 {
-    render_material_ = value;
+    is_mask_premultiplied_ = false;
+    assign_render_material(value);
+}
+
+void particle_emitter_component::assign_render_material(const asset_handle<material>& value)
+{
+    if(material_.get_shared_material() == value)
+    {
+        return;
+    }
+    material_.set_shared_material(value);
+    material_.update_resolved();
     is_render_mesh_dirty_ = true;
 }
 
 auto particle_emitter_component::get_render_material() const -> const asset_handle<material>&
 {
-    return render_material_;
+    return material_.get_shared_material();
+}
+
+auto particle_emitter_component::get_material_instance() const -> const material_instance&
+{
+    return material_;
+}
+
+auto particle_emitter_component::get_material_instance() -> material_instance&
+{
+    return material_;
+}
+
+void particle_emitter_component::set_material_instance(const material_instance& instance)
+{
+    material_instance updated = instance;
+    // The instance's own shared material is the emitter's: the overrides follow the material picked.
+    updated.set_shared_material(material_.get_shared_material());
+    // The material drawn keeps its place and is rewritten there, so what is keyed on it holds across an edit of one
+    // override.
+    updated.adopt_resolved(material_);
+    material_ = std::move(updated);
+    material_.update_resolved();
+    is_render_mesh_dirty_ = true;
+}
+
+void particle_emitter_component::refresh_material()
+{
+    material_.update_resolved();
+    if(mesh_model_.is_valid())
+    {
+        mesh_model_.update_material_instances();
+    }
+    auto drawn = find_drawn_material();
+    if(!drawn && drawn_material_ && is_material_loading())
+    {
+        // Its material is on its way, for the first time or again after an edit: the one drawn so far stays.
+        return;
+    }
+    const auto* graph = drawn ? drawn->safe_cast<graph_material>() : nullptr;
+    const uint64_t revision = graph != nullptr ? graph->get_revision() : 0;
+    if(graph != drawn_graph_ || revision != drawn_revision_)
+    {
+        drawn_hash_ = graph != nullptr ? graph->get_draw_hash() : 0;
+        drawn_revision_ = revision;
+    }
+    drawn_material_ = std::move(drawn);
+    drawn_graph_ = graph;
+    if(graph != nullptr)
+    {
+        // The simulation sorts and culls by the blend the material draws with.
+        desc_.render.blend_mode = get_particle_blend_mode(graph->get_blend_mode());
+    }
+}
+
+auto particle_emitter_component::is_material_loading() const -> bool
+{
+    const auto& shared = material_.get_shared_material();
+    // A handle is valid while its asset has a load: one that names an asset without any is missing, not on its way.
+    return shared.is_valid() && !shared.try_get();
+}
+
+auto particle_emitter_component::find_drawn_material() const -> std::shared_ptr<material>
+{
+    const auto& shared = material_.get_shared_material();
+    const auto loaded = shared.try_get();
+    if(!loaded && shared.is_valid())
+    {
+        // Its own, once it has loaded.
+        return nullptr;
+    }
+    if(loaded && !asset_handle<material>::is_empty(loaded) && draws_emitter_particles(loaded->safe_cast<graph_material>()))
+    {
+        // The overrides wait for the shared material (update_resolved): until then it draws as it is.
+        const auto& resolved = material_.get_resolved();
+        return resolved ? resolved : loaded;
+    }
+    // No material, a missing one, or one that cannot draw particles: the plain one.
+    const auto plain = default_material().try_get();
+    if(!plain || asset_handle<material>::is_empty(plain))
+    {
+        return nullptr;
+    }
+    return draws_emitter_particles(plain->safe_cast<graph_material>()) ? plain : nullptr;
+}
+
+auto particle_emitter_component::find_own_material() const -> std::shared_ptr<material>
+{
+    const auto& shared = material_.get_shared_material();
+    if(!names_emitter_asset(shared))
+    {
+        return nullptr;
+    }
+    // The overrides wait for the shared material (update_resolved): until then the emitter draws it as it is.
+    const auto& resolved = material_.get_resolved();
+    auto loaded = resolved ? resolved : shared.try_get();
+    return loaded && !asset_handle<material>::is_empty(loaded) ? loaded : nullptr;
+}
+
+auto particle_emitter_component::has_unusable_material() const -> bool
+{
+    const auto& shared = material_.get_shared_material();
+    if(desc_.render.render_mode == ps_soa::render_mode::mesh || !names_emitter_asset(shared))
+    {
+        return false;
+    }
+    const auto loaded = shared.try_get();
+    if(!loaded || asset_handle<material>::is_empty(loaded))
+    {
+        return false;
+    }
+    return find_material_problem(*loaded) != particle_material_problem::none;
+}
+
+auto particle_emitter_component::draws_own_material() const -> bool
+{
+    const auto& shared = material_.get_shared_material();
+    if(!names_emitter_asset(shared))
+    {
+        return false;
+    }
+    if(desc_.render.render_mode == ps_soa::render_mode::mesh)
+    {
+        // One of the engine's particle materials leaves a mesh its own.
+        return !find_shipped_particle_surface(shared.id());
+    }
+    return !has_unusable_material();
+}
+
+auto particle_emitter_component::draws_lit_material() const -> bool
+{
+    if(desc_.render.render_mode == ps_soa::render_mode::mesh)
+    {
+        return false;
+    }
+    const auto drawn = find_drawn_material();
+    const auto* graph = drawn ? drawn->safe_cast<graph_material>() : nullptr;
+    return graph == nullptr || graph->get_shading_model() != material_shading_model::unlit;
+}
+
+auto particle_emitter_component::get_particle_material() const -> const graph_material*
+{
+    return desc_.render.render_mode == ps_soa::render_mode::mesh ? nullptr : drawn_graph_;
+}
+
+auto particle_emitter_component::get_particle_material_hash() const -> uint64_t
+{
+    return desc_.render.render_mode == ps_soa::render_mode::mesh ? 0 : drawn_hash_;
 }
 
 void particle_emitter_component::set_mesh_cast_shadows(bool value)
@@ -1778,10 +2436,12 @@ void particle_emitter_component::refresh_cutout()
     {
         return;
     }
+    // The shape is cut from what the material shows as its Texture.
+    const auto texture = desc_.render.primitive == ps_soa::particle_primitive::cutout ? get_texture() : asset_handle<gfx::texture>{};
     const bool wants_cutout = desc_.render.primitive == ps_soa::particle_primitive::cutout &&
                               desc_.render.render_mode != ps_soa::render_mode::trail &&
-                              desc_.render.render_mode != ps_soa::render_mode::ribbon && texture_.is_valid() &&
-                              texture_.is_ready();
+                              desc_.render.render_mode != ps_soa::render_mode::ribbon && texture.is_valid() &&
+                              texture.is_ready();
     uint64_t key = 0;
     ps_soa::cutout_sheet sheet;
     if(wants_cutout)
@@ -1800,8 +2460,8 @@ void particle_emitter_component::refresh_cutout()
         // The loaded texture object too: a reimport bakes again.
         uint64_t threshold_bits = 0;
         std::memcpy(&threshold_bits, &sheet.alpha_threshold, sizeof(sheet.alpha_threshold));
-        key = std::hash<std::string>{}(texture_.id());
-        key = combine_hash(key, uint64_t(reinterpret_cast<uintptr_t>(texture_.get(false).get())));
+        key = std::hash<std::string>{}(texture.id());
+        key = combine_hash(key, uint64_t(reinterpret_cast<uintptr_t>(texture.get(false).get())));
         key = combine_hash(key, uint64_t(sheet.tiles_x) | (uint64_t(sheet.tiles_y) << 32));
         key = combine_hash(key, threshold_bits);
         key = combine_hash(key, uint64_t(sheet.is_blended) | (uint64_t(sheet.is_random_row) << 1) |
@@ -1814,7 +2474,7 @@ void particle_emitter_component::refresh_cutout()
     }
     ps_soa::set_emitter_cutout(emitter_handle_,
                                key,
-                               [texture_key = texture_.id(), sheet]()
+                               [texture_key = texture.id(), sheet]()
                                {
                                    return bake_texture_cutouts(texture_key, sheet);
                                });
@@ -1840,18 +2500,26 @@ void particle_emitter_component::refresh_render_mesh()
     }
     model built;
     built.set_lod(render_mesh_, 0);
-    if(render_material_.is_valid())
+    // One of the engine's particle materials is the sprites': a mesh it would stand in for keeps its own.
+    const auto& shared_material = material_.get_shared_material();
+    if(names_emitter_asset(shared_material) && !find_shipped_particle_surface(shared_material.id()))
     {
         for(uint32_t group = 0; group < source->get_data_groups_count(); ++group)
         {
-            built.set_shared_material(render_material_, group);
+            built.set_shared_material(shared_material, group);
+            // Every slot takes the emitter's overrides of the material.
+            built.get_material_instance(group) = material_;
         }
     }
     else
     {
         built.apply_default_materials(engine::context().get_cached<asset_manager>(), false);
     }
+    // The materials drawn keep their places where a slot's material stayed: an edit of an override rewrites them.
+    built.adopt_resolved_materials(mesh_model_);
     mesh_model_ = std::move(built);
+    // The slots' overrides reach the materials the new model draws with at once.
+    mesh_model_.update_material_instances();
     mesh_node_transforms_.clear();
     bool has_node_transforms = false;
     for(const auto& node : source->get_submesh_node_transforms(0))
@@ -1999,6 +2667,8 @@ void particle_emitter_component::set_simulation_space(ps_soa::simulation_space s
         return;
     }
     desc_.motion.space = space;
+    // Particles collide in World space alone, and the events that read their contacts follow.
+    refresh_event_mask();
     reset_emitter();
 }
 

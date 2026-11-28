@@ -1052,7 +1052,9 @@ void renderer::frame_begin(rtti::context& ctx, const frame_times& /*times*/)
                              particles.min_screen_size,
                              particles.max_drawn_particles,
                              particles.max_particles_scale,
-                             particles.max_lighting});
+                             particles.max_lighting,
+                             particles.max_collision_casts,
+                             particles.scene_collision});
     }
     // Every frame refills the probe face budget, the engine's default before a settings instance exists: a budget
     // left spent would stop every bake.

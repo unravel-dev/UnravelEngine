@@ -3,7 +3,7 @@
 
 /*
  * Exponential height fog (engine/engine/rendering/pipeline/passes/fog_pass.h). The full-screen composite
- * (fog_composite.sh) fogs the lit scene; the particles (particles/particle_fragment.sh) fog themselves with the same
+ * (fog_composite.sh) fogs the lit scene; the particles (particles/particle_shading.sh) fog themselves with the same
  * model and uniforms; the froxel passes (cs_fog_lighting.eshader, cs_fog_integrate.eshader) light and integrate the
  * volumetric layer near the camera.
  *

@@ -41,6 +41,16 @@ auto get_mixed_value_color() -> ImVec4;
 
 //-----------------------------------------------------------------------------
 /// <summary>
+/// The color of what is wrong and still works: an inspector row whose value does less than it
+/// asks for, the asset of a field that cannot use it. Amber, apart from the red-orange of a
+/// mixed value.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto get_warning_color() -> ImVec4;
+auto get_warning_color_u32() -> ImU32;
+
+//-----------------------------------------------------------------------------
+/// <summary>
 /// The colors that mark an asset an import writes, such as a model's default material: one
 /// while imports still rewrite it, one once it is edited and imports keep it. The inspector
 /// and the content browser mark it the same way.

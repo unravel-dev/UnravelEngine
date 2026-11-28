@@ -73,13 +73,62 @@ draws them: skill `unravel-rendering`. Driving materials through the editor's MC
 - A forward graph's own textures get the stages the engine leaves: 7 lit, 13 unlit, one fewer per scene read
   (`get_material_graph_max_textures`, `get_forward_scene_texture_stages`); mg_forward.sh's stage defines and those two
   functions change together, with the "material graphs" suite's stage checks.
+- Particles draw materials and nothing else: every sprite, trail and ribbon batch is a Surface material with
+  Particle Use (`MATERIAL_PARTICLE_USE_SETTING`, which applies with a Blend Mode of the translucency pass), drawn by
+  `particles/vs_particle.eshader`'s `graph` variants with the material's `particle` / `particle_unlit` /
+  `particle_velocity` fragment variants (`fs_material_graph_particle.sh`, `mg_particle.sh`,
+  `particles/particle_shading.sh`). An emitter without a material, or with one that cannot draw particles
+  (`particle_emitter_component::has_unusable_material`), draws `DEFAULT_PARTICLE_MATERIAL_KEY`.
+- A lit particle material is matte unless its graph sets Roughness or Metallic (Specular or Glossiness in that
+  workflow) on the output or on the Make Material Attributes it reads (`is_output_reflectance_given`): then the
+  compiler defines `MATERIAL_PARTICLE_SPECULAR` and the particle main adds what the surface reflects
+  (`particle_reflected_light`: the sun's highlight by the mesh surfaces' `StandardShadingDirect` for emitters whose
+  Lighting is Surface, and the per-particle ambient light as the environment, in the pixel's own orthonormal
+  frame). It fades with the Opacity in every blend mode: a Premultiplied graph's colour carries its Opacity, the
+  reflected light does not. The shipped particle materials set neither pin.
+- A particle draw leaves a graph 4 textures (lit) or 7 (unlit), one fewer with a Scene Color read, at the stages
+  `get_material_graph_particle_texture_stage` gives; the generated shader declares each sampler at both stages under
+  `#if MATERIAL_PARTICLE`. The stages, `mg_particle.sh`'s `PARTICLE_SCENE_COLOR_STAGE`, `particle_gpu_schema.h` and
+  the suite's stage checks change together.
+- The particle varyings are one contract between `vs_particle.eshader`'s `[outputs]` and the compiler's
+  `PARTICLE_SHADER_INPUTS`, by name and type. No varying of a material's mesh variants may have another type in
+  `vs_particle.eshader` either: `gpu_program::find_refusal` compares the two files, not the two variants, and refuses
+  the program.
+- A lit material is lit as the emitter's Lighting says: Unlit draws `particle_unlit` (its Base Color is light the
+  particle gives off), Volumetric and Surface draw `particle` with the `graph_lit` vertex variant. A material whose
+  Shading Model is Unlit has no `particle_unlit` variant and is never lit. The Normal channel is in the quad's frame;
+  left unlinked (`MATERIAL_NORMAL_LINKED` absent) a lit particle shades as a sphere.
+- The engine's Standard particle materials (`engine_data/data/materials/particles/`) are the output of
+  `make_particle_material_graph` (`particle_material.h`), one per Blend Mode, mask texture and normal map. After
+  changing the generator, write them with `UNRAVEL_WRITE_PARTICLE_MATERIALS=1 unravel-tests --suite "material graphs"`;
+  the suite fails while a file differs. Their texture nodes are named Texture and Normal Map
+  (`PARTICLE_TEXTURE_NAME`, `PARTICLE_NORMAL_MAP_NAME`), which an emitter overrides in its material instance, and
+  filter trilinear: anisotropic filtering costs a read and gains nothing on a quad that faces the camera.
+- The material a new Line or Trail draws with (`engine_data/data/materials/strip.mat`) is generated the same way
+  (`make_strip_material_graph`, `dynamic_geometry_material.h`) and written by the same run. It is Dithered, so a
+  colour's alpha fades it smoothly, and a Dithered surface casts no shadow: a rope that should cast takes an Opaque
+  material.
+- An emitter's look setters (`set_blend_mode`, `set_texture_mode`, `set_texture`, `set_normal_texture`) pick among
+  the Standard particle materials and set instance overrides; a material of the project's own keeps its Blend Mode.
+  Scenes saved with those keys load through the same setters (`load_legacy_look`), and prefab overrides of the old
+  keys are restated on `render_material` and `material_overrides` (those properties' `replaces` attribute,
+  `restate_replaced_overrides` in `prefab_component.cpp`).
+- Emitters batch by what their materials bind (`graph_material::get_draw_hash`, cached per emitter by
+  `particle_emitter_component::refresh_material`, and `graph_material::binds_same_draw` in `is_same_particle_batch`,
+  `pipeline.cpp`), not by material object: two instances with the same overrides share a draw, and so do two
+  materials of the same code. The loader's shader handles carry their material's key and no uid: a shader is told
+  apart by its code's hash (`get_shader_hash`) and its loaded object (`asset_handle::version`), never by `uid()`. A
+  ribbon's batch clamps the textures that read as their texture says (`material_draw::address_mask`).
+- A particle's Refraction bends by the Normal channel alone, in every variant: without a Normal linked nothing
+  bends, whatever the emitter's Lighting.
 - GI on forward surfaces: a lit graph whose textures and scene reads fit MATERIAL_GRAPH_MAX_FORWARD_GI_TEXTURES (5)
   also compiles "gi" / "oit_gi" (FORWARD_GI), which read the radiance cache's indirection and per-probe L1 SH on
   stages 6 and 5. The deferred pipeline draws them only when its GI updated the cache this frame
   (`pipeline::get_forward_gi_cache`), and the see-through models mark the cache cells around them
   (`deferred::collect_translucent_gi_points`). The SH pass (`cs_gi_rc_sh`) starts the first frame such surfaces mark
   points (a full pass) and then runs over the traced probes every frame until the cache is released; a scene without
-  them never runs it.
+  them never runs it. Lit particles of an emitter whose Ambient Light is Global Illumination read the same SH per
+  particle and mark the cache the same way (skill `unravel-rendering`).
 - GI Reflections (`gi_reflections`, opt in): a graph with the "gi" variant also compiles "gi_layer"
   (FORWARD_GI_LAYER: octahedral normal, metallic, roughness in G-buffer target 1's layout, discarding behind the
   opaque depth read at stage 6) and "gi_reflect" / "oit_gi_reflect" (FORWARD_GI_REFLECTIONS: the traced result on
@@ -275,6 +324,9 @@ offset keeps the shadow live and the mesh in the velocity pass; bounds grow by M
 - Suite "material graphs" (slow: shaderc per example and renderer) for the model, compiler, node library and
   shader side; "material instances" for overrides, batching and `pbr_material` loads; "render change" for property
   traits; "eshader files" after editing a `material_graph/*.sh` include.
+- A change of the particle main, the particle variants or the Standard particle materials: compare captures of an
+  old-format scene before and after with play mode paused and `play_skip_frame` (fixed-seed emitters then stand at
+  the same state in every run), on each backend and with `--gfx-disable=vertex_storage_buffers`.
 - Live in an editor: change a parameter (no recompile, the scene updates), pick a texture (no recompile), toggle a
   Static Switch (recompiles), override a value on one entity and confirm the draw count stays (registers 0..3),
   enter and leave play mode with the graph window open.
@@ -293,5 +345,6 @@ offset keeps the shadow live and the mesh in the velocity pass; bounds grow by M
 | Shader side | `engine_data/data/shaders/material_graph/material_graph.sh`, `engine_data/data/shaders/material_graph/fs_material_graph_gbuffer.sh` |
 | Editor window, previews | `editor/editor/hub/panels/material_graph_panel/material_graph_panel.h` |
 | Engine default materials | `engine_data/data/materials/standard.mat`, `engine_data/data/materials/fallback.mat` |
+| Particle materials: generator, shipped files, main | `engine/engine/rendering/material_graph/particle_material.h`, `engine_data/data/materials/particles/`, `engine_data/data/shaders/material_graph/fs_material_graph_particle.sh` |
 | Inspector, create actions | `editor/editor/hub/panels/inspector_panel/inspectors/inspector_assets.cpp`, `editor/editor/assets/asset_actions.cpp` |
 | MCP tool code | `editor/editor/system/mcp/mcp_tools_materials.cpp`, `editor/editor/system/mcp/mcp_material_utils.h` |

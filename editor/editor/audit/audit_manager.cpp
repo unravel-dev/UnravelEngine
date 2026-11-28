@@ -107,6 +107,7 @@ auto audit_manager::start(rtti::context& ctx, const run_request& request, std::s
         progress_->stages[static_cast<std::size_t>(audit::run_stage::scripts)].status = stage_progress::state::skipped;
     }
     run_error_.clear();
+    scanner_.begin_run();
     project_root_ = deployment::get_project_root();
     progress_->report({audit::run_stage::snapshot});
     input_ = make_audit_input(ctx, request.analyze_code);

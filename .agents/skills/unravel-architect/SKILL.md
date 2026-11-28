@@ -33,6 +33,9 @@ AGENTS.md ("Changing a shared contract").
 - A per-object variation reuses the object the engine already has (a material instance of a
   material), never a side channel or a new value type next to it (`unravel-materials`); a
   script API exposes those same objects (`unravel-scripting`).
+- A feature has one system, used for the simple case and the advanced one alike. A better
+  approach replaces the old one and upgrades old scenes, prefabs and assets on load (every
+  material became a graph, with the Standard graph as the default); it never ships beside it.
 - Work that takes longer than a frame is computed when an asset compiles or a deploy runs and
   is loaded like an imported asset; deferring it to first use moves the stall into play.
 - A format change keeps old files loading (a version or a backward-compatible LOAD) and keeps

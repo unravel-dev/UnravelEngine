@@ -37,6 +37,10 @@ struct field_content
     std::string path;
     /// Where opening the asset shows it, "the Material Graph"; empty for a type nothing opens.
     std::string open_in;
+    /// The row says its asset is wrong for it: the field is outlined in the warning color.
+    bool has_problem{};
+    /// The field shows its asset, locates and opens it, and neither picks nor clears.
+    bool is_read_only{};
 };
 
 /// What the field was asked for this frame.
@@ -64,6 +68,22 @@ auto draw_field(const field_content& content) -> field_request;
 /// Colors the last item as a place to drop, while a drag that fits it goes on.
 void draw_drop_highlight(bool is_drop_possible);
 
+/// Whether an entry suits the field the picker fills.
+enum class fit_state
+{
+    /// Not known yet: the asset still loads. Shown with the ones that suit until it is known.
+    unknown,
+    fits,
+    unfit,
+};
+
+/// An entry's fit, with a sentence the details pane shows: what the asset does in the field, or why it does not suit it.
+struct entry_fit
+{
+    fit_state state{fit_state::unknown};
+    std::string reason;
+};
+
 /// One choice of the picker.
 struct entry
 {
@@ -88,6 +108,10 @@ struct window_content
     std::string empty_text;
     /// Index of the entry the field holds now: highlighted when the window opens and marked on its card.
     hpp::optional<std::size_t> current;
+    /// What the field needs its asset for, "Particles", when only some entries suit it (entry_source::get_fit). The
+    /// picker then opens on the ones that suit, under a sidebar row named for it, tags their cards with it and veils
+    /// the others, which All still shows. Empty for a field that takes every entry alike.
+    std::string fit_use;
 };
 
 /// What the picker asks of the entries it draws, by their index. Each runs only for what is on screen: asking for a
@@ -99,6 +123,9 @@ struct entry_source
     std::function<std::string(std::size_t)> get_summary;
     /// The facts the details pane lists for the highlighted entry; may be empty.
     std::function<void(std::size_t, content_item_sections&)> collect_details;
+    /// Whether the entry suits the field; empty for a field that takes every entry alike. Asked for every entry each
+    /// frame the picker is open.
+    std::function<entry_fit(std::size_t)> get_fit;
 };
 
 /// Opens the picker with this id. Call from the ID scope draw_window() is called from.

@@ -17,6 +17,7 @@
 #include <engine/meta/rendering/material.hpp>
 #include <engine/meta/rendering/material_graph.hpp>
 #include <engine/rendering/ecs/components/camera_component.h>
+#include <engine/rendering/material_graph/particle_material.h>
 #include <engine/rendering/ecs/components/volume_component.h>
 
 #include <filedialog/filedialog.h>
@@ -50,7 +51,7 @@ constexpr float PANE_TAB_PADDING_EM = 0.5f;
 /// The 3D preview is square, up to this part of the side pane's height.
 constexpr float SCENE_PREVIEW_MAX_HEIGHT_RATIO = 0.45f;
 constexpr float SCENE_PREVIEW_SHAPE_WIDTH = 96.0f;
-constexpr const char* SCENE_PREVIEW_SHAPES[] = {"Sphere", "Cube", "Cylinder", "Plane"};
+constexpr const char* SCENE_PREVIEW_SHAPES[] = {"Sphere", "Cube", "Cylinder", "Plane", "Particles"};
 /// Room kept right of the status in the toolbar.
 constexpr float GRAPH_STATUS_MARGIN = 12.0f;
 constexpr float SETTING_DRAG_SPEED = 0.01f;
@@ -63,6 +64,8 @@ constexpr const char* UNTITLED_NAME = "Untitled";
 constexpr const char* TEXTURE_SAMPLE_TYPE = "texture_sample";
 constexpr const char* NEW_FUNCTION_NAME = "New Material Function";
 constexpr const char* PROJECT_DATA_FOLDER = "app:/data";
+/// Seconds the window waits for the import of a copy it made before it gives up opening it.
+constexpr double GRAPH_COPY_IMPORT_SECONDS = 60.0;
 constexpr const char* REROUTE_NAME_SETTING = "name";
 /// A Custom node's code editor: lines shown, and the room its buffer keeps for typing.
 constexpr float CODE_EDITOR_LINES = 10.0f;
@@ -267,9 +270,12 @@ void material_graph_panel::on_frame_ui_render(rtti::context& ctx, const char* na
 void material_graph_panel::set_graph(material_graph graph, const std::string& path, const std::string& name)
 {
     // Another document leaves the way back behind; a reload of this one (sync_with_asset) keeps it.
-    if(path.empty() || path != path_)
+    const bool is_other_document = path.empty() || path != path_;
+    if(is_other_document)
     {
         back_trail_.clear();
+        // A particle material opens on particles; the shape picked for this document stays through its reloads.
+        scene_preview_.pick_shape_for(is_material_graph_particle_use(graph));
     }
     ensure_material_graph_output(graph);
     // Component links written by hand or by a tool show on component pins.
@@ -304,10 +310,39 @@ void material_graph_panel::set_untitled_graph(material_graph graph, const std::s
     own_saves_.clear();
 }
 
+namespace
+{
+/// @p loaded, what a material handle holds, as a graph material; null for none, a failed load and a material that
+/// is no graph.
+auto find_loaded_graph_material(const std::shared_ptr<material>& loaded) -> const graph_material*
+{
+    return loaded && !asset_handle<material>::is_empty(loaded) ? loaded->safe_cast<graph_material>() : nullptr;
+}
+} // namespace
+
 auto material_graph_panel::open(const asset_handle<material>& asset) -> bool
 {
+    // The untitled graph the window holds is the user's to keep: asked before another material takes its place,
+    // and only of a material the window can show.
+    if(asset != material_ && find_loaded_graph_material(asset ? asset.get() : nullptr) != nullptr)
+    {
+        // The open edit goes to the graph it was made in.
+        if(edit_open_)
+        {
+            apply_edit(true, false);
+        }
+        if(!confirm_discard())
+        {
+            return false;
+        }
+    }
+    return show_material(asset);
+}
+
+auto material_graph_panel::show_material(const asset_handle<material>& asset) -> bool
+{
     const auto loaded = asset ? asset.get() : nullptr;
-    const auto* graph = loaded && !asset_handle<material>::is_empty(loaded) ? loaded->safe_cast<graph_material>() : nullptr;
+    const auto* graph = find_loaded_graph_material(loaded);
     if(graph == nullptr)
     {
         return false;
@@ -318,10 +353,6 @@ auto material_graph_panel::open(const asset_handle<material>& asset) -> bool
         if(edit_open_)
         {
             apply_edit(true, false);
-        }
-        if(!confirm_discard())
-        {
-            return false;
         }
         set_graph(graph->get_graph(), fs::resolve_protocol(asset.id()).string(), asset.name());
         material_ = asset;
@@ -366,7 +397,7 @@ void material_graph_panel::open_file(const std::string& absolute_path)
         // open untitled.
         const auto key = fs::convert_to_protocol(fs::path(absolute_path)).generic_string();
         material_graph graph;
-        if(key.rfind(PROJECT_DATA_FOLDER, 0) == 0 && load_from_file(absolute_path, graph))
+        if(asset_actions::is_project_asset(key) && load_from_file(absolute_path, graph))
         {
             set_graph(std::move(graph), absolute_path, fs::path(absolute_path).stem().string());
             material_ = {};
@@ -380,7 +411,7 @@ void material_graph_panel::open_file(const std::string& absolute_path)
     }
     const auto key = fs::convert_to_protocol(fs::path(absolute_path)).generic_string();
     const auto asset = ctx_ ? ctx_->get_cached<asset_manager>().get_asset<material>(key) : asset_handle<material>{};
-    if(!open(asset))
+    if(!show_material(asset))
     {
         native::message_box(fs::path(absolute_path).filename().string() + " is not a material graph.",
                             native::dialog_type::ok,
@@ -418,7 +449,12 @@ auto material_graph_panel::is_graph_file_document() const -> bool
 
 auto material_graph_panel::is_saved_on_edit() const -> bool
 {
-    return material_ || is_graph_file_document();
+    return (material_ && !is_view_only()) || is_graph_file_document();
+}
+
+auto material_graph_panel::is_view_only() const -> bool
+{
+    return material_ && !asset_actions::is_project_asset(material_.id());
 }
 
 auto material_graph_panel::detach_deleted_material() -> bool
@@ -428,7 +464,7 @@ auto material_graph_panel::detach_deleted_material() -> bool
     {
         return false;
     }
-    APPLOG_WARNING("The material {} was deleted; its graph stays in the Material Graph window, unsaved, until Save As.",
+    APPLOG_WARNING("The material {} was deleted. Its graph stays in the Material Graph window, unsaved, until Save As.",
                    material_.id());
     material_ = {};
     shown_material_.reset();
@@ -442,7 +478,7 @@ void material_graph_panel::save_graph_file()
 {
     if(!save_to_file(path_, graph_))
     {
-        APPLOG_ERROR("Could not save the material graph {}; it stays unsaved.", path_);
+        APPLOG_ERROR("Could not save the material graph {}. It stays unsaved.", path_);
         return;
     }
     dirty_ = false;
@@ -461,7 +497,7 @@ void material_graph_panel::save_function_as()
     {
         path += GRAPH_EXTENSION;
     }
-    if(fs::convert_to_protocol(path).generic_string().rfind(PROJECT_DATA_FOLDER, 0) != 0)
+    if(!asset_actions::is_project_asset(fs::convert_to_protocol(path).generic_string()))
     {
         native::message_box("A material function is saved in the project, under its data folder.",
                             native::dialog_type::ok,
@@ -476,6 +512,10 @@ void material_graph_panel::save_function_as()
 
 void material_graph_panel::save()
 {
+    if(is_view_only())
+    {
+        return;
+    }
     if(is_graph_file_document())
     {
         save_graph_file();
@@ -498,7 +538,7 @@ void material_graph_panel::save()
     const auto written = ctx_ ? asset_actions::save_material_graph(*ctx_, material_, graph_) : nullptr;
     if(!written)
     {
-        APPLOG_ERROR("Could not save the material graph {}; it stays unsaved.", material_.id());
+        APPLOG_ERROR("Could not save the material graph {}. It stays unsaved.", material_.id());
         return;
     }
     own_saves_.push_back(save_to_string(graph_));
@@ -515,8 +555,11 @@ void material_graph_panel::save_as()
     {
         return;
     }
-    const fs::path start = path_.empty() ? fs::resolve_protocol("app:/data/") / NEW_GRAPH_MATERIAL_NAME
-                                         : fs::path(path_).replace_extension();
+    // The dialog starts beside the material, or in the project for a graph without a file there.
+    const fs::path project_data = fs::resolve_protocol(std::string(PROJECT_DATA_FOLDER) + "/");
+    const fs::path start = path_.empty()    ? project_data / NEW_GRAPH_MATERIAL_NAME
+                           : is_view_only() ? project_data / name_
+                                            : fs::path(path_).replace_extension();
     std::string picked;
     if(!native::save_file_dialog(picked, {GRAPH_MATERIAL_FILTER}, "Materials", "Save material graph as", start.string()))
     {
@@ -527,7 +570,7 @@ void material_graph_panel::save_as()
     {
         path += ex::get_format<material>();
     }
-    if(!fs::has_known_protocol(fs::convert_to_protocol(path)))
+    if(!asset_actions::is_project_asset(fs::convert_to_protocol(path).generic_string()))
     {
         native::message_box("A material graph is saved in the project, under its data folder.",
                             native::dialog_type::ok,
@@ -538,20 +581,28 @@ void material_graph_panel::save_as()
     const auto asset = asset_actions::create_material_graph(*ctx_, path, graph_);
     if(!asset)
     {
-        APPLOG_ERROR("Could not save the material graph {}; it stays unsaved.", path.string());
+        APPLOG_ERROR("Could not save the material graph {}. It stays unsaved.", path.string());
         return;
     }
+    // What the asset holds now: the graph on screen for a new material, and for one that was at the path already its
+    // own graph and shader until the recompile the save started reloads it with the new ones.
+    const auto loaded = asset.get();
+    const auto* held = loaded && !asset_handle<material>::is_empty(loaded) ? loaded->safe_cast<graph_material>() : nullptr;
     material_ = asset;
-    shown_material_ = asset.try_get();
+    shown_material_ = loaded;
     own_saves_ = {save_to_string(graph_)};
     path_ = path.string();
     name_ = path.stem().string();
-    live_code_ = make_generated_code(graph_);
+    live_code_ = held != nullptr ? make_generated_code(held->get_graph()) : std::string{};
     dirty_ = false;
 }
 
 void material_graph_panel::push_values_to_asset()
 {
+    if(is_view_only())
+    {
+        return;
+    }
     const auto loaded = material_.try_get();
     auto* graph = loaded && !asset_handle<material>::is_empty(loaded) ? loaded->safe_cast<graph_material>() : nullptr;
     compile_if_needed();
@@ -687,7 +738,7 @@ void material_graph_panel::find_examples()
 
 void material_graph_panel::begin_edit()
 {
-    if(edit_open_)
+    if(edit_open_ || is_view_only())
     {
         return;
     }
@@ -702,8 +753,61 @@ void material_graph_panel::begin_edit()
     edit_item_ = ImGui::GetActiveID();
 }
 
+void material_graph_panel::show_committed_graph()
+{
+    material_graph committed;
+    if(load_from_string(committed_snapshot_, committed))
+    {
+        graph_ = std::move(committed);
+    }
+    edit_open_ = false;
+    view_.cancel_interaction();
+    ++revision_;
+    ++text_revision_;
+}
+
+void material_graph_panel::duplicate_into_project()
+{
+    if(!ctx_ || !material_)
+    {
+        return;
+    }
+    const std::string copy = editor_actions::duplicate_asset_into_project(*ctx_, material_.id());
+    if(!copy.empty())
+    {
+        pending_copy_ = {copy, material_.uid(), ImGui::GetTime() + GRAPH_COPY_IMPORT_SECONDS};
+    }
+}
+
+void material_graph_panel::open_pending_copy()
+{
+    if(pending_copy_.key.empty() || !ctx_)
+    {
+        return;
+    }
+    // The copy takes the place of the material it was made of: a window that went on to another graph keeps it.
+    const bool shows_source = material_ && material_.uid() == pending_copy_.source;
+    if(!shows_source || ImGui::GetTime() > pending_copy_.deadline)
+    {
+        pending_copy_ = {};
+        return;
+    }
+    // There is no asset to open until the asset watcher has imported the file.
+    const auto copy = ctx_->get_cached<asset_manager>().find_asset<material>(pending_copy_.key);
+    if(copy && open(copy))
+    {
+        pending_copy_ = {};
+    }
+}
+
 void material_graph_panel::apply_edit(bool finished, bool code_change)
 {
+    // Nothing edits a graph the window only shows: whatever reports an edit of it is taken back.
+    if(is_view_only())
+    {
+        show_committed_graph();
+        return;
+    }
     if(code_change)
     {
         ++revision_;
@@ -842,10 +946,12 @@ void material_graph_panel::select_node(const std::string& id)
 
 void material_graph_panel::draw_ui(rtti::context& ctx)
 {
+    open_pending_copy();
     sync_with_asset();
     handle_shortcuts();
     compile_if_needed();
     draw_toolbar();
+    draw_view_only_bar();
     ImGui::Separator();
     draw_layout(ctx);
     finish_abandoned_edit();
@@ -967,10 +1073,12 @@ void material_graph_panel::draw_toolbar()
     }
     set_wrapped_item_tooltip("Open a material graph: a graph material (.mat), or a graph file (.mgraph) as an untitled graph.");
     ImGui::SameLine();
+    ImGui::BeginDisabled(is_view_only());
     if(ImGui::Button(ICON_MDI_CONTENT_SAVE))
     {
         save();
     }
+    ImGui::EndDisabled();
     set_wrapped_item_tooltip("Save (Ctrl+S). A graph material saves every finished edit on its own; an untitled graph "
                             "becomes one.");
     ImGui::SameLine();
@@ -998,10 +1106,12 @@ void material_graph_panel::draw_toolbar()
     ImGui::SameLine();
     ImGui::TextDisabled("|");
     ImGui::SameLine();
+    ImGui::BeginDisabled(is_view_only());
     if(ImGui::Button(ICON_MDI_SITEMAP " Arrange"))
     {
         lay_out();
     }
+    ImGui::EndDisabled();
     set_wrapped_item_tooltip("Arranges every node in columns flowing into the output node.");
     ImGui::SameLine();
     if(ImGui::Button(ICON_MDI_FIT_TO_PAGE_OUTLINE))
@@ -1012,6 +1122,36 @@ void material_graph_panel::draw_toolbar()
     draw_status();
 }
 
+void material_graph_panel::draw_view_only_bar()
+{
+    if(!is_view_only())
+    {
+        return;
+    }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled(ICON_MDI_LOCK_OUTLINE);
+    ImGui::SameLine();
+    ImGui::TextUnformatted(asset_actions::get_shipped_asset_note(material_.id()).c_str());
+    set_wrapped_item_tooltip("Every project shares this material, and an update replaces it. The window shows its graph: "
+                             "select nodes to read their values, and copy them with Ctrl+C. A model that uses it overrides "
+                             "its values and textures in its own material slot, without a copy.");
+    ImGui::SameLine();
+    const bool is_importing = !pending_copy_.key.empty();
+    ImGui::BeginDisabled(is_importing);
+    if(ImGui::Button(ICON_MDI_CONTENT_DUPLICATE " Duplicate Into Project"))
+    {
+        duplicate_into_project();
+    }
+    ImGui::EndDisabled();
+    set_wrapped_item_tooltip("Copies it into the folder the Content Browser shows and opens the copy here once it is "
+                             "imported. The copy is the project's, and every edit of it is saved.");
+    if(is_importing)
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Importing the copy...");
+    }
+}
+
 void material_graph_panel::draw_domain_combo()
 {
     if(is_material_function_graph(graph_))
@@ -1020,6 +1160,7 @@ void material_graph_panel::draw_domain_combo()
     }
     const auto domain = get_material_graph_domain(graph_);
     ImGui::SetNextItemWidth(ImGui::CalcTextSize(get_material_domain_label(material_domain::post_process)).x + ImGui::GetFrameHeight() * 2.0f);
+    ImGui::BeginDisabled(is_view_only());
     if(ImGui::BeginCombo("##material_domain", get_material_domain_label(domain)))
     {
         for(uint32_t i = 0; i < MATERIAL_DOMAIN_COUNT; ++i)
@@ -1034,6 +1175,7 @@ void material_graph_panel::draw_domain_combo()
         }
         ImGui::EndCombo();
     }
+    ImGui::EndDisabled();
     set_wrapped_item_tooltip("What the material draws. Surface: the surface of a mesh. Decal: what a Decal component's box "
                              "lays onto the surfaces it projects onto. Post Process: the colour of the view, from a volume or "
                              "a camera. Changing it keeps every link the new output node has a pin for.");
@@ -1101,6 +1243,12 @@ void material_graph_panel::draw_new_menu()
     }
     set_wrapped_item_tooltip("A decal: a colour map tinted, its alpha the opacity. A Decal component projects it onto the "
                              "surfaces in its box.");
+    if(ImGui::MenuItem(ICON_MDI_CREATION " Particle Material") && confirm_discard())
+    {
+        set_untitled_graph(make_particle_material_graph({}), "Untitled Particle Material");
+    }
+    set_wrapped_item_tooltip("A particle material: a texture, or the frames of a sheet, tinted by each particle's colour. A "
+                             "Particle Emitter draws it on its sprites, trails and ribbons.");
     if(ImGui::MenuItem(ICON_MDI_IMAGE_FILTER_VINTAGE " Post Process Material") && confirm_discard())
     {
         set_untitled_graph(asset_actions::make_starter_material_graph(material_domain::post_process), "Untitled Post Process");
@@ -1197,6 +1345,7 @@ void material_graph_panel::draw_layout(rtti::context& ctx)
                       ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoMove);
     view_.set_previews(&previews_, show_swatches_);
+    view_.set_read_only(is_view_only());
     const auto result = view_.draw(graph_, compiled_, selection_);
     apply_result(result);
     apply_texture_drop(ctx, result);
@@ -1296,9 +1445,11 @@ void material_graph_panel::draw_palette()
     {
         show_palette_ = false;
     }
-    set_wrapped_item_tooltip("Collapse the palette; its tab at the window's edge opens it again.");
+    set_wrapped_item_tooltip("Collapse the palette. Its tab at the window's edge opens it again.");
     const std::string filter = make_lowercase(palette_filter_.data());
     ImGui::BeginChild("##palette_list");
+    // A graph the window only shows takes no node: the list stays to look a node type up.
+    ImGui::BeginDisabled(is_view_only());
     int category = -1;
     bool is_open = true;
     const auto domain = get_material_graph_domain(graph_);
@@ -1336,6 +1487,7 @@ void material_graph_panel::draw_palette()
     {
         ImGui::TreePop();
     }
+    ImGui::EndDisabled();
     ImGui::EndChild();
 }
 
@@ -1357,7 +1509,11 @@ void material_graph_panel::draw_palette_entry(const material_node_def& def)
         ImGui::TextUnformatted((std::string(get_material_category_icon(def.category)) + " " + def.label).c_str());
         ImGui::EndDragDropSource();
     }
-    if(def.shortcut != 0)
+    if(is_view_only())
+    {
+        set_wrapped_item_tooltip("%s", def.description.c_str());
+    }
+    else if(def.shortcut != 0)
     {
         set_wrapped_item_tooltip("%s\n\nDrag onto the canvas, double-click, or hold %c and click the canvas.", def.description.c_str(), def.shortcut);
     }
@@ -1381,7 +1537,7 @@ void material_graph_panel::draw_side(rtti::context& ctx)
     {
         show_side_ = false;
     }
-    set_wrapped_item_tooltip("Collapse the side pane; its tab at the window's edge opens it again.");
+    set_wrapped_item_tooltip("Collapse the side pane. Its tab at the window's edge opens it again.");
     if(ImGui::BeginTabItem(ICON_MDI_INFORMATION_OUTLINE " Details"))
     {
         draw_details(ctx);
@@ -1412,7 +1568,8 @@ void material_graph_panel::draw_scene_preview()
     {
         scene_preview_.set_shape(material_graph_scene_preview::shape(shape));
     }
-    set_wrapped_item_tooltip("The shape the preview shows the material on.");
+    set_wrapped_item_tooltip("The shape the preview shows the material on. Particles is a Particle Emitter drawing it on "
+                             "its sprites, which a material takes with Particle Use on.");
     ImGui::SetCursorScreenPos(after);
     draw_preview_state();
 }
@@ -1435,9 +1592,12 @@ void material_graph_panel::draw_preview_state()
 
 void material_graph_panel::draw_details(rtti::context& ctx)
 {
+    // The details of a node and of a comment are their editors: for a graph the window only shows they take no input.
     if(selection_.comment >= 0 && size_t(selection_.comment) < graph_.comments.size())
     {
+        ImGui::BeginDisabled(is_view_only());
         draw_comment_details();
+        ImGui::EndDisabled();
         return;
     }
     if(selection_.nodes.size() == 1)
@@ -1445,7 +1605,9 @@ void material_graph_panel::draw_details(rtti::context& ctx)
         const int index = find_material_graph_node(graph_, selection_.nodes.front());
         if(index >= 0)
         {
+            ImGui::BeginDisabled(is_view_only());
             draw_node_details(ctx, size_t(index));
+            ImGui::EndDisabled();
             return;
         }
     }
@@ -1673,6 +1835,13 @@ void material_graph_panel::draw_function_setting(material_graph_node& node, cons
         ImGui::EndCombo();
     }
     ImGui::SameLine();
+    // Opening the function edits nothing: the button works in the details of a graph the window only shows, which
+    // are drawn disabled.
+    const bool is_viewing = is_view_only();
+    if(is_viewing)
+    {
+        ImGui::BeginDisabledOverrideReenable();
+    }
     ImGui::BeginDisabled(value.empty());
     if(ImGui::Button(ICON_MDI_OPEN_IN_NEW))
     {
@@ -1680,6 +1849,10 @@ void material_graph_panel::draw_function_setting(material_graph_node& node, cons
         pending_open_ = fs::resolve_protocol(value).string();
     }
     ImGui::EndDisabled();
+    if(is_viewing)
+    {
+        ImGui::EndDisabledOverrideReenable();
+    }
     set_wrapped_item_tooltip("Open the function in this window.");
 }
 
@@ -1729,6 +1902,8 @@ void material_graph_panel::draw_texture_field(rtti::context& ctx, size_t index)
     entt::meta_any texture = entt::forward_as_meta(graph_.nodes[index].texture);
     var_info info;
     info.is_property = true;
+    // Read only, the field takes no drop either: a drop target works inside a disabled scope.
+    info.read_only = is_view_only();
     const auto result = inspect_var(ctx, texture, make_proxy(texture, "texture"), info);
     if(result.changed)
     {
@@ -2123,7 +2298,10 @@ void material_graph_panel::draw_graph_summary()
                                              {
                                                  return info.is_used;
                                              }));
-    ImGui::TextDisabled("%zu nodes, %zu feeding the output. Select a node to edit it.", graph_.nodes.size(), used);
+    ImGui::TextDisabled("%zu nodes, %zu feeding the output. %s",
+                        graph_.nodes.size(),
+                        used,
+                        is_view_only() ? "Select a node to see its values." : "Select a node to edit it.");
     draw_problems();
     ImGui::SeparatorText("Parameters");
     if(compiled_.parameters.empty())
@@ -2174,11 +2352,18 @@ void material_graph_panel::draw_graph_summary()
     }
     ImGui::SeparatorText("Shortcuts");
     ImGui::PushTextWrapPos(0.0f);
+    if(is_view_only())
+    {
+        ImGui::TextDisabled("F frames the selection. Ctrl+A selects every node. Ctrl+C copies nodes as JSON, which "
+                            "pastes into a graph of the project.");
+        ImGui::PopTextWrapPos();
+        return;
+    }
     ImGui::TextDisabled("Space, Tab or right-click: add a node. Hold a key and click: 1-4 constants, M multiply, A add, "
                         "D divide, L lerp, O one minus, E power, T texture, N normal map, U UV, P panner, S scalar "
                         "parameter, V vector parameter. Drag from a pin into empty space to add a linked node. Alt+click "
                         "a pin breaks its links, double-click a link adds a reroute. C comments the selection, F frames it. "
-                        "Ctrl+C copies nodes as JSON; Ctrl+V pastes graph JSON from anywhere.");
+                        "Ctrl+C copies nodes as JSON, and Ctrl+V pastes graph JSON from anywhere.");
     ImGui::PopTextWrapPos();
 }
 

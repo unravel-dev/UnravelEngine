@@ -1,0 +1,30 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "link": "tinted"},
+    {"pin": "opacity_mask", "link": "alpha"}
+   ], "settings": [{"name": "blend_mode", "value": "translucent"}, {"name": "shading_model", "value": "default_lit"}, {"name": "particle_use", "value": "on"}]},
+   {"id": "uv", "type": "texcoord"},
+   {"id": "particle", "type": "particle_data"},
+   {"id": "center", "type": "vector2", "inputs": [{"pin": "value", "value": [0.5, 0.5]}]},
+   {"id": "disc", "type": "sphere_mask", "inputs": [
+    {"pin": "position", "link": "uv"}, {"pin": "center", "link": "center"}, {"pin": "radius", "value": [0.5]}, {"pin": "hardness", "value": [0.0]}
+   ]},
+   {"id": "own_offset", "type": "multiply", "inputs": [{"pin": "a", "link": "particle.random"}, {"pin": "b", "value": [23.0]}]},
+   {"id": "own_uv", "type": "add", "inputs": [{"pin": "a", "link": "uv"}, {"pin": "b", "link": "own_offset"}]},
+   {"id": "puffs", "type": "noise", "inputs": [{"pin": "uv", "link": "own_uv"}, {"pin": "scale", "value": [3.0]}, {"pin": "octaves", "value": [4.0]}]},
+   {"id": "thick_puffs", "type": "smoothstep", "inputs": [{"pin": "min", "value": [0.2]}, {"pin": "max", "value": [0.7]}, {"pin": "in", "link": "puffs"}]},
+   {"id": "density", "type": "multiply", "inputs": [{"pin": "a", "link": "thick_puffs"}, {"pin": "b", "link": "disc"}]},
+   {"id": "eroded", "type": "particle_erosion", "inputs": [{"pin": "alpha", "link": "density"}]},
+   {"id": "soft", "type": "depth_fade", "inputs": [{"pin": "distance", "value": [0.5]}]},
+   {"id": "color", "type": "vertex_color"},
+   {"id": "smoke", "type": "color_parameter", "inputs": [{"pin": "value", "value": [0.55, 0.55, 0.58, 1.0]}],
+    "settings": [{"name": "name", "value": "Smoke Color"}]},
+   {"id": "tinted", "type": "multiply", "inputs": [{"pin": "a", "link": "smoke.rgb"}, {"pin": "b", "link": "color.rgb"}]},
+   {"id": "visible", "type": "multiply", "inputs": [{"pin": "a", "link": "eroded.out"}, {"pin": "b", "link": "color.a"}]},
+   {"id": "alpha", "type": "multiply", "inputs": [{"pin": "a", "link": "visible"}, {"pin": "b", "link": "soft"}]}
+  ]
+ }
+}

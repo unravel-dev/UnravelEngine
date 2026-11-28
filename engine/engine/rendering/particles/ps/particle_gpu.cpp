@@ -3,6 +3,7 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/gi/global_sdf_clipmap.h>
 #include <engine/rendering/gpu_resource_utils.h>
 #include <engine/rendering/render_feature_support.h>
 #include <graphics/graphics.h>
@@ -26,8 +27,6 @@ constexpr uint32_t k_min_pool_capacity = 4096;
 constexpr uint32_t k_max_dispatch_groups = 65535;
 constexpr uint32_t k_min_table_rows = 256;
 constexpr uint32_t k_min_lut_blocks = 16;
-/// The cutout buffer's first size, vec4 (always created: the vertex shaders bind it).
-constexpr uint32_t k_min_cutout_vec4s = 256;
 constexpr uint32_t k_min_staging_records = 256;
 constexpr uint32_t k_min_tasks = 64;
 constexpr uint32_t k_min_list_entries = 1024;
@@ -56,8 +55,8 @@ constexpr float k_octagon_low = -0.5f + k_octagon_cut;
 constexpr float k_octagon_high = 0.5f - k_octagon_cut;
 
 /// The quad (vertices 0-3), the octagon (vertices 4-11), then the cutout (vertices 12-19: z = its vertex + 1, on
-/// the quad's outline until the shader moves it onto the frame's cutout); uv = (x + 0.5, 0.5 - y). The trail strip
-/// follows (make_particle_vertices).
+/// the quad's outline until the shader moves it onto the frame's cutout); uv = (x + 0.5, 0.5 - y). The strip of
+/// trails and ribbons follows (make_particle_vertices).
 const quad_vertex k_shape_vertices[20] = {
     {-0.5f, -0.5f, 0.0f, 0.0f, 1.0f},
     {0.5f, -0.5f, 0.0f, 1.0f, 1.0f},
@@ -88,31 +87,37 @@ const uint16_t k_shape_indices[quad_index_count + octagon_index_count + cutout_i
     12, 13, 14, 12, 14, 15, 12, 15, 16, 12, 16, 17, 12, 17, 18, 12, 18, 19,
 };
 
-/// The shapes, then the trail strip: trail_segments + 1 pairs of vertices across it (x = -0.5, 0.5), y = 0 at
-/// the particle to 1 at the tail.
+/// The shapes, then the strip: strip_max_segments + 1 pairs of vertices across it (x = -0.5, 0.5), y = 0 at its
+/// start (a trail's particle, the older particle of a ribbon's stretch) to 1 at its end.
 auto make_particle_vertices() -> std::vector<quad_vertex>
 {
     std::vector<quad_vertex> vertices(std::begin(k_shape_vertices), std::end(k_shape_vertices));
-    for(uint32_t j = 0; j <= trail_segments; ++j)
+    for(uint32_t j = 0; j <= strip_max_segments; ++j)
     {
-        const float along = float(j) / float(trail_segments);
+        const float along = float(j) / float(strip_max_segments);
         vertices.push_back({-0.5f, along, 0.0f, 0.0f, along});
         vertices.push_back({0.5f, along, 0.0f, 1.0f, along});
     }
     return vertices;
 }
 
+/// The shapes' indices, then the strip's ranges: 1 quad, 2, 4 ... strip_max_segments, each over every pair of
+/// vertices its quads end on (get_strip_first_index).
 auto make_particle_indices() -> std::vector<uint16_t>
 {
     std::vector<uint16_t> indices(std::begin(k_shape_indices), std::end(k_shape_indices));
     const uint16_t base = uint16_t(std::size(k_shape_vertices));
-    for(uint16_t j = 0; j < trail_segments; ++j)
+    for(uint32_t segments = 1; segments <= strip_max_segments; segments *= 2)
     {
-        const uint16_t near_left = uint16_t(base + j * 2);
-        const uint16_t near_right = uint16_t(near_left + 1);
-        const uint16_t far_left = uint16_t(near_left + 2);
-        const uint16_t far_right = uint16_t(near_left + 3);
-        indices.insert(indices.end(), {near_left, near_right, far_right, far_right, far_left, near_left});
+        const uint32_t pairs_per_quad = strip_max_segments / segments;
+        for(uint32_t quad = 0; quad < segments; ++quad)
+        {
+            const uint16_t near_left = uint16_t(base + quad * pairs_per_quad * 2);
+            const uint16_t near_right = uint16_t(near_left + 1);
+            const uint16_t far_left = uint16_t(near_left + pairs_per_quad * 2);
+            const uint16_t far_right = uint16_t(far_left + 1);
+            indices.insert(indices.end(), {near_left, near_right, far_right, far_right, far_left, near_left});
+        }
     }
     return indices;
 }
@@ -140,7 +145,10 @@ auto ceil_log2(uint32_t value) -> uint32_t
 /// The program of a compute shader asset. Kept even while the shader does not compile: the program
 /// rebuilds itself when the asset is recompiled (gpu_program::begin), so a fixed shader comes back
 /// without a restart.
-auto load_compute(asset_manager& assets, const char* key, const char* label) -> std::shared_ptr<gpu_program>
+auto load_compute(asset_manager& assets,
+                  const char* key,
+                  const char* label,
+                  const std::string& variant = gfx::shader::DEFAULT_VARIANT) -> std::shared_ptr<gpu_program>
 {
     auto shader = assets.get_asset<gfx::shader>(key);
     if(!shader)
@@ -148,7 +156,7 @@ auto load_compute(asset_manager& assets, const char* key, const char* label) -> 
         APPLOG_WARNING("Particles: {} missing", label);
         return {};
     }
-    auto program = std::make_shared<gpu_program>(shader);
+    auto program = std::make_shared<gpu_program>(shader, variant);
     // On a device without the particle storage buffers the program is never built; the renderer's feature log says
     // so once.
     if(!program->is_valid() && get_render_feature_support().is_available(render_feature::particle_storage_buffers))
@@ -214,9 +222,18 @@ void particle_gpu::init(rtti::context& ctx)
     u_args_ = bgfx::createUniform("u_particle_args", bgfx::UniformType::Vec4);
     u_draw_ = bgfx::createUniform("u_particle_draw", bgfx::UniformType::Vec4);
     u_noise_ = bgfx::createUniform("s_particle_noise", bgfx::UniformType::Sampler);
+    u_pool_copy_ = bgfx::createUniform("u_particle_pool_copy", bgfx::UniformType::Vec4);
+    u_collide_ = bgfx::createUniform("u_particle_collide", bgfx::UniformType::Vec4);
+    u_scene_depth_ = bgfx::createUniform("s_particle_scene_depth", bgfx::UniformType::Sampler);
+    u_scene_normals_ = bgfx::createUniform("s_particle_scene_normals", bgfx::UniformType::Sampler);
+    // The distance field's own names (gi/sdf_clipmap.sh): the collide kernel samples it as every reader does.
+    u_distance_field_ = bgfx::createUniform("s_sdf_clipmap", bgfx::UniformType::Sampler);
+    u_distance_field_levels_ =
+        bgfx::createUniform("u_sdf_clipmap_levels", bgfx::UniformType::Vec4, uint16_t(global_sdf_clipmap::level_count));
+    u_distance_field_params_ = bgfx::createUniform("u_sdf_clipmap_params", bgfx::UniformType::Vec4);
     // The samplers of texture storage come before the programs too; the first view's buffers stand for every view's.
     storage_ = get_particle_data_storage();
-    for(shader_buffer* data : {&records_, &static_table_, &dynamic_table_, &lut_atlas_, &cutout_buffer_})
+    for(shader_buffer* data : {&records_, &static_table_, &dynamic_table_, &lut_atlas_})
     {
         data->set_storage(storage_);
         data->init();
@@ -227,6 +244,10 @@ void particle_gpu::init(rtti::context& ctx)
     keygen_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_keygen.eshader", "cull / sort keys");
     sort_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_sort.eshader", "sort");
     args_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_draw_args.eshader", "draw arguments");
+    pool_copy_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_pool_copy.eshader", "pool copy");
+    const char* collide_key = "engine:/data/shaders/particles/cs_particle_collide.eshader";
+    collide_depth_program_ = load_compute(assets, collide_key, "scene collision");
+    collide_field_program_ = load_compute(assets, collide_key, "scene collision with the distance field", "distance_field");
     clear_.init(ctx);
     refresh_programs();
     if(!can_draw())
@@ -285,6 +306,10 @@ void particle_gpu::refresh_programs()
     // The GPU path draws with indirect arguments; without indirect draws the CPU culls, sorts and counts.
     can_sort_ = can_draw_ && support.is_available(render_feature::gpu_particles_indirect) && refresh(keygen_program_) &&
                 refresh(sort_program_) && refresh(args_program_);
+    can_copy_pool_ = can_draw_ && !uses_textures() && refresh(pool_copy_program_);
+    // Collided records are known to the GPU alone, so they need the path that culls and sorts there.
+    can_collide_ = can_sort_ && refresh(collide_depth_program_);
+    can_collide_with_field_ = can_collide_ && refresh(collide_field_program_);
 }
 
 void particle_gpu::shutdown()
@@ -296,6 +321,16 @@ void particle_gpu::shutdown()
     keygen_program_.reset();
     sort_program_.reset();
     args_program_.reset();
+    collide_depth_program_.reset();
+    collide_field_program_.reset();
+    pool_copy_program_.reset();
+    destroy_handle(u_pool_copy_);
+    destroy_handle(u_collide_);
+    destroy_handle(u_scene_depth_);
+    destroy_handle(u_scene_normals_);
+    destroy_handle(u_distance_field_);
+    destroy_handle(u_distance_field_levels_);
+    destroy_handle(u_distance_field_params_);
     destroy_handle(u_scatter_);
     destroy_handle(u_view0_);
     destroy_handle(u_view1_);
@@ -312,22 +347,28 @@ void particle_gpu::shutdown()
     lut_block_keys_.clear();
     free_lut_blocks_.clear();
     dirty_lut_blocks_.clear();
+    // The cutout tables' blocks go with the atlas.
+    cutouts_.clear();
+    has_cutout_uploads_ = false;
     lut_block_count_ = 0;
 }
 
 void particle_gpu::destroy_buffers()
 {
     records_.destroy();
+    grown_from_.destroy();
+    grown_records_ = 0;
+    for(auto& buffer : collide_buffers_)
+    {
+        destroy_handle(buffer.handle);
+    }
+    collide_buffers_.clear();
     static_table_.destroy();
     dynamic_table_.destroy();
     lut_atlas_.destroy();
-    cutout_buffer_.destroy();
-    cutout_buffer_capacity_ = 0;
-    cutouts_dirty_ = true;
     destroy_handle(sort_);
     destroy_handle(counters_);
     destroy_handle(draw_args_);
-    destroy_handle(batch_counts_);
     table_rows_ = 0;
     for(auto& buffer : staging_buffers_)
     {
@@ -362,6 +403,16 @@ auto particle_gpu::can_draw() const -> bool
 auto particle_gpu::can_sort() const -> bool
 {
     return can_sort_;
+}
+
+auto particle_gpu::can_collide() const -> bool
+{
+    return can_collide_;
+}
+
+auto particle_gpu::make_record_pool(shader_buffer_storage storage) -> shader_buffer
+{
+    return shader_buffer("s_particle_records", shader_buffer_element::uint4, storage, BGFX_BUFFER_COMPUTE_READ_WRITE);
 }
 
 auto particle_gpu::reserve_range(uint32_t capacity) -> uint32_t
@@ -427,18 +478,65 @@ void particle_gpu::grow_pool(uint32_t required)
 {
     const uint32_t old_capacity = pool_capacity_;
     const uint32_t new_capacity = grow_capacity(old_capacity, required, k_min_pool_capacity);
+    // The pool holds what scene collisions wrote, which no CPU copy has: it is kept until flush copies it into the
+    // larger one. A pool that grows again before that still copies from the one that holds the records.
+    const bool keeps_records = old_capacity > 0 && records_.is_valid() && can_copy_pool_;
+    if(keeps_records && !grown_from_.is_valid())
+    {
+        grown_from_ = std::move(records_);
+        grown_records_ = old_capacity;
+        records_ = make_record_pool(storage_);
+    }
     records_.reserve(new_capacity * k_record_uint4s);
     pool_capacity_ = new_capacity;
     release_range(old_capacity, new_capacity - old_capacity);
-    // The new buffer starts empty: everything staged against the old one is restaged by its emitter.
+    if(keeps_records)
+    {
+        // What is staged keeps its slots in the larger pool, and is scattered after the copy.
+        return;
+    }
+    // The new buffer starts empty: everything staged against the old one is restaged by its emitter, and a pool
+    // still kept for its copy is let go.
+    grown_from_.destroy();
+    grown_records_ = 0;
     staged_records_.clear();
     staged_slots_.clear();
     has_kept_staging_ = false;
     pool_reset_ = old_capacity > 0;
 }
 
+void particle_gpu::copy_grown_pool()
+{
+    gfx::render_pass pass("Particles/Pool Copy");
+    pass.touch();
+    if(records_.is_valid() && pool_copy_program_->begin())
+    {
+        const float copy[4] = {float(grown_records_), 0.0f, 0.0f, 0.0f};
+        bgfx::setUniform(u_pool_copy_, copy);
+        grown_from_.bind_compute(0, bgfx::Access::Read);
+        records_.bind_compute(1, bgfx::Access::Write);
+        dispatch_threads(pass.id, pool_copy_program_->native_handle(), grown_records_);
+        pool_copy_program_->end();
+    }
+    else
+    {
+        // The copy cannot run after all: the emitters stage their records again, as the CPU knows them.
+        pool_reset_ = true;
+    }
+    grown_from_.destroy();
+    grown_records_ = 0;
+}
+
 auto particle_gpu::take_pool_reset() -> bool
 {
+    // A pool that grew waits for flush to copy it. Where that copy cannot run after all (its shader was recompiled
+    // and failed), the emitters stage their records again now, before any view reads the pool that holds none.
+    if(grown_from_.is_valid() && !refresh(pool_copy_program_))
+    {
+        grown_from_.destroy();
+        grown_records_ = 0;
+        pool_reset_ = true;
+    }
     const bool was_reset = pool_reset_;
     pool_reset_ = false;
     return was_reset;
@@ -453,6 +551,33 @@ auto particle_gpu::allocate_lut_block() -> uint32_t
         return block;
     }
     return lut_block_count_++;
+}
+
+auto particle_gpu::allocate_lut_blocks(uint32_t count) -> uint32_t
+{
+    if(count <= 1)
+    {
+        return allocate_lut_block();
+    }
+    std::sort(free_lut_blocks_.begin(), free_lut_blocks_.end());
+    size_t run_start = 0;
+    for(size_t i = 0; i < free_lut_blocks_.size(); ++i)
+    {
+        if(i > 0 && free_lut_blocks_[i] != free_lut_blocks_[i - 1] + 1)
+        {
+            run_start = i;
+        }
+        if(i - run_start + 1 == count)
+        {
+            const uint32_t first = free_lut_blocks_[run_start];
+            free_lut_blocks_.erase(free_lut_blocks_.begin() + ptrdiff_t(run_start),
+                                   free_lut_blocks_.begin() + ptrdiff_t(i + 1));
+            return first;
+        }
+    }
+    const uint32_t first = lut_block_count_;
+    lut_block_count_ += count;
+    return first;
 }
 
 void particle_gpu::release_lut(uint64_t key)
@@ -491,9 +616,12 @@ void particle_gpu::release_cutout(uint64_t key)
     {
         return;
     }
-    if(found->second.size > 0)
     {
-        free_cutout_ranges_.push_back({found->second.base, found->second.size});
+        std::lock_guard<std::mutex> lock(lut_mutex_);
+        for(uint32_t block = 0; block < found->second.block_count; ++block)
+        {
+            free_lut_blocks_.push_back(found->second.block + block);
+        }
     }
     cutouts_.erase(found);
 }
@@ -501,82 +629,65 @@ void particle_gpu::release_cutout(uint64_t key)
 auto particle_gpu::is_cutout_pending(uint64_t key) const -> bool
 {
     auto found = cutouts_.find(key);
-    return found != cutouts_.end() && !found->second.has_polygons;
+    return found != cutouts_.end() && found->second.points.empty();
 }
 
 void particle_gpu::set_cutout_polygons(uint64_t key, const std::vector<cutout_polygon>& polygons)
 {
     auto found = cutouts_.find(key);
-    if(found == cutouts_.end() || found->second.has_polygons || polygons.empty())
+    if(found == cutouts_.end() || !found->second.points.empty() || polygons.empty())
     {
         return;
     }
-    const uint32_t size = uint32_t(polygons.size()) * cutout_frame_vec4s;
-    const uint32_t base = allocate_cutout_range(size);
-    for(size_t frame = 0; frame < polygons.size(); ++frame)
+    cutout_entry& entry = found->second;
+    entry.points.reserve(polygons.size() * cutout_frame_vec4s);
+    for(const cutout_polygon& polygon : polygons)
     {
-        const cutout_polygon& polygon = polygons[frame];
         for(uint32_t pair = 0; pair < cutout_frame_vec4s; ++pair)
         {
-            cutout_data_[base + frame * cutout_frame_vec4s + pair] =
-                math::vec4(polygon[pair * 2], polygon[pair * 2 + 1]);
+            entry.points.emplace_back(polygon[pair * 2], polygon[pair * 2 + 1]);
         }
     }
-    found->second.base = base;
-    found->second.size = size;
-    found->second.has_polygons = true;
-    cutouts_dirty_ = true;
+    entry.block_count = (uint32_t(entry.points.size()) + lut_set_vec4s - 1) / lut_set_vec4s;
+    // The rest of the last block reads as collapsed polygons, never as what the block held before.
+    entry.points.resize(size_t(entry.block_count) * lut_set_vec4s, math::vec4(0.0f));
+    {
+        std::lock_guard<std::mutex> lock(lut_mutex_);
+        entry.block = allocate_lut_blocks(entry.block_count);
+    }
+    entry.needs_upload = true;
+    has_cutout_uploads_ = true;
 }
 
 auto particle_gpu::get_cutout_table(uint64_t key) const -> float
 {
     auto found = cutouts_.find(key);
-    return found != cutouts_.end() && found->second.has_polygons ? float(found->second.base + 1) : 0.0f;
-}
-
-auto particle_gpu::allocate_cutout_range(uint32_t size) -> uint32_t
-{
-    for(auto free = free_cutout_ranges_.begin(); free != free_cutout_ranges_.end(); ++free)
-    {
-        if(free->size < size)
-        {
-            continue;
-        }
-        const uint32_t base = free->base;
-        free->base += size;
-        free->size -= size;
-        if(free->size == 0)
-        {
-            free_cutout_ranges_.erase(free);
-        }
-        return base;
-    }
-    const uint32_t base = uint32_t(cutout_data_.size());
-    cutout_data_.resize(cutout_data_.size() + size, math::vec4(0.0f));
-    return base;
-}
-
-void particle_gpu::ensure_cutout_buffer()
-{
-    const uint32_t required = math::max(uint32_t(cutout_data_.size()), 1u);
-    if(cutout_buffer_.is_valid() && cutout_buffer_capacity_ >= required)
-    {
-        return;
-    }
-    cutout_buffer_capacity_ = grow_capacity(cutout_buffer_capacity_, required, k_min_cutout_vec4s);
-    cutout_buffer_.reserve(cutout_buffer_capacity_);
-    cutouts_dirty_ = true;
+    const bool has_table = found != cutouts_.end() && !found->second.points.empty();
+    return has_table ? float(found->second.block * lut_set_vec4s + 1) : 0.0f;
 }
 
 void particle_gpu::upload_cutouts()
 {
-    ensure_cutout_buffer();
-    if(!cutouts_dirty_ || cutout_data_.empty())
+    if(!has_cutout_uploads_ || !lut_atlas_.is_valid())
     {
         return;
     }
-    cutout_buffer_.update(0, uint32_t(cutout_data_.size()), cutout_data_.data());
-    cutouts_dirty_ = false;
+    has_cutout_uploads_ = false;
+    for(auto& [key, entry] : cutouts_)
+    {
+        if(!entry.needs_upload)
+        {
+            continue;
+        }
+        const bool is_in_atlas = entry.block + entry.block_count <= lut_atlas_blocks_;
+        if(!is_in_atlas)
+        {
+            has_cutout_uploads_ = true;
+            continue;
+        }
+        lut_atlas_.update(entry.block * lut_set_vec4s, uint32_t(entry.points.size()), entry.points.data());
+        entry.needs_upload = false;
+    }
 }
 
 void particle_gpu::set_static_row(uint16_t emitter, const static_row& row)
@@ -675,11 +786,16 @@ void particle_gpu::ensure_lut_atlas()
     const uint32_t blocks = grow_capacity(lut_atlas_blocks_, lut_block_count_, k_min_lut_blocks);
     lut_atlas_.reserve(blocks * lut_set_vec4s);
     lut_atlas_blocks_ = blocks;
-    // A new atlas holds nothing yet: upload every live block.
+    // A new atlas holds nothing yet: upload every live block and every cutout table.
     dirty_lut_blocks_.clear();
     for(const auto& block_key : lut_block_keys_)
     {
         dirty_lut_blocks_.push_back(block_key.first);
+    }
+    for(auto& [key, entry] : cutouts_)
+    {
+        entry.needs_upload = !entry.points.empty();
+        has_cutout_uploads_ = has_cutout_uploads_ || entry.needs_upload;
     }
 }
 
@@ -817,6 +933,10 @@ void particle_gpu::flush()
         keep_latest_staged();
         has_kept_staging_ = false;
     }
+    if(grown_from_.is_valid())
+    {
+        copy_grown_pool();
+    }
     if(uses_textures())
     {
         write_staged_records();
@@ -844,6 +964,7 @@ void particle_gpu::begin_frame()
         frame_ = frame;
         views_this_frame_ = 0;
         staging_used_this_frame_ = 0;
+        collides_this_frame_ = 0;
         refresh_programs();
     }
 }
@@ -865,25 +986,34 @@ auto particle_gpu::current_view_buffers() -> view_buffers&
     return view_buffers_[views_this_frame_ - 1];
 }
 
+auto particle_gpu::get_batch_counts_base() const -> uint32_t
+{
+    return sort_capacity_ * k_list_uints_per_entry;
+}
+
 void particle_gpu::ensure_sort_buffers(uint32_t entries, uint32_t batches)
 {
-    if(sort_capacity_ < entries || !bgfx::isValid(sort_))
-    {
-        destroy_handle(sort_);
-        sort_capacity_ = grow_capacity(sort_capacity_, entries, k_min_list_entries);
-        sort_ = bgfx::createDynamicIndexBuffer(sort_capacity_ * k_list_uints_per_entry,
-                                               BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
-    }
-    if(batch_capacity_ < batches || !bgfx::isValid(counters_))
+    const bool needs_batches = batch_capacity_ < batches || !bgfx::isValid(counters_);
+    if(needs_batches)
     {
         destroy_handle(counters_);
         destroy_handle(draw_args_);
-        destroy_handle(batch_counts_);
         batch_capacity_ = grow_capacity(batch_capacity_, batches, k_min_batches);
         counters_ = bgfx::createDynamicIndexBuffer(batch_capacity_, BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
-        batch_counts_ = bgfx::createDynamicIndexBuffer(batch_capacity_, BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
         draw_args_ = bgfx::createIndirectBuffer(batch_capacity_);
         counters_need_clear_ = true;
+    }
+    // The list holds the batch counts after its entries, so it is created again when either capacity grows.
+    const bool needs_entries = sort_capacity_ < entries;
+    if(needs_entries || needs_batches || !bgfx::isValid(sort_))
+    {
+        destroy_handle(sort_);
+        if(needs_entries)
+        {
+            sort_capacity_ = grow_capacity(sort_capacity_, entries, k_min_list_entries);
+        }
+        sort_ = bgfx::createDynamicIndexBuffer(get_batch_counts_base() + batch_capacity_,
+                                               BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
     }
 }
 
@@ -944,7 +1074,7 @@ auto particle_gpu::dispatch_view(bgfx::ViewId view,
             sorted_ordinal[b] = ordinal++;
         }
     }
-    // Task table: pool base, high water, thread offset, output base, batch, sort kind, batch key.
+    // Task table: pool base, high water, thread offset, output base, batch, sort kind, batch key, ribbon key bits.
     task_data_.assign(tasks.size() * gpu_task_uints, 0u);
     std::vector<uint32_t> batch_fill(batch_count, 0);
     uint32_t thread_offset = 0;
@@ -960,6 +1090,8 @@ auto particle_gpu::dispatch_view(bgfx::ViewId view,
         entry[4] = task.batch;
         entry[5] = uint32_t(batch.is_sorted ? task.sort_kind : gpu_sort_kind::append);
         entry[6] = batch.is_sorted && batch_bits > 0 ? sorted_ordinal[task.batch] << distance_bits : 0u;
+        const bool is_ribbon = batch.is_sorted && task.sort_kind == gpu_sort_kind::ribbon;
+        entry[7] = is_ribbon ? pack_ribbon_key_bits(task.ribbon_count, task.longest_age_ticks, distance_bits) : 0u;
         batch_fill[task.batch] += task.high_water;
         thread_offset += task.high_water;
     }
@@ -1043,17 +1175,103 @@ auto particle_gpu::dispatch_view(bgfx::ViewId view,
     }
     if(args_program_->begin())
     {
-        const float args[4] = {float(batch_count), 0.0f, 0.0f, 0.0f};
+        const float args[4] = {float(batch_count), float(get_batch_counts_base()), 0.0f, 0.0f};
         bgfx::setUniform(u_args_, args);
         bgfx::setBuffer(0, counters_, bgfx::Access::ReadWrite);
         bgfx::setBuffer(1, draw_args_, bgfx::Access::Write);
         bgfx::setBuffer(2, buffers.batches, bgfx::Access::Read);
-        bgfx::setBuffer(3, batch_counts_, bgfx::Access::Write);
+        bgfx::setBuffer(3, sort_, bgfx::Access::Write);
         gfx::dispatch(view, args_program_->native_handle(), (batch_count + gpu_group_threads - 1) / gpu_group_threads, 1, 1);
         args_program_->end();
         ++stats.dispatches;
     }
     return stats;
+}
+
+auto particle_gpu::collide_view(bgfx::ViewId view, const std::vector<collide_task>& tasks, const collide_scene& scene) -> uint32_t
+{
+    begin_frame();
+    const bool uses_field = can_collide_with_field_ && bgfx::isValid(scene.distance_field) &&
+                            scene.distance_field_levels != nullptr && scene.distance_field_params != nullptr;
+    const bool has_depth = bgfx::isValid(scene.depth) && bgfx::isValid(scene.normals);
+    const bool has_data = records_.is_valid() && static_table_.is_valid() && lut_atlas_.is_valid();
+    if(tasks.empty() || !can_collide() || !has_data || (!uses_field && !has_depth))
+    {
+        return 0;
+    }
+    APP_SCOPE_PERF("Particles/GPU Scene Collision");
+    // Task table (gpu_collide_task_slot).
+    collide_data_.assign(tasks.size() * gpu_collide_task_uints, 0u);
+    uint32_t thread_offset = 0;
+    for(size_t t = 0; t < tasks.size(); ++t)
+    {
+        const collide_task& task = tasks[t];
+        uint32_t* entry = &collide_data_[t * gpu_collide_task_uints];
+        const auto set_float = [entry](gpu_collide_task_slot slot, float value)
+        {
+            std::memcpy(entry + slot, &value, sizeof(value));
+        };
+        entry[gpu_collide_task_pool_base] = task.pool_base;
+        entry[gpu_collide_task_high_water] = task.high_water;
+        entry[gpu_collide_task_thread_offset] = thread_offset;
+        entry[gpu_collide_task_answer] = uint32_t(task.mode) |
+                                         (std::min(task.max_bounces, motion_offset_bounce_mask) << gpu_collide_bounces_shift) |
+                                         (task.lies_flat ? gpu_collide_flat_bit : 0u);
+        set_float(gpu_collide_task_restitution, task.restitution);
+        set_float(gpu_collide_task_friction, task.friction);
+        set_float(gpu_collide_task_radius_scale, task.radius_scale);
+        set_float(gpu_collide_task_rest_speed, task.rest_speed);
+        set_float(gpu_collide_task_lifetime_loss, task.lifetime_loss);
+        set_float(gpu_collide_task_bounce_scatter, task.bounce_scatter);
+        thread_offset += task.high_water;
+    }
+    if(thread_offset == 0)
+    {
+        return 0;
+    }
+    if(collides_this_frame_ >= collide_buffers_.size())
+    {
+        collide_buffers_.emplace_back();
+    }
+    staging_buffer& buffer = collide_buffers_[collides_this_frame_++];
+    if(buffer.capacity < tasks.size() || !bgfx::isValid(buffer.handle))
+    {
+        destroy_handle(buffer.handle);
+        buffer.capacity = grow_capacity(buffer.capacity, uint32_t(tasks.size()), k_min_tasks);
+        buffer.handle = bgfx::createDynamicIndexBuffer(buffer.capacity * gpu_collide_task_uints,
+                                                       BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32);
+    }
+    bgfx::update(buffer.handle, 0, bgfx::copy(collide_data_.data(), uint32_t(collide_data_.size() * sizeof(uint32_t))));
+    const std::shared_ptr<gpu_program>& program = uses_field ? collide_field_program_ : collide_depth_program_;
+    if(!program->begin())
+    {
+        return 0;
+    }
+    const float collide[4] = {float(tasks.size()), float(thread_offset), 0.0f, 0.0f};
+    bgfx::setUniform(u_collide_, collide);
+    records_.bind_compute(gpu_records_stage, bgfx::Access::ReadWrite);
+    static_table_.bind_compute(gpu_static_stage, bgfx::Access::Read);
+    dynamic_table_.bind_compute(gpu_dynamic_stage, bgfx::Access::Read);
+    lut_atlas_.bind_compute(gpu_luts_stage, bgfx::Access::Read);
+    bgfx::setBuffer(gpu_collide_tasks_stage, buffer.handle, bgfx::Access::Read);
+    // The particles are tested where they draw, turbulence included.
+    bgfx::setTexture(gpu_noise_stage, u_noise_, noise_texture_);
+    if(uses_field)
+    {
+        bgfx::setUniform(u_distance_field_levels_, scene.distance_field_levels, uint16_t(global_sdf_clipmap::level_count));
+        bgfx::setUniform(u_distance_field_params_, scene.distance_field_params);
+        bgfx::setTexture(gpu_collide_distance_field_stage, u_distance_field_, scene.distance_field);
+    }
+    else
+    {
+        // The depth and the normal of one pixel: no filtering across an edge.
+        const uint32_t point_clamp = BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP;
+        bgfx::setTexture(gpu_collide_depth_stage, u_scene_depth_, scene.depth, point_clamp);
+        bgfx::setTexture(gpu_collide_normals_stage, u_scene_normals_, scene.normals, point_clamp);
+    }
+    dispatch_threads(view, program->native_handle(), thread_offset);
+    program->end();
+    return thread_offset;
 }
 
 auto particle_gpu::upload_cpu_list(const std::vector<uint32_t>& slots) -> uint32_t
@@ -1105,17 +1323,6 @@ auto particle_gpu::bind_data(bool is_cpu_list) -> bool
     {
         bgfx::setBuffer(gpu_sorted_stage, sort_, bgfx::Access::Read);
     }
-    // The GPU path's live counts; the texture variants draw CPU lists only and read none.
-    if(bgfx::isValid(batch_counts_))
-    {
-        bgfx::setBuffer(gpu_batch_counts_stage, batch_counts_, bgfx::Access::Read);
-    }
-    else if(!uses_textures())
-    {
-        cpu_list.bind(gpu_batch_counts_stage);
-    }
-    ensure_cutout_buffer();
-    cutout_buffer_.bind(gpu_cutout_stage);
     return true;
 }
 
@@ -1125,11 +1332,12 @@ void particle_gpu::submit_draw(const draw_params& params)
     {
         return;
     }
-    // y: the GPU batch whose live count the vertex shaders read; z: a CPU list's count (-1 on the GPU path).
+    // y: the GPU batch whose live count the vertex shaders read; z: a CPU list's count (-1 on the GPU path); w: where
+    // the GPU list holds its first batch count.
     const float draw[4] = {float(params.first),
                            float(params.batch),
                            params.is_cpu_list ? float(params.instance_count) : -1.0f,
-                           0.0f};
+                           params.is_cpu_list ? 0.0f : float(get_batch_counts_base())};
     bgfx::setUniform(u_draw_, draw);
     bgfx::setVertexBuffer(0, quad_vertices_);
     // Indirect draws take their index range from the draw arguments.

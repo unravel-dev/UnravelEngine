@@ -1,0 +1,36 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "value": [0.0, 0.0, 0.0]},
+    {"pin": "emissive", "link": "glow"},
+    {"pin": "opacity_mask", "link": "alpha"}
+   ], "settings": [{"name": "blend_mode", "value": "additive"}, {"name": "shading_model", "value": "unlit"}, {"name": "particle_use", "value": "on"}]},
+   {"id": "uv", "type": "texcoord"},
+   {"id": "particle", "type": "particle_data"},
+   {"id": "custom", "type": "particle_custom_data"},
+   {"id": "center", "type": "vector2", "inputs": [{"pin": "value", "value": [0.5, 0.5]}]},
+   {"id": "disc", "type": "sphere_mask", "inputs": [
+    {"pin": "position", "link": "uv"}, {"pin": "center", "link": "center"}, {"pin": "radius", "value": [0.5]}, {"pin": "hardness", "value": [0.0]}
+   ]},
+   {"id": "core", "type": "power", "inputs": [{"pin": "a", "link": "disc"}, {"pin": "b", "value": [3.0]}]},
+   {"id": "own_offset", "type": "multiply", "inputs": [{"pin": "a", "link": "particle.random"}, {"pin": "b", "value": [13.0]}]},
+   {"id": "own_uv", "type": "add", "inputs": [{"pin": "a", "link": "uv"}, {"pin": "b", "link": "own_offset"}]},
+   {"id": "grain", "type": "noise", "inputs": [{"pin": "uv", "link": "own_uv"}, {"pin": "scale", "value": [12.0]}]},
+   {"id": "dissolve_end", "type": "add", "inputs": [{"pin": "a", "link": "custom.x"}, {"pin": "b", "value": [0.1]}]},
+   {"id": "kept", "type": "smoothstep", "inputs": [{"pin": "min", "link": "custom.x"}, {"pin": "max", "link": "dissolve_end"}, {"pin": "in", "link": "grain"}]},
+   {"id": "boost", "type": "scalar_parameter", "inputs": [{"pin": "value", "value": [4.0]}],
+    "settings": [{"name": "name", "value": "Glow Boost"}]},
+   {"id": "extra_glow", "type": "multiply", "inputs": [{"pin": "a", "link": "custom.y"}, {"pin": "b", "link": "boost"}]},
+   {"id": "glow_scale", "type": "add", "inputs": [{"pin": "a", "link": "extra_glow"}, {"pin": "b", "value": [1.0]}]},
+   {"id": "tint", "type": "color_parameter", "inputs": [{"pin": "value", "value": [4.0, 2.2, 0.6, 1.0]}],
+    "settings": [{"name": "name", "value": "Spark Color"}]},
+   {"id": "color", "type": "vertex_color"},
+   {"id": "tinted", "type": "multiply", "inputs": [{"pin": "a", "link": "tint.rgb"}, {"pin": "b", "link": "color.rgb"}]},
+   {"id": "glow", "type": "multiply", "inputs": [{"pin": "a", "link": "tinted"}, {"pin": "b", "link": "glow_scale"}]},
+   {"id": "shape", "type": "multiply", "inputs": [{"pin": "a", "link": "core"}, {"pin": "b", "link": "kept"}]},
+   {"id": "alpha", "type": "multiply", "inputs": [{"pin": "a", "link": "shape"}, {"pin": "b", "link": "color.a"}]}
+  ]
+ }
+}

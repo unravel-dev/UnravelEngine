@@ -57,6 +57,11 @@ struct motion_bounds_params
     lut_ranges ranges{};
     bool has_ease = false;
     bool has_speed_curve = false;
+    /// The particles bounce off surfaces the CPU does not know (collision_source::scene_surfaces, unless the quality
+    /// turns scene collision off): the speed the acceleration gives one can then carry it any way, not only along the
+    /// acceleration, and a speed curve or an easing speeds a bounced particle up by as much as it rises after the
+    /// bounce.
+    bool bounces_unseen = false;
 };
 
 /**

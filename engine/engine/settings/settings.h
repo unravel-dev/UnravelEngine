@@ -132,6 +132,11 @@ struct settings
             float max_particles_scale{1.0f};
             /// The most expensive lighting mode particles use: lower modes stand in for higher ones.
             ps_soa::particle_lighting max_lighting{ps_soa::particle_lighting::surface};
+            /// The most casts a frame spends on particles that collide with physics colliders. Particles past it
+            /// are swept in later frames: their contacts come late.
+            uint32_t max_collision_casts{2048};
+            /// What the particles of emitters that collide with Scene Surfaces are tested against, on the GPU.
+            ps_soa::scene_collision scene_collision{ps_soa::scene_collision::depth_buffer};
 
             friend auto operator==(const particle_settings& lhs, const particle_settings& rhs) -> bool = default;
         } particles;

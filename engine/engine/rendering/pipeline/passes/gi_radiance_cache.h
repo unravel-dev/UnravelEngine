@@ -65,6 +65,47 @@ public:
                                     size_t budget,
                                     float spacing,
                                     std::vector<math::vec4>& points) -> bool;
+    /// Appends to @p points the surface points of what fills @p bounds, as particles fill their emitter's box, with
+    /// the camera at @p eye: one inside every lattice cube of the cache that the box reaches, in the clipmap a lookup
+    /// there reads, so every probe such a lookup interpolates is marked. The points are the lattice's own: boxes that
+    /// overlap get the same points where they do. A point's w is its clipmap. False, with @p points partly filled,
+    /// when they would pass @p budget.
+    static auto make_volume_points(const math::bbox& bounds, const math::vec3& eye, size_t budget, std::vector<math::vec4>& points)
+        -> bool;
+
+    /**
+     * @brief The probes the volume points of a frame's boxes mark together (make_volume_points). A point marks the
+     * eight probes at the corners of its lattice cube, and neighbouring cubes and overlapping boxes share them: the
+     * cache's pool is spent in probes, so they are what a budget counts.
+     */
+    class volume_marks
+    {
+    public:
+        /// Forgets every probe: a new frame.
+        void clear();
+        /// Appends to @p points the ones of @p candidates (make_volume_points' points of one box) that mark a probe
+        /// no earlier box marked, and takes their probes. False, changing nothing, when that is more than
+        /// @p max_points points or brings the probes past @p max_probes.
+        auto add(const std::vector<math::vec4>& candidates, size_t max_points, size_t max_probes, std::vector<math::vec4>& points) -> bool;
+        /// How many probes the boxes added so far mark.
+        auto get_probe_count() const -> size_t
+        {
+            return marked_.size();
+        }
+
+    private:
+        /// A probe: its clipmap, and its place along each axis in multiples of that clipmap's cell.
+        using probe = std::array<int64_t, 4>;
+
+        /// Whether @p point marks a probe marked_ lacks; appends those to fresh_.
+        auto collect_new_probes(const math::vec4& point) -> bool;
+
+        /// The probes of the boxes added so far, sorted.
+        std::vector<probe> marked_;
+        /// add's scratch: the new probes of the box at hand, and the merge of both lists.
+        std::vector<probe> fresh_;
+        std::vector<probe> merged_;
+    };
 
     /// Whether the probes' SH is kept for surfaces (bind_for_surfaces): from the first frame that marked surface
     /// points.
@@ -84,8 +125,9 @@ public:
     /// the clipmap and layout uniforms.
     void bind_for_sampling(uint8_t indirection_stage, uint8_t final_stage) const;
 
-    /// Binds what a surface outside the G-buffer reads of the cache (mg_forward.sh FORWARD_GI): the indirection and
-    /// the probes' L1 SH at the given stages, and the clipmap uniforms.
+    /// Binds what is lit outside the G-buffer reads of the cache (gi_radiance_cache_surface.sh: mg_forward.sh
+    /// FORWARD_GI, particle_lighting.sh PARTICLE_GI): the indirection and the probes' L1 SH at the given stages, and
+    /// the clipmap uniforms.
     void bind_for_surfaces(uint8_t indirection_stage, uint8_t sh_stage) const;
 
     /// Frees the probe atlases and buffers; the next update allocates them again and rebuilds the cache.

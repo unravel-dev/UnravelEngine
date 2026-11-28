@@ -27,7 +27,9 @@
 #include <engine/rendering/ecs/components/assao_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
+#include <engine/rendering/ecs/components/line_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/ecs/components/trail_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 
@@ -73,7 +75,8 @@ void manipulation_gizmos(bool& gizmo_at_center,
                          entt::handle center,
                          entt::handle editor_camera,
                          editing_manager& em,
-                         float overlay_top);
+                         float overlay_top,
+                         const line_point_edit& line_points);
 
 // Material preview state
 struct material_preview_state
@@ -168,6 +171,30 @@ void queue_create_at_cursor(rtti::context& ctx,
                             const std::string& action_name,
                             std::function<entt::handle(rtti::context&, scene&, const camera&, const math::vec2&)> producer);
 
+/// Gives the Line or the Trail of @p entity @p dropped as its material, as one undo step. False when the entity has
+/// neither.
+auto set_dropped_renderer_material(editing_manager& em, entt::handle entity, const asset_handle<material>& dropped) -> bool
+{
+    const auto apply = [&](dynamic_renderer& renderer, const entt::meta_type& type)
+    {
+        auto state_before = prefab_override_context::save_component_state(entity, type);
+        renderer.set_material(dropped);
+        em.push_undo_stack_enabled(true);
+        em.queue_action<entity_component_state_action_t>({}, entity, type, std::move(state_before));
+        em.pop_undo_stack_enabled();
+        return true;
+    };
+    if(auto* line = entity.try_get<line_component>())
+    {
+        return apply(*line, entt::resolve<line_component>());
+    }
+    if(auto* trail = entity.try_get<trail_component>())
+    {
+        return apply(*trail, entt::resolve<trail_component>());
+    }
+    return false;
+}
+
 // Handle material drop on entity
 void handle_material_drop(rtti::context& ctx, const camera_component& camera_comp, const std::string& material_path)
 {
@@ -235,9 +262,9 @@ void handle_material_drop(rtti::context& ctx, const camera_component& camera_com
 
                 em.pop_undo_stack_enabled();
             }
-            else if(entity)
+            else if(entity && !set_dropped_renderer_material(em, entity, material_asset))
             {
-                APPLOG_WARNING("Cannot apply material to entity without model_component");
+                APPLOG_WARNING("The material was not applied. The entity under the cursor has no Model, Line or Trail.");
             }
         },
         force);
@@ -872,6 +899,261 @@ auto handle_ui_document_component_bounds_manipulation(entt::handle active_select
     return true;
 }
 
+/// The radius of a line point's handle, and how near the mouse must be to be on it, in pixels.
+constexpr float LINE_POINT_HANDLE_RADIUS = 5.0f;
+constexpr float LINE_POINT_HOVER_RADIUS = 7.0f;
+constexpr ImU32 LINE_POINT_COLOR = IM_COL32(255, 255, 255, 230);
+constexpr ImU32 LINE_POINT_HOVERED_COLOR = IM_COL32(255, 200, 60, 255);
+constexpr ImU32 LINE_POINT_PICKED_COLOR = IM_COL32(255, 140, 0, 255);
+constexpr ImU32 LINE_POINT_OUTLINE_COLOR = IM_COL32(20, 20, 20, 255);
+
+/// The Line whose points the Scene view edits: the one entity selected, when it has a Line.
+auto find_edited_line(editing_manager& em) -> entt::handle
+{
+    const auto selections = em.try_get_selections_as<entt::handle>();
+    const bool is_one_entity = selections.size() == 1 && selections.front() != nullptr && selections.front()->valid();
+    if(!is_one_entity || !selections.front()->all_of<transform_component, line_component>())
+    {
+        return {};
+    }
+    return *selections.front();
+}
+
+/// Where point @p index of @p line is in the world, on an entity at @p world.
+auto get_line_point_world(const line_component& line, const math::transform& world, size_t index) -> math::vec3
+{
+    const math::transform::position_t point(line.points[index]);
+    return math::vec3(line.world_space ? point : world.transform_coord(point));
+}
+
+/// Where a point at @p position shows in the view's image; false behind the camera and outside the image.
+auto find_line_point_on_screen(const line_point_edit& edit, const math::vec3& position, const camera& camera, ImVec2& screen) -> bool
+{
+    if(camera.world_to_view_depth(position) <= 0.0f)
+    {
+        return false;
+    }
+    // The camera's viewport starts at the image, but a forced render size makes it larger than the image showing it.
+    const auto& viewport_size = camera.get_viewport_size();
+    const math::vec3 point = camera.world_to_viewport(position);
+    screen.x = edit.image_min.x + (point.x - edit.image_min.x) * (edit.image_max.x - edit.image_min.x) / float(viewport_size.width);
+    screen.y = edit.image_min.y + (point.y - edit.image_min.y) * (edit.image_max.y - edit.image_min.y) / float(viewport_size.height);
+    return screen.x >= edit.image_min.x && screen.y >= edit.image_min.y && screen.x < edit.image_max.x && screen.y < edit.image_max.y;
+}
+
+/// The point of @p line whose handle is nearest the mouse and under it, but the picked one, whose place the gizmo
+/// holds; -1 for none.
+auto find_hovered_line_point(const line_point_edit& edit, const line_component& line, const math::transform& world, const camera& camera) -> int
+{
+    const ImVec2 mouse = ImGui::GetMousePos();
+    const size_t count = std::min(line.points.size(), line_component::MAX_POINTS);
+    int nearest = -1;
+    float nearest_distance = LINE_POINT_HOVER_RADIUS * LINE_POINT_HOVER_RADIUS;
+    for(size_t i = 0; i < count; ++i)
+    {
+        ImVec2 screen;
+        if(int(i) == edit.picked || !find_line_point_on_screen(edit, get_line_point_world(line, world, i), camera, screen))
+        {
+            continue;
+        }
+        const float distance = ImLengthSqr(screen - mouse);
+        if(distance <= nearest_distance)
+        {
+            nearest = int(i);
+            nearest_distance = distance;
+        }
+    }
+    return nearest;
+}
+
+/// Whether the mouse can be on a point handle: it is over the view's image, no gizmo is dragged, and no other gesture
+/// of the mouse is under way. A click on a handle starts on the frame the left button goes down.
+auto can_hover_line_points() -> bool
+{
+    const bool holds_other_button = ImGui::IsMouseDown(ImGuiMouseButton_Right) || ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+    const bool drags_left = ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    return ImGui::IsItemHovered() && !ImGuizmo::IsUsing() && !holds_other_button && !drags_left;
+}
+
+/// Once a frame, right after the view's image is drawn and before its clicks are read: which Line is edited, and
+/// which of its points is under the mouse. Escape in the view hands the gizmo back to the entity.
+void update_line_point_edit(line_point_edit& edit, editing_manager& em, const camera& camera)
+{
+    const bool held_gizmo = edit.picked >= 0;
+    const auto edited = find_edited_line(em);
+    if(edited != edit.entity)
+    {
+        edit = {};
+        edit.entity = edited;
+    }
+    edit.hovered = -1;
+    edit.holds_press = edit.holds_press && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    if(edit.entity)
+    {
+        edit.image_min = ImGui::GetItemRectMin();
+        edit.image_max = ImGui::GetItemRectMax();
+        const auto& line = edit.entity.get<line_component>();
+        const bool cancels = ImGui::IsWindowFocused() && !ImGui::IsAnyItemActive() && !ImGuizmo::IsUsing() &&
+                             ImGui::IsKeyPressed(shortcuts::item_cancel, false);
+        if(cancels || edit.picked >= int(line.points.size()))
+        {
+            edit.picked = -1;
+        }
+        if(can_hover_line_points())
+        {
+            edit.hovered = find_hovered_line_point(edit, line, edit.entity.get<transform_component>().get_transform_global(), camera);
+        }
+    }
+    // A point that held the gizmo and is gone (another selection, a shorter list) takes the gizmo's drag with it.
+    if(held_gizmo && edit.picked < 0 && ImGuizmo::IsUsing())
+    {
+        ImGuizmo::Enable(false);
+        ImGuizmo::Enable(true);
+    }
+}
+
+/// Whether the mouse is on a point handle, or holds a press that began on one: the view's own clicks and drags
+/// (selection, the selection rectangle) stand aside.
+auto is_line_point_engaged(const line_point_edit& edit) -> bool
+{
+    return edit.hovered >= 0 || edit.holds_press;
+}
+
+/// A click in the view on a point handle picks that point; false when the click is on no handle.
+auto pick_hovered_line_point(line_point_edit& edit) -> bool
+{
+    if(edit.hovered < 0)
+    {
+        return false;
+    }
+    edit.picked = edit.hovered;
+    edit.hovered = -1;
+    edit.holds_press = true;
+    return true;
+}
+
+/// Takes the picked point out of its Line, as one undo step, and hands the gizmo back to the entity. False when no
+/// point is picked.
+auto remove_picked_line_point(line_point_edit& edit, editing_manager& em) -> bool
+{
+    auto* line = edit.entity && edit.picked >= 0 ? edit.entity.try_get<line_component>() : nullptr;
+    if(line == nullptr || edit.picked >= int(line->points.size()))
+    {
+        return false;
+    }
+    const auto index = size_t(edit.picked);
+    auto points = line->points;
+    points.erase(points.begin() + ptrdiff_t(index));
+    em.push_undo_stack_enabled(true);
+    em.do_action("Remove Line Point",
+                 std::make_shared<entity_set_line_points_action_t>(edit.entity, line_points_edit::remove_point, index, line->points, std::move(points)));
+    em.pop_undo_stack_enabled();
+    edit.picked = -1;
+    return true;
+}
+
+/// Draws a handle on each point of @p line the view shows. Handles that would lie over the one before them are left
+/// out, so a line of many points stays readable; the picked and the hovered one always show.
+void draw_line_point_handles(const line_point_edit& edit, const line_component& line, const math::transform& world, const camera& camera)
+{
+    auto* draw_list = ImGui::GetWindowDrawList();
+    const size_t count = std::min(line.points.size(), line_component::MAX_POINTS);
+    const float min_gap = LINE_POINT_HANDLE_RADIUS * LINE_POINT_HANDLE_RADIUS;
+    ImVec2 last_drawn(-FLT_MAX, -FLT_MAX);
+    for(size_t i = 0; i < count; ++i)
+    {
+        ImVec2 center;
+        if(!find_line_point_on_screen(edit, get_line_point_world(line, world, i), camera, center))
+        {
+            continue;
+        }
+        const bool is_picked = int(i) == edit.picked;
+        const bool is_hovered = int(i) == edit.hovered;
+        if(!is_picked && !is_hovered && ImLengthSqr(center - last_drawn) < min_gap)
+        {
+            continue;
+        }
+        last_drawn = center;
+        const ImU32 color = is_picked ? LINE_POINT_PICKED_COLOR : (is_hovered ? LINE_POINT_HOVERED_COLOR : LINE_POINT_COLOR);
+        draw_list->AddCircleFilled(center, LINE_POINT_HANDLE_RADIUS, color);
+        draw_list->AddCircle(center, LINE_POINT_HANDLE_RADIUS, LINE_POINT_OUTLINE_COLOR);
+    }
+    if(edit.hovered >= 0)
+    {
+        ImGui::SetTooltip("Point %d. Click it to move it with the gizmo. Delete removes the picked point, and Escape hands the gizmo back "
+                          "to the entity.",
+                          edit.hovered);
+    }
+}
+
+/// Moves the picked point of @p line with a translate gizmo, as one undo step per drag.
+void move_picked_line_point(const line_point_edit& edit,
+                            const line_component& line,
+                            const math::transform& world,
+                            const camera& camera,
+                            editing_manager& em)
+{
+    const auto index = size_t(edit.picked);
+    math::transform placed;
+    placed.set_position(math::transform::position_t(get_line_point_world(line, world, index)));
+    if(em.mode == ImGuizmo::MODE::LOCAL && !line.world_space)
+    {
+        placed.set_rotation(world.get_rotation());
+    }
+    // The move tool's snap applies while it is the tool in use.
+    const bool snaps = em.operation == ImGuizmo::OPERATION::TRANSLATE && ImGui::IsKeyDown(shortcuts::modifier_snapping);
+    math::mat4 output = placed;
+    ImGuizmo::AllowAxisFlip(false);
+    const int movetype = ImGuizmo::Manipulate(camera.get_view(),
+                                              camera.get_projection_unjittered(),
+                                              ImGuizmo::OPERATION::TRANSLATE,
+                                              em.mode,
+                                              math::value_ptr(output),
+                                              nullptr,
+                                              snaps ? &em.snap_data.translation_snap[0] : nullptr,
+                                              nullptr,
+                                              nullptr);
+    if(movetype == ImGuizmo::MT_NONE)
+    {
+        return;
+    }
+    const math::transform::position_t moved = math::transform(output).get_position();
+    auto points = line.points;
+    points[index] = math::vec3(line.world_space ? moved : world.inverse_transform_coord(moved));
+    // A press on the gizmo that moved nothing is no edit.
+    if(points[index] == line.points[index])
+    {
+        return;
+    }
+    em.push_undo_stack_enabled(true);
+    em.do_action("Move Line Point",
+                 std::make_shared<entity_set_line_points_action_t>(edit.entity, line_points_edit::move_point, index, line.points, std::move(points)));
+    em.pop_undo_stack_enabled();
+}
+
+/// The Scene view's editing of the selected Line's points: draws their handles and runs the gizmo of the one picked.
+/// True while a point holds the gizmo, so the entity's own stays away.
+auto handle_line_point_editing(const line_point_edit& edit, const camera_component& camera_comp, editing_manager& em) -> bool
+{
+    if(!edit.entity || !edit.entity.all_of<transform_component, line_component>())
+    {
+        return false;
+    }
+    const auto& line = edit.entity.get<line_component>();
+    const auto& camera = camera_comp.get_camera();
+    const auto& world = edit.entity.get<transform_component>().get_transform_global();
+    draw_line_point_handles(edit, line, world, camera);
+    if(edit.picked < 0 || edit.picked >= int(line.points.size()))
+    {
+        return false;
+    }
+    // The press that picked the point is the pick's alone: the gizmo takes the next one.
+    ImGuizmo::Enable(!edit.holds_press);
+    move_picked_line_point(edit, line, world, camera, em);
+    ImGuizmo::Enable(true);
+    return true;
+}
+
 auto handle_inverse_kinematics(entt::handle selection, entt::handle center, editing_manager& em) -> bool
 {
     // Allow IK when gizmo is being used, but block for other ImGui items (like text inputs, sliders, etc.)
@@ -1021,12 +1303,14 @@ void manipulation_gizmos(bool& gizmo_at_center,
                          entt::handle center,
                          entt::handle editor_camera,
                          editing_manager& em,
-                         float overlay_top)
+                         float overlay_top,
+                         const line_point_edit& line_points)
 {
     auto& camera_trans = editor_camera.get<transform_component>();
     auto& camera_comp = editor_camera.get<camera_component>();
 
     setup_gizmo_context(camera_comp);
+    ImGuizmo::Enable(true);
     handle_view_manipulator(editor_camera, camera_comp, overlay_top);
     handle_gizmo_shortcuts(em);
 
@@ -1041,6 +1325,13 @@ void manipulation_gizmos(bool& gizmo_at_center,
     float* bounds_snap = nullptr;
 
     setup_snap_data(em, snap, bounds_snap, bounds_snap_data);
+
+    if(handle_line_point_editing(line_points, camera_comp, em))
+    {
+        return;
+    }
+    // A press on a point handle is that handle's alone: the entity's gizmo under it does not take it too.
+    ImGuizmo::Enable(line_points.hovered < 0);
 
     auto selections = em.try_get_selections_as<entt::handle>();
     setup_gizmo_pivot(gizmo_at_center, center, selections, *active_sel);
@@ -1225,6 +1516,7 @@ void manipulation_gizmos(bool& gizmo_at_center,
         em.do_action("Transform Manipulation", batch_action);
         em.pop_undo_stack_enabled();
     }
+    ImGuizmo::Enable(true);
 }
 
 // Process drag and drop for assets
@@ -1432,7 +1724,7 @@ void scene_panel::handle_drag_selection(rtti::context& ctx, const camera& camera
 {
     // The orbit modifier hands the left drag to the camera.
     const bool is_camera_drag = is_orbiting_ || ImGui::IsKeyDown(shortcuts::modifier_camera_orbit);
-    if(!is_camera_drag && !ImGui::IsAnyItemHovered() && !ImGuizmo::IsOver() && ImGui::IsWindowHovered())
+    if(!is_camera_drag && !ImGui::IsAnyItemHovered() && !ImGuizmo::IsOver() && ImGui::IsWindowHovered() && !is_line_point_engaged(line_point_edit_))
     {
         if(ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
@@ -2017,7 +2309,8 @@ void scene_panel::handle_viewport_interaction(rtti::context& ctx, const camera& 
     // Only handle single-click selection if we're not drag selecting
     if(ImGui::IsItemClicked(ImGuiMouseButton_Left) && !is_using && !is_drag_selecting_)
     {
-        bool is_over_active_gizmo = is_over && is_entity;
+        // A point handle under the mouse takes the click: the entity's gizmo is off while one is hovered.
+        bool is_over_active_gizmo = is_over && is_entity && line_point_edit_.hovered < 0;
         if(!is_over_active_gizmo)
         {
             ImGui::SetWindowFocus();
@@ -2025,7 +2318,7 @@ void scene_panel::handle_viewport_interaction(rtti::context& ctx, const camera& 
             {
                 begin_camera_orbit(em);
             }
-            else
+            else if(!pick_hovered_line_point(line_point_edit_))
             {
                 auto& pick_manager = ctx.get_cached<picking_manager>();
                 auto pos = ImGui::GetMousePos();
@@ -2054,7 +2347,8 @@ void scene_panel::handle_keyboard_shortcuts(editing_manager& em)
 
     auto selections = em.try_get_selections_as_copy<entt::handle>();
 
-    if(is_delete_pressed)
+    // Delete takes out the picked point of a Line before it takes the entity.
+    if(is_delete_pressed && !remove_picked_line_point(line_point_edit_, em))
     {
         delete_entities(selections);
     }
@@ -2270,11 +2564,12 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx,
         }
     }
 
+    update_line_point_edit(line_point_edit_, em, camera);
     handle_viewport_interaction(ctx, camera, em);
     handle_keyboard_shortcuts(em);
 
     const float overlay_top = ImGui::GetCurrentWindow()->ContentRegionRect.Min.y + toolbar_extent_;
-    manipulation_gizmos(gizmo_at_center_, was_using_gizmo_, get_center(), camera_entity, em, overlay_top);
+    manipulation_gizmos(gizmo_at_center_, was_using_gizmo_, get_center(), camera_entity, em, overlay_top, line_point_edit_);
     handle_camera_movement(camera_entity);
     draw_camera_fly_speed_hint(size, pos);
     draw_selected_camera(ctx, camera_entity, ImRect(pos, pos + size));

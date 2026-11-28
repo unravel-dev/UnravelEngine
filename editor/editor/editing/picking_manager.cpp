@@ -11,6 +11,7 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/events.h>
 #include <engine/meta/ecs/components/all_components.h>
+#include <engine/rendering/dynamic_geometry/dynamic_geometry_draw.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
@@ -29,6 +30,34 @@ namespace
 auto to_bx(const math::vec3& data) -> bx::Vec3
 {
     return {data.x, data.y, data.z};
+}
+
+/// Pixels a line or a trail is at least wide in the pick pass.
+constexpr float PICK_STRIP_PIXELS = 8.0f;
+
+/// The least width a strip is picked with: what PICK_STRIP_PIXELS cover as @p cam sees them, at every distance.
+auto get_pick_width_floor(const camera& cam) -> strip_width_floor
+{
+    const float viewport_height = std::max(float(cam.get_viewport_size().height), 1.0f);
+    const float scale = std::max(std::abs(cam.get_projection()[1][1]), 1.0e-6f);
+    // The world size of the pixels: one metre away through a perspective, anywhere through an orthographic view.
+    const float width = PICK_STRIP_PIXELS * 2.0f / (scale * viewport_height);
+    const bool is_orthographic = cam.get_projection_mode() == projection_mode::orthographic;
+    return is_orthographic ? strip_width_floor{width, 0.0f} : strip_width_floor{0.0f, width};
+}
+
+/// How far @p floor widens anything within @p box, as a camera at @p eye sees it.
+auto get_pick_margin(const strip_width_floor& floor, const math::bbox& box, const math::vec3& eye) -> float
+{
+    const float farthest = math::distance(eye, box.get_center()) + math::length(box.max - box.min) * 0.5f;
+    return (floor.constant + floor.per_metre * farthest) * 0.5f;
+}
+
+/// The colour the pick pass draws entity @p e with: its id, a byte to a channel.
+auto get_pick_id_color(entt::entity e) -> math::vec4
+{
+    const auto id = ENTT_ID_TYPE(e);
+    return {float(id & 0xff) / 255.0f, float((id >> 8) & 0xff) / 255.0f, float((id >> 16) & 0xff) / 255.0f, float((id >> 24) & 0xff) / 255.0f};
 }
 
 auto from_bx(const bx::Vec3& data) -> math::vec3
@@ -536,13 +565,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                     return;
                 }
 
-                auto id = ENTT_ID_TYPE(e);
-                std::uint32_t rr = (id) & 0xff;
-                std::uint32_t gg = (id >> 8) & 0xff;
-                std::uint32_t bb = (id >> 16) & 0xff;
-                std::uint32_t aa = (id >> 24) & 0xff;
-
-                math::vec4 color_id = {rr / 255.0f, gg / 255.0f, bb / 255.0f, aa / 255.0f};
+                const math::vec4 color_id = get_pick_id_color(e);
 
                 anything_picked = true;
                 const auto& submesh_transforms = model_comp.get_submesh_transforms();
@@ -593,6 +616,20 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                              nullptr,
                              nullptr,
                              model_comp.get_submit_extras());
+            });
+
+        bgfx::discard();
+
+        // Lines and trails are picked by what they draw.
+        target_scene->registry->view<transform_component, line_component, active_component>().each(
+            [&](auto e, auto&&, auto&&, auto&&)
+            {
+                anything_picked |= pick_dynamic_renderers(target_scene->create_handle(e), original_camera, pick_camera, pass.id);
+            });
+        target_scene->registry->view<transform_component, trail_component, active_component>(entt::exclude<line_component>).each(
+            [&](auto e, auto&&, auto&&, auto&&)
+            {
+                anything_picked |= pick_dynamic_renderers(target_scene->create_handle(e), original_camera, pick_camera, pass.id);
             });
 
         bgfx::discard();
@@ -805,6 +842,53 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
         // Clear the callback after processing
         pick_callback_ = {};
     }
+}
+
+auto picking_manager::pick_dynamic_renderers(entt::handle entity, const camera& original_camera, const camera& pick_camera, bgfx::ViewId view)
+    -> bool
+{
+    const math::bbox box = get_dynamic_renderer_bounds(entity);
+    if(!box.is_populated())
+    {
+        return false;
+    }
+    const math::vec3 pick_origin = original_camera.get_position();
+    const strip_width_floor pick_floor = get_pick_width_floor(original_camera);
+    const math::vec3 margin(get_pick_margin(pick_floor, box, pick_origin));
+    if(!pick_camera.test_aabb(math::bbox(box.min - margin, box.max + margin)))
+    {
+        return false;
+    }
+    const math::vec4 color_id = get_pick_id_color(entity.entity());
+    const math::mat4 world = get_dynamic_geometry_world(pick_origin);
+    bool is_picked = false;
+    draw_dynamic_renderers(entity,
+                           original_camera,
+                           pick_origin,
+                           pick_floor,
+                           pick_geometry_,
+                           [&](const dynamic_geometry& geometry, const std::shared_ptr<material>& drawn)
+                           {
+                               program_->begin();
+                               program_->set_uniform("u_id", math::value_ptr(color_id));
+                               gfx::set_world_transform(math::value_ptr(world));
+                               if(bind_dynamic_geometry(geometry))
+                               {
+                                   // A material that moves its vertices is picked where it draws them.
+                                   auto* moved = drawn ? moved_vertex_programs_.begin_moved_vertices(
+                                                             *drawn,
+                                                             graph_material_programs::get_position_only_variant(false),
+                                                             id_fragment_shader_,
+                                                             pick_origin)
+                                                       : nullptr;
+                                   // Both sides: a strip is a sheet.
+                                   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | gfx::depth_test_nearer);
+                                   bgfx::submit(view, moved != nullptr ? moved->native_handle() : program_->native_handle(), 0, BGFX_DISCARD_ALL);
+                                   is_picked = true;
+                               }
+                               program_->end();
+                           });
+    return is_picked;
 }
 
 void picking_manager::process_pick_result(rtti::context& ctx, scene* target_scene, ENTT_ID_TYPE id_key)

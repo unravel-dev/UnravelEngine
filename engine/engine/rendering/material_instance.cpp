@@ -1,4 +1,5 @@
 #include "material_instance.h"
+#include "material_graph/graph_material.h"
 #include "material_graph/named_values.h"
 #include "material_graph/standard_material.h"
 
@@ -382,6 +383,15 @@ auto material_instance::set_graph_texture(const std::string& name, const asset_h
         note_changed_name(changed_graph_textures_, name);
     }
     return true;
+}
+
+void material_instance::set_known_graph_texture(const std::string& name, const asset_handle<gfx::texture>& texture)
+{
+    material_type_ = entt::resolve<graph_material>().id();
+    if(set_named(graph_textures_, name, texture))
+    {
+        note_changed_name(changed_graph_textures_, name);
+    }
 }
 
 auto material_instance::get_graph_texture(hpp::string_view name) const -> asset_handle<gfx::texture>

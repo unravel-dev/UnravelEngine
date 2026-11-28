@@ -1,5 +1,7 @@
 #include "reflection.h"
 
+#include <algorithm>
+
 namespace entt
 {
 namespace
@@ -169,6 +171,29 @@ auto find_renamed_property(const meta_type& type, const std::string& former_name
         }
     }
     return {};
+}
+
+auto get_replaced_names(const meta_data& prop) -> std::vector<std::string>
+{
+    return get_attribute_as<std::vector<std::string>>(prop, "replaces");
+}
+
+auto find_replacing_properties(const meta_type& type, const std::string& former_name) -> std::vector<meta_data>
+{
+    std::vector<meta_data> replacing;
+    if(former_name.empty())
+    {
+        return replacing;
+    }
+    for(auto [id, prop] : type.data())
+    {
+        const auto replaced = get_replaced_names(prop);
+        if(std::find(replaced.begin(), replaced.end(), former_name) != replaced.end())
+        {
+            replacing.push_back(prop);
+        }
+    }
+    return replacing;
 }
 
 auto get_pretty_name(const meta_data& prop) -> std::string

@@ -67,6 +67,37 @@ auto get_forward_scene_texture_stages(bool is_lit, uint32_t scene_textures, bool
 /// How many stages the scene reads of @p scene_textures take (material_scene_texture_bits: colour, depth, blurred).
 auto count_forward_scene_reads(uint32_t scene_textures) -> uint32_t;
 
+/// The most textures a material reads on a particle emitter's sprites, trails and ribbons (Particle Use). A particle
+/// draw holds the particle data on stages 0-4 and 7, the sky's SH on 12 and the view's depth on 15; an unlit one the
+/// fog's froxel column on 8, a lit one the sun's four cascades on 8-11 (particles/particle_shading.sh, mg_particle.sh).
+constexpr uint32_t MATERIAL_GRAPH_MAX_PARTICLE_LIT_TEXTURES = 4;
+constexpr uint32_t MATERIAL_GRAPH_MAX_PARTICLE_UNLIT_TEXTURES = 7;
+/// The most textures a particle material of @p model reads: one fewer when it reads the scene's colour
+/// (@p scene_textures, material_scene_texture_bits). The view's depth has a stage of every particle draw already.
+auto get_material_graph_particle_max_textures(material_shading_model model, uint32_t scene_textures = 0) -> uint32_t;
+/// The stage a particle draw binds a graph material's texture @p index at: the stages such a draw leaves free, in
+/// the order every particle material fills them (the lit ones first).
+auto get_material_graph_particle_texture_stage(uint32_t index) -> uint8_t;
+/// The stage a particle draw binds the copy of the lit scene at for a material of @p model that reads it: the last
+/// stage its own textures could take (mg_particle.sh PARTICLE_SCENE_COLOR_STAGE).
+auto get_material_graph_particle_scene_color_stage(material_shading_model model) -> uint8_t;
+
+/// The most textures a lit particle material reads while its emitter's particles take the GI's light around them:
+/// the radiance cache's two buffers take the stages the third and fourth texture would (particle_lighting.sh
+/// PARTICLE_GI).
+constexpr uint32_t MATERIAL_GRAPH_MAX_PARTICLE_GI_TEXTURES = 2;
+/// Whether a lit particle material that binds @p texture_count textures and reads @p scene_textures
+/// (material_scene_texture_bits) leaves the radiance cache those stages: the copy of the lit scene takes one of them.
+auto fits_material_graph_particle_gi(uint32_t texture_count, uint32_t scene_textures) -> bool;
+/// The stages of the radiance cache's buffers in such a draw (particle_lighting.sh PARTICLE_GI_*_STAGE).
+struct particle_gi_stages
+{
+    uint8_t indirection{};
+    uint8_t sh{};
+};
+/// Those stages: the ones the first two textures past MATERIAL_GRAPH_MAX_PARTICLE_GI_TEXTURES would take.
+auto get_material_graph_particle_gi_stages() -> particle_gi_stages;
+
 /// What a decal material writes (material_graph_compile_result::decal_writes): the channels its Decal Output links.
 enum material_decal_write_bits : uint32_t
 {
@@ -304,6 +335,10 @@ struct material_graph_compile_result
     /// A surface of the translucency pass that casts a shadow dithered by its Opacity (MATERIAL_CAST_SHADOW_SETTING): the
     /// shader has the shadow caster variants.
     bool casts_forward_shadow{};
+    /// A surface of the translucency pass also compiled for particle emitters (MATERIAL_PARTICLE_USE_SETTING): the shader
+    /// has the "particle" variant, "particle_unlit" when its Shading Model lights it (an emitter whose Lighting is
+    /// Unlit draws that one), and "particle_velocity" when it writes its velocity (writes_velocity).
+    bool particle_use{};
     /// World Position Offset moves the vertices: there is a vertex shader, and the shader has the shadow caster
     /// variants, as the shadow moves with the surface.
     bool uses_world_position_offset{};
@@ -414,6 +449,8 @@ struct material_graph_binding
     int post_priority{};
     uint32_t scene_textures{};
     bool samples_scene_neighbours{};
+    /// material_graph_compile_result::particle_use.
+    bool particle_use{};
 };
 
 /// The binding of a compiled graph.

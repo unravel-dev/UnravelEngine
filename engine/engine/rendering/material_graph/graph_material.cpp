@@ -3,9 +3,12 @@
 
 #include <engine/meta/rendering/material_graph.hpp>
 
+#include <base/hash.hpp>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstring>
 
 namespace unravel
 {
@@ -614,6 +617,63 @@ auto graph_material::has_depth_prepass() const -> bool
 auto graph_material::writes_velocity() const -> bool
 {
     return is_forward() && binding_.writes_velocity;
+}
+
+auto graph_material::is_particle_use() const -> bool
+{
+    return is_forward() && binding_.particle_use;
+}
+
+auto graph_material::get_draw_hash() const -> uint64_t
+{
+    // The code's hash names the shader: the loader's shader handles carry their material's key and no uid.
+    std::size_t hash = std::hash<std::string>{}(get_shader_hash());
+    for(const auto& value : get_parameter_registers())
+    {
+        for(int component = 0; component < 4; ++component)
+        {
+            uint32_t bits = 0;
+            std::memcpy(&bits, &value[component], sizeof(bits));
+            utils::hash_combine(hash, bits);
+        }
+    }
+    for(const auto& texture : get_textures())
+    {
+        utils::hash_combine(hash, texture.texture.uid());
+        utils::hash_combine(hash, texture.texture.id());
+        utils::hash_combine(hash, (uint32_t(texture.address) << 8) | uint32_t(texture.filter));
+    }
+    return uint64_t(hash);
+}
+
+auto graph_material::binds_same_draw(const graph_material& other) const -> bool
+{
+    if(this == &other)
+    {
+        return true;
+    }
+    const auto& textures = get_textures();
+    const auto& other_textures = other.get_textures();
+    // Materials of the same code share one loaded shader, which the programs are made per: the code's hash tells, and
+    // the loaded shader itself for a material no compile gave a hash.
+    const auto& code = get_shader_hash();
+    if(code != other.get_shader_hash() || (code.empty() && get_shader().version() != other.get_shader().version()) ||
+       get_parameter_registers() != other.get_parameter_registers() || textures.size() != other_textures.size())
+    {
+        return false;
+    }
+    for(size_t i = 0; i < textures.size(); ++i)
+    {
+        const auto& own = textures[i];
+        const auto& theirs = other_textures[i];
+        // The loaded texture, which every handle of one asset shares and which tells the ones made at run time apart.
+        // Two that have no load yet both read the default texture.
+        if(own.texture.version() != theirs.texture.version() || own.address != theirs.address || own.filter != theirs.filter)
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 auto graph_material::get_domain() const -> material_domain

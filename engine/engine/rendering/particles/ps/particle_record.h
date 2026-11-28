@@ -3,6 +3,7 @@
 #include <math/math.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace unravel
@@ -53,7 +54,8 @@ enum static_slot : uint32_t
     static_slot_facing = 13,
     /// Fastest speed as multiples of the launch speed and of the acceleration's speed.
     static_slot_speed_bound = 14,
-    /// Ribbon facing (ribbon_facing), unused yzw.
+    /// Ribbon facing (ribbon_facing), the ribbons the emitter's live particles are of, 1 when particles at rest lie
+    /// flat on their surface, unused w.
     static_slot_ribbon = 15,
 };
 
@@ -88,7 +90,8 @@ enum lut_row : uint32_t
     lut_row_shape = 4,
     /// The second color gradient (two_gradients).
     lut_row_color_b = 5,
-    /// (turbulence strength over life, size z multiplier over life, 0, 0): the z multiplier sizes mesh particles.
+    /// (turbulence strength, size z multiplier, Custom Data X, Custom Data Y) over life: the z multiplier sizes mesh
+    /// particles, the custom data is what the emitter's material reads.
     lut_row_turbulence_size_z = 6,
 };
 
@@ -117,9 +120,12 @@ struct particle_record
     /// Linear tint, half floats: rg, ba.
     uint32_t tint_rg = 0;
     uint32_t tint_ba = 0;
-    /// Emitter table row (low 16 bits).
-    uint32_t emitter = 0;
-    /// Age, ticks, at which the current motion segment started (0 = since birth).
+    /// Emitter table row, and the ribbon of its emitter the particle is of (ribbon render mode): the low and the
+    /// high half of one uint of the record.
+    uint16_t emitter = 0;
+    uint16_t ribbon = 0;
+    /// Age, ticks, at which the current motion segment started (0 = since birth). With motion_offset_rest_bit the
+    /// particle rests at start since that age, and velocity holds the unit normal of the surface it rests on.
     uint32_t motion_offset = 0;
 
     auto get_start() const -> math::vec3
@@ -148,6 +154,45 @@ struct particle_record
 };
 
 static_assert(sizeof(particle_record) == record_uints * sizeof(uint32_t), "particle_record must be 64 bytes");
+
+/// The bit of particle_record::motion_offset that marks a particle at rest (PARTICLE_MOTION_REST_BIT in
+/// particle_common.sh). An age never reaches it: lifetimes are far shorter than 2^31 ticks.
+constexpr uint32_t motion_offset_rest_bit = 0x80000000u;
+
+/// Metres a bounced particle starts off its surface, so its next path does not cross it at once, and metres above
+/// its surface a particle at rest lies when it lies flat on it (PARTICLE_CONTACT_LIFT and PARTICLE_REST_LIFT in
+/// cs_particle_collide.eshader).
+constexpr float contact_lift = 1.0e-3f;
+constexpr float rest_lift = 5.0e-3f;
+/// Smallest speed factor (speed curve times easing rate) a bounce divides by when it carries a particle's curves on
+/// past its contact; below it the bounced velocity is kept as it is (PARTICLE_MIN_SEGMENT_FACTOR).
+constexpr float min_segment_factor = 1.0e-2f;
+
+/// A record in the GPU's pool also counts its particle's bounces off scene surfaces (cs_particle_collide.eshader)
+/// in motion_offset: motion_offset_bounce_mask at motion_offset_bounce_shift, above the ages (every age fits
+/// motion_offset_age_mask) and below the rest bit. The CPU's records never hold a count
+/// (PARTICLE_MOTION_BOUNCE_SHIFT, PARTICLE_MOTION_BOUNCE_MASK and PARTICLE_MOTION_AGE_MASK in particle_common.sh).
+constexpr uint32_t motion_offset_bounce_shift = 25u;
+constexpr uint32_t motion_offset_bounce_mask = 0x3fu;
+constexpr uint32_t motion_offset_age_mask = (1u << motion_offset_bounce_shift) - 1u;
+static_assert(((motion_offset_bounce_mask << motion_offset_bounce_shift) & (motion_offset_rest_bit | motion_offset_age_mask)) == 0u,
+              "the bounce count lies between the age and the rest bit");
+
+/// Whether the particle rests where it is for the rest of its life (collision_mode::stick, or a bounce slower than the
+/// emitter's rest speed).
+inline auto is_at_rest(const particle_record& record) -> bool
+{
+    return (record.motion_offset & motion_offset_rest_bit) != 0u;
+}
+
+/// The age, ticks, at which a particle at rest came to rest.
+inline auto get_rest_age_ticks(const particle_record& record) -> uint32_t
+{
+    return record.motion_offset & ~motion_offset_rest_bit;
+}
+// particle_common.sh reads the emitter as the low half and the ribbon as the high half of the record's uint 14.
+static_assert(offsetof(particle_record, emitter) == 14 * sizeof(uint32_t), "the emitter row is the low half of uint 14");
+static_assert(offsetof(particle_record, ribbon) == 14 * sizeof(uint32_t) + sizeof(uint16_t), "the ribbon is the high half of uint 14");
 
 auto pack_size_picks(float start, float end) -> uint32_t;
 auto unpack_size_picks(uint32_t picks) -> math::vec2;

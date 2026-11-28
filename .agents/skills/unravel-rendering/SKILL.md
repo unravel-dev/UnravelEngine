@@ -158,6 +158,74 @@ Pipeline, targets and draws:
   pixel of depth slope (`max(abs(dFdx(d)), abs(dFdy(d)))`), not a constant in device depth; check D3D and GL.
 - The World Normal debug view writes the normal unremapped: surfaces facing -x, -y or -z read black.
 - `particle_eval.h` mirrors `particle_common.sh` (suite "particle motion" compares the constants); change both.
+- A particle at rest (Stick, or a bounce slower than Rest Speed) carries `motion_offset_rest_bit` in its record
+  (`PARTICLE_MOTION_REST_BIT`): the other bits are the age it came to rest at, its start is where it rests and its
+  velocity holds the surface's unit normal. Both evaluators give it no velocity and no turbulence and stop its spin
+  at that age.
+- Particles collide with physics colliders through a cast function (`ps_soa::particle_sweep`) that
+  `particle_system::resolve_collisions` builds from the scene's physics world: `ps_soa` includes no physics. The
+  sweeps run on one thread after the parallel emitter update, at most `graphics.particles.max_collision_casts` a
+  frame, each over a stretch of the closed-form path cut into chords. A contact found late (the cast limit, a
+  particle born in the past) still happens at its own tick: the path stays exact and only shows late.
+- That cast function leaves out the colliders its sphere touches where it starts (an emitter inside its owner's
+  collider, a particle lying on a surface) and reports that there were some. A contact, or a death, past what a
+  path was swept waits for that stretch (`holds_for_sweep`, `holds_death_for_sweep`; a death at most a second), and
+  a contact is the last tick still clear of its surface, so a bounce starts outside it. Kill ends a particle at its
+  contact without cutting its life earlier: a life that changes mid-flight moves every curve that reads it.
+- A quad built from a surface normal (Align To Surface in `particle_vertex.sh`) winds as a billboard does: its
+  right x up points away from the side it shows. The other order is culled as a back face.
+- Particles that collide with Scene Surfaces are rewritten on the GPU alone (`cs_particle_collide.eshader`, one
+  dispatch per camera view from `collide_particles_with_scene` in `pipeline.cpp`): the record pool then holds what no
+  CPU copy does. A pool that grows is copied on the GPU (`particle_gpu::copy_grown_pool`), never restaged; the CPU's
+  records stay as the particles were born, so everything the CPU evaluates (events, sub-emitters, particle lights,
+  mesh particles, the live count) follows the path without the contacts; such an emitter always culls and sorts on
+  the GPU, and its bounds hold every way a bounce can send a particle (`motion_bounds_params::bounces_unseen`).
+- A lit emitter whose Ambient Light is Global Illumination draws `vs_particle.eshader#graph_lit_gi` (`PARTICLE_GI` in
+  `particle_lighting.sh`): each particle takes the radiance cache's L1 SH around it (`gi/gi_radiance_cache_surface.sh`,
+  which `mg_forward.sh` reads too) in place of the sky's. The cache's two buffers sit on the stages a material's
+  third and fourth texture and the copy of the lit scene would take (`get_material_graph_particle_gi_stages`), so a
+  material that needs those keeps the sky's light (`fits_material_graph_particle_gi`). The deferred pipeline marks
+  the cache through the box of each such emitter's particle centres (`ps_soa::get_lit_aabb`) after the see-through
+  models' points, the nearest emitter first (`deferred::collect_particle_gi_points`): one point in every lattice cube
+  the box reaches (`gi_radiance_cache::make_volume_points`), counted by the probes they mark, which emitters that
+  overlap share (`gi_radiance_cache::volume_marks`, `max_particle_gi_probes`). It names the emitters that fit to the
+  particle pass (`pipeline::set_particle_gi_emitters`); the rest, and every emitter of a view without the GI, draw
+  `graph_lit`. The variant has no texture twin: the cache's buffers are no textures.
+- A GPU record's `motion_offset` holds the age in `motion_offset_age_mask`, the bounce count above it and the rest bit
+  on top; `particle_load` splits them, and CPU records never carry a count. A new bit there changes both.
+- The depth variant of that kernel tests the plane of the pixel under the particle, then looks the plane up again at
+  the point of it nearest the particle: a plane runs on past the edge of what it belongs to, and without the second
+  tap particles stop in the air beside railings and behind pillars. A particle behind a surface by more than its
+  size or two frames of sinking is behind something, not in it. A parameter named `point` does not compile for
+  HLSL (a keyword).
+- Lines and Trails (`dynamic_renderer`) have no mesh and no model: a camera run builds their triangles on
+  the CPU in the mesh vertex layout, placed relative to the camera, and draws them from the frame's transient buffers
+  (`deferred::collect_dynamic_geometry`, `pipeline_dynamic_geometry.cpp`). The ones whose Opaque or Dithered
+  materials bind the same draw (`get_draw_hash`, `binds_same_draw`) are one G-buffer draw, in the phase after the
+  decals (they take none); each one with a see-through material is an entry of the translucency list, sorted
+  whatever its Order Independent setting. A probe capture draws none. They draw no velocity, are no GI cards, mark
+  no radiance-cache cells, and their one world matrix is a translation: a graph's object data reads no object.
+- Their shadows are a caster kind of their own (`shadow_geometry_source`, built once a camera frame by
+  `gather_dynamic_shadow_casters`, only for the ones a shadow-casting light can take a shadow from: within a local
+  light's sphere, or where a directional light's shadow comes within its shadow distance of the camera): one caster
+  per draw hash and 32 m cell of the world, drawn from both sides. Its key is a hash of its vertices, which are placed relative to the corner of the 64 m cell
+  the camera stands in, so a caster that holds still keeps its maps while the camera moves within the cell. A
+  caster that cannot be drawn yet (its mask's shader is not compiled, the frame's transient memory is full) leaves
+  its views' cached maps invalid, so they render again.
+- A Line that does not face the camera keeps its geometry between builds (`line_component::kept_geometry_`, keyed
+  by a hash of what it follows but where the entity is) and copies it. One that faces the camera is built per run,
+  unless it casts a shadow: the frame builds that one for its shadow maps and copies it for the view
+  (`keeps_geometry`).
+- A draw path that walks models and should show these three too (a debug view, an id or mask pass) calls
+  `build_dynamic_renderer_geometry` and `bind_dynamic_geometry`
+  (`engine/engine/rendering/dynamic_geometry/dynamic_geometry_draw.h`), as the editor's picking and selection
+  outline do, with a state that culls nothing: a strip is a sheet.
+- A transient vertex or index buffer lives for one `gfx::frame`, and a run can submit a frame part-way
+  (`render_pass` flushes when views run out): a copy kept for several draws records `gfx::get_render_frame()` and is
+  made again when the number moved (`deferred::dynamic_shadow_caster::bind_shadow_geometry`).
+- Particle sprites, trails and ribbons are shaded by materials alone (skill `unravel-materials`): the particle pass
+  owns the quads, the sort and the particle data on stages 0-4 and 7, and a material's graph the rest. The overdraw
+  view is the one fixed particle program left (`fs_particle_overdraw.eshader`).
 
 Shaders (procedure and per-language traps: [shader-change.md](shader-change.md)):
 
@@ -320,6 +388,7 @@ Indirect occlusion contract (each indirect term takes only the occlusion it has 
 | Run params, passes, volumes | `engine/engine/rendering/pipeline/pipeline.h`, `engine/engine/rendering/pipeline/volume_resolver.h` |
 | Passes | `engine/engine/rendering/pipeline/passes/` |
 | Programs, uniform order | `engine/engine/rendering/gpu_program.h` |
+| Lines, trails, sprites: builders, draw helpers, pipeline step | `engine/engine/rendering/dynamic_geometry/`, `engine/engine/rendering/pipeline/deferred/pipeline_dynamic_geometry.cpp` |
 | bgfx layer: targets, views, caps | `engine/core/graphics/render_view.h`, `engine/core/graphics/render_pass.h`, `engine/core/graphics/device_caps.h`, `engine/core/graphics/graphics.h` |
 | Feature requirements | `engine/engine/rendering/render_feature_support.h` |
 | Shadows | `engine/engine/rendering/shadow.h`, `engine/engine/rendering/light.h` |

@@ -439,6 +439,7 @@ void deferred::begin_camera_frame(const run_context& run)
     // Before the probe captures: they are the frame's first views of the local lights, whose shadow maps every later
     // view reuses, so they render them with the camera's instanced casters too.
     gather_instance_sources(run.scn, run.cam, run.render_mask);
+    gather_dynamic_shadow_casters(run);
 }
 
 void deferred::capture_reflection_probes(const run_context& run)
@@ -472,6 +473,7 @@ void deferred::render_geometry(const run_context& run)
 {
     begin_velocity_recording(run.params);
     auto visibility_set = collect_visible_models(run.scn, run.cam, run.params, run.render_mask, run.dt);
+    collect_dynamic_geometry(run);
     decal_pass_.collect(run.scn, run.cam, run.params.limits, run.render_mask);
     const hpp::span<const visibility_data> visible(visibility_set.data(), visibility_set.size());
     if(!decal_pass_.has_decals())
@@ -490,7 +492,7 @@ void deferred::render_geometry(const run_context& run)
         stats_.drawn_decals += decal_stats.decals;
         stats_.decal_draws += decal_stats.draws;
         stats_.decal_buffer_runs += decal_stats.is_full_path ? 1u : 0u;
-        if(!others.empty())
+        if(!others.empty() || has_dynamic_opaque_geometry())
         {
             run_g_buffer_pass(others, run.cam, run.rview, run.params.limits, run.dt, g_buffer_phase::after_decals);
         }

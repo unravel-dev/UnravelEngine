@@ -1,7 +1,7 @@
 ---
 name: components
 title: Component workflow + semantics
-description: The list -> add -> set -> get -> remove workflow, how properties are shaped (nested objects, lists, enums, entity and asset references), and per-component knowledge - lights, particle emitters (semantics + recipes), physics bodies and shapes, joints, ragdolls, character controllers, animation clips, world-space text, reflection probes, local volumes and post effects.
+description: The list -> add -> set -> get -> remove workflow, how properties are shaped (nested objects, lists, enums, entity and asset references), and per-component knowledge - lights, particle emitters (semantics + recipes), lines and trails, physics bodies and shapes, joints, ragdolls, character controllers, animation clips, world-space text, reflection probes, local volumes and post effects.
 order: 40
 ---
 # Component workflow and semantics
@@ -109,12 +109,57 @@ Motion (exact at any frame rate; there is no per-frame integration):
   field: smoke billows, embers wander, magic churns. turbulence_frequency
   (swirls per metre), turbulence_speed (swirls per second, 0 freezes the field),
   turbulence_over_life multiplies the strength over life.
-- collision kill | bounce with collision_planes [[nx,ny,nz,offset]] (world
-  normal and offset from the emitter along it; [[0,1,0,0]] is the ground at the
-  emitter's height); restitution, friction and max_bounces shape the bounce.
-  World simulation space only. collision_radius_scale (default 1) makes a
-  particle touch with its edge, half its size from the plane, so sprites and
-  meshes rest on the floor; 0 = its centre.
+- collision kill | bounce | stick with collision_planes [[nx,ny,nz,offset]]
+  (world normal and offset from the emitter along it; [[0,1,0,0]] is the ground
+  at the emitter's height); restitution, friction and max_bounces shape the
+  bounce. World simulation space only. collision_radius_scale (default 1) makes
+  a particle touch with its edge, half its size from the surface, so sprites
+  and meshes rest on the floor; 0 = its centre.
+- collide_with planes (default) | physics_colliders: the planes and the
+  colliders of the physics world, by collision_layers (layer names, indices,
+  "everything"). Colliders are touched in play mode only; in edit mode the
+  particles collide with the planes alone. collision_quality low | medium |
+  high trades casts for how soon a moving collider is noticed. Each particle
+  costs a cast every half second of its path at medium, more on a curved path;
+  graphics.particles.max_collision_casts (2048, 512 on new Android and Web
+  profiles) limits a frame, and stats_get's particle_collision shows the casts
+  and the particles left waiting, whose contacts come late. Use it for
+  hundreds to a few thousand particles: sparks, debris, shells, splashes.
+- collide_with scene_surfaces: the particles touch whatever a camera draws,
+  found on the GPU for each view that shows them, in edit mode and in play,
+  with no physics and no planes. It costs the CPU nothing, so it suits tens of
+  thousands of particles: rain, snow, embers, sparks. A contact happens where
+  the particle is in a frame, not at the exact place its path crossed the
+  surface. The game is told of no such contact: it sends no collision event,
+  leaves no collision_decal and fires no sub-emitter, and deaths (death
+  events, sub-emitters on death), particle lights and the particle count
+  follow the path the particle would take without it, so a splash where rain
+  lands needs planes or physics_colliders. The particles of an emitter no
+  camera draws touch nothing, only opaque surfaces count, and mesh particles
+  do not collide this way. max_bounces counts to 63. The project's
+  graphics.particles.scene_collision picks what is tested: depth_buffer
+  (default: what the camera sees, so nothing behind a surface or off screen),
+  distance_field (the GI's distance field where the view has one: surfaces
+  off screen too, rounded to its voxels) or off. A view's stats_get
+  particles.scene_collision_tested counts the particle slots it tested.
+- stick leaves a particle where it touched for the rest of its life (snow,
+  splats). rest_speed (m/s, 0 = off) does the same to a bounce slower than it:
+  debris that settles needs max_bounces around 16 and rest_speed around 0.5.
+  align_to_surface lays a resting quad flat on its surface and stands a mesh
+  upright on it (set soft_fade_distance 0 with it). lifetime_loss (0..1) takes
+  that share of the remaining life at each contact; bounce_scatter (degrees)
+  turns each bounce at random within a cone, for rough ground.
+- collision_decal {enabled, material, size:[min,max], lifetime, fade_out,
+  probability, attach_to_entity} leaves a decal at each contact in play mode
+  (scorch marks, splats): a Decal material, or the engine's default when
+  empty. At most 32 a frame for one emitter; they share the 256 transient
+  decals of Decals.Spawn.
+- Script events are off until asked for: send_birth_events,
+  send_death_events, send_collision_events deliver OnParticleEvents(batch)
+  once a frame to the scripts on the emitter's entity (or its nearest parent
+  with scripts); notify_hit_entities delivers OnParticleHits(batch) to the
+  scripts of the entity whose collider was touched (damage). Each event has
+  type, position, velocity, normal, surfacePoint, color, size and entity.
 - sub_emitters [{trigger:birth|death|collision,target:<entity id>,count,
   probability,inherit_velocity,inherit_color,inherit_size}] burst another
   entity's emitter at each event: sparks where embers land, smoke where a
@@ -134,8 +179,32 @@ Look:
   random_between_gradients true mixes it with color_gradient_b by a random
   amount per particle (sparks from yellow to red). intensity_over_life
   multiplies color_intensity over life (embers that flare and cool).
-- blend_mode: additive for fire, sparks, magic; normal for smoke and dust.
-  color_intensity above 1 (6-10) makes additive effects glow through bloom.
+- render_material is what the particles draw: a Surface material whose output
+  has Particle Use on. The engine's own are in
+  engine:/data/materials/particles/: particle.mat (alpha blended, what a new
+  emitter has), particle_additive.mat (fire, sparks, magic),
+  particle_premultiplied.mat (a texture whose colour carries its alpha) and
+  particle_modulate.mat (darkens what is behind by the colour); a "_mask" in
+  the name (particle_mask.mat, particle_mask_additive.mat,
+  particle_mask_modulate.mat) reads the texture's brightness as the opacity,
+  and "_normal_map" at the end reads a normal map for surface lighting. A
+  material of your own: material_graph_set with particle_use "on" (the
+  material-graphs guide).
+- material_overrides holds the emitter's own values of that material:
+  {"textures":{"Texture":"app:/data/Textures/smoke.png"}} gives it its
+  texture, {"parameters":{"Tint":[1,0.5,0.2,1]}} a parameter of a material
+  that has one; a name with null reverts it, "revert_all":true drops them
+  all first. Emitters whose overrides hold the same values still draw in one
+  batch. Set render_material before material_overrides (in one call the
+  keys apply in the order given).
+- custom_data_x / custom_data_y [{progress,value}] are two values over each
+  particle's life that a material reads through its Particle Custom Data node
+  (a dissolve amount, a glow).
+- color_intensity above 1 (6-10) makes additive effects glow through bloom.
+- A scene saved while emitters had texture, texture_mode, blend_mode and
+  normal_texture of their own loads as the engine material of that look with
+  the textures as overrides. Those four keys are not properties of the
+  emitter: set render_material and material_overrides.
 - Flipbook textures: texture_sheet_tiles [8,8] with texture_sheet_cycles 1
   plays an 8x8 sheet once per particle life. texture_sheet_use_frame_curve
   with texture_sheet_frame_curve (0 = first frame, 1 = last) holds, speeds up
@@ -152,13 +221,24 @@ Look:
   camera_facing | stretched | trail | ribbon | mesh | fixed_axis. trail draws
   each particle's own past path over trail_length seconds (it curves with
   gravity, drag and turbulence), narrowing to trail_width_end (share of the
-  size) and fading toward its tail. ribbon joins the emitter's live particles,
+  size) and fading toward its tail; a trail is drawn in more pieces the
+  larger it is on screen, and in one where nothing bends its path (no
+  gravity, acceleration or turbulence). ribbon joins the emitter's live particles,
   oldest to youngest, into one strip: a moving emitter with a high rate (or
   rate_over_distance) leaves a ribbon behind it; ribbon_texture_mode age (the
   texture flows with the particles' age) | stretch (once head to tail) | tile
   (repeated every ribbon_tile_time seconds of age). ribbon_facing camera (the
   width faces the camera) | launch_direction (the width runs along each
-  particle's launch direction as it was at birth). A sword slash: a world-space
+  particle's launch direction as it was at birth). ribbon_count (1-64) makes
+  that many ribbons: each particle born joins the next one in turn, and each
+  ribbon is a stream of its own, born at one place of the shape and launched
+  one way at one speed of the start_speed range - a still emitter with a
+  cone shape gives that many jets, a moving one with a circle or line shape
+  that many strands side by side. Lowering it lets the ribbons that are
+  left over fade out as they are.
+  ribbon_smoothing none | low | medium | high bends the ribbon along a
+  smooth curve between two particles (2, 4 or 8 pieces a stretch), so a low
+  emission_rate still draws a round arc. A sword slash: a world-space
   ribbon emitter at the blade's middle, rate_over_distance, a slow launch along
   the blade (shape direction / start_speed ~0.01), size = blade length,
   launch_direction - it sweeps the blade's arc as one sheet. trail never makes
@@ -172,15 +252,16 @@ Look:
 - render_mode mesh draws render_mesh (a mesh asset key, e.g.
   "engine:/data/meshes/cube.emesh" or "engine:/data/meshes/sphere.emesh"; the
   earlier spelling "engine:/embedded/cube" loads the same mesh) per particle with
-  render_material (unset = the mesh's own materials), drawn, lit, shadowed
+  render_material (unset, or one of the engine's particle materials = the
+  mesh's own materials), drawn, lit, shadowed
   (mesh_cast_shadows) and with motion vectors like the scene's models: debris,
   rocks, shells, leaves. Size 1 is the mesh's own size, times size_axes (and
   size_axes_over_life, z included); start_rotation / spin_speed tumble each
   mesh about an axis of its own, align_to_direction points its +Y along the
   motion. The color
   gradient's alpha (and opacity) fades meshes out by dithering, as LOD
-  transitions do (they stop casting shadows below half); its color, the blend
-  mode and the texture do not apply to meshes.
+  transitions do (they stop casting shadows below half); its color does not
+  apply to meshes.
 - Horizontal billboards follow the entity's rotation: spin the entity to spin a
   ground rune; local simulation_space plus a spinning entity swirls particles.
 - start_rotation [min,max] is each particle's start angle in degrees (0-360
@@ -194,13 +275,27 @@ Look:
   lifetime_by_emitter_speed_range (the emitter's own speed, m/s).
 - soft_fade_distance (metres, 0 = off) fades particles where they meet the scene
   behind them: smoke, mist and glows near the floor stop cutting hard lines.
-- lighting unlit (default: the colour is emitted light - fire, magic, sparks) |
-  volumetric (lit once per particle by the sky, the sun with its shadow and up
-  to 4 nearby lights, the same from every side - smoke, dust, steam) | surface
-  (lit like a small sphere; lighting_wrap 0..1 softens the terminator;
-  normal_texture, a tangent-space normal map laid out like the texture with
-  green up, replaces the sphere so smoke and debris show their shapes).
-  receive_shadows false ignores the sun's shadow.
+- lighting says how a lit material's Base Color shows: unlit (default: it is
+  emitted light - fire, magic, sparks) | volumetric (lit once per particle by
+  the sky, the sun with its shadow and up to 4 nearby lights, the same from
+  every side - smoke, dust, steam) | surface (lit like a small sphere;
+  lighting_wrap 0..1 softens the terminator; a material that gives a Normal,
+  as the engine's "_normal_map" ones do from their Normal Map texture, lights
+  each pixel by it so smoke and debris show their shapes). receive_shadows
+  false ignores the sun's shadow. A material whose Shading Model is Unlit, as
+  the modulate ones, ignores lighting.
+- ambient_light says where a lit emitter's particles take the light around
+  them from: sky (default: the sky's light, the same wherever a particle is) |
+  global_illumination (the scene's bounced light where each particle is, so
+  smoke in a dark room is dark and takes the colour of what is lit beside
+  it). The second needs a view whose Global Illumination runs and a material
+  with at most two textures that reads no Scene Color. The emitters of a view
+  lit that way share the probes for a box of particles about eight metres a
+  side near the camera (a larger one farther away), the nearest first, and one
+  that does not fit keeps the sky's light, as the particles do wherever one of
+  these is missing.
+  stats_get's particle_emitters.lit_by_gi counts the emitters a view lit that
+  way.
 - light_count > 0 turns the emitter's brightest particles into point lights
   without shadows (light_intensity candela at full brightness, light_range
   metres, light_color_from_particle): embers and sparks light the floor and
@@ -227,7 +322,8 @@ Cost:
   always_simulate keeps it running.
 - Project-wide quality: settings_set {"graphics.particles":{"spawn_scale":0.5,
   "sorting":true,"force_half_resolution":false,"min_screen_size":0,
-  "max_drawn_particles":0,"max_particles_scale":1,"max_lighting":"surface"}}
+  "max_drawn_particles":0,"max_particles_scale":1,"max_lighting":"surface",
+  "max_collision_casts":2048,"scene_collision":"depth_buffer"}}
   scales every rate and burst and every emitter's capacity, can skip the
   emitters smallest on screen, and caps the lighting (volumetric: surface
   lights as volumetric; unlit: lit particles draw unlit).
@@ -475,6 +571,94 @@ outline, shadow and style_flags (["underline","overline","strike_through",
 "background","foreground"]). The readable side of the glyphs faces -Z at yaw 0:
 a viewer standing on -Z reads it; rotate the entity 180 in yaw for viewers on
 +Z.
+
+## Line / Trail
+
+Two components that draw a strip the engine builds every frame, shaded by any
+Surface material like a mesh: an Opaque or Dithered material draws into the
+G-buffer and takes the scene's light, shadows, GI and screen-space reflections
+as a model's surface does, and a see-through one (Translucent, Additive, ...)
+draws in the translucency pass, sorted with the particles and the see-through
+models. scene_create_batch kinds line and trail make an entity with one. Use
+them for one thing an entity owns; many short-lived things are a Particle
+Emitter, and a flat picture in the world (a sign, an icon) is a Plane
+primitive with a material.
+
+What they are not: they take no decals, show in no reflection probe capture,
+light nothing through the GI (they are no part of its scene), and write no
+motion of their own, so a fast one can smear a little under Temporal AA. A
+material's Object Position, Object Scale and Per Instance Random read no
+object on them, and its Order Independent and Write Velocity settings do
+nothing.
+
+Shared by both:
+- material: a Surface material. Unset, they draw the engine's strip material
+  (engine:/data/materials/strip.mat: the strip's colour, dithered by its
+  alpha). A Decal or Post Process material draws the strip material too, and
+  the project audit reports it.
+- material_overrides: this renderer's own values of that material, shaped as
+  the emitter's and named as the material names them. With the Standard
+  material: {"textures":{"Color Map":"app:/data/Textures/rope.png"}},
+  {"parameters":{"Base Color":[1,0.5,0.2,1]}}; a name with null reverts it.
+  The strip material has no parameters and no textures. Set material before
+  material_overrides.
+- Draws: the components whose Opaque or Dithered materials hold the same
+  values (one material, or equal overrides of it) share one draw, however
+  many there are. Each one with a see-through material is a draw of its own.
+- casts_shadow (default true): the geometry casts when its material does - an
+  Opaque one (an Opacity Mask clips the shadow), or a see-through one whose
+  Cast Shadow is Dithered. The engine's strip material is Dithered and
+  casts none: give a rope the Standard material
+  (engine:/data/materials/standard.mat) or one of your own.
+- sort_priority: where a see-through material draws among the other
+  see-through renderers, lower first, then far to near.
+
+Line (lasers, ropes, cables, lightning, aim arcs, paths, outlines):
+- points [[x,y,z], ...] in the entity's space, or the world's with world_space
+  true; loop true joins the last to the first. A line draws its first 4096
+  points.
+- strip {...} shapes it (below). A script moves the points each frame for a
+  laser or a rope; in the Scene view a selected Line shows a handle on each
+  point: a clicked one moves with the gizmo, Delete takes it out, and Escape
+  hands the gizmo back to the entity.
+
+Trail (where the entity has been: swooshes, tracers, skid marks):
+- time = seconds a point lives; min_distance = metres the entity moves before
+  the trail takes another point; emitting false stops new points and lets the
+  trail age out, and turned on again it starts a stretch of its own that no
+  strip joins to the one still fading. Position 0 of the strip's curves is
+  the entity, 1 the oldest point: width_over_length from 1 to 0 tapers the
+  tail.
+- edge true sweeps a sheet between edge_base and edge_tip (two points in the
+  entity's space, a blade's base and tip): a weapon's arc. strip.subdivisions
+  rounds it between frames. The edge's length is the sheet's width: the
+  strip's shape, alignment, width, corner_vertices and cap_vertices do not
+  apply.
+- The points are not saved and start over when play begins or ends; a trail
+  follows its entity while editing too.
+
+strip (Line and Trail), an object that merges like any nested setting:
+- shape flat | rounded (a band shaded as a cylinder: cables, beams) | tube (a
+  ring of tube_sides vertices: right from every side and in its shadow).
+- alignment camera | local_axis | world_axis with axis [x,y,z]: what a flat or
+  rounded band faces (world_axis [0,1,0] lays a path on the ground).
+- width in metres (a tube's diameter), width_over_length [{progress,value}]
+  scales it along the strip, color_over_length [{progress,color:[r,g,b,a]}]
+  is written to the vertex colour (a material shows it through its Vertex
+  Color node, as the engine's strip material does). Both are read at every
+  cross-section: a two-point laser needs subdivisions for a width that
+  swells in its middle.
+- uv_mode stretch | tile (one repeat every tile_length metres: the texture
+  keeps its size as the strip grows, and on a Trail it stays on the ground it
+  was laid on, as a skid mark does) | per_segment. U runs across the strip
+  and V along it.
+- subdivisions (0-16) adds points along a smooth curve between each pair;
+  corner_vertices (0-16) rounds sharp corners; cap_vertices (0-16) rounds the
+  ends (any number closes a tube's).
+
+Recipes: a laser is a two-point Line with an Additive unlit material; a rope
+is shape tube with an Opaque material and subdivisions 4-6; a sword arc is a
+Trail with edge true, time 0.2-0.4 and an Additive material.
 
 ## Reflection Probe / Volume / post effects
 

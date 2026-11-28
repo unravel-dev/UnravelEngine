@@ -677,20 +677,27 @@ void prefab_override_context::mark_property_as_changed(entt::handle entity,
             {
                 for(auto& token : tokens)
                 {
-                    auto prop = type.data(entt::hashed_string(token.c_str()));
-                    auto prop_type = prop.type();
+                    // An element of a list ("points[3]") is named by the list's property.
+                    const auto bracket = token.find('[');
+                    const std::string name = token.substr(0, bracket);
+                    const std::string element = bracket == std::string::npos ? std::string() : token.substr(bracket);
+                    auto prop = type ? type.data(entt::hashed_string(name.c_str())) : entt::meta_data{};
 
                     if(token.starts_with("script_components["))
                     {
                         current_pretty_path += "/" + string_utils::replace(token, "script_components", "Scripts");
                     }
+                    else if(prop)
+                    {
+                        current_pretty_path += "/" + entt::get_pretty_name(prop) + element;
+                    }
                     else
                     {
-                        current_pretty_path += "/" + entt::get_pretty_name(prop);
-
+                        // No reflected property of that name: the path shows as it is recorded.
+                        current_pretty_path += "/" + token;
                     }
 
-                    type = prop_type;
+                    type = prop ? prop.type() : entt::meta_type{};
                 }
             }
 
@@ -1552,7 +1559,8 @@ auto for_each_reflected_property(const entt::meta_any& value,
 auto contains_name(rtti::context& ctx, entt::meta_any value, const std::string& text, int depth) -> bool;
 
 /// Whether one of the reflected properties of `value`, or what one of them holds, has a name holding the text. A
-/// component's properties are its rows even when an inspector of its own draws them.
+/// component's properties are its rows even when an inspector of its own draws them. A property counts by its
+/// group's name too (the "group" attribute): a group whose name holds the text shows whole (match_group_filter).
 auto contains_name_in_properties(rtti::context& ctx, entt::meta_any value, const std::string& text, int depth) -> bool
 {
     bool found = false;
@@ -1561,6 +1569,7 @@ auto contains_name_in_properties(rtti::context& ctx, entt::meta_any value, const
                                 [&](const entt::meta_data& prop)
                                 {
                                     found = holds_text(entt::get_pretty_name(prop), text) ||
+                                            holds_text(entt::get_attribute_as<std::string>(prop, "group"), text) ||
                                             contains_name(ctx, prop.get(value), text, depth - 1);
                                     return !found;
                                 });
@@ -1935,6 +1944,8 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
     {
         draw_header_row(ctx, header);
     }
+    // What the row's value asks the object's inspector about, the row's notes among it.
+    const current_row_scope current_row(object.base().data(), prop_name, prop_var.base().data());
     // A setting every profile shares is edited in the project settings, not in a profile.
     is_readonly |= profile_overrides.is_current_shared();
     info.read_only = is_readonly;
@@ -1963,12 +1974,14 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
         {
             property_layout layout(prop, object);
             result |= inspect_enum(ctx, prop_var, prop_proxy, info);
+            current_row_scope::draw_notes();
         }
         else
         {
             if(prop_inspector)
             {
                 result |= inspect_var(ctx, prop_var, prop_proxy, info, prop.custom());
+                current_row_scope::draw_notes();
             }
             // A sub-object: a section titled with its name by default, a foldout when it is "foldable" (folded at
             // first when also "collapsed"), its rows joining the list untitled when it is "flattable".
@@ -2186,21 +2199,25 @@ auto inspect_var(rtti::context& ctx,
 
     inspect_result result{};
 
-    ImGui::PushReadonly(info.read_only);
+    // A value drawn inside a read-only scope (an asset the project does not own, a shared setting) is read only for
+    // its inspector too, whoever calls for it.
+    var_info shown_info = info;
+    shown_info.read_only = info.read_only || ImGui::IsReadonly();
+    ImGui::PushReadonly(shown_info.read_only);
 
     // ImGui::PushStyleColor(ImGuiCol_Separator, ImGui::GetStyleColorVec4(ImGuiCol_Text));
     auto inspector = get_inspector(ctx, type);
     if(inspector)
     {
-        result |= inspector->inspect(ctx, var, derived_var_proxy, info, custom);
+        result |= inspector->inspect(ctx, var, derived_var_proxy, shown_info, custom);
     }
     else if(type.is_enum())
     {
-        result |= inspect_enum(ctx, var, derived_var_proxy, info);
+        result |= inspect_enum(ctx, var, derived_var_proxy, shown_info);
     }
     else
     {
-        result |= inspect_var_properties(ctx, var, derived_var_proxy, info, custom);
+        result |= inspect_var_properties(ctx, var, derived_var_proxy, shown_info, custom);
     }
 
     // Record override if this was a property change in a prefab instance

@@ -1,8 +1,10 @@
 #include "particle_luts.h"
+#include "particle_record.h"
 #include "particle_scale_curve.h"
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace unravel
 {
@@ -155,6 +157,47 @@ void bake_speed_row(const emitter_desc& desc, emitter_feature features, lut_set&
     }
 }
 
+/// The most the speed curve and the easing speed a particle up after a bounce (lut_ranges::bounce_speed_gain), from
+/// the baked life and speed rows: the largest factor later in the life over the factor at the bounce, for every
+/// place in the life a bounce can fall. A bounce where the factor is under min_segment_factor keeps its velocity
+/// undivided, so what follows it is the later factor itself.
+auto find_bounce_speed_gain(emitter_feature features, const lut_set& luts) -> float
+{
+    const bool has_ease = has_feature(features, emitter_feature::non_linear_ease);
+    const bool has_speed_curve = has_feature(features, emitter_feature::speed_curve);
+    if(!has_ease && !has_speed_curve)
+    {
+        return 1.0f;
+    }
+    const uint32_t life_base = uint32_t(lut_row_life) * lut_size;
+    float gain = 1.0f;
+    float lowest_divisor = std::numeric_limits<float>::max();
+    bool has_undivided = false;
+    for(uint32_t i = 0; i < lut_size; ++i)
+    {
+        const math::vec4 life = luts.data[life_base + i];
+        const float speed_factor = has_speed_curve ? luts.sample(lut_row_speed, life.x).y : 1.0f;
+        const float factor = math::abs(speed_factor * (has_ease ? life.y : 1.0f));
+        if(lowest_divisor < std::numeric_limits<float>::max())
+        {
+            gain = math::max(gain, factor / lowest_divisor);
+        }
+        if(has_undivided)
+        {
+            gain = math::max(gain, factor);
+        }
+        if(factor >= min_segment_factor)
+        {
+            lowest_divisor = math::min(lowest_divisor, factor);
+        }
+        else
+        {
+            has_undivided = true;
+        }
+    }
+    return gain;
+}
+
 } // namespace
 
 auto compute_lut_key(const emitter_desc& desc, emitter_feature features) -> uint64_t
@@ -210,6 +253,8 @@ auto compute_lut_key(const emitter_desc& desc, emitter_feature features) -> uint
     {
         hasher.add_curve(desc.motion.turbulence_over_life);
     }
+    hasher.add_curve(desc.appearance.custom_data_x);
+    hasher.add_curve(desc.appearance.custom_data_y);
     return hasher.value();
 }
 
@@ -285,6 +330,7 @@ void bake_lut_set(const emitter_desc& desc, emitter_feature features, lut_set& o
         }
     }
     bake_speed_row(desc, features, out_luts, out_ranges);
+    out_ranges.bounce_speed_gain = find_bounce_speed_gain(features, out_luts);
     bake_erosion_and_frame(desc, features, out_luts);
     bake_shape_row(desc, features, out_luts, out_ranges);
     const bool has_two_gradients = has_feature(features, emitter_feature::two_gradients);
@@ -300,7 +346,9 @@ void bake_lut_set(const emitter_desc& desc, emitter_feature features, lut_set& o
         const float t = float(i) / float(lut_size - 1);
         const float strength = has_turbulence ? desc.motion.turbulence_over_life.sample(t) : 1.0f;
         const float size_z = has_axes ? desc.appearance.size_axes_over_life.sample(t).z : 1.0f;
-        out_luts.data[turbulence_base + i] = math::vec4(strength, size_z, 0.0f, 0.0f);
+        const float custom_x = desc.appearance.custom_data_x.sample(t);
+        const float custom_y = desc.appearance.custom_data_y.sample(t);
+        out_luts.data[turbulence_base + i] = math::vec4(strength, size_z, custom_x, custom_y);
         out_ranges.turbulence_peak = math::max(out_ranges.turbulence_peak, math::abs(strength));
     }
 }

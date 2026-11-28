@@ -2460,8 +2460,13 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
             if((render_views & (1u << ii)) != 0u)
             {
                 view_keys_[ii] = view_keys[ii];
-                view_key_valid_[ii] = true;
+                // A view a geometry caster could not be drawn into renders again next frame.
+                view_key_valid_[ii] = (missed_geometry_views_ & (1u << ii)) == 0u;
             }
+        }
+        if(missed_geometry_views_ != 0u)
+        {
+            casters_key_valid_ = false;
         }
     }
 
@@ -2664,12 +2669,14 @@ void shadowmap_generator::compute_caster_facts(const shadow_map_models_t& models
             facts.is_marked = false;
             continue;
         }
-        if(element.instances != nullptr)
+        if(element.instances != nullptr || element.geometry != nullptr)
         {
-            // Playing particles and scripted instances move every frame; a paused or frozen emitter keeps its shadow.
-            const uint64_t instances_key = element.instances->get_mesh_shadow_key();
-            key = mix_key(key, instances_key);
-            mix_into_views(facts.view_mask, instances_key);
+            // Playing particles and scripted instances move every frame, as does geometry built for the camera; a
+            // paused or frozen emitter, and geometry that holds still, keep their shadow.
+            const uint64_t source_key = element.instances != nullptr ? element.instances->get_mesh_shadow_key()
+                                                                     : element.geometry->get_shadow_key();
+            key = mix_key(key, source_key);
+            mix_into_views(facts.view_mask, source_key);
             collection.has_movers = true;
             continue;
         }
@@ -2740,6 +2747,7 @@ void shadowmap_generator::collect_shadow_casters(const shadow_map_models_t& mode
         runs.clear();
     }
     individual_casters_.clear();
+    geometry_casters_.clear();
     collection.anything_collected = false;
     collection.has_static_batches = false;
     collection.has_skinned_batches = false;
@@ -2802,6 +2810,13 @@ void shadowmap_generator::collect_shadow_casters(const shadow_map_models_t& mode
             }
             has_instanced_casters = has_instanced_casters || collected;
             collection.anything_collected = collection.anything_collected || collected;
+            continue;
+        }
+        if(element.geometry != nullptr)
+        {
+            // Drawn by submit_shadow_casters, into the views that render.
+            geometry_casters_.push_back({element.geometry, view_mask});
+            collection.anything_collected = true;
             continue;
         }
 
@@ -2928,7 +2943,8 @@ void shadowmap_generator::mark_reused_casters(const shadow_map_models_t& models,
     for(size_t caster_index = 0; caster_index < models.size(); ++caster_index)
     {
         const auto& element = models[caster_index];
-        if(caster_facts_[caster_index].is_marked && element.instances == nullptr)
+        const bool is_model = element.instances == nullptr && element.geometry == nullptr;
+        if(caster_facts_[caster_index].is_marked && is_model)
         {
             element.entity.get<model_component>().set_last_render_frame(frame);
         }
@@ -3191,6 +3207,19 @@ void shadowmap_generator::submit_shadow_casters(uint8_t view_mask,
             submit_individual_caster(caster, caster_views, shadowmap_1_id, lightFrustums, currentSmSettings, writes_color, stats);
         }
     }
+    missed_geometry_views_ = 0;
+    for(const auto& caster : geometry_casters_)
+    {
+        for(uint8_t ii = 0; ii < get_view_count(); ++ii)
+        {
+            const bool is_drawn_here = (caster.view_mask & view_mask & (1u << ii)) != 0u;
+            if(is_drawn_here &&
+               !submit_geometry_caster(caster, shadowmap_1_id + ii, currentSmSettings, get_face_render_state(ii, writes_color), stats))
+            {
+                missed_geometry_views_ |= uint8_t(1u << ii);
+            }
+        }
+    }
 
     // Submit batched geometry for each cascade
     if(!collection.has_static_batches && !collection.has_skinned_batches && !collection.has_runs)
@@ -3219,6 +3248,51 @@ void shadowmap_generator::submit_shadow_casters(uint8_t view_mask,
             submit_shadow_runs(cascade_runs_[ii], viewId, currentSmSettings, renderState, stats);
         }
     }
+}
+
+auto shadowmap_generator::submit_geometry_caster(const geometry_caster& caster,
+                                                 bgfx::ViewId view_id,
+                                                 ShadowMapSettings* currentSmSettings,
+                                                 const RenderState& render_state,
+                                                 ::unravel::rendering::pipeline_stats* stats) -> bool
+{
+    const material& mat = caster.source->get_shadow_material();
+    const auto* graph = mat.safe_cast<graph_material>();
+    const bool draws_own = graph != nullptr && graph->draws_own_shadow();
+    gpu_program* prog = begin_graph_shadow_program(&mat, gfx::shader::DEFAULT_VARIANT);
+    if(prog == nullptr)
+    {
+        // A material that clips or moves its shadow casts with its own program: the plain one would cast the whole
+        // sheet. While its shaders and textures load, the caster waits for them. A material that is loaded and holds
+        // no such program casts with the plain one, as a model's does.
+        const bool is_on_its_way = draws_own && !graph->is_ready_to_draw();
+        prog = is_on_its_way ? nullptr : currentSmSettings->m_progPack;
+        if(prog == nullptr)
+        {
+            return false;
+        }
+        prog->begin();
+    }
+    const bool is_bound = caster.source->bind_shadow_geometry();
+    if(is_bound)
+    {
+        if(stats != nullptr)
+        {
+            stats->drawn_submeshes_for_shadows++;
+        }
+        uniforms_.submitPerDrawUniforms();
+        bgfx::setStencil(render_state.m_fstencil, render_state.m_bstencil);
+        // A strip is a sheet: it casts from both of its sides, whichever one its material draws.
+        bgfx::setState(apply_shadow_cull(render_state.m_state, cull_type::none), render_state.m_blendFactorRgba);
+        bgfx::submit(view_id, prog->native_handle(), 0, BGFX_DISCARD_ALL);
+    }
+    else
+    {
+        // What the program set for the draw that is not made.
+        bgfx::discard();
+    }
+    prog->end();
+    return is_bound;
 }
 
 void shadowmap_generator::submit_individual_caster(const individual_caster& caster,

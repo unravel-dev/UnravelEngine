@@ -12,6 +12,8 @@
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 
+#include <engine/engine.h>
+#include <engine/rendering/ecs/systems/particle_system.h>
 #include <engine/settings/settings.h>
 #include <graphics/eviction.h>
 #include <graphics/graphics.h>
@@ -689,6 +691,12 @@ void draw_pipeline_section(const rendering::pipeline_stats& pstats)
                    pstats.drawn_translucent_submeshes,
                    "Models drawn in the translucency pass after the lighting, and their see-through\n"
                    "submeshes. Two-sided ones draw twice, back faces first."});
+    draw_pair_row({"Lines, Trails",
+                   pstats.drawn_dynamic_renderers,
+                   pstats.drawn_dynamic_batches,
+                   "Line and Trail components in view, and the draws their geometry took. The ones\n"
+                   "that share an opaque or dithered material share one draw, and each one with a see-through\n"
+                   "material is a draw of its own."});
     draw_pair_row({"Shadow Casters",
                    pstats.drawn_models_for_shadows + pstats.drawn_skinned_models_for_shadows,
                    pstats.drawn_submeshes_for_shadows + pstats.drawn_skinned_submeshes_for_shadows,
@@ -745,6 +753,27 @@ void draw_particles_section(const rendering::pipeline_stats& pstats)
               "Particles sorted for this camera's draws, every pass included (the GPU sorts a\n"
               "power-of-two range). Additive and multiply emitters on Auto, and the sort mode\n"
               "None, need no sort."});
+    draw_row({"Scene Collision",
+              fmt::format("{}", pstats.scene_collision_particles),
+              "Particle slots this camera tested against its scene surfaces this frame, on the graphics\n"
+              "processor: every slot up to the highest in use of the emitters in view whose Collide With\n"
+              "is Scene Surfaces."});
+    draw_row({"Lit By GI",
+              fmt::format("{}", pstats.gi_lit_particle_emitters),
+              "Emitters this camera drew with the Global Illumination's light around their particles\n"
+              "(Ambient Light: Global Illumination). An emitter that asks for it and is not counted\n"
+              "kept the sky's light. Its view runs no Global Illumination, nearer emitters took the\n"
+              "probes kept for particles, it is too large for them or past their reach, or its material\n"
+              "cannot take that light."});
+    const particle_collision_stats collision = engine::context().get_cached<particle_system>().get_collision_stats();
+    draw_row({"Collision Casts",
+              fmt::format("{} / {}", collision.hits, collision.casts),
+              "Casts that touched a collider, of the casts this frame made for the particles that collide\n"
+              "with physics colliders. The project's Max Collision Casts limits them."});
+    draw_row({"Waiting Sweeps",
+              fmt::format("{}", collision.waiting),
+              "Particles whose path waits for a later frame because the frame's casts ran out. Their\n"
+              "contacts come late. Raise Max Collision Casts, or lower the emitters' Quality."});
 }
 
 void draw_decals_section(const rendering::pipeline_stats& pstats)

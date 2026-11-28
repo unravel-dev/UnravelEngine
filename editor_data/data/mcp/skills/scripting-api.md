@@ -137,9 +137,45 @@ reset state there instead of in `OnStart`, which runs only once per instance.
   and `subEmitters` (`new ParticleSubEmitter(ParticleEventType.Death, target, count)`, then
   `inheritVelocity` / `countMax` as needed) burst another emitter where particles are born, die
   or land. Build bursts and sub-emitters with their constructors: a struct left at its defaults
-  has probability 0 and never fires. `renderMode` `Trail` (`trailLength`, `trailWidthEnd`) or `Ribbon`,
-  `lighting` (`ParticleLighting.Volumetric` for smoke) and `lightCount` (brightest particles
-  become point lights) round out the look.
+  has probability 0 and never fires. `collideWith = ParticleCollisionSource.PhysicsColliders`
+  (with `collisionLayers`, `collisionQuality`) makes the particles touch the physics world's
+  colliders, and `ParticleCollisionSource.SceneSurfaces` whatever opaque surface a camera
+  draws, on the GPU: those contacts send no event, leave no decal and fire no sub-emitter, and
+  death events give the place a particle would be without them.
+  `ParticleCollisionMode.Stick`, `restSpeed`, `alignToSurface`, `lifetimeLoss` and
+  `bounceScatter` shape what a contact does, and `collisionDecal` (a `ParticleCollisionDecal`:
+  `enabled`, `material`, `size`, `lifetime`, `fadeOut`, `probability`, `attachToEntity`) leaves
+  a decal there. Scripts hear of particles only when asked: `sendEvents =
+  ParticleEventType.Collision | ParticleEventType.Death` delivers
+  `OnParticleEvents(ParticleEventBatch batch)` once a frame to the scripts on the emitter's
+  entity (or its nearest parent with scripts), and `notifyHitEntities = true` delivers
+  `OnParticleHits(ParticleEventBatch batch)` to the scripts of the entity whose collider was
+  touched. `batch.emitter` is the emitter's entity and `batch.events` an array of
+  `ParticleEvent` (`type`, `position`, `velocity`, `normal`, `surfacePoint`, `color`, `size`,
+  `entity`); they arrive the frame after they happened. `renderMode` `Trail` (`trailLength`, `trailWidthEnd`) or `Ribbon`
+  (`ribbonCount` streams, `ribbonSmoothing` `ParticleRibbonSmoothing.None` / `Low` / `Medium` / `High`),
+  `lighting` (`ParticleLighting.Volumetric` for smoke), `ambientLight`
+  (`ParticleAmbientLight.GlobalIllumination` gives lit particles the scene's bounced light where
+  they are) and `lightCount` (brightest particles become point lights) round out the look. `renderMaterial` is what the particles draw, a
+  material whose `particleUse` is true, and `emitter.materialInstance` holds this emitter's own
+  values of it (`SetTexture("Texture", t)`, `SetColor(name, c)`, `Revert(name)`).
+  `blendMode`, `textureMode`, `texture` and `normalTexture` pick among the engine's particle
+  materials and set those overrides, and leave the Blend Mode of a material of the project's
+  own alone. `customDataX` / `customDataY` (`Curve`) are what a material's Particle Custom
+  Data node reads.
+
+- Lines and trails: `LineComponent` (`SetPoints(points)`, `SetPoint(i, p)`, `GetPoints()`,
+  `pointCount`, `worldSpace`, `loop`) and `TrailComponent` (`time`, `minDistance`, `emitting`,
+  `Clear()`, `edge` with `edgeBase` / `edgeTip` for a blade's arc, `pointCount`). A laser is a
+  two-point line with `worldSpace = true` that a script aims each frame:
+  `line.SetPoint(0, muzzle); line.SetPoint(1, hitPoint)`. Call `trail.Clear()` after teleporting a
+  trail's entity or taking it from a pool. They share the strip settings: `width`,
+  `widthOverLength` (`Curve`), `colorOverLength` (`Gradient`), `shape` (`StripShape.Flat` /
+  `Rounded` / `Tube`), `alignment` (`StripAlignment`) with `axis`, `uvMode` (`StripUVMode`) with
+  `tileLength`, `subdivisions`, `cornerVertices`, `capVertices`, `tubeSides`. Both have `material`,
+  `materialInstance` (this renderer's own values of its material's parameters and textures, by
+  the names the material gives them: `line.materialInstance.SetColor("Beam Color", Color.red)`;
+  the engine's strip material has none), `castsShadow` and `sortPriority`.
 
 ## Random is the engine's
 

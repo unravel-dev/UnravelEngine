@@ -18,6 +18,28 @@
 
 namespace unravel
 {
+class graph_material;
+
+namespace ps_soa
+{
+/**
+ * @brief How a batch that draws with a material is drawn (render_view_params::begin_material).
+ */
+struct material_draw
+{
+    bool is_lit{};
+    /// A lit draw takes the GI's light around its particles in place of the sky's (render_view_params::bind_lighting
+    /// bound the radiance cache).
+    bool reads_gi{};
+    bool is_velocity{};
+    /// The address bits a ribbon replaces in the sampler state of the material's textures that read as their texture
+    /// says (@ref address_mask), and what it puts there (@ref address_flags): a ribbon clamps across itself, and along
+    /// itself unless its texture tiles, so its edges and its two ends do not filter into each other. 0: nothing.
+    uint32_t address_mask{};
+    uint32_t address_flags{};
+};
+} // namespace ps_soa
+
 namespace ps_soa
 {
 
@@ -71,6 +93,11 @@ struct particle_quality
     /// The most expensive lighting mode particles use: surface ones light as volumetric below surface, lit ones
     /// draw unlit at unlit.
     particle_lighting max_lighting = particle_lighting::surface;
+    /// The most casts a frame spends on particles that collide with physics colliders; paths past it are swept in
+    /// later frames.
+    uint32_t max_collision_casts = 2048;
+    /// What the particles that collide with scene surfaces are tested against.
+    scene_collision scene_collision = scene_collision::depth_buffer;
 };
 
 void set_quality(const particle_quality& quality);
@@ -192,6 +219,9 @@ auto has_updated(emitter_handle handle) -> bool;
  * @brief World-space AABB used for culling.
  */
 void get_aabb(emitter_handle handle, math::bbox& out_aabb);
+/// The world-space box @p handle's particles are lit in: their centres with the reach of the turbulence and the
+/// camera offset, without the size of their quads, which the culling box holds too.
+void get_lit_aabb(emitter_handle handle, math::bbox& out_aabb);
 
 /**
  * @brief Live particle count.
@@ -209,22 +239,112 @@ auto get_camera_stretch_reach(emitter_handle handle, float camera_speed) -> floa
  */
 void get_particle_states(emitter_handle handle, std::vector<particle_state>& out_states);
 
-/// Something that happened to a particle, as a sub-emitter reads it.
+/// The entity of a particle_event or a particle_sweep_hit that has none.
+constexpr uint32_t no_particle_entity = 0xFFFFFFFFu;
+
+/// Something that happened to a particle, as a sub-emitter or a script reads it.
 struct particle_event
 {
     particle_event_type type = particle_event_type::death;
-    /// World position and velocity then.
+    /// World position and velocity then (a collision: the velocity the particle arrived with).
     math::vec3 position{0.0f};
     math::vec3 velocity{0.0f};
     /// Linear color without the emitter's intensity, and the size.
     math::vec4 color{1.0f};
     float size = 0.0f;
+    /// A collision: the unit normal of the surface the particle touched, where on the surface it touched (the
+    /// particle's position less its radius), and the entity of the collider it belongs to (no_particle_entity for a
+    /// collision plane).
+    math::vec3 normal{0.0f};
+    math::vec3 surface_point{0.0f};
+    uint32_t entity = no_particle_entity;
 };
 
 /**
  * @brief Moves the events the emitter recorded since the last call (emitter_desc::event_mask) to @p out_events.
  */
 void take_particle_events(emitter_handle handle, std::vector<particle_event>& out_events);
+
+/// What a sweep of a piece of a particle's path touched.
+struct particle_sweep_hit
+{
+    /// How far along the sweep the sphere's centre had come when it touched, metres.
+    float distance = 0.0f;
+    /// Where it touched and the surface's unit normal there, world space.
+    math::vec3 point{0.0f};
+    math::vec3 normal{0.0f, 1.0f, 0.0f};
+    /// The entity the collider belongs to.
+    uint32_t entity = no_particle_entity;
+    /// The sphere was in contact with a collider where the sweep started. Such a collider is no hit: the particle
+    /// is born in it, or lies against it.
+    bool starts_touching = false;
+};
+
+/**
+ * @brief Sweeps a sphere of @p radius (0: a ray) from @p from to @p to through the colliders of the layer mask
+ * @p layers. The colliders it is in contact with where it starts do not count (particle_sweep_hit::starts_touching
+ * says there were some). False when it touches no other; else @p hit is the first it touches.
+ */
+using particle_sweep =
+    std::function<bool(const math::vec3& from, const math::vec3& to, float radius, int layers, particle_sweep_hit& hit)>;
+
+/// What one resolve_collisions call did.
+struct collision_resolve_stats
+{
+    /// Sweeps made, and how many of them touched a surface.
+    uint32_t casts = 0;
+    uint32_t hits = 0;
+    /// Contacts that happened within the call: the records of their particles changed after the emitter's update.
+    uint32_t contacts = 0;
+    /// Particles whose path still waits for a sweep because the cast limit was reached.
+    uint32_t waiting = 0;
+};
+
+/**
+ * @brief Sweeps the paths of the emitter's particles that wait for it (collision_source::physics_colliders) with
+ * @p sweep, in at most @p max_casts sweeps (up to three more for a path that starts in contact with a collider), and
+ * schedules the contacts it finds; a contact that lies behind the emitter's clock happens at once. With an empty
+ * @p sweep (no physics world), or when the emitter no longer collides with the scene, the waiting paths are
+ * forgotten; when sweeps start again, every live particle's path is swept from then on.
+ * @note One thread, after the frame's update_emitter calls and before take_particle_events. Call it every frame for
+ * an emitter that collides with colliders, with or without waiting paths.
+ */
+auto resolve_collisions(emitter_handle handle, const emitter_desc& desc, const particle_sweep& sweep, uint32_t max_casts)
+    -> collision_resolve_stats;
+
+/// How many of the emitter's particles wait for a sweep of their path (resolve_collisions).
+auto get_waiting_sweeps(emitter_handle handle) -> uint32_t;
+
+/// The scene a view's particles collide with (collide_with_scene).
+struct scene_collision_view
+{
+    /// A view with the camera's matrices and view origin that runs before the views that draw the particles.
+    bgfx::ViewId view = 0;
+    /// The view's opaque depth and its G-buffer's normals.
+    bgfx::TextureHandle depth = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle normals = BGFX_INVALID_HANDLE;
+    /// The view's distance field with its level (one vec4 a level) and sampling uniforms: with all three the
+    /// particles collide with the field instead of the depth.
+    bgfx::TextureHandle distance_field = BGFX_INVALID_HANDLE;
+    const float* distance_field_levels = nullptr;
+    const float* distance_field_params = nullptr;
+};
+
+/// True where particles can collide with scene surfaces: the GPU culls and sorts them and the collision kernel loaded.
+auto can_collide_with_scene() -> bool;
+
+/// Whether the emitter's particles collide with scene surfaces, as it was last updated (collides_with_scene_surfaces).
+auto collides_with_scene(emitter_handle handle) -> bool;
+
+/**
+ * @brief The particles of the @p emitters that collide with scene surfaces touch the scene of @p view: the GPU tests
+ * each where it draws now and rewrites the record of one that is in a surface, or will be within the frame, as the
+ * emitter's collision mode says. The contact happens at the frame's tick. The CPU is told nothing: no event, and what
+ * it evaluates itself (particle lights, get_particle_states) follows the particle's path as it was born.
+ * @note Main thread, after sync_gpu_simulation and before the view's render_view calls.
+ * @return The particles tested (0 where particles cannot collide with scene surfaces).
+ */
+auto collide_with_scene(const scene_collision_view& view, const emitter_handle* emitters, uint32_t count) -> uint32_t;
 
 /// A particle that lights the scene (emitter_render_desc::light_count).
 struct particle_light
@@ -264,23 +384,20 @@ void collect_particle_mesh_transforms(emitter_handle handle,
 void get_particle_sizes(emitter_handle handle, std::vector<float>& out_sizes);
 
 /**
- * @brief One draw: emitters sharing a texture, texture mode and blend mode, in draw order. Their
- * particles sort together.
+ * @brief One draw: emitters whose materials bind the same shader, values and textures, in draw order. Their particles
+ * sort together.
  */
 struct render_batch
 {
     const emitter_handle* emitters = nullptr;
     uint32_t count = 0;
-    bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
-    texture_mode texture_mode = texture_mode::multi_channel;
+    /// The material the batch's particles draw with: a Surface material with Particle Use. Its Blend Mode is
+    /// @ref blend_mode, and @ref lighting is unlit for one whose Shading Model is Unlit.
+    const graph_material* material = nullptr;
     blend_mode blend_mode = blend_mode::normal;
     particle_primitive primitive = particle_primitive::quad;
-    /// Lit batches draw with the lit programs and bind_lighting before each draw.
+    /// Lit batches draw with the lit variants and bind_lighting before each draw.
     particle_lighting lighting = particle_lighting::unlit;
-    /// Surface-lit batches: the normal map their pixels light with (invalid: a sphere's normal), and where it keeps
-    /// its vector.
-    bgfx::TextureHandle normal_texture = BGFX_INVALID_HANDLE;
-    gfx::normal_map_channels normal_channels = gfx::normal_map_channels::xyz;
     /// Where the batch sorts among the view's translucent draws: its first emitter's sort priority and squared
     /// distance from the camera (the farthest of the batch).
     int32_t sort_priority = 0;
@@ -298,13 +415,15 @@ constexpr uint32_t reactive_blend_rgba =
 struct render_view_params
 {
     bgfx::ViewId view = 0;
-    /// Programs for the multi-channel and mask texture modes.
-    bgfx::ProgramHandle program = BGFX_INVALID_HANDLE;
-    bgfx::ProgramHandle mask_program = BGFX_INVALID_HANDLE;
-    /// The same for lit batches (render_batch::lighting), and what binds their light before each of their draws.
-    bgfx::ProgramHandle lit_program = BGFX_INVALID_HANDLE;
-    bgfx::ProgramHandle lit_mask_program = BGFX_INVALID_HANDLE;
-    std::function<void(const render_batch&)> bind_lighting;
+    /// The overdraw debug view's program (overdraw_weight above 0): every other view draws each batch's material.
+    bgfx::ProgramHandle overdraw_program = BGFX_INVALID_HANDLE;
+    /// Binds the scene's light before each draw of a lit batch (render_batch::lighting); without it no batch is lit.
+    /// True when it bound the GI's light around the batch's particles too (material_draw::reads_gi).
+    std::function<bool(const render_batch&)> bind_lighting;
+    /// The program of a batch's material (render_batch::material), called before its draw with what the material
+    /// reads bound: the colour passes' program (lit when material_draw::is_lit), or the velocity pass's
+    /// (material_draw::is_velocity). An invalid handle while the material cannot draw yet: the batch is skipped.
+    std::function<bgfx::ProgramHandle(const render_batch&, const material_draw&)> begin_material;
     /// Sets the view's fog (fog.sh) before each draw: the color passes fog the particles with it. Called with whether
     /// the draw is lit (its programs hold the sun's cascades where the unlit ones read the froxel column).
     std::function<void(bool)> bind_fog;
@@ -315,6 +434,11 @@ struct render_view_params
     math::vec3 forward{0.0f, 0.0f, 1.0f};
     /// The view frustum's planes (outward normals, frustum::planes order).
     std::array<math::vec4, 6> frustum_planes{};
+    /// How many pixels of the view a metre covers: one metre from the camera through a perspective, anywhere through
+    /// an orthographic view. 0: unknown, and trails draw their middle count of quads.
+    float pixels_per_metre = 0.0f;
+    /// The view is orthographic: a metre covers as many pixels at every depth.
+    bool is_orthographic = false;
     /// The view's opaque depth soft particles fade against; invalid turns the fade off.
     bgfx::TextureHandle scene_depth = BGFX_INVALID_HANDLE;
     /// The u_pre_exposure value the particle programs read.
@@ -334,11 +458,11 @@ struct render_view_params
     bool is_transmittance_target = false;
     /// The velocity pass: last frame's unjittered view-projection, set per draw as @p prev_view_proj_uniform.
     /// The draws then replace the scene's motion where texels pass their emitter's opacity threshold: no
-    /// blend, no reactive target, one program for both texture modes.
+    /// blend, no reactive target, each material's velocity variant.
     const float* prev_view_proj = nullptr;
     bgfx::UniformHandle prev_view_proj_uniform = BGFX_INVALID_HANDLE;
     /// Above 0: the overdraw debug view. Every fragment the draws rasterize adds this weight (0..1) to the
-    /// color target, whatever the batch's blend; no lighting, one program for both texture modes.
+    /// color target, whatever the batch's blend; no lighting, @ref overdraw_program for every batch.
     float overdraw_weight = 0.0f;
     /// Called before each batch's draw, drawn or not, in the order of the batches: the translucency pass draws there
     /// the meshes that sort before the batch. Empty: nothing is called.

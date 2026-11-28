@@ -1,0 +1,28 @@
+{
+ "material_graph": {
+  "version": 1,
+  "nodes": [
+   {"id": "output", "type": "surface_output", "inputs": [
+    {"pin": "base_color", "value": [0.0, 0.0, 0.0]},
+    {"pin": "emissive", "link": "glow"},
+    {"pin": "opacity_mask", "link": "alpha"}
+   ], "settings": [{"name": "blend_mode", "value": "additive"}, {"name": "shading_model", "value": "unlit"}, {"name": "two_sided", "value": "on"}]},
+   {"id": "uv", "type": "texcoord"},
+   {"id": "toward_tip", "type": "power", "inputs": [{"pin": "a", "link": "uv.u"}, {"pin": "b", "value": [2.0]}]},
+   {"id": "toward_head", "type": "one_minus", "inputs": [{"pin": "in", "link": "uv.v"}]},
+   {"id": "within", "type": "saturate", "inputs": [{"pin": "in", "link": "toward_head"}]},
+   {"id": "fresh", "type": "power", "inputs": [{"pin": "a", "link": "within"}, {"pin": "b", "value": [1.5]}]},
+   {"id": "shape", "type": "multiply", "inputs": [{"pin": "a", "link": "toward_tip"}, {"pin": "b", "link": "fresh"}]},
+   {"id": "stretched", "type": "multiply", "inputs": [{"pin": "a", "link": "uv"}, {"pin": "b", "value": [14.0, 1.2]}]},
+   {"id": "streaks", "type": "noise", "inputs": [{"pin": "uv", "link": "stretched"}, {"pin": "scale", "value": [1.0]}, {"pin": "octaves", "value": [2.0]}]},
+   {"id": "grain", "type": "lerp", "inputs": [{"pin": "a", "value": [0.55]}, {"pin": "b", "value": [1.3]}, {"pin": "alpha", "link": "streaks"}]},
+   {"id": "textured", "type": "multiply", "inputs": [{"pin": "a", "link": "shape"}, {"pin": "b", "link": "grain"}]},
+   {"id": "tint", "type": "color_parameter", "inputs": [{"pin": "value", "value": [1.2, 3.0, 6.0, 1.0]}],
+    "settings": [{"name": "name", "value": "Arc Color"}]},
+   {"id": "color", "type": "vertex_color"},
+   {"id": "glow", "type": "multiply", "inputs": [{"pin": "a", "link": "tint.rgb"}, {"pin": "b", "link": "color.rgb"}]},
+   {"id": "faded", "type": "multiply", "inputs": [{"pin": "a", "link": "textured"}, {"pin": "b", "link": "color.a"}]},
+   {"id": "alpha", "type": "saturate", "inputs": [{"pin": "in", "link": "faded"}]}
+  ]
+ }
+}

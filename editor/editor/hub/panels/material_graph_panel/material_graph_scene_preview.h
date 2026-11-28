@@ -19,7 +19,8 @@ class material;
 
 /**
  * @brief The Material Graph window's 3D preview: a shape wearing the graph's material in a scene of its own, lit by a
- * sun and a sky, under a camera the user turns around it.
+ * sun and a sky, under a camera the user turns around it. The Particles shape is a Particle Emitter drawing the
+ * material on its sprites, over a checkered floor.
  *
  * A Decal material is laid onto the shape (wearing the Standard material) by a decal projecting from the first view,
  * or straight down onto the plane; a Post Process material runs on the preview camera at its Location over the shape
@@ -38,6 +39,7 @@ public:
         cube,
         cylinder,
         plane,
+        particles,
     };
 
     void deinit(rtti::context& ctx);
@@ -53,6 +55,8 @@ public:
 
     void set_shape(shape value);
     auto get_shape() const -> shape;
+    /// Shows a material that draws particles on the Particles shape, and any other on the mesh shape last picked.
+    void pick_shape_for(bool draws_particles);
 
 private:
     /// The scene, its camera and lights, and a sphere wearing @p mat.
@@ -60,6 +64,12 @@ private:
     /// Empties the scene and forgets its entities; the last render and the camera's view stay.
     void unload_scene(rtti::context& ctx);
     void create_object(rtti::context& ctx);
+    /// The Particles shape: an emitter of slow, large sprites that fills the view from its first frame, lit as
+    /// surfaces where the material is lit.
+    void create_emitter(rtti::context& ctx);
+    /// The floor under the Particles shape, in two greys: what a material that bends or filters the scene behind it
+    /// shows, and what soft particles meet. Its tiles belong to the emitter's entity and go with it.
+    void create_floor(rtti::context& ctx);
     /// Aims the camera at the shape's bounds.
     void frame_object();
     /// Shows @p mat as its domain draws: on the shape, as a decal onto it, or over the view.
@@ -85,6 +95,8 @@ private:
     material_domain shown_domain_{material_domain::surface};
     shape shape_{shape::sphere};
     shape object_shape_{shape::sphere};
+    /// The mesh shape last picked, which a material that draws no particles goes back to.
+    shape mesh_shape_{shape::sphere};
     bool has_scene_{};
 
     /// The size the preview was drawn at; zero while it was not drawn.

@@ -81,6 +81,106 @@ auto make_rules() -> std::vector<rule>
                     "behind it (a Quality Switch can leave the read out on Low).",
                     {},
                     true});
+    list.push_back({rules::EMITTER_MATERIAL,
+                    "Emitter Material Cannot Draw Particles",
+                    severity::warning,
+                    to_mask(area::correctness),
+                    rule_source::scenes,
+                    "A Particle Emitter's Material is one its sprites, trails and ribbons cannot draw: its output has "
+                    "Particle Use off, or it is no Surface material of the translucency pass. The particles draw the "
+                    "engine's plain particle material in its place.",
+                    "Open the material in the Material Graph window, give its Surface Output the Blend Mode Translucent, "
+                    "Premultiplied, Additive or Modulate and turn Particle Use on. Or pick another material for the "
+                    "emitter.",
+                    {},
+                    false});
+    list.push_back({rules::LOCAL_SPACE_COLLISION,
+                    "Collision on a Local Space Emitter",
+                    severity::warning,
+                    to_mask(area::correctness),
+                    rule_source::scenes,
+                    "A Particle Emitter has a Collision mode and simulates its particles in Local space. Particles "
+                    "collide in World space only, so they pass through the planes and the colliders.",
+                    "Set the emitter's Simulation Space to World, or set its Collision to None.",
+                    {},
+                    false});
+    list.push_back({rules::COLLISION_CASTS,
+                    "Particle Collisions Past the Cast Limit",
+                    severity::warning,
+                    to_mask(area::cpu) | to_mask(area::correctness),
+                    rule_source::scenes,
+                    "The Particle Emitters of a scene or prefab that collide with physics colliders need more casts a "
+                    "frame than a profile's Graphics > Particles > Max Collision Casts allows. The casts past the limit "
+                    "wait for later frames, so particles bounce or stop late, after they passed their surface.",
+                    "Lower the emitters' rate, lifetime or Max Particles, set their Collision Quality to Low, let only "
+                    "the emitters that need it collide with Physics Colliders, or raise the profile's Max Collision "
+                    "Casts.",
+                    {},
+                    true});
+    list.push_back({rules::SCENE_CONTACT_UNREPORTED,
+                    "Scene Surface Contacts Nothing Is Told Of",
+                    severity::warning,
+                    to_mask(area::correctness),
+                    rule_source::scenes,
+                    "A Particle Emitter collides with Scene Surfaces and also asks for something only a contact with a "
+                    "plane or a physics collider gives: a sub-emitter on Collision or on Death, death events for "
+                    "scripts, particle lights, or mesh particles. Contacts with scene surfaces are found on the "
+                    "graphics processor, which tells the game nothing: no contact fires anything, and what the game "
+                    "does with a particle afterwards follows the path it would take without the contact. Mesh "
+                    "particles do not touch scene surfaces at all.",
+                    "Set the emitter's Collide With to Planes or Physics Colliders, or remove what waits for its "
+                    "contacts.",
+                    {},
+                    false});
+    list.push_back({rules::SCENE_COLLISION_OFF,
+                    "Scene Surface Collisions a Profile Does Not Run",
+                    severity::info,
+                    to_mask(area::correctness),
+                    rule_source::scenes,
+                    "Particle Emitters of a scene or prefab collide with Scene Surfaces, and a profile does not run "
+                    "that collision: its Graphics > Particles > Scene Collision is Off, or its builds can run on "
+                    "WebGL 2, which has no compute shaders. There the particles pass through every surface.",
+                    "Keep it when the profile turns the collision off on purpose. Otherwise set the profile's Scene "
+                    "Collision to Depth Buffer, ship WebGPU alone on the web, or let the emitters collide with Planes "
+                    "or Physics Colliders where the effect must not pass through.",
+                    {},
+                    true});
+    list.push_back({rules::GI_AMBIENT_NOT_TAKEN,
+                    "Ambient Light the Material Cannot Take",
+                    severity::warning,
+                    to_mask(area::correctness),
+                    rule_source::scenes,
+                    "A Particle Emitter's Ambient Light is Global Illumination, and its Material reads more than two "
+                    "textures or the Scene Color. The Global Illumination's light takes the place of the material's "
+                    "third and fourth texture in a particle draw, so these particles keep the sky's light in every "
+                    "view.",
+                    "Give the emitter a material that reads at most two textures and no Scene Color, or set its "
+                    "Ambient Light to Sky.",
+                    {},
+                    false});
+    list.push_back({rules::COLOR_NOT_SHOWN,
+                    "Colour the Material Does Not Show",
+                    severity::info,
+                    to_mask(area::correctness),
+                    rule_source::scenes,
+                    "A Line's or a Trail's Color Over Length is set, and the material it draws with has no Vertex Color "
+                    "node. The colour is written to the geometry and changes nothing on screen.",
+                    "Multiply the material's colour by a Vertex Color node in the Material Graph window, or draw with the "
+                    "engine's strip material. When the material's own colour is what you want, reset the component's "
+                    "Color Over Length to white.",
+                    {},
+                    false});
+    list.push_back({rules::STRIP_MATERIAL,
+                    "Line or Trail Material Is No Surface Material",
+                    severity::warning,
+                    to_mask(area::correctness),
+                    rule_source::scenes,
+                    "A Line's or a Trail's Material is a Decal or a Post Process material. A strip draws Surface "
+                    "materials alone, so it draws the engine's strip material in its place.",
+                    "Pick a Surface material for the component, or clear its Material to draw the engine's strip "
+                    "material.",
+                    {},
+                    false});
     list.push_back({rules::STEREO_SPATIAL,
                     "Stereo Clip on 3D Sources Only",
                     severity::info,

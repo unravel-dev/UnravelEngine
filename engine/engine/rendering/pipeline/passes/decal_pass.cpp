@@ -33,7 +33,7 @@ namespace
 constexpr uint16_t DECAL_INSTANCE_VEC4S = 12;
 constexpr uint16_t DECAL_INSTANCE_STRIDE = DECAL_INSTANCE_VEC4S * sizeof(math::vec4);
 /// The TAA mip bias the G-buffer's materials read their textures at while the view jitters
-/// (pipeline_geometry.cpp, make_geometry_clip_planes).
+/// (pipeline::get_material_clip_planes).
 constexpr float DECAL_TAA_MIP_BIAS = -0.3f;
 /// Stages of the view textures fs_material_graph_decal.sh reads (mg_decal.sh).
 constexpr uint8_t DECAL_DEPTH_STAGE = 7;

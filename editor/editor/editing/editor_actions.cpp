@@ -7,6 +7,7 @@
 #include <asset_compiler/asset_manifest.h>
 #include <asset_compiler/audio_compression.h>
 #include <asset_compiler/texture_target.h>
+#include <editor/assets/asset_actions.h>
 #include <editor/assets/asset_watcher.h>
 #include <editor/deploy/deploy_pipeline.h>
 #include <editor/editing/prefab_bake.h>
@@ -17,6 +18,7 @@
 #include <editor/editing/editing_manager.h>
 #include <editor/hub/hub.h>
 #include <editor/hub/panels/animation_panel/animation_panel.h>
+#include <editor/hub/panels/content_browser_panel/content_browser_panel.h>
 #include <editor/hub/panels/console_log_panel/console_log_panel.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
@@ -1269,6 +1271,11 @@ void editor_actions::recompile_shaders(const std::string& group)
 
 auto editor_actions::save_import_settings(const std::string& key, const asset_meta& meta) -> bool
 {
+    if(!asset_actions::is_project_asset(key))
+    {
+        APPLOG_ERROR("{} Its import settings were not saved.", asset_actions::get_shipped_asset_note(key));
+        return false;
+    }
     if(!asset_writer::atomic_save_to_file(asset_writer::resolve_meta_file_for_key(key).string(), meta))
     {
         return false;
@@ -1802,14 +1809,12 @@ void editor_actions::clear_selection(rtti::context& ctx)
     ctx.get_cached<editing_manager>().unselect();
 }
 
-auto editor_actions::select_asset(rtti::context& ctx, const std::string& key, std::string* error, bool add) -> bool
+namespace
 {
-    auto& am = ctx.get_cached<asset_manager>();
-    auto& em = ctx.get_cached<editing_manager>();
-    const std::string extension = fs::path(key).extension().string();
-    const std::string name = fs::path(key).stem().string();
-    bool is_selected = false;
-    // The asset types the content browser selects.
+/// Calls @p visit with a tag of each asset type the Content Browser shows and selects as an asset.
+template<typename Visitor>
+void for_each_browser_asset_type(Visitor&& visit)
+{
     hpp::for_each_type<gfx::texture,
                        gfx::shader,
                        scene_prefab,
@@ -1823,7 +1828,18 @@ auto editor_actions::select_asset(rtti::context& ctx, const std::string& key, st
                        animation_clip,
                        animation_controller,
                        font,
-                       script>(
+                       script>(std::forward<Visitor>(visit));
+}
+} // namespace
+
+auto editor_actions::select_asset(rtti::context& ctx, const std::string& key, std::string* error, bool add) -> bool
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    auto& em = ctx.get_cached<editing_manager>();
+    const std::string extension = fs::path(key).extension().string();
+    const std::string name = fs::path(key).stem().string();
+    bool is_selected = false;
+    for_each_browser_asset_type(
         [&](auto tag)
         {
             using asset_t = typename std::decay_t<decltype(tag)>::type;
@@ -1846,6 +1862,64 @@ auto editor_actions::select_asset(rtti::context& ctx, const std::string& key, st
     return is_selected;
 }
 
+auto editor_actions::find_asset_object(rtti::context& ctx, const std::string& key) -> entt::meta_any
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    const std::string extension = fs::path(key).extension().string();
+    entt::meta_any object;
+    for_each_browser_asset_type(
+        [&](auto tag)
+        {
+            using asset_t = typename std::decay_t<decltype(tag)>::type;
+            if(object || !ex::is_format<asset_t>(extension))
+            {
+                return;
+            }
+            if(const auto handle = am.find_asset<asset_t>(key))
+            {
+                object = entt::meta_any{handle};
+            }
+        });
+    return object;
+}
+
+auto editor_actions::get_asset_key(const entt::meta_any& object) -> std::string
+{
+    std::string key;
+    for_each_browser_asset_type(
+        [&](auto tag)
+        {
+            using asset_t = typename std::decay_t<decltype(tag)>::type;
+            // By its name alone: a handle names its asset before the asset has loaded.
+            const auto* handle = key.empty() ? object.try_cast<asset_handle<asset_t>>() : nullptr;
+            if(handle != nullptr)
+            {
+                key = handle->id();
+            }
+        });
+    return key;
+}
+
+auto editor_actions::duplicate_asset_into_project(rtti::context& ctx, const std::string& key) -> std::string
+{
+    const fs::path name = fs::path(key).filename();
+    const fs::path folder = ctx.has<hub>() ? ctx.get_cached<hub>().get_panels().get_content_browser_panel().get_current_folder()
+                                           : fs::resolve_protocol("app:/data");
+    fs::error_code ec;
+    const fs::path target = fs::exists(folder / name, ec)
+                                ? asset_actions::get_free_copy_path(folder, name.stem().string(), name.extension().string())
+                                : folder / name;
+    std::string error;
+    const std::string copy = asset_actions::copy_asset_into_project(ctx, key, target, &error);
+    if(copy.empty())
+    {
+        ImGui::PushNotification(ImGuiToast(ImGuiToastType_Error, 6000, "%s", error.c_str()));
+        return {};
+    }
+    reveal_in_content_browser(ctx, copy);
+    return copy;
+}
+
 namespace
 {
 /// Focuses the asset at @p key as its locate button does; false for a folder or a file of no asset type.
@@ -1855,21 +1929,7 @@ auto focus_known_asset(rtti::context& ctx, const std::string& key) -> bool
     auto& em = ctx.get_cached<editing_manager>();
     const std::string extension = fs::path(key).extension().string();
     bool is_focused = false;
-    // The asset types the Content Browser shows as assets.
-    hpp::for_each_type<gfx::texture,
-                       gfx::shader,
-                       scene_prefab,
-                       material,
-                       physics_material,
-                       ui_tree,
-                       style_sheet,
-                       audio_clip,
-                       mesh,
-                       prefab,
-                       animation_clip,
-                       animation_controller,
-                       font,
-                       script>(
+    for_each_browser_asset_type(
         [&](auto tag)
         {
             using asset_t = typename std::decay_t<decltype(tag)>::type;

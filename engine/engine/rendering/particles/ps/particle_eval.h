@@ -71,6 +71,12 @@ struct emitter_eval_params
     float ribbon_tiles_per_second = 4.0f;
     /// Ribbon mode: which way the width runs (ribbon_facing).
     ribbon_facing ribbon_facing = ribbon_facing::camera;
+    /// Ribbon mode: how many ribbons the emitter's live particles are of, and the pieces a stretch between two
+    /// particles is drawn in (the strip range its batch draws: no shader reads it).
+    uint32_t ribbon_count = 1;
+    uint32_t ribbon_segments = 1;
+    /// Particles at rest lie flat on the surface they rest on (is_at_rest; their record's velocity is its normal).
+    bool align_to_surface = false;
     /// Fastest a particle moves: x multiples of its launch speed (the speed curve's peak x the easing's fastest
     /// rate) plus y multiples of the speed the acceleration gave it (the easing's fastest rate).
     math::vec2 speed_bound{1.0f, 1.0f};
@@ -105,6 +111,10 @@ struct lut_ranges
     /// is its launch speed times both.
     float speed_factor_max = 1.0f;
     float ease_rate_max = 1.0f;
+    /// How many times faster a particle may move after a bounce than the speed it arrived with (1 or more): a bounce
+    /// keeps the speed curve and the easing running, so its path starts at the arriving speed over their factor there
+    /// and they speed it up by as much as they rise later in the life. 1 where they only fall, or are not used.
+    float bounce_speed_gain = 1.0f;
     /// Largest size the size curve reaches over a life.
     float size_peak = 0.0f;
     /// Largest multiplier the per-axis size curves reach (1 without them).
@@ -155,6 +165,11 @@ auto evaluate_particle_angle(const particle_record& record,
                              const particle_state& state,
                              const emitter_eval_params& params,
                              const lut_set& luts) -> float;
+/// The emitter's two Custom Data curves at the particle's life: what a material reads through Particle Custom Data.
+auto evaluate_particle_custom_data(const particle_state& state, const lut_set& luts) -> math::vec2;
+/// What a material reads of the particle through Particle Data: its age in seconds, its life (0..1), a number in
+/// [0, 1) of its own for its whole life, and its speed in metres per second.
+auto evaluate_particle_material_data(const particle_record& record, const particle_state& state) -> math::vec4;
 /// The particle's quad, width and height, before the emitter's 3D scale: square, or stretched along its
 /// motion in stretched mode.
 auto evaluate_particle_quad(const particle_record& record,
@@ -189,6 +204,8 @@ constexpr uint32_t salt_sheet_row = 6;
 /// The axis a mesh particle turns about: its height on the unit sphere and its turn around the vertical.
 constexpr uint32_t salt_mesh_axis_height = 7;
 constexpr uint32_t salt_mesh_axis_turn = 8;
+/// The random number a material reads of the particle (evaluate_particle_material_data).
+constexpr uint32_t salt_material = 9;
 
 } // namespace ps_soa
 } // namespace unravel

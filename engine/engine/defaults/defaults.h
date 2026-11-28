@@ -219,6 +219,22 @@ struct defaults
      */
     static void place_decal_on_surface(entt::handle decal, const math::vec3& point, const math::vec3& normal, float roll_degrees = 0.0f);
     /**
+     * @brief Leaves a decal of @p decal_material, @p size metres wide and high, on the surface at @p point: it projects
+     * into the surface against @p normal, turned by @p roll_degrees, fades out over @p fade_out seconds once
+     * @p lifetime seconds are over and is removed then (a lifetime of 0 keeps it). It counts among the transient decals
+     * (decal_component::max_transient_decals) and follows @p parent when that is valid.
+     */
+    static auto spawn_transient_decal(rtti::context& ctx,
+                                      scene& scn,
+                                      const asset_handle<material>& decal_material,
+                                      const math::vec3& point,
+                                      const math::vec3& normal,
+                                      const math::vec2& size,
+                                      float roll_degrees,
+                                      float lifetime,
+                                      float fade_out,
+                                      entt::handle parent) -> entt::handle;
+    /**
      * @brief Creates a Decal entity with @p decal_material on the surface under screen position @p pos of @p cam, or
      * on the ground plane when no surface is there: what dropping a Decal material in the Scene view does.
      */
@@ -245,6 +261,11 @@ struct defaults
      * @return A handle to the created entity.
      */
     static auto create_particle_emitter_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
+
+    /// Creates an entity with a Line: a metre of strip along its X axis.
+    static auto create_line_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
+    /// Creates an entity with a Trail, which follows it from then on.
+    static auto create_trail_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
 
     /**
      * @brief Creates a audio source entity.

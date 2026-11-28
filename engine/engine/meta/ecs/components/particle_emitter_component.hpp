@@ -17,6 +17,10 @@ SAVE_EXTERN(particle_sub_emitter);
 LOAD_EXTERN(particle_sub_emitter);
 REFLECT_EXTERN(particle_sub_emitter);
 
+SAVE_EXTERN(particle_collision_decal);
+LOAD_EXTERN(particle_collision_decal);
+REFLECT_EXTERN(particle_collision_decal);
+
 SAVE_EXTERN(particle_emitter_component);
 LOAD_EXTERN(particle_emitter_component);
 REFLECT_EXTERN(particle_emitter_component);

@@ -157,6 +157,13 @@ public:
      */
     auto set_graph_texture(const std::string& name, const asset_handle<gfx::texture>& texture) -> bool;
 
+    /**
+     * @brief Overrides texture node @p name without asking the shared material for it: for a caller that knows the node
+     * from the material's generator and must not wait for the material to load, such as a scene load. An override of a
+     * node the graph lacks changes nothing drawn.
+     */
+    void set_known_graph_texture(const std::string& name, const asset_handle<gfx::texture>& texture);
+
     /// What the renderer samples for texture node @p name: the override, or the shared material's texture.
     auto get_graph_texture(hpp::string_view name) const -> asset_handle<gfx::texture>;
 

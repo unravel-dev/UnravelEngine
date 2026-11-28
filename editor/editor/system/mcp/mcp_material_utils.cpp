@@ -428,7 +428,7 @@ auto apply_material_instance_properties(rtti::context& ctx,
     {
         component_apply_result result;
         result.ok = false;
-        result.errors.emplace_back("The slot has no shared material to override.");
+        result.errors.emplace_back("There is no shared material to override.");
         return result;
     }
     // Checked on a copy first: a rejected value leaves the slot exactly as it was.

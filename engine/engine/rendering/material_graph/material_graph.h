@@ -303,6 +303,10 @@ inline constexpr const char* MATERIAL_WRITE_VELOCITY_SETTING = "write_velocity";
 /// The Surface Output's setting that gives a lit Translucent or Premultiplied surface the GI's traced reflections where
 /// it is the nearest such surface of a pixel ("on" / "off", the default).
 inline constexpr const char* MATERIAL_GI_REFLECTIONS_SETTING = "gi_reflections";
+/// The Surface Output's setting that also compiles a surface of the translucency pass for particle emitters, whose
+/// sprites, trails and ribbons then draw it as their material ("on" / "off", the default): the shader gets the particle
+/// variants (fs_material_graph_particle.sh) and the material the textures a particle draw leaves stages for.
+inline constexpr const char* MATERIAL_PARTICLE_USE_SETTING = "particle_use";
 /// The value of the on / off settings that turns them on.
 inline constexpr const char* MATERIAL_SETTING_ON = "on";
 /// The Surface Output's setting picking how the surface is described: base color, metallic and roughness
@@ -467,6 +471,17 @@ auto get_material_shading_model(const material_graph_node& output) -> material_s
 
 /// The Shading Model of @p graph's Surface Output; Default Lit without one.
 auto get_material_graph_shading_model(const material_graph& graph) -> material_shading_model;
+
+/// Whether Surface Output @p output is also compiled for particle emitters: Particle Use on
+/// (MATERIAL_PARTICLE_USE_SETTING) and a Blend Mode of the translucency pass, where particles draw.
+auto is_material_particle_use(const material_graph_node& output) -> bool;
+
+/// Whether @p graph's Surface Output is also compiled for particle emitters; false without one.
+auto is_material_graph_particle_use(const material_graph& graph) -> bool;
+
+/// Turns Particle Use of @p graph's Surface Output on or off. False when the graph has no Surface Output or the setting
+/// already has that value.
+auto set_material_graph_particle_use(material_graph& graph, bool is_on) -> bool;
 
 /// Whether input @p pin of Surface Output @p output feeds the surface: Metallic and Roughness do not in the specular
 /// workflow, Specular and Glossiness not in the metallic one; Unlit reads Emissive, Opacity, World Position Offset and

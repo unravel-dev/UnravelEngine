@@ -10,6 +10,7 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/layer_component.h>
+#include <engine/rendering/ecs/components/line_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/material.h>
@@ -1022,6 +1023,69 @@ void entity_set_text_bounds_action_t::draw_in_inspector(rtti::context& ctx)
     draw_in_inspector_impl(ctx, old_area_any, new_area_any, {});
 }
 
+
+entity_set_line_points_action_t::entity_set_line_points_action_t(entt::handle ent,
+                                                                 line_points_edit edit,
+                                                                 size_t index,
+                                                                 std::vector<math::vec3> old_points,
+                                                                 std::vector<math::vec3> new_points)
+    : entity(entt::make_uhandle(ent))
+    , edit(edit)
+    , index(index)
+    , old_points(std::move(old_points))
+    , new_points(std::move(new_points))
+{
+    name = edit == line_points_edit::move_point ? "Move Line Point" : "Remove Line Point";
+}
+
+void entity_set_line_points_action_t::do_action()
+{
+    auto ent = entity.resolve();
+    auto* line = ent ? ent.try_get<line_component>() : nullptr;
+    if(line == nullptr)
+    {
+        return;
+    }
+    line->points = new_points;
+    // The override the Inspector records for the same edit: the point's row, or the list a point left.
+    const std::string path = edit == line_points_edit::move_point ? fmt::format("points[{}]", index) : std::string("points");
+    prefab_record = prefab_override_context::mark_path_changed(ent, entt::resolve<line_component>(), path, {});
+}
+
+void entity_set_line_points_action_t::undo_action()
+{
+    auto ent = entity.resolve();
+    auto* line = ent ? ent.try_get<line_component>() : nullptr;
+    if(line == nullptr)
+    {
+        return;
+    }
+    line->points = old_points;
+    prefab_override_context::restore_overrides(prefab_record);
+    prefab_record = {};
+}
+
+auto entity_set_line_points_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    // The frames of one drag move the same point of the same line.
+    const auto& prior = static_cast<const entity_set_line_points_action_t&>(previous);
+    const bool both_move = edit == line_points_edit::move_point && prior.edit == line_points_edit::move_point;
+    return both_move && entity == prior.entity && index == prior.index;
+}
+
+void entity_set_line_points_action_t::merge_with(const editing_action_t& previous)
+{
+    // The merged step undoes to where the first one began, its override included: later frames found it recorded.
+    const auto& prior = static_cast<const entity_set_line_points_action_t&>(previous);
+    old_points = prior.old_points;
+    prefab_record = prior.prefab_record;
+}
+
+auto entity_set_line_points_action_t::is_valid() const -> bool
+{
+    auto ent = entity.resolve();
+    return ent.valid() && ent.all_of<line_component>();
+}
 
 entity_set_ui_document_component_bounds_action_t::entity_set_ui_document_component_bounds_action_t(entt::handle ent, const usize32_t& old_size, const usize32_t& new_size)
     : entity(entt::make_uhandle(ent)), old_size(old_size), new_size(new_size)

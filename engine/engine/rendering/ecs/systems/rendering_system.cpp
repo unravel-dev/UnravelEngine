@@ -19,6 +19,8 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/decal_component.h>
+#include <engine/rendering/ecs/components/line_component.h>
+#include <engine/rendering/ecs/components/trail_component.h>
 
 #include <engine/rendering/ecs/systems/camera_system.h>
 #include <engine/rendering/ecs/systems/model_system.h>
@@ -77,6 +79,7 @@ auto rendering_system::init(rtti::context& ctx) -> bool
                                this,
                                &rendering_system::reset_script_draws);
     ev.on_frame_end.connect(sentinel_, 1000, this, &rendering_system::on_frame_end);
+    ev.on_play_begin.connect(sentinel_, 1000, this, &rendering_system::on_play_begin);
     ev.on_play_end.connect(sentinel_, -10, this, &rendering_system::on_play_end);
 
     baked_animations_.init();
@@ -94,6 +97,17 @@ auto rendering_system::deinit(rtti::context& ctx) -> bool
     morph_deformer_.reset();
     material_instances_.clear();
     return true;
+}
+
+void rendering_system::on_play_begin(rtti::context& ctx)
+{
+    // What a trail left while the scene was edited does not follow it into the game.
+    auto& registry = *ctx.get_cached<ecs>().get_scene().registry;
+    registry.view<trail_component>().each(
+        [](auto /*entity*/, auto&& trail)
+        {
+            trail.clear();
+        });
 }
 
 void rendering_system::on_play_end(rtti::context& ctx)
@@ -165,6 +179,19 @@ void rendering_system::set_debug_pass(const hpp::optional<int>& pass)
 
 namespace
 {
+/// Once a frame for the renderers whose geometry follows the time: a trail takes where its entity is and ages its
+/// points. The runs that draw them bring their materials up to date.
+void update_dynamic_renderers(scene& scn, const frame_times& times)
+{
+    const float dt = times.scaled.count();
+    auto& registry = *scn.registry;
+    registry.view<transform_component, trail_component, active_component>().each(
+        [dt](auto /*entity*/, auto&& transform, auto&& trail, auto&& /*active*/)
+        {
+            trail.update(transform.get_transform_global(), dt);
+        });
+}
+
 /// Ages the decals that fade over time (Fade In, Lifetime) while the simulation runs, and destroys those whose Remove
 /// After Fade holds once they have faded out. Edit mode and a paused play leave every age alone.
 void update_decal_lifetimes(rtti::context& ctx, scene& scn, const frame_times& times)
@@ -242,6 +269,7 @@ void rendering_system::on_frame_update(scene& scn, const frame_times& times)
     ctx.get_cached<reflection_probe_system>().on_frame_update(scn, times);
     ctx.get_cached<skylight_system>().on_frame_update(scn, times);
     update_decal_lifetimes(ctx, scn, times);
+    update_dynamic_renderers(scn, times);
 }
 
 void rendering_system::on_frame_before_render(scene& scn, const frame_times& times)

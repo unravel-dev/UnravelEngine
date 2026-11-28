@@ -32,6 +32,17 @@ Ids and `.meta`:
 - Two files with one uid (a copy made together with its `.meta`): the file the watcher indexes while
   the other already holds the uid gets a fresh id, and references keep the holder
   (`find_other_holder_of_uid`, `asset_watcher.cpp`).
+- The editor writes only the project's assets: `asset_actions::is_project_asset(key)` (a key under
+  `app:/data`) is the one rule. What the engine and the editor ship is shared by every project and
+  replaced by an update, so the Inspector shows it read only (`inspector_panel::inspect_object`), the
+  Material Graph window opens it for viewing (`material_graph_panel::is_view_only`), MCP tools
+  refuse it (`require_project_data_asset`) and the save functions refuse it
+  (`asset_actions::save_material_graph`, `editor_actions::save_import_settings`). The way to edit one
+  is a copy: `asset_actions::copy_asset_into_project` (Duplicate Into Project, MCP
+  `assets_copy_to_project_batch`) writes the copy's `.meta` first, with the source's import settings
+  under a fresh id, then the file. A new window or tool that writes an asset asks the rule before it
+  edits, not only before it saves: an edit of a loaded engine asset shows in every scene until the
+  editor restarts.
 - Built-in shape ids (`engine_data/data/meshes/*.emesh.meta`) are `generate_uuid("engine:/embedded/<name>")`,
   which projects reference in bulk: never regenerate them. Keys of that form resolve to the shape's
   file (`asset_manager::resolve_key`).

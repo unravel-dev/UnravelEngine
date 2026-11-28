@@ -2,10 +2,13 @@
 #define PARTICLE_LIGHTING_SH_HEADER_GUARD
 
 /*
- * Lit particles (vs_particle.eshader#lit), lit at the particle: the sky's irradiance SH, the sun with its cascaded
+ * Lit particles (vs_particle.eshader#graph_lit), lit at the particle: the sky's irradiance SH, the sun with its cascaded
  * shadow, and up to PARTICLE_MAX_LIGHTS nearby point / spot lights the CPU picked for the draw. Every term is
  * irradiance; the particle's color is its albedo (Lambert: radiance = albedo x irradiance / pi). Bound by
  * the renderer per lit draw (pipeline.cpp, the particle lighting).
+ *
+ * The graph_lit_gi variant (PARTICLE_GI) draws an emitter whose Ambient Light is Global Illumination in a view whose
+ * GI keeps probes around it: the particle takes the GI's light where it is in place of the sky's.
  */
 
 #include "../common.sh"
@@ -30,14 +33,38 @@ SAMPLER2D(s_particle_irradiance, 12);
 uniform vec4 u_particle_sun_direction;
 /// rgb: the sun's irradiance (linear, lux, pre-exposed); w: the stored depth offset of linear shadow maps.
 uniform vec4 u_particle_sun_color;
-/// x: local lights; y: the view's pre-exposure (the SH is absolute); z: 1 when the batch has a normal map, w: 1
-/// when it stores x and y only (the fragment shaders read both).
+/// x: local lights; y: the view's pre-exposure (the SH is absolute).
 uniform vec4 u_particle_lighting;
 /// Per light: (position, 1 / range), (axis, cos outer half angle), (linear color x candela x pre-exposure,
 /// 1 / (cos inner - cos outer half angle)). A point light has cos outer -2, so its cone mask is 1.
 uniform vec4 u_particle_lights[12];
 
 #define PARTICLE_MAX_LIGHTS 4
+
+#if PARTICLE_GI
+#include "../shader_buffer.sh"
+#include "../gi/gi_radiance_cache_common.sh"
+
+// The GI's radiance cache (gi_radiance_cache_surface.sh): its indirection and its probes' L1 SH, on the two stages
+// below the buffers' limit that a material of up to two textures leaves (MATERIAL_GRAPH_MAX_PARTICLE_GI_TEXTURES).
+#define PARTICLE_GI_INDIRECTION_STAGE 6
+#define PARTICLE_GI_SH_STAGE 5
+SHADER_BUFFER_UINT(b_gi_rc_indirection, PARTICLE_GI_INDIRECTION_STAGE);
+SHADER_BUFFER_FLOAT4(b_gi_rc_surface_sh, PARTICLE_GI_SH_STAGE);
+/// x: the GI's diffuse intensity, which scales its light as it scales the opaque surfaces' (mg_forward.sh).
+uniform vec4 u_fwd_gi;
+#include "../gi/gi_radiance_cache_surface.sh"
+
+/// The irradiance a particle at @p position takes from around it, absolute: the GI's where its radiance cache has
+/// probes around the particle, @p sky elsewhere. Along @p direction with the cosine lobe's first two bands times
+/// @p band_scale: (1, 1) what a surface facing it receives, (1, 0) the average over every side.
+vec3 particle_gi_irradiance(vec3 sky, vec3 position, vec3 direction, vec2 band_scale)
+{
+	// The radiance cache's lattice is world-locked: it takes the absolute position.
+	GiRcSurfaceSh gi = GiRcSurfaceShAt(viewOffsetToWorld(position), u_fwd_gi.x);
+	return mix(sky, GiRcSurfaceShEval(gi, direction, band_scale), GiRcSurfaceShShare(gi));
+}
+#endif
 /// Metres a receiver is pulled toward the sun before its shadow test (particles have no surface to bias by).
 #define PARTICLE_SHADOW_BIAS 0.1
 
@@ -107,7 +134,7 @@ vec3 particle_local_irradiance(vec3 position)
 }
 
 /**
- * The light a lit particle's vertices pass on (particle_fragment.sh, particle_pixel_light): @p ambient the
+ * The light a lit particle's vertices pass on (particle_shading.sh, particle_surface_light): @p ambient the
  * per-particle radiance factor, @p sun the sun's radiance factor and the wrap for surface lighting (zero for
  * volumetric), @p sun_local the direction toward the sun in the quad's (x, y, normal) frame.
  */
@@ -124,14 +151,20 @@ void particle_light_vertex(particle_vertex vertex, out vec3 ambient, out vec4 su
 	sun_local = vec3(dot(toward_sun, vertex.axis_x), dot(toward_sun, vertex.axis_y), dot(toward_sun, vertex.normal));
 	if((flags & PARTICLE_FLAG_LIT_SURFACE) != 0u)
 	{
-		vec3 sky = eval_irradiance_sh(s_particle_irradiance, vertex.normal) * pre_exposure;
-		ambient = (sky + local) * RECIP_PI;
+		vec3 around = eval_irradiance_sh(s_particle_irradiance, vertex.normal);
+#if PARTICLE_GI
+		around = particle_gi_irradiance(around, position, vertex.normal, vec2_splat(1.0));
+#endif
+		ambient = (around * pre_exposure + local) * RECIP_PI;
 		sun = vec4(sun_irradiance * RECIP_PI, particle_static(emitter, PARTICLE_STATIC_DISTANCE).z);
 		return;
 	}
-	// A small cloud: the sky's average irradiance (band 0) and the sun from every side.
-	vec3 sky = eval_irradiance_sh_scaled(s_particle_irradiance, vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0)) * pre_exposure;
-	ambient = (sky + sun_irradiance + local) * RECIP_PI;
+	// A small cloud: the average irradiance around it (band 0) and the sun from every side.
+	vec3 around = eval_irradiance_sh_scaled(s_particle_irradiance, vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0));
+#if PARTICLE_GI
+	around = particle_gi_irradiance(around, position, vec3(0.0, 1.0, 0.0), vec2(1.0, 0.0));
+#endif
+	ambient = (around * pre_exposure + sun_irradiance + local) * RECIP_PI;
 	sun = vec4_splat(0.0);
 }
 

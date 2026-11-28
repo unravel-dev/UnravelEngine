@@ -264,6 +264,12 @@ auto internal_m2n_material_get_blend_mode(const hpp::uuid& uid) -> int32_t
     return graph ? int32_t(graph->get_blend_mode()) : int32_t(material_blend_mode::opaque);
 }
 
+auto internal_m2n_material_get_particle_use(const hpp::uuid& uid) -> bool
+{
+    const auto graph = find_shared_graph(uid);
+    return graph && graph->is_particle_use();
+}
+
 auto internal_m2n_material_get_shading_model(const hpp::uuid& uid) -> int32_t
 {
     const auto graph = find_shared_graph(uid);
@@ -407,6 +413,7 @@ void register_assets_script_bindings()
         auto reg = dotnet::internal_call_registry("Unravel.Core.Material");
         reg.add_internal_call("internal_m2n_material_set_color", script_internal_call(internal_m2n_material_set_color));
         reg.add_internal_call("internal_m2n_material_get_blend_mode", script_internal_call(internal_m2n_material_get_blend_mode));
+        reg.add_internal_call("internal_m2n_material_get_particle_use", script_internal_call(internal_m2n_material_get_particle_use));
         reg.add_internal_call("internal_m2n_material_get_shading_model", script_internal_call(internal_m2n_material_get_shading_model));
         reg.add_internal_call("internal_m2n_material_get_color", script_internal_call(internal_m2n_material_get_color));
         reg.add_internal_call("internal_m2n_material_set_float", script_internal_call(internal_m2n_material_set_float));

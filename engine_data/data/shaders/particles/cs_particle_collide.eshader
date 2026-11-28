@@ -1,0 +1,425 @@
+[variants]
+// default: against what the view shows, its opaque depth and its G-buffer normals.
+default
+// distance_field: against the global illumination's distance field of the view.
+distance_field    PARTICLE_COLLIDE_DISTANCE_FIELD
+
+[code]
+/*
+ * Per camera view: the particles of the emitters that collide with scene surfaces touch what is drawn.
+ *
+ * A task is one emitter: pool base, high water, thread offset and how its particles answer a contact. Its slots
+ * [0, high water) map to threads [thread offset, thread offset + high water). Each thread places its particle where
+ * it draws now, asks the scene for the surface there, and where the particle is in it and moving into it, rewrites
+ * the particle's record in the pool: its life ends (Kill, or out of bounces), it starts a new path segment from the
+ * contact (Bounce), or it rests there (Stick, or a bounce slower than the rest speed).
+ *
+ * The contact is found once a frame, where the particle is or will be within the frame: it happens at the frame's
+ * tick, not at the tick the path crossed the surface. The CPU's copy of the record is not told.
+ *
+ * Every binding sits below stage 8, the compute bindings the particle kernels may count on
+ * (render_feature::particle_storage_buffers).
+ */
+
+#include <bgfx_compute.sh>
+#include "../common.sh"
+#include "../view_origin.sh"
+
+BUFFER_RW(s_particle_records, uint, 0);
+BUFFER_RO(s_particle_static, vec4, 1);
+BUFFER_RO(s_particle_dynamic, uint, 2);
+BUFFER_RO(s_particle_luts, vec4, 3);
+BUFFER_RO(s_particle_collide_tasks, uint, 5);
+
+#include "particle_common.sh"
+
+#if PARTICLE_COLLIDE_DISTANCE_FIELD
+// The field takes stage 4 (sdf_clipmap.sh).
+#include "gi/gi_global_sdf.sh"
+#else
+#include "../lighting.sh"
+SAMPLER2D(s_particle_scene_depth, 4);
+SAMPLER2D(s_particle_scene_normals, 6);
+#endif
+
+/// x = tasks, y = threads of the tasks.
+uniform vec4 u_particle_collide;
+
+/// uints per task of s_particle_collide_tasks, and what each holds (particle_gpu_schema.h, gpu_collide_task_uints and
+/// gpu_collide_task_slot). The answer has the collision mode in its low byte, the max bounces in the next and
+/// PARTICLE_COLLIDE_FLAT_BIT where a particle at rest lies flat; the uints after it are floats, the scatter in radians.
+#define PARTICLE_COLLIDE_TASK_UINTS 10u
+#define PARTICLE_COLLIDE_TASK_POOL_BASE 0u
+#define PARTICLE_COLLIDE_TASK_HIGH_WATER 1u
+#define PARTICLE_COLLIDE_TASK_THREAD_OFFSET 2u
+#define PARTICLE_COLLIDE_TASK_ANSWER 3u
+#define PARTICLE_COLLIDE_TASK_RESTITUTION 4u
+#define PARTICLE_COLLIDE_TASK_FRICTION 5u
+#define PARTICLE_COLLIDE_TASK_RADIUS_SCALE 6u
+#define PARTICLE_COLLIDE_TASK_REST_SPEED 7u
+#define PARTICLE_COLLIDE_TASK_LIFETIME_LOSS 8u
+#define PARTICLE_COLLIDE_TASK_BOUNCE_SCATTER 9u
+/// ps_soa::collision_mode.
+#define PARTICLE_COLLISION_KILL 1u
+#define PARTICLE_COLLISION_BOUNCE 2u
+#define PARTICLE_COLLISION_STICK 3u
+/// Where the answer holds the max bounces, and its bit that lays a particle at rest flat (particle_gpu_schema.h,
+/// gpu_collide_bounces_shift and gpu_collide_flat_bit).
+#define PARTICLE_COLLIDE_BOUNCES_SHIFT 8u
+#define PARTICLE_COLLIDE_FLAT_BIT 0x10000u
+/// Metres a bounced particle starts off its surface, and a particle that lies flat at rest lies above it
+/// (particle_record.h, contact_lift and rest_lift).
+#define PARTICLE_CONTACT_LIFT 0.001
+#define PARTICLE_REST_LIFT 0.005
+/// Smallest speed factor a bounce divides by (particle_record.h, min_segment_factor).
+#define PARTICLE_MIN_SEGMENT_FACTOR 0.01
+/// The depth buffer says nothing of what lies behind a surface: a particle whose centre is further behind one than
+/// this, or than it moved into the surface in two frames, is behind something, not in it, however large it is.
+#define PARTICLE_COLLIDE_MIN_THICKNESS 0.05
+/// Nor does it say where a surface ends: the plane of a pixel's surface runs on past the surface's edge. A particle
+/// touches that plane only where the view shows the plane again, within this many metres, at the point of it nearest
+/// the particle.
+#define PARTICLE_COLLIDE_PLANE_TOLERANCE 0.05
+/// The geometry's normal is taken across neighbouring depth texels. Where it leaves the shading normal by more than
+/// this cosine (further than a normal map tilts one) the texels span an edge, and the shading normal stands in.
+#define PARTICLE_COLLIDE_NORMAL_AGREEMENT 0.5
+/// Salt of a bounce's scatter picks, drawn from the particle's seed and its bounce count.
+#define PARTICLE_SALT_SCATTER 23u
+
+/// Threads in one row of a dispatch (particle_gpu.cpp, dispatch_threads): 65535 groups of 64.
+#define PARTICLE_DISPATCH_ROW_THREADS (65535u * 64u)
+
+uint collide_task_value(uint task, uint index)
+{
+	return s_particle_collide_tasks[task * PARTICLE_COLLIDE_TASK_UINTS + index];
+}
+
+float collide_task_float(uint task, uint index)
+{
+	return uintBitsToFloat(collide_task_value(task, index));
+}
+
+uint find_collide_task(uint thread_index, uint task_count)
+{
+	uint low = 0u;
+	uint high = task_count - 1u;
+	while(low < high)
+	{
+		uint middle = (low + high + 1u) / 2u;
+		if(collide_task_value(middle, PARTICLE_COLLIDE_TASK_THREAD_OFFSET) <= thread_index)
+		{
+			low = middle;
+		}
+		else
+		{
+			high = middle - 1u;
+		}
+	}
+	return low;
+}
+
+#if !PARTICLE_COLLIDE_DISTANCE_FIELD
+/// Where the view shows @p offset (an offset from the view origin), as a uv. False behind the camera or off screen.
+bool particle_project(vec3 offset, out vec2 uv)
+{
+	vec4 clip = mul(u_viewProj, vec4(offset, 1.0));
+	vec2 screen = clip.xy / max(clip.w, 1e-6) * 0.5 + 0.5;
+	uv = clipToUv(screen);
+	return clip.w > 0.0 && all(greaterThanEqual(screen, vec2_splat(0.0))) && all(lessThanEqual(screen, vec2_splat(1.0)));
+}
+
+/// The texel of the view's depth, @p size texels wide and high, that holds @p uv.
+ivec2 particle_scene_texel(vec2 uv, vec2 size)
+{
+	return ivec2(clamp(uv * size, vec2_splat(0.0), size - vec2_splat(1.0)));
+}
+
+/// The scene's surface in @p texel of the view's depth, as an offset from the view origin: the point at the texel's
+/// centre, so it lies on the surface whatever uv asked for the texel. False where the view drew nothing.
+bool particle_scene_point(ivec2 texel, vec2 size, out vec3 place)
+{
+	float depth = texelFetch(s_particle_scene_depth, texel, 0).x;
+	vec2 centre = (vec2(texel) + vec2_splat(0.5)) / size;
+	place = mul(u_invView, vec4(computeViewSpacePosition(centre, depth), 1.0)).xyz;
+	return !isFarDepth(depth);
+}
+
+/// From @p place, the surface point of @p texel, to the surface point of the texel one @p stride on or one back,
+/// whichever lies nearer: across an edge the far side is the other surface. Zero where the view drew neither.
+vec3 particle_scene_step(ivec2 texel, ivec2 stride, vec2 size, vec3 place)
+{
+	ivec2 last = ivec2(size) - ivec2(1, 1);
+	ivec2 ahead = min(texel + stride, last);
+	ivec2 behind = max(texel - stride, ivec2(0, 0));
+	vec3 ahead_place;
+	vec3 behind_place;
+	bool has_ahead = particle_scene_point(ahead, size, ahead_place);
+	bool has_behind = particle_scene_point(behind, size, behind_place);
+	vec3 to_ahead = has_ahead ? ahead_place - place : vec3_splat(0.0);
+	vec3 to_behind = has_behind ? behind_place - place : vec3_splat(0.0);
+	// A texel at the view's edge is its own neighbour on that side: no step.
+	float ahead_length = dot(to_ahead, to_ahead);
+	float behind_length = dot(to_behind, to_behind);
+	if(ahead_length <= 0.0)
+	{
+		return to_behind;
+	}
+	if(behind_length <= 0.0)
+	{
+		return to_ahead;
+	}
+	return ahead_length <= behind_length ? to_ahead : to_behind;
+}
+
+/// The unit normal of the geometry at @p texel, whose surface point is @p place: across to the texels beside and
+/// below it, on the side @p shading_normal faces. A material's normal map tilts the shading normal, not what a
+/// particle lands on. Where the neighbours lie on another surface (a thin edge), @p shading_normal itself.
+vec3 particle_geometry_normal(ivec2 texel, vec2 size, vec3 place, vec3 shading_normal)
+{
+	vec3 across = cross(particle_scene_step(texel, ivec2(1, 0), size, place), particle_scene_step(texel, ivec2(0, 1), size, place));
+	float area = length(across);
+	if(area <= 0.0)
+	{
+		return shading_normal;
+	}
+	vec3 geometry_normal = across / area;
+	if(dot(geometry_normal, shading_normal) < 0.0)
+	{
+		geometry_normal = -geometry_normal;
+	}
+	return dot(geometry_normal, shading_normal) >= PARTICLE_COLLIDE_NORMAL_AGREEMENT ? geometry_normal : shading_normal;
+}
+#endif
+
+/**
+ * The surface a particle at @p position (absolute world) moving at @p velocity may touch within @p frame_time
+ * seconds: its unit @p normal, and the @p clearance of a sphere of @p radius there (negative: in the surface). False
+ * where the scene shows no such surface: none near, or the particle behind or deep inside one.
+ */
+bool particle_find_surface(vec3 position, vec3 velocity, float radius, float frame_time, out vec3 normal, out float clearance)
+{
+	normal = vec3(0.0, 1.0, 0.0);
+	clearance = 0.0;
+	float travel = length(velocity) * frame_time;
+#if PARTICLE_COLLIDE_DISTANCE_FIELD
+	SdfClipmapSample field = SdfSampleClipmapLevels(position);
+	clearance = field.distance - radius;
+	// Further from every surface than it moves in a frame: nothing to touch. Its centre deeper in one than it could
+	// have come in two frames, or than the field's voxels resolve: born in it, as an emitter set inside a mesh, and
+	// left alone.
+	float thickness = max(travel * 2.0, field.voxel_size);
+	if(field.index >= SDF_CLIPMAP_LEVEL_COUNT || clearance >= travel || field.distance <= -thickness)
+	{
+		return false;
+	}
+	normal = GiGlobalSdfNormal(position, field.voxel_size, vec3_splat(0.0));
+	return dot(normal, normal) > 0.5;
+#else
+	vec3 offset = worldToViewOffset(position);
+	vec2 uv;
+	if(!particle_project(offset, uv))
+	{
+		return false;
+	}
+	vec2 size = vec2(textureSize(s_particle_scene_depth, 0));
+	ivec2 texel = particle_scene_texel(uv, size);
+	vec3 surface;
+	if(!particle_scene_point(texel, size, surface))
+	{
+		return false;
+	}
+	// The plane of the surface the view shows under the particle: a floor seen at a shallow angle is still the
+	// floor's plane, however far along the view ray its pixel lies.
+	vec3 shading_normal = DecodeGBufferNormalMetalRoughnessTexel(texel, s_particle_scene_normals).world_normal;
+	float height = dot(offset - surface, shading_normal);
+	float sink = max(-dot(velocity, shading_normal), 0.0) * frame_time;
+	float thickness = max(sink * 2.0, PARTICLE_COLLIDE_MIN_THICKNESS);
+	if(height - radius >= travel || height <= -thickness)
+	{
+		return false;
+	}
+	// The plane runs on past the edge of what it belongs to: beside a railing, behind a pillar. The particle touches
+	// it only where the view shows that plane again under the point of it nearest the particle.
+	vec3 foot = offset - shading_normal * height;
+	vec2 foot_uv;
+	if(!particle_project(foot, foot_uv))
+	{
+		return false;
+	}
+	ivec2 foot_texel = particle_scene_texel(foot_uv, size);
+	vec3 foot_surface;
+	if(!particle_scene_point(foot_texel, size, foot_surface))
+	{
+		return false;
+	}
+	if(abs(dot(foot_surface - foot, shading_normal)) >= PARTICLE_COLLIDE_PLANE_TOLERANCE)
+	{
+		return false;
+	}
+	// The contact is with the geometry there, at the surface point the view holds.
+	normal = particle_geometry_normal(foot_texel, size, foot_surface, shading_normal);
+	clearance = dot(offset - foot_surface, normal) - radius;
+	return true;
+#endif
+}
+
+/// The factor the speed curve and the easing apply to a particle's velocity at @p life (1 without them):
+/// particle_system_soa.cpp, get_motion_factor.
+float particle_motion_factor(uint emitter, float life)
+{
+	uint flags = particle_flags(emitter);
+	float factor = 1.0;
+	float progress = clamp(life, 0.0, 1.0);
+	if((flags & PARTICLE_FLAG_EASE) != 0u)
+	{
+		vec4 life_curves = particle_lut(emitter, PARTICLE_LUT_ROW_LIFE, progress);
+		progress = life_curves.x;
+		factor *= life_curves.y;
+	}
+	if((flags & PARTICLE_FLAG_SPEED_CURVE) != 0u)
+	{
+		factor *= particle_lut(emitter, PARTICLE_LUT_ROW_SPEED, progress).y;
+	}
+	return factor;
+}
+
+/// @p velocity turned at random within a cone of half angle @p scatter (radians) about itself, by the picks of
+/// @p seed, and mirrored out of the surface of unit @p normal when the turn points into it.
+vec3 particle_scatter_bounce(vec3 velocity, vec3 normal, float scatter, uint seed)
+{
+	float speed = length(velocity);
+	if(scatter <= 0.0 || speed <= 0.0)
+	{
+		return velocity;
+	}
+	vec3 axis = velocity / speed;
+	vec3 across = abs(axis.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+	vec3 side = normalize(cross(across, axis));
+	vec3 up = cross(axis, side);
+	// Evenly over the cone's cap.
+	float cos_angle = mix(1.0, cos(scatter), particle_random(seed, PARTICLE_SALT_SCATTER));
+	float sin_angle = sqrt(max(1.0 - cos_angle * cos_angle, 0.0));
+	float turn = 6.28318530718 * particle_random(seed, PARTICLE_SALT_SCATTER + 1u);
+	vec3 turned = (axis * cos_angle + (side * cos(turn) + up * sin(turn)) * sin_angle) * speed;
+	float into = dot(turned, normal);
+	return into < 0.0 ? turned - normal * (2.0 * into) : turned;
+}
+
+void store_vec3(uint index, vec3 value)
+{
+	s_particle_records[index] = floatBitsToUint(value.x);
+	s_particle_records[index + 1u] = floatBitsToUint(value.y);
+	s_particle_records[index + 2u] = floatBitsToUint(value.z);
+}
+
+NUM_THREADS(64, 1, 1)
+void main()
+{
+	uint thread_index = gl_GlobalInvocationID.y * PARTICLE_DISPATCH_ROW_THREADS + gl_GlobalInvocationID.x;
+	if(thread_index >= uint(u_particle_collide.y))
+	{
+		return;
+	}
+	uint task = find_collide_task(thread_index, uint(u_particle_collide.x));
+	uint slot = collide_task_value(task, PARTICLE_COLLIDE_TASK_POOL_BASE) +
+	            (thread_index - collide_task_value(task, PARTICLE_COLLIDE_TASK_THREAD_OFFSET));
+	particle_record record = particle_load(slot);
+	uint emitter = record.emitter;
+	uint now = particle_dynamic_uint(emitter, PARTICLE_DYNAMIC_NOW);
+	particle_state state = particle_evaluate_at(record, now);
+	if(!state.is_alive || (record.motion_offset & PARTICLE_MOTION_REST_BIT) != 0u)
+	{
+		return;
+	}
+	// The particle is tested where it draws, pushed by the turbulence. A bounce turns the velocity of its path alone:
+	// the turbulence goes on pushing the path it starts, and no bounce adds its push to the path for good.
+	vec3 path_velocity = state.velocity;
+	if((particle_flags(emitter) & PARTICLE_FLAG_TURBULENCE) != 0u)
+	{
+		particle_apply_turbulence(record, state);
+	}
+	float radius = 0.5 * max(collide_task_float(task, PARTICLE_COLLIDE_TASK_RADIUS_SCALE), 0.0) * particle_size(record, state);
+	float frame_time = particle_dynamic_float(emitter, PARTICLE_DYNAMIC_FRAME_TIME);
+	vec3 normal;
+	float clearance;
+	if(!particle_find_surface(state.position, state.velocity, radius, frame_time, normal, clearance))
+	{
+		return;
+	}
+	uint answer = collide_task_value(task, PARTICLE_COLLIDE_TASK_ANSWER);
+	uint mode = answer & 0xffu;
+	uint max_bounces = (answer >> PARTICLE_COLLIDE_BOUNCES_SHIFT) & 0xffu;
+	bool lies_flat = (answer & PARTICLE_COLLIDE_FLAT_BIT) != 0u;
+	bool ends_here = mode == PARTICLE_COLLISION_KILL || (mode == PARTICLE_COLLISION_BOUNCE && record.bounces >= max_bounces);
+	// A particle touches the surface it moves into: one that leaves it after a bounce does not bounce again. It
+	// touches it where it is in it, or will be before the next frame looks: a fast particle does not show inside a
+	// surface first, and a thin one is not stepped over. A particle whose life ends there is drawn until it is in it.
+	float approach = dot(state.velocity, normal);
+	float reach = ends_here ? 0.0 : approach * frame_time;
+	if(approach >= 0.0 || clearance + reach >= 0.0)
+	{
+		return;
+	}
+	uint base = slot * PARTICLE_RECORD_UINTS;
+	uint age_ticks = now - record.birth;
+	// The record's quads: start and birth, velocity and lifespan, seed and the size terms, tint, emitter and motion
+	// offset (particle_load).
+	uint lifespan_index = base + 7u;
+	uint motion_index = base + 15u;
+	if(ends_here)
+	{
+		// Its life ends here: nothing draws it from now on.
+		s_particle_records[lifespan_index] = max(age_ticks, 1u);
+		return;
+	}
+	// The contact takes a share of the life that is left.
+	uint lifespan = record.lifespan;
+	float loss = clamp(collide_task_float(task, PARTICLE_COLLIDE_TASK_LIFETIME_LOSS), 0.0, 1.0);
+	if(loss > 0.0)
+	{
+		uint left = uint(float(lifespan - age_ticks) * (1.0 - loss));
+		if(left == 0u)
+		{
+			s_particle_records[lifespan_index] = max(age_ticks, 1u);
+			return;
+		}
+		lifespan = age_ticks + left;
+	}
+	// Where the sphere touches the surface, pushed out of it.
+	vec3 contact = state.position - normal * clearance;
+	float path_approach = dot(path_velocity, normal);
+	vec3 along = path_velocity - normal * path_approach;
+	// A path that already leaves the surface (the turbulence pushed the particle into it) keeps that speed.
+	float restitution = clamp(collide_task_float(task, PARTICLE_COLLIDE_TASK_RESTITUTION), 0.0, 1.0);
+	float away = path_approach < 0.0 ? -path_approach * restitution : path_approach;
+	vec3 bounced = along * (1.0 - clamp(collide_task_float(task, PARTICLE_COLLIDE_TASK_FRICTION), 0.0, 1.0)) + normal * away;
+	bounced = particle_scatter_bounce(bounced,
+	                                  normal,
+	                                  collide_task_float(task, PARTICLE_COLLIDE_TASK_BOUNCE_SCATTER),
+	                                  record.seed + record.bounces);
+	if(mode == PARTICLE_COLLISION_STICK || length(bounced) < max(collide_task_float(task, PARTICLE_COLLIDE_TASK_REST_SPEED), 0.0))
+	{
+		// At rest where it touched, flat on the surface when the emitter aligns its particles to it: its velocity
+		// then holds the surface's normal.
+		if(lies_flat)
+		{
+			contact += normal * (PARTICLE_REST_LIFT - radius);
+			store_vec3(base + 4u, normal);
+		}
+		store_vec3(base, contact);
+		s_particle_records[lifespan_index] = lifespan;
+		s_particle_records[motion_index] =
+			age_ticks | (record.bounces << PARTICLE_MOTION_BOUNCE_SHIFT) | PARTICLE_MOTION_REST_BIT;
+		return;
+	}
+	// A new segment of its path from the contact. It keeps its age, so its looks over life go on, and its speed
+	// curve and easing go on too: they scale the segment's velocity, so that is the bounced velocity divided by
+	// their factor at the contact.
+	float lifespan_seconds = max(float(lifespan), 1.0) / PARTICLE_TICKS_PER_SECOND;
+	float factor = particle_motion_factor(emitter, state.age / lifespan_seconds);
+	store_vec3(base, contact + normal * PARTICLE_CONTACT_LIFT);
+	store_vec3(base + 4u, abs(factor) >= PARTICLE_MIN_SEGMENT_FACTOR ? bounced / factor : bounced);
+	s_particle_records[lifespan_index] = lifespan;
+	uint bounces = min(record.bounces + 1u, PARTICLE_MOTION_BOUNCE_MASK);
+	s_particle_records[motion_index] = age_ticks | (bounces << PARTICLE_MOTION_BOUNCE_SHIFT);
+}

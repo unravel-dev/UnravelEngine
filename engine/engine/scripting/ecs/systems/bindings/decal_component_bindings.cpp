@@ -183,19 +183,7 @@ auto internal_m2n_decals_spawn(const hpp::uuid& material_uid,
     auto* parent_scene = parent ? scene::get_scene(parent) : nullptr;
     auto& scn = parent_scene != nullptr ? *parent_scene : ctx.get_cached<ecs>().get_scene();
     const auto chosen = material_uid.is_nil() ? asset_handle<material>{} : am.get_asset<material>(material_uid);
-    auto decal = defaults::create_decal_entity(ctx, scn, "Decal", chosen);
-    auto& comp = decal.get<decal_component>();
-    comp.resize(size);
-    comp.lifetime = std::max(lifetime, 0.0f);
-    comp.fade_out = std::max(fade_out, 0.0f);
-    comp.remove_after_fade = lifetime > 0.0f;
-    comp.is_transient = true;
-    defaults::place_decal_on_surface(decal, point, normal, rotation);
-    if(parent)
-    {
-        decal.get<transform_component>().set_parent(parent, true);
-    }
-    return decal.entity();
+    return defaults::spawn_transient_decal(ctx, scn, chosen, point, normal, size, rotation, lifetime, fade_out, parent).entity();
 }
 
 auto internal_m2n_decal_get_receiver_layers(entt::entity id) -> int32_t

@@ -126,7 +126,7 @@ editor, and never under a hard timeout. Times are a full parallel run, RelWithDe
 | `skinning palettes` | the CPU side of the skinning palette buffer |
 | `instanced draws` | scripted instance draws (`Graphics.DrawMeshInstanced`) |
 | `particle emitter desc` | which kernel features an emitter description bakes |
-| `particle motion` | the closed-form particle motion against a numeric reference |
+| `particle motion` | the closed-form particle motion against a numeric reference; sweeps against a test collider (contact time, cast limit, rest, stick); the scene collision kernel's layout against C++ (the kernel itself runs only on a GPU: check it in a running editor) |
 
 ## Materials
 
@@ -134,6 +134,7 @@ editor, and never under a hard timeout. Times are a full parallel run, RelWithDe
 |-------|--------|
 | `material graphs` | graph editing, the JSON format, types and conversions, the generated shader, every shipped example compiled with shaderc |
 | `material instances` | a model slot's overrides of its shared material |
+| `dynamic geometry` | the geometry Lines and Trails build: vertex packing, the strip builder's shapes, corners, caps and UV modes, trail history, each component's save and load |
 
 ## Assets, files and packs
 

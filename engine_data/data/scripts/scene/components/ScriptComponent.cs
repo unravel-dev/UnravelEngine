@@ -200,6 +200,28 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Called once a frame with what happened to the particles of an emitter on this entity (or on a child without
+        /// scripts of its own) since the last call: the births, deaths and collisions its
+        /// <see cref="ParticleEmitterComponent.sendEvents"/> asks for. Runs before <see cref="OnUpdate"/>, the frame
+        /// after they happened.
+        /// </summary>
+        /// <param name="batch">The emitter and its events, oldest first.</param>
+        public virtual void OnParticleEvents(ParticleEventBatch batch)
+        {
+        }
+
+        /// <summary>
+        /// Called once a frame for each emitter whose particles touched a collider of this entity (or of a child without
+        /// scripts of its own), when that emitter's <see cref="ParticleEmitterComponent.notifyHitEntities"/> is on.
+        /// Runs before <see cref="OnUpdate"/>, the frame after the particles touched.
+        /// </summary>
+        /// <param name="batch">The emitter and its collisions with this entity and its children, oldest first: each
+        /// event's entity is the one whose collider was touched. The emitter's entity may have been destroyed since.</param>
+        public virtual void OnParticleHits(ParticleEventBatch batch)
+        {
+        }
+
+        /// <summary>
         /// Called when a joint breaks: on the joint's own entity and on both bodies it held together.
         /// </summary>
         /// <param name="jointBreak">The joint, its bodies and the force that broke it.</param>
@@ -463,6 +485,41 @@ namespace Unravel.Core
             using (Run(this))
             {
                 OnCollisionEnter(collision);
+            }
+        }
+
+        /// <summary>
+        /// Internal method invoked with an emitter's particle events. Converts them and calls <see cref="OnParticleEvents"/>.
+        /// </summary>
+        private void internal_n2m_on_particle_events(Entity emitter, byte[] eventData)
+        {
+            var batch = new ParticleEventBatch
+            {
+                emitter = emitter,
+                events = eventData.ToStructArray<ParticleEvent>()
+            };
+
+            using (Run(this))
+            {
+                OnParticleEvents(batch);
+            }
+        }
+
+        /// <summary>
+        /// Internal method invoked with the particles of an emitter that touched this entity. Converts them and calls
+        /// <see cref="OnParticleHits"/>.
+        /// </summary>
+        private void internal_n2m_on_particle_hits(Entity emitter, byte[] eventData)
+        {
+            var batch = new ParticleEventBatch
+            {
+                emitter = emitter,
+                events = eventData.ToStructArray<ParticleEvent>()
+            };
+
+            using (Run(this))
+            {
+                OnParticleHits(batch);
             }
         }
 

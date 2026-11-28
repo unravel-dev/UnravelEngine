@@ -22,12 +22,16 @@
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/gi_component.h>
 #include <engine/rendering/ecs/components/gtao_component.h>
+#include <engine/rendering/ecs/components/line_component.h>
+#include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/ecs/components/post_process_material_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/taa_component.h>
+#include <engine/rendering/ecs/components/trail_component.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/material_graph/graph_material.h>
+#include <engine/rendering/material_graph/material_graph_compiler.h>
 #include <reflection/reflection.h>
 #include <ser20/external/simdjson/simdjson.h>
 #include <string_utils/utils.h>
@@ -243,6 +247,243 @@ void add_joint_problems(entt::registry& registry, const std::string& document, a
     }
 }
 
+/// Reports @p emitter when its Ambient Light is Global Illumination, the scene lights its Material @p graph (named
+/// @p material) and that material leaves the Global Illumination no place in a particle draw.
+void add_gi_ambient_misfit(entt::handle handle,
+                           const particle_emitter_component& emitter,
+                           const graph_material& graph,
+                           const std::string& material,
+                           const std::string& document,
+                           audit::document_scan& out)
+{
+    const bool asks = emitter.get_ambient_light() == ps_soa::particle_ambient::global_illumination &&
+                      emitter.get_lighting() != ps_soa::particle_lighting::unlit &&
+                      graph.get_shading_model() != material_shading_model::unlit;
+    if(!asks)
+    {
+        return;
+    }
+    std::string message = audit::make_gi_ambient_message(material,
+                                                         std::uint32_t(graph.get_textures().size()),
+                                                         (graph.get_scene_textures() & material_scene_texture_color) != 0,
+                                                         MATERIAL_GRAPH_MAX_PARTICLE_GI_TEXTURES);
+    if(!message.empty())
+    {
+        out.gi_ambient_misfits.push_back({document, audit_entity_uid(handle), make_audit_entity_path(handle), std::move(message)});
+    }
+}
+
+/// The emitters whose sprites, trails and ribbons cannot draw the Material they name: one that is no Surface material
+/// with Particle Use, and the ones whose Material cannot take the Ambient Light they ask for. A material that does
+/// not load is a missing reference, reported as one.
+void add_emitter_material_problems(entt::registry& registry, const std::string& document, audit::document_scan& out)
+{
+    for(const auto entity : registry.view<particle_emitter_component>())
+    {
+        const entt::handle handle(registry, entity);
+        const auto& emitter = handle.get<particle_emitter_component>();
+        const auto& named = emitter.get_render_material();
+        if(emitter.get_render_mode() == ps_soa::render_mode::mesh || named.uid().is_nil())
+        {
+            continue;
+        }
+        // Waits for the load: the scan reads what its documents name.
+        const auto loaded = named.get();
+        if(!loaded || asset_handle<material>::is_empty(loaded))
+        {
+            continue;
+        }
+        const auto* graph = loaded->safe_cast<graph_material>();
+        if(graph == nullptr || !graph->is_particle_use())
+        {
+            out.emitter_materials.push_back({document, audit_entity_uid(handle), make_audit_entity_path(handle), named.id()});
+            continue;
+        }
+        add_gi_ambient_misfit(handle, emitter, *graph, named.id(), document, out);
+    }
+}
+
+/// What an emitter whose Collide With is Scene Surfaces asks for that a contact with one does not give. The rows the
+/// Inspector hides for such an emitter (its Decal, Send Collision Events) are off with it and are not counted.
+auto get_scene_contact_needs(const particle_emitter_component& emitter) -> audit::scene_contact_needs
+{
+    const auto fires_on = [&](ps_soa::particle_event_type trigger)
+    {
+        const auto& sub_emitters = emitter.get_sub_emitters();
+        return std::any_of(sub_emitters.begin(),
+                           sub_emitters.end(),
+                           [trigger](const particle_sub_emitter& sub)
+                           {
+                               return sub.trigger == trigger;
+                           });
+    };
+    audit::scene_contact_needs needs;
+    needs.draws_meshes = emitter.get_render_mode() == ps_soa::render_mode::mesh;
+    needs.fires_on_collision = fires_on(ps_soa::particle_event_type::collision);
+    needs.fires_on_death = fires_on(ps_soa::particle_event_type::death);
+    needs.sends_death_events = emitter.get_send_death_events();
+    needs.lights_scene = emitter.get_light_count() > 0;
+    return needs;
+}
+
+/// The emitters whose collision cannot work, costs casts or runs on the graphics processor: the ones that collide
+/// while they simulate in Local space, the ones that collide with physics colliders, with the casts their particles
+/// need, and the ones that collide with scene surfaces, with what they ask for that such contacts do not give.
+void add_emitter_collisions(entt::registry& registry, const std::string& document, audit::document_scan& out)
+{
+    audit::collider_emitter_use colliders;
+    colliders.document = document;
+    audit::scene_surface_emitter_use scene_surfaces;
+    scene_surfaces.document = document;
+    for(const auto entity : registry.view<particle_emitter_component>())
+    {
+        const entt::handle handle(registry, entity);
+        const auto& emitter = handle.get<particle_emitter_component>();
+        if(emitter.get_collision() == ps_soa::collision_mode::none)
+        {
+            continue;
+        }
+        if(emitter.get_simulation_space() == ps_soa::simulation_space::local)
+        {
+            out.local_space_collisions.push_back({document, audit_entity_uid(handle), make_audit_entity_path(handle), {}});
+            continue;
+        }
+        if(emitter.get_collide_with() == ps_soa::collision_source::scene_surfaces)
+        {
+            // The ones whose particles collide there at all: a mesh emitter's do not, and is reported for that.
+            if(ps_soa::collides_with_scene_surfaces(emitter.get_desc()))
+            {
+                scene_surfaces.entities.push_back(make_audit_entity_path(handle));
+            }
+            std::string unreported = audit::make_scene_contact_message(get_scene_contact_needs(emitter));
+            if(!unreported.empty())
+            {
+                out.unreported_scene_contacts.push_back(
+                    {document, audit_entity_uid(handle), make_audit_entity_path(handle), std::move(unreported)});
+            }
+            continue;
+        }
+        const float casts = ps_soa::estimate_collision_casts_per_second(emitter.get_desc(), emitter.get_max_particles());
+        if(casts > 0.0f)
+        {
+            colliders.entities.push_back(make_audit_entity_path(handle));
+            colliders.casts_per_second += double(casts);
+        }
+    }
+    if(!colliders.entities.empty())
+    {
+        out.collider_emitters.push_back(std::move(colliders));
+    }
+    if(!scene_surfaces.entities.empty())
+    {
+        out.scene_surface_emitters.push_back(std::move(scene_surfaces));
+    }
+}
+
+/// Whether the materials of a run show the vertex colour of what they draw, by material id.
+using vertex_color_reads = std::unordered_map<std::string, bool>;
+
+/// Whether @p graph reads the vertex colour anywhere: in its pixels, the functions it calls included, or in a node
+/// that feeds its vertices, such as a mask of its World Position Offset.
+auto reads_vertex_color(const material_graph& graph) -> bool
+{
+    const auto compiled = compile_material_graph(graph);
+    if(compiled.reads_vertex_color)
+    {
+        return true;
+    }
+    for(size_t i = 0; i < graph.nodes.size() && i < compiled.nodes.size(); ++i)
+    {
+        if(compiled.nodes[i].is_used && graph.nodes[i].type == "vertex_color")
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Whether @p named shows the vertex colour of a Line or a Trail that names it. True where there is
+/// nothing to report: none named, one that does not load, and one that is no Surface material, in whose place the
+/// component draws the engine's own, which shows it.
+auto shows_vertex_color(const asset_handle<material>& named, vertex_color_reads& known) -> bool
+{
+    if(named.uid().is_nil())
+    {
+        return true;
+    }
+    const auto found = known.find(named.id());
+    if(found != known.end())
+    {
+        return found->second;
+    }
+    // Waits for the load: the scan reads what its documents name.
+    const auto loaded = named.get();
+    const auto* graph = loaded && !asset_handle<material>::is_empty(loaded) ? loaded->safe_cast<graph_material>() : nullptr;
+    const bool draws = graph != nullptr && graph->get_domain() == material_domain::surface;
+    const bool is_shown = !draws || reads_vertex_color(graph->get_graph());
+    known.emplace(named.id(), is_shown);
+    return is_shown;
+}
+
+/// Whether a Line or a Trail draws @p named: none named, one that does not load, or a Surface material. Any other
+/// leaves the component drawing the engine's strip material.
+auto draws_on_strips(const asset_handle<material>& named) -> bool
+{
+    if(named.uid().is_nil())
+    {
+        return true;
+    }
+    // Waits for the load: the scan reads what its documents name.
+    const auto loaded = named.get();
+    if(!loaded || asset_handle<material>::is_empty(loaded))
+    {
+        return true;
+    }
+    const auto* graph = loaded->safe_cast<graph_material>();
+    return graph != nullptr && graph->get_domain() == material_domain::surface;
+}
+
+/// Whether @p strip colours anything: a key of its Color Over Length that is not opaque white.
+auto colors_its_length(const strip_style& strip) -> bool
+{
+    const auto& points = strip.color_over_length.get_points();
+    return std::any_of(points.begin(),
+                       points.end(),
+                       [](const auto& point)
+                       {
+                           return point.element.value != math::vec4(1.0f);
+                       });
+}
+
+/// The lines and trails whose material is no Surface material, and the ones whose colour is set and whose material
+/// has no Vertex Color read to show it.
+void add_strip_material_problems(entt::registry& registry, const std::string& document, vertex_color_reads& known, audit::document_scan& out)
+{
+    const auto report = [&](entt::entity entity, const dynamic_renderer& renderer, const char* component, const strip_style& strip)
+    {
+        const auto& named = renderer.get_material();
+        const bool is_unsuited = !draws_on_strips(named);
+        const bool hides_color = !is_unsuited && colors_its_length(strip) && !shows_vertex_color(named, known);
+        if(!is_unsuited && !hides_color)
+        {
+            return;
+        }
+        const entt::handle handle(registry, entity);
+        auto& problems = is_unsuited ? out.unsuited_strip_materials : out.unshown_colors;
+        problems.push_back({document, audit_entity_uid(handle), make_audit_entity_path(handle), component, named.id()});
+    };
+    for(const auto entity : registry.view<line_component>())
+    {
+        const auto& line = registry.get<line_component>(entity);
+        report(entity, line, "Line", line.strip);
+    }
+    for(const auto entity : registry.view<trail_component>())
+    {
+        const auto& trail = registry.get<trail_component>(entity);
+        report(entity, trail, "Trail", trail.strip);
+    }
+}
+
 template<typename Component>
 void add_feature_use(entt::registry& registry, const std::string& document, audit::limited_feature feature, audit::document_scan& out)
 {
@@ -261,6 +502,31 @@ void add_feature_use(entt::registry& registry, const std::string& document, audi
     }
 }
 
+/// The emitters whose contacts leave decals, which the Decals limit turns off with the Decal components.
+void add_collision_decal_use(entt::registry& registry, const std::string& document, audit::document_scan& out)
+{
+    audit::feature_use use;
+    use.document = document;
+    use.feature = audit::limited_feature::collision_decals;
+    use.component = get_pretty_name(entt::resolve<particle_emitter_component>());
+    for(const auto entity : registry.view<particle_emitter_component>())
+    {
+        const auto& emitter = registry.get<particle_emitter_component>(entity);
+        // A contact with a scene surface leaves no decal (add_emitter_collisions reports that).
+        const bool has_contacts = emitter.get_collision() != ps_soa::collision_mode::none &&
+                                  emitter.get_collide_with() != ps_soa::collision_source::scene_surfaces;
+        if(has_contacts && emitter.get_collision_decal().enabled)
+        {
+            use.entities.push_back(make_audit_entity_path(entt::handle(registry, entity)));
+        }
+    }
+    if(!use.entities.empty())
+    {
+        std::sort(use.entities.begin(), use.entities.end());
+        out.features.push_back(std::move(use));
+    }
+}
+
 void add_feature_uses(entt::registry& registry, const std::string& document, audit::document_scan& out)
 {
     using feature = audit::limited_feature;
@@ -271,6 +537,7 @@ void add_feature_uses(entt::registry& registry, const std::string& document, aud
     add_feature_use<assao_component>(registry, document, feature::ambient_occlusion, out);
     add_feature_use<bloom_component>(registry, document, feature::bloom, out);
     add_feature_use<decal_component>(registry, document, feature::decals, out);
+    add_collision_decal_use(registry, document, out);
     add_feature_use<post_process_material_component>(registry, document, feature::post_process_materials, out);
     add_feature_use<taa_component>(registry, document, feature::temporal_anti_aliasing, out);
     add_feature_use<fxaa_component>(registry, document, feature::fxaa, out);
@@ -361,6 +628,11 @@ void audit_document_scanner::scan(rtti::context& ctx,
     }
 }
 
+void audit_document_scanner::begin_run()
+{
+    shown_vertex_colors_.clear();
+}
+
 void audit_document_scanner::scan_entities(rtti::context& ctx, const audit_document& document, audit::document_scan& out)
 {
     auto& am = ctx.get_cached<asset_manager>();
@@ -386,6 +658,9 @@ void audit_document_scanner::scan_entities(rtti::context& ctx, const audit_docum
     auto& registry = *scratch.registry;
     add_missing(document.key, recorder.get_missing(), collect_entity_paths(registry), out);
     add_joint_problems(registry, document.key, out);
+    add_emitter_material_problems(registry, document.key, out);
+    add_emitter_collisions(registry, document.key, out);
+    add_strip_material_problems(registry, document.key, shown_vertex_colors_, out);
     add_feature_uses(registry, document.key, out);
     add_audio_sources(registry, document.key, out);
     add_camera_depth_ranges(registry, document.key, out);

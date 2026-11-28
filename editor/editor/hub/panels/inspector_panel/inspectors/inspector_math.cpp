@@ -107,7 +107,8 @@ bool drag_vector_fields(ImGuiDataType data_type,
         ImGui::GetWindowDrawList()->AddRectFilled(min,
                                                   ImVec2(min.x + AXIS_EDGE_WIDTH, ImGui::GetItemRectMax().y),
                                                   AXIS_EDGE_COLORS[size_t(i) % AXIS_EDGE_COLORS.size()]);
-        if(reset_component != nullptr && ImGui::BeginPopupContextItem("##axis_menu"))
+        // A read-only value has nothing to reset.
+        if(reset_component != nullptr && !ImGui::IsReadonly() && ImGui::BeginPopupContextItem("##axis_menu"))
         {
             {
                 ImGui::ContextMenuStyleScope style_scope;
@@ -131,6 +132,15 @@ bool drag_vector_fields(ImGuiDataType data_type,
     ImGui::PopID();
     ImGui::EndGroup();
     return changed;
+}
+
+/// The button that puts one of a transform's rows back to its rest value. A read-only row shows it disabled.
+auto draw_transform_reset_button(const var_info& info) -> bool
+{
+    ImGui::BeginDisabled(info.read_only);
+    const bool is_pressed = ImGui::Button(ICON_MDI_UNDO_VARIANT, ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
+    ImGui::EndDisabled();
+    return is_pressed;
 }
 
 /// What a color edit did: changed the value, and finished an edit.
@@ -370,11 +380,13 @@ auto inspector_bvec2::inspect(rtti::context& ctx,
     flags |= data.y ? bflags::y : 0;
 
     bool mod = false;
+    ImGui::BeginDisabled(info.read_only);
     ImGui::BeginGroup();
     mod |= ImGui::CheckboxFlags("X", &flags, bflags::x);
     ImGui::SameLine();
     mod |= ImGui::CheckboxFlags("Y", &flags, bflags::y);
     ImGui::EndGroup();
+    ImGui::EndDisabled();
     if(mod)
     {
         data.x = flags & bflags::x;
@@ -409,6 +421,7 @@ auto inspector_bvec3::inspect(rtti::context& ctx,
     flags |= data.z ? bflags::z : 0;
 
     bool mod = false;
+    ImGui::BeginDisabled(info.read_only);
     ImGui::BeginGroup();
     mod |= ImGui::CheckboxFlags("X", &flags, bflags::x);
     ImGui::SameLine();
@@ -416,6 +429,7 @@ auto inspector_bvec3::inspect(rtti::context& ctx,
     ImGui::SameLine();
     mod |= ImGui::CheckboxFlags("Z", &flags, bflags::z);
     ImGui::EndGroup();
+    ImGui::EndDisabled();
 
     if(mod)
     {
@@ -454,6 +468,7 @@ auto inspector_bvec4::inspect(rtti::context& ctx,
     flags |= data.w ? bflags::w : 0;
 
     bool mod = false;
+    ImGui::BeginDisabled(info.read_only);
     ImGui::BeginGroup();
     mod |= ImGui::CheckboxFlags("X", &flags, bflags::x);
     ImGui::SameLine();
@@ -463,6 +478,7 @@ auto inspector_bvec4::inspect(rtti::context& ctx,
     ImGui::SameLine();
     mod |= ImGui::CheckboxFlags("W", &flags, bflags::w);
     ImGui::EndGroup();
+    ImGui::EndDisabled();
 
     if(mod)
     {
@@ -692,7 +708,7 @@ auto inspector_transform::inspect(rtti::context& ctx,
             ImGui::GetFrameHeight(),
             [&]()
             {
-                if(ImGui::Button(ICON_MDI_UNDO_VARIANT, ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight())))
+                if(draw_transform_reset_button(info))
                 {
                     data.reset_position();
                     result.changed = true;
@@ -747,7 +763,7 @@ auto inspector_transform::inspect(rtti::context& ctx,
             ImGui::GetFrameHeight(),
             [&]()
             {
-                if(ImGui::Button(ICON_MDI_UNDO_VARIANT, ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight())))
+                if(draw_transform_reset_button(info))
                 {
                     const math::vec3 euler_old = euler_angles;
                     data.reset_rotation();
@@ -861,7 +877,7 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
                 ImGui::SameLine();
 
-                if(ImGui::Button(ICON_MDI_UNDO_VARIANT, ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight())))
+                if(draw_transform_reset_button(info))
                 {
                     data.reset_scale();
                     result.changed = true;
@@ -930,7 +946,7 @@ auto inspector_transform::inspect(rtti::context& ctx,
             ImGui::GetFrameHeight(),
             [&]()
             {
-                if(ImGui::Button(ICON_MDI_UNDO_VARIANT, ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight())))
+                if(draw_transform_reset_button(info))
                 {
                     data.reset_skew();
                     result.changed = true;

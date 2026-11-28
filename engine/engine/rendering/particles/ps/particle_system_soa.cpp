@@ -19,9 +19,11 @@
 #include <logging/logging.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <memory>
 #include <unordered_map>
@@ -44,13 +46,37 @@ constexpr double k_contact_step_seconds = 1.0 / 30.0;
 constexpr uint32_t k_min_contact_search_steps = 24;
 constexpr uint32_t k_max_contact_search_steps = 256;
 constexpr uint32_t k_contact_refine_steps = 16;
-/// Smallest speed factor (speed curve times easing rate) a bounce divides by when it carries a particle's curves
-/// on past its contact; below it the bounced velocity is kept as it is.
-constexpr float k_min_segment_factor = 1.0e-2f;
+constexpr float k_min_segment_factor = min_segment_factor;
 /// Below this scale determinant the emitter's basis cannot be inverted (a local-space emitter scaled to zero).
 constexpr float k_min_basis_determinant = 1.0e-12f;
-/// Metres a bounced particle starts off its plane, so its next path does not cross it at once.
-constexpr float k_contact_lift = 1.0e-3f;
+constexpr float k_contact_lift = contact_lift;
+constexpr float k_rest_lift = rest_lift;
+/// Widest bounce scatter, degrees.
+constexpr float k_max_bounce_scatter = 90.0f;
+/// The most straight pieces one sweep of a path is cut into.
+constexpr uint32_t k_max_sweep_chords = 8;
+/// Seconds before a particle reaches the end of the stretch of its path that was swept at which the next stretch is
+/// asked for.
+constexpr double k_resweep_lead_seconds = 0.05;
+/// Ticks of the shortest stretch a sweep is cut down to when a path bends more than its chords can follow.
+constexpr uint64_t k_min_sweep_ticks = 64;
+/// Metres a cast starts before its chord, where the chord does not start a path: a sphere a hair from a surface at
+/// the end of one chord is then not in contact with it at the start of the next.
+constexpr float k_cast_overlap = 0.01f;
+/// Metres a touch on an edge is taken back by: a sphere cast reports its touch a little past the surface.
+constexpr float k_touch_slop = 5.0e-3f;
+/// Halvings of the contact radius a path that starts in contact with a collider tries (half, a quarter), before
+/// the particle touches with its centre.
+constexpr uint8_t k_contact_radius_steps = 3;
+/// Times one resolve step sweeps and then settles the contacts the sweeps found behind the clock.
+constexpr uint32_t k_max_resolve_rounds = 4;
+/// A particle that lands again this soon after a bounce, slower than this into the surface, is settling on it: a
+/// hop too short to see, which reports no collision of its own.
+constexpr double k_settling_hop_seconds = 1.0 / 30.0;
+constexpr float k_settling_speed = 0.5f;
+/// The longest a death waits for its path's sweep, seconds: after a long catch-up, or with the casts far behind, the
+/// particle's slot goes back to the emitter and what waited for the sweep happens without it.
+constexpr double k_max_death_hold_seconds = 1.0;
 /// Salts of an emitter's place in the turbulence noise, drawn from its seed.
 constexpr uint32_t k_noise_offset_salt = 101u;
 /// Shortest time between the firings of one burst, seconds.
@@ -64,6 +90,8 @@ constexpr uint32_t k_seed_mix = 0x9e3779b9u;
 /// The emitter clock starts here, one longest lifetime in: a particle born before the clock started (prewarm)
 /// still gets its exact birth tick.
 constexpr double k_clock_origin_seconds = double(max_particle_lifetime);
+static_assert(uint64_t(double(max_particle_lifetime) * ticks_per_second) <= motion_offset_age_mask,
+              "every age fits the bits of motion_offset below a GPU record's bounce count");
 /// Emitter time before which a rate-spawned particle is certainly dead is skipped, not spawned.
 constexpr double k_spawn_skip_margin = 1.0e-6;
 /// Slack for an emission time that lands on a whole number of particle intervals.
@@ -93,6 +121,171 @@ struct pending_burst
     emit_params params{};
 };
 
+/// The contact a particle's path reaches next.
+struct pending_contact
+{
+    /// Clock tick of the contact; 0: none.
+    uint64_t tick = 0;
+    /// The surface's unit normal there, and how far from it the particle's centre is when it touches, metres.
+    float normal[3] = {0.0f, 1.0f, 0.0f};
+    float offset = 0.0f;
+    /// The entity the collider belongs to (no_particle_entity for a plane).
+    uint32_t entity = no_particle_entity;
+
+    auto get_normal() const -> math::vec3
+    {
+        return {normal[0], normal[1], normal[2]};
+    }
+};
+
+/// Where the sweeps of a particle's current path against the scene stand.
+struct sweep_state
+{
+    /// Clock tick the path is swept up to: its start while nothing of it is swept; 0: the path is not swept at all.
+    uint64_t swept = 0;
+    /// Clock tick the path asks for its next stretch at; 0: it waits for one now, or needs none.
+    uint64_t resweep = 0;
+    /// The slot is on the list of waiting paths.
+    bool is_waiting = false;
+    /// The contact the particle heads for waits for the stretch before it: a collider may stand before it.
+    bool holds_contact = false;
+    /// The particle's life is over, and its death waits for the rest of its path: a contact may come before it.
+    bool holds_death = false;
+};
+
+/// @p radius after @p steps halvings a path that starts in contact made of it (k_contact_radius_steps: none left).
+auto get_stepped_radius(float radius, uint8_t steps) -> float
+{
+    return steps >= k_contact_radius_steps ? 0.0f : radius / float(1u << steps);
+}
+
+/// How one sweep of a path is made: the seconds of path it covers, the most chords it is cut into, and how far the
+/// path may leave a chord, as a multiple of the particle's contact radius and never less than a floor in metres.
+struct sweep_settings
+{
+    double horizon_seconds = 0.5;
+    uint32_t max_chords = k_max_sweep_chords;
+    float tolerance_scale = 1.0f;
+    float min_tolerance = 0.02f;
+};
+
+auto get_sweep_settings(collision_quality quality) -> sweep_settings
+{
+    switch(quality)
+    {
+        case collision_quality::low:
+            return {get_collision_sweep_seconds(quality), 4, 4.0f, 0.08f};
+        case collision_quality::high:
+            return {get_collision_sweep_seconds(quality), k_max_sweep_chords, 0.5f, 0.01f};
+        default:
+            return {get_collision_sweep_seconds(collision_quality::medium), k_max_sweep_chords, 1.0f, 0.02f};
+    }
+}
+
+/// A particle's path: where its record puts it at a clock tick.
+struct particle_path
+{
+    const particle_record& record;
+    emitter_eval_params params;
+    const lut_set& luts;
+
+    auto at(uint64_t tick) -> math::vec3
+    {
+        params.now = uint32_t(tick);
+        return evaluate_particle(record, params, luts).position;
+    }
+};
+
+/// A stretch of a particle's path as straight pieces: the ticks and the places where they join.
+struct path_chords
+{
+    uint32_t count = 0;
+    std::array<uint64_t, k_max_sweep_chords + 1> ticks{};
+    std::array<math::vec3, k_max_sweep_chords + 1> points{};
+};
+
+/// @p path from @p from to @p until in @p count pieces of equal time.
+auto make_chords(particle_path& path, uint64_t from, uint64_t until, uint32_t count) -> path_chords
+{
+    path_chords chords;
+    chords.count = count;
+    for(uint32_t point = 0; point <= count; ++point)
+    {
+        chords.ticks[point] = from + (until - from) * point / count;
+        chords.points[point] = path.at(chords.ticks[point]);
+    }
+    return chords;
+}
+
+/// The farthest @p path is from the middle of one of @p chords at that chord's middle tick, metres.
+auto get_chord_error(particle_path& path, const path_chords& chords) -> float
+{
+    float error = 0.0f;
+    for(uint32_t chord = 0; chord < chords.count; ++chord)
+    {
+        const uint64_t middle = chords.ticks[chord] + (chords.ticks[chord + 1] - chords.ticks[chord]) / 2;
+        const math::vec3 on_chord = (chords.points[chord] + chords.points[chord + 1]) * 0.5f;
+        error = math::max(error, math::distance(path.at(middle), on_chord));
+    }
+    return error;
+}
+
+/**
+ * @brief @p path from @p from to @p until as chords it stays within @p tolerance metres of: as few as do, up to
+ * @p max_chords. A stretch too bent for that many is halved until they do, and @p until moves to its end.
+ */
+auto cut_path(particle_path& path, uint64_t from, uint64_t& until, float tolerance, uint32_t max_chords) -> path_chords
+{
+    for(;;)
+    {
+        const uint64_t span = until - from;
+        path_chords chords;
+        for(uint32_t count = 1; count <= max_chords && count <= span; count *= 2)
+        {
+            chords = make_chords(path, from, until, count);
+            if(get_chord_error(path, chords) <= tolerance)
+            {
+                return chords;
+            }
+        }
+        if(span <= k_min_sweep_ticks)
+        {
+            return chords;
+        }
+        until = from + span / 2;
+    }
+}
+
+/**
+ * @brief The last tick between @p open and @p closed, the ends of a chord whose sweep touched a surface at @p point
+ * with unit normal @p normal, at which @p path itself is still @p radius clear of the surface's plane there: the
+ * particle bounces from outside the surface, never from behind it. A path that ends the chord clear of that plane (a
+ * touch on an edge) takes the place along the chord the sweep touched at, the share @p fraction of it.
+ */
+auto find_touch_tick(particle_path& path,
+                     uint64_t open,
+                     uint64_t closed,
+                     const math::vec3& point,
+                     const math::vec3& normal,
+                     float radius,
+                     float fraction) -> uint64_t
+{
+    const auto clearance_at = [&](uint64_t tick)
+    {
+        return math::dot(path.at(tick) - point, normal) - radius;
+    };
+    if(clearance_at(closed) >= 0.0f)
+    {
+        return open + uint64_t(double(closed - open) * double(math::clamp(fraction, 0.0f, 1.0f)));
+    }
+    for(uint32_t refine = 0; refine < k_contact_refine_steps && closed - open > 1; ++refine)
+    {
+        const uint64_t middle = open + (closed - open) / 2;
+        (clearance_at(middle) >= 0.0f ? open : closed) = middle;
+    }
+    return open;
+}
+
 /// What every particle spawned in one update shares.
 struct spawn_frame
 {
@@ -117,7 +310,13 @@ public:
         pool_base_ = gpu.reserve_range(capacity);
         records_.assign(capacity, particle_record{});
         bounce_counts_.assign(capacity, 0u);
-        contact_planes_.assign(capacity, 0u);
+        radius_steps_.assign(capacity, 0u);
+        sweeps_run_ = false;
+        pending_contacts_.clear();
+        sweeps_.clear();
+        waiting_sweeps_.clear();
+        resweeps_.clear();
+        death_holds_.clear();
         staged_.assign(capacity, 0u);
         staged_slots_.clear();
         slots_.reset(capacity);
@@ -132,6 +331,10 @@ public:
         lut_base_ = 0;
         luts_ = nullptr;
         params_ = emitter_eval_params{};
+        scene_collision_ = particle_gpu::collide_task{};
+        collides_with_scene_ = false;
+        gpu_finds_contacts_ = false;
+        ribbons_in_use_ = 1;
         render_desc_ = emitter_render_desc{};
         static_row_ = static_row{};
         cutout_table_ = 0.0f;
@@ -156,6 +359,16 @@ public:
         pool_base_ = particle_gpu::invalid_base;
         records_.clear();
         records_.shrink_to_fit();
+        // What collisions keep for each slot goes with the records.
+        std::vector<uint8_t>().swap(bounce_counts_);
+        std::vector<uint8_t>().swap(radius_steps_);
+        std::vector<pending_contact>().swap(pending_contacts_);
+        std::vector<sweep_state>().swap(sweeps_);
+        std::vector<uint32_t>().swap(waiting_sweeps_);
+        std::vector<particle_event>().swap(events_);
+        contacts_.clear();
+        resweeps_.clear();
+        death_holds_.clear();
         staged_.clear();
         staged_slots_.clear();
         deaths_.clear();
@@ -172,6 +385,10 @@ public:
         slots_.reset(capacity_);
         deaths_.clear();
         contacts_.clear();
+        std::fill(sweeps_.begin(), sweeps_.end(), sweep_state{});
+        waiting_sweeps_.clear();
+        resweeps_.clear();
+        death_holds_.clear();
         events_.clear();
         history_.clear();
         std::fill(staged_.begin(), staged_.end(), 0u);
@@ -211,7 +428,9 @@ public:
         sim_.features = features;
         refresh_luts(desc, features, gpu);
         bake_params(desc, features, transform);
+        follow_contact_owner(desc);
         settle_particles(desc);
+        wake_sweeps(desc);
         history_.expire(clock_seconds_);
         const spawn_frame frame = make_spawn_frame(desc, features, transform, sim_dt, catch_up);
         if(sim_.prewarm_pending && playback.playing && !is_paused)
@@ -249,6 +468,9 @@ public:
         const emitter_feature features = cap_features(desc.bake_features());
         sim_.features = features;
         bake_params(desc, features, transform);
+        // A frozen emitter is still drawn the frame it comes into view: its contacts' owner is settled here too, and
+        // the contacts this schedules happen at its next update.
+        follow_contact_owner(desc);
         update_bounds(desc, features, transform);
         transform.previous = transform.current;
     }
@@ -276,6 +498,39 @@ public:
         events_.clear();
     }
 
+    /// Sweeps the paths that wait for it against the scene (resolve_collisions).
+    auto resolve(const emitter_desc& desc, const particle_sweep& sweep, uint32_t max_casts) -> collision_resolve_stats
+    {
+        collision_resolve_stats stats;
+        if(!sweep || !uses_scene_sweeps(desc) || !luts_)
+        {
+            forget_sweeps();
+            return stats;
+        }
+        if(!sweeps_run_)
+        {
+            sweeps_run_ = true;
+            sweep_live_paths();
+        }
+        const uint32_t contacts_before = contacts_handled_;
+        for(uint32_t round = 0; round < k_max_resolve_rounds && !waiting_sweeps_.empty() && stats.casts < max_casts; ++round)
+        {
+            run_waiting_sweeps(desc, sweep, max_casts, stats);
+            // A contact found behind the clock (a particle born a while ago, a path that waited for its sweep)
+            // happens now, and the path it starts is swept in the next round.
+            settle_particles(desc);
+        }
+        // The paths a bounce of the last round started are next frame's work, not paths the limit kept waiting.
+        stats.waiting = stats.casts >= max_casts ? uint32_t(waiting_sweeps_.size()) : 0u;
+        stats.contacts = contacts_handled_ - contacts_before;
+        return stats;
+    }
+
+    auto get_waiting_sweep_count() const -> uint32_t
+    {
+        return uint32_t(waiting_sweeps_.size());
+    }
+
     auto has_pending_bursts() const -> bool
     {
         return !pending_bursts_.empty();
@@ -291,9 +546,58 @@ public:
         return sim_.world_bounds;
     }
 
+    auto get_lit_bounds() const -> const math::bbox&
+    {
+        return sim_.lit_bounds;
+    }
+
     auto get_live_count() const -> uint32_t
     {
         return slots_.get_used_count();
+    }
+
+    /// The longest life of the particles spawned lately, in seconds.
+    auto get_longest_life() const -> float
+    {
+        float longest_life = 0.0f;
+        for(const auto& bucket : history_.get_buckets())
+        {
+            longest_life = math::max(longest_life, bucket.max_lifespan);
+        }
+        return longest_life;
+    }
+
+    /// The fastest a particle can move, in metres per second: its launch at the speed curve's peak plus what the
+    /// acceleration adds over a life, at the easing's fastest rate.
+    auto get_top_speed() const -> float
+    {
+        float launch = 0.0f;
+        for(const auto& bucket : history_.get_buckets())
+        {
+            launch = math::max(launch, bucket.max_speed);
+        }
+        const lut_ranges ranges = luts_ ? luts_->ranges : lut_ranges{};
+        return (launch * ranges.speed_factor_max + math::length(params_.acceleration) * get_longest_life()) * ranges.ease_rate_max;
+    }
+
+    /// The longest a trail of the emitter can be in the world, in metres: what the fastest particle covers in the
+    /// trail's seconds, stretched by a local-space emitter's scale, and the turbulence's push on its past points.
+    auto get_longest_trail() const -> float
+    {
+        float reach = get_top_speed() * params_.trail_length;
+        if(has_feature(emitter_feature(params_.flags), emitter_feature::local_space))
+        {
+            const math::mat3 axes(params_.local_to_world);
+            reach *= get_max_axis_scale(math::vec3(math::length(axes[0]), math::length(axes[1]), math::length(axes[2])));
+        }
+        return reach + params_.turbulence.w;
+    }
+
+    /// Whether every particle of the emitter moves along a straight line: nothing accelerates it and no turbulence
+    /// pushes it, so its trail is one straight piece.
+    auto moves_straight() const -> bool
+    {
+        return math::length(params_.acceleration) <= 0.0f && params_.turbulence.w <= 0.0f;
     }
 
     /// Points the emitter at the cutout table of @p key (0: none), releasing the one it held. Main thread.
@@ -356,6 +660,21 @@ public:
         return pool_base_;
     }
 
+    /// Whether the particles collide with scene surfaces (collides_with_scene_surfaces, as last updated).
+    auto collides_with_scene() const -> bool
+    {
+        return collides_with_scene_;
+    }
+
+    /// How the particles answer a contact with a scene surface, over the pool slots that may hold one.
+    auto get_scene_collision_task() const -> particle_gpu::collide_task
+    {
+        particle_gpu::collide_task task = scene_collision_;
+        task.pool_base = pool_base_;
+        task.high_water = slots_.get_high_water();
+        return task;
+    }
+
     auto get_params() const -> const emitter_eval_params&
     {
         return params_;
@@ -398,6 +717,11 @@ public:
         if(!can_sort)
         {
             return particle_sort_backend::cpu;
+        }
+        // The records a scene collision rewrote are known to the GPU alone: it culls and sorts them.
+        if(collides_with_scene_)
+        {
+            return particle_sort_backend::gpu;
         }
         return has_backend_override_ ? backend_override_ : g_default_sort_backend;
     }
@@ -511,6 +835,11 @@ private:
     /// Bounces and contacts up to now, then deaths: a particle's contact always comes before its death.
     void settle_particles(const emitter_desc& desc)
     {
+        death_holds_.pop_dead(now_ticks_,
+                              [&](const particle_death_queue::entry& held)
+                              {
+                                  give_up_sweep(held.slot, held.death_tick);
+                              });
         contacts_.pop_dead(now_ticks_,
                            [&](const particle_death_queue::entry& contact)
                            {
@@ -521,7 +850,8 @@ private:
                          {
                              // A particle a contact killed early, or whose slot was reused, has a stale entry.
                              const particle_record& record = records_[dead.slot];
-                             if(!slots_.is_used(dead.slot) || uint32_t(dead.death_tick) != record.birth + record.lifespan)
+                             if(!slots_.is_used(dead.slot) || uint32_t(dead.death_tick) != record.birth + record.lifespan ||
+                                holds_death_for_sweep(desc, dead.slot, dead.death_tick))
                              {
                                  return;
                              }
@@ -538,8 +868,13 @@ private:
         return evaluate_particle(record, params, *luts_);
     }
 
-    /// Records @p type for the particle in @p record at @p tick when a sub-emitter listens for it.
-    void record_event(const emitter_desc& desc, particle_event_type type, const particle_record& record, uint64_t tick)
+    /// Records @p type for the particle in @p record at @p tick when something listens for it (emitter_desc::event_mask);
+    /// a collision with the surface of @p contact.
+    void record_event(const emitter_desc& desc,
+                      particle_event_type type,
+                      const particle_record& record,
+                      uint64_t tick,
+                      const pending_contact* contact = nullptr)
     {
         if((desc.event_mask & static_cast<uint32_t>(type)) == 0u || !luts_)
         {
@@ -556,7 +891,44 @@ private:
         const float intensity = math::max(params.intensity, 1.0e-4f);
         event.color = math::vec4(math::vec3(event.color) / intensity, event.color.a);
         event.size = evaluate_particle_size(record, state, params, *luts_);
+        event.surface_point = event.position;
+        if(contact)
+        {
+            event.normal = contact->get_normal();
+            event.surface_point = event.position - event.normal * contact->offset;
+            event.entity = contact->entity;
+        }
         events_.push_back(event);
+    }
+
+    /// Whether the emitter's particles are swept against the scene's colliders.
+    static auto uses_scene_sweeps(const emitter_desc& desc) -> bool
+    {
+        return collides_with_colliders(desc);
+    }
+
+    /// Whether the CPU finds the particles' contacts and rewrites their records: with the emitter's planes and the
+    /// colliders. The contacts with scene surfaces are found on the GPU, which rewrites its own records, so the
+    /// CPU's are left as they were born.
+    static auto finds_contacts(const emitter_desc& desc) -> bool
+    {
+        return desc.motion.collision != collision_mode::none && desc.motion.collide_with != collision_source::scene_surfaces;
+    }
+
+    /// Whether a particle at rest lies flat on its surface: the emitter aligns its quads to it. A mesh stays where it
+    /// touched and turns its up axis along the surface's normal.
+    static auto lies_flat(const emitter_desc& desc) -> bool
+    {
+        return desc.motion.align_to_surface && desc.render.render_mode != render_mode::mesh;
+    }
+
+    /// How far from a surface the centre of the particle in @p record is when it touches: half its size where its
+    /// current path starts (@p start_state), times the emitter's radius scale.
+    auto get_contact_radius(const emitter_desc& desc, const particle_record& record, const particle_state& start_state) const
+        -> float
+    {
+        return 0.5f * math::max(desc.motion.collision_radius_scale, 0.0f) *
+               evaluate_particle_size(record, start_state, params_, *luts_);
     }
 
     /// The signed distance of @p position to collision plane @p plane (positive on the open side).
@@ -565,13 +937,43 @@ private:
         return math::dot(math::vec3(plane), position - origin) - plane.w;
     }
 
+    /// Who finds the particles' contacts may have changed with the emitter's settings: the GPU (scene surfaces) or
+    /// the CPU (planes, colliders, or nothing). Where the GPU did and no longer does, the CPU takes the records back.
+    void follow_contact_owner(const emitter_desc& desc)
+    {
+        if(gpu_finds_contacts_ && !collides_with_scene_)
+        {
+            take_back_records(desc);
+        }
+        gpu_finds_contacts_ = collides_with_scene_;
+    }
+
+    /// The emitter stops colliding with scene surfaces while particles live: the GPU's records go back to what the
+    /// CPU holds, the paths the particles were born with, and each path is searched for the planes it crosses. A
+    /// crossing behind the clock happens at once, as if the planes had been there all along.
+    void take_back_records(const emitter_desc& desc)
+    {
+        const uint32_t high_water = slots_.get_high_water();
+        for(uint32_t slot = 0; slot < high_water; ++slot)
+        {
+            if(!slots_.is_used(slot))
+            {
+                continue;
+            }
+            restage(slot);
+            schedule_plane_contact(desc, slot);
+        }
+    }
+
     /// The first tick the particle's current path crosses a collision plane from its open side, before it dies;
-    /// 0 when it never does. @p out_plane receives the plane's index.
-    auto find_contact(const emitter_desc& desc, const particle_record& record, uint32_t& out_plane) const -> uint64_t
+    /// 0 when it never does. @p out_plane receives the plane's index and @p out_radius how far from the plane the
+    /// particle's centre is then.
+    auto find_plane_contact(const emitter_desc& desc, const particle_record& record, uint32_t& out_plane, float& out_radius) const
+        -> uint64_t
     {
         const auto& planes = desc.motion.collision_planes;
-        if(desc.motion.collision == collision_mode::none || planes.empty() || !luts_ ||
-           desc.motion.space != simulation_space::world)
+        if(!finds_contacts(desc) || planes.empty() || !luts_ || desc.motion.space != simulation_space::world ||
+           is_at_rest(record))
         {
             return 0;
         }
@@ -586,8 +988,7 @@ private:
         // The particle touches a plane with its edge: half its size (at the start of this path) from it, and never
         // further than it starts, so one born or bounced closer than that still touches instead of passing through.
         const particle_state start_state = evaluate_at(record, start);
-        const float radius = 0.5f * math::max(desc.motion.collision_radius_scale, 0.0f) *
-                             evaluate_particle_size(record, start_state, params_, *luts_);
+        const float radius = get_contact_radius(desc, record, start_state);
         hpp::small_vector<float, 8> radii;
         for(const auto& plane : planes)
         {
@@ -622,10 +1023,12 @@ private:
                     const uint64_t middle = open + (closed - open) / 2;
                     (distance_at(plane, middle) >= 0.0f ? open : closed) = middle;
                 }
-                if(contact == 0 || closed < contact)
+                // The last tick on the open side: the particle bounces from before its plane, never from behind it.
+                if(contact == 0 || open < contact)
                 {
-                    contact = closed;
+                    contact = open;
                     out_plane = plane;
+                    out_radius = radii[plane];
                 }
             }
             if(contact != 0)
@@ -637,22 +1040,364 @@ private:
         return 0;
     }
 
-    /// Schedules the slot's next contact (the kill mode ends its life there).
-    void schedule_contact(const emitter_desc& desc, uint32_t slot)
+    /// The slot's particle starts a path at @p tick, its birth or a bounce: the plane it reaches first is found now,
+    /// and where sweeps run, what it reaches in the scene is asked for (resolve).
+    void start_path(const emitter_desc& desc, uint32_t slot, uint64_t tick)
     {
-        particle_record& record = records_[slot];
+        if(!pending_contacts_.empty())
+        {
+            pending_contacts_[slot] = pending_contact{};
+        }
+        radius_steps_[slot] = 0;
+        schedule_plane_contact(desc, slot);
+        if(sweeps_run_ && uses_scene_sweeps(desc))
+        {
+            restart_sweeps(slot, tick);
+        }
+    }
+
+    /// Schedules the slot's contact with the first collision plane its path crosses.
+    void schedule_plane_contact(const emitter_desc& desc, uint32_t slot)
+    {
         uint32_t plane = 0;
-        const uint64_t contact = find_contact(desc, record, plane);
-        if(contact == 0)
+        float radius = 0.0f;
+        const uint64_t contact = find_plane_contact(desc, records_[slot], plane, radius);
+        if(contact != 0)
+        {
+            set_pending_contact(slot, contact, math::vec3(desc.motion.collision_planes[plane]), radius, no_particle_entity);
+        }
+    }
+
+    /// The slot's particle reaches a surface of unit normal @p normal at @p tick, its centre @p offset metres from
+    /// it: the contact it heads for from now on, in place of a later one.
+    void set_pending_contact(uint32_t slot, uint64_t tick, const math::vec3& normal, float offset, uint32_t entity)
+    {
+        // Sized when an emitter's first particle heads for a surface: most emitters collide with nothing.
+        if(pending_contacts_.empty())
+        {
+            pending_contacts_.assign(capacity_, pending_contact{});
+        }
+        pending_contact& pending = pending_contacts_[slot];
+        pending.tick = tick;
+        pending.normal[0] = normal.x;
+        pending.normal[1] = normal.y;
+        pending.normal[2] = normal.z;
+        pending.offset = offset;
+        pending.entity = entity;
+        contacts_.push(tick, slot);
+    }
+
+    /// Starts the sweeps of the slot's path over: nothing of it is swept from @p tick on.
+    void restart_sweeps(uint32_t slot, uint64_t tick)
+    {
+        if(sweeps_.size() != capacity_)
+        {
+            sweeps_.assign(capacity_, sweep_state{});
+            waiting_sweeps_.clear();
+        }
+        release_held_death(slot);
+        sweep_state& state = sweeps_[slot];
+        // A slot is on the list once: its last particle may have died before its sweep came.
+        const bool was_waiting = state.is_waiting;
+        state = sweep_state{};
+        state.swept = std::max<uint64_t>(tick, 1);
+        state.is_waiting = true;
+        if(!was_waiting)
+        {
+            waiting_sweeps_.push_back(slot);
+        }
+    }
+
+    /// Puts the slot's path on the list of the paths that wait for their next stretch.
+    void queue_sweep(uint32_t slot)
+    {
+        sweep_state& state = sweeps_[slot];
+        state.resweep = 0;
+        if(!state.is_waiting)
+        {
+            state.is_waiting = true;
+            waiting_sweeps_.push_back(slot);
+        }
+    }
+
+    /// Asks for the next stretch of every path whose swept stretch the clock nears the end of. An emitter that no
+    /// longer collides with the scene forgets its sweeps.
+    void wake_sweeps(const emitter_desc& desc)
+    {
+        if(!uses_scene_sweeps(desc))
+        {
+            forget_sweeps();
+            return;
+        }
+        resweeps_.pop_dead(now_ticks_,
+                           [&](const particle_death_queue::entry& due)
+                           {
+                               // A path that ended since (its particle bounced, came to rest or died) asks for nothing.
+                               if(slots_.is_used(due.slot) && sweeps_[due.slot].resweep == due.death_tick)
+                               {
+                                   queue_sweep(due.slot);
+                               }
+                           });
+    }
+
+    /// Forgets every sweep: the paths that wait and how far each path was swept. The contacts that waited for a
+    /// stretch happen without it.
+    void forget_sweeps()
+    {
+        if(!sweeps_run_ && waiting_sweeps_.empty() && resweeps_.empty())
         {
             return;
         }
-        contact_planes_[slot] = uint8_t(plane);
-        if(desc.motion.collision == collision_mode::kill)
+        for(const uint32_t slot : waiting_sweeps_)
         {
-            record.lifespan = math::max(uint32_t(contact - get_birth_tick(record.birth)), 1u);
+            release_held_contact(slot);
+            release_held_death(slot);
         }
-        contacts_.push(contact, slot);
+        std::fill(sweeps_.begin(), sweeps_.end(), sweep_state{});
+        waiting_sweeps_.clear();
+        resweeps_.clear();
+        death_holds_.clear();
+        sweeps_run_ = false;
+    }
+
+    /// Asks for a sweep of every live path that has none, from the clock's tick on: sweeps start, or start again, and
+    /// the particles already alive collide from now.
+    void sweep_live_paths()
+    {
+        const uint32_t high_water = slots_.get_high_water();
+        for(uint32_t slot = 0; slot < high_water; ++slot)
+        {
+            if(!slots_.is_used(slot) || is_at_rest(records_[slot]) || (sweeps_.size() == capacity_ && sweeps_[slot].swept != 0))
+            {
+                continue;
+            }
+            const particle_record& record = records_[slot];
+            restart_sweeps(slot, math::max(now_ticks_, get_birth_tick(record.birth) + record.motion_offset));
+        }
+    }
+
+    /// Whether the slot's contact at @p tick has to wait: its path is swept against the scene, and not yet as far
+    /// as the contact, so a collider may stand before it. The contact then happens once that stretch is swept
+    /// (sweep_slot).
+    auto holds_for_sweep(const emitter_desc& desc, uint32_t slot, uint64_t tick) -> bool
+    {
+        if(!sweeps_run_ || !uses_scene_sweeps(desc) || sweeps_.size() != capacity_)
+        {
+            return false;
+        }
+        sweep_state& state = sweeps_[slot];
+        if(state.swept == 0 || state.swept >= tick)
+        {
+            return false;
+        }
+        state.holds_contact = true;
+        queue_sweep(slot);
+        return true;
+    }
+
+    /// The contact the slot's particle heads for: its clock tick, 0 when it heads for none.
+    auto get_pending_tick(uint32_t slot) const -> uint64_t
+    {
+        return pending_contacts_.empty() ? 0 : pending_contacts_[slot].tick;
+    }
+
+    /// The contact that waited for the slot's path to be swept up to it happens now.
+    void release_held_contact(uint32_t slot)
+    {
+        sweep_state& state = sweeps_[slot];
+        if(state.holds_contact && slots_.is_used(slot) && get_pending_tick(slot) != 0)
+        {
+            contacts_.push(get_pending_tick(slot), slot);
+        }
+        state.holds_contact = false;
+    }
+
+    /// Whether the death of the slot's particle at @p tick has to wait: its path is swept against the scene, and not
+    /// yet to its end, so a contact may come before the death. The particle is past its life and no longer drawn; it
+    /// dies once the rest of its path is swept (sweep_slot).
+    auto holds_death_for_sweep(const emitter_desc& desc, uint32_t slot, uint64_t tick) -> bool
+    {
+        if(!sweeps_run_ || !uses_scene_sweeps(desc) || sweeps_.size() != capacity_ || is_at_rest(records_[slot]))
+        {
+            return false;
+        }
+        sweep_state& state = sweeps_[slot];
+        if(state.swept == 0 || state.swept >= tick || now_ticks_ - tick > seconds_to_ticks(k_max_death_hold_seconds))
+        {
+            return false;
+        }
+        state.holds_death = true;
+        death_holds_.push(tick + seconds_to_ticks(k_max_death_hold_seconds) + 1, slot);
+        queue_sweep(slot);
+        return true;
+    }
+
+    /// The death of the slot's particle has waited for its sweep as long as it may (the entry of @p tick in
+    /// death_holds_): its path counts as swept, so the contact and the death that waited happen without the sweep.
+    void give_up_sweep(uint32_t slot, uint64_t tick)
+    {
+        if(sweeps_.size() != capacity_ || !sweeps_[slot].holds_death || !slots_.is_used(slot))
+        {
+            return;
+        }
+        const particle_record& record = records_[slot];
+        const uint64_t death = get_birth_tick(record.birth) + record.lifespan;
+        // An entry of the particle the slot held before is not this one's.
+        if(tick != death + seconds_to_ticks(k_max_death_hold_seconds) + 1)
+        {
+            return;
+        }
+        sweeps_[slot].swept = death;
+        release_held_contact(slot);
+        release_held_death(slot);
+    }
+
+    /// The death that waited for the slot's path to be swept to its end happens now.
+    void release_held_death(uint32_t slot)
+    {
+        if(sweeps_.size() != capacity_)
+        {
+            return;
+        }
+        sweep_state& state = sweeps_[slot];
+        if(state.holds_death && slots_.is_used(slot))
+        {
+            const particle_record& record = records_[slot];
+            deaths_.push(get_birth_tick(record.birth) + record.lifespan, slot);
+        }
+        state.holds_death = false;
+    }
+
+    /// Sweeps the waiting paths in the order they asked, until the casts of @p stats reach @p max_casts.
+    void run_waiting_sweeps(const emitter_desc& desc, const particle_sweep& sweep, uint32_t max_casts, collision_resolve_stats& stats)
+    {
+        size_t done = 0;
+        // A path that asks again while this runs (its next stretch lies behind the clock) joins the end of the list.
+        while(done < waiting_sweeps_.size() && stats.casts < max_casts)
+        {
+            bool touched = false;
+            stats.casts += sweep_slot(desc, waiting_sweeps_[done], sweep, max_casts - stats.casts, touched);
+            stats.hits += touched ? 1u : 0u;
+            ++done;
+        }
+        waiting_sweeps_.erase(waiting_sweeps_.begin(), waiting_sweeps_.begin() + std::ptrdiff_t(done));
+    }
+
+    /**
+     * @brief Sweeps the next stretch of the slot's path, in at most @p max_casts casts (up to three more when the
+     * path starts in contact with a collider), and schedules what it finds: the contact, or the stretch after it.
+     * @param out_touched Set when the sweep touched a surface.
+     * @return The casts made.
+     */
+    auto sweep_slot(const emitter_desc& desc, uint32_t slot, const particle_sweep& sweep, uint32_t max_casts, bool& out_touched)
+        -> uint32_t
+    {
+        sweep_state& state = sweeps_[slot];
+        state.is_waiting = false;
+        state.resweep = 0;
+        const particle_record& record = records_[slot];
+        if(!slots_.is_used(slot) || is_at_rest(record) || state.swept == 0)
+        {
+            // Its path is over: nothing is left to wait for.
+            release_held_death(slot);
+            state = sweep_state{};
+            return 0;
+        }
+        const uint64_t birth = get_birth_tick(record.birth);
+        const uint64_t segment_start = birth + record.motion_offset;
+        const uint64_t from = math::max(state.swept, segment_start);
+        // Nothing past the contact the particle already heads for matters: its path changes there.
+        const uint64_t death = birth + record.lifespan;
+        const uint64_t pending = get_pending_tick(slot);
+        const uint64_t last = pending != 0 ? math::min(death, pending) : death;
+        if(from >= last)
+        {
+            release_held_contact(slot);
+            release_held_death(slot);
+            return 0;
+        }
+        const sweep_settings settings = get_sweep_settings(desc.motion.collision_quality);
+        const float full_radius = get_contact_radius(desc, record, evaluate_at(record, segment_start));
+        const float tolerance = math::max(full_radius * settings.tolerance_scale, settings.min_tolerance);
+        uint64_t until = math::min(from + seconds_to_ticks(settings.horizon_seconds), last);
+        particle_path path{record, params_, *luts_};
+        const path_chords chords = cut_path(path, from, until, tolerance, settings.max_chords);
+        uint32_t casts = 0;
+        for(uint32_t chord = 0; chord < chords.count; ++chord)
+        {
+            if(casts >= max_casts)
+            {
+                // Out of casts: the rest of the stretch waits with the stretches after it.
+                until = chords.ticks[chord];
+                break;
+            }
+            const math::vec3& start = chords.points[chord];
+            const math::vec3& end = chords.points[chord + 1];
+            const math::vec3 travel = end - start;
+            const float length = math::length(travel);
+            const bool starts_path = chords.ticks[chord] == segment_start;
+            // A chord inside the path is cast from a little before it (k_cast_overlap).
+            const float overlap = starts_path || length <= 0.0f ? 0.0f : k_cast_overlap;
+            const math::vec3 cast_start = overlap > 0.0f ? start - travel * (overlap / length) : start;
+            float radius = get_stepped_radius(full_radius, radius_steps_[slot]);
+            particle_sweep_hit hit;
+            ++casts;
+            bool touched = sweep(cast_start, end, radius, desc.motion.collision_layers, hit);
+            // A path that starts in contact with a collider (the particle is born in one, or against one) touches
+            // with as much of its radius as starts clear, down to its centre, so it still meets a surface it starts
+            // close to instead of starting inside it.
+            while(starts_path && hit.starts_touching && radius > 0.0f && radius_steps_[slot] < k_contact_radius_steps)
+            {
+                ++radius_steps_[slot];
+                radius = get_stepped_radius(full_radius, radius_steps_[slot]);
+                hit = particle_sweep_hit{};
+                ++casts;
+                touched = sweep(cast_start, end, radius, desc.motion.collision_layers, hit);
+            }
+            if(!touched)
+            {
+                continue;
+            }
+            // The surface faces the particle that reaches it.
+            const math::vec3 normal = math::dot(hit.normal, travel) > 0.0f ? -hit.normal : hit.normal;
+            const float along = math::max(hit.distance - overlap - k_touch_slop, 0.0f);
+            const uint64_t tick = find_touch_tick(path,
+                                                  chords.ticks[chord],
+                                                  chords.ticks[chord + 1],
+                                                  hit.point,
+                                                  normal,
+                                                  radius,
+                                                  length > 0.0f ? along / length : 0.0f);
+            out_touched = true;
+            state.holds_contact = false;
+            state.swept = math::clamp(tick, from, until);
+            set_pending_contact(slot, state.swept, normal, radius, hit.entity);
+            // The contact comes first; a death that waited is looked at again after it.
+            release_held_death(slot);
+            return casts;
+        }
+        state.swept = until;
+        if(until >= last)
+        {
+            // Swept as far as the path goes: the contact and the death that waited for it happen.
+            release_held_contact(slot);
+            release_held_death(slot);
+            return casts;
+        }
+        // Nothing in this stretch: the next one is asked for shortly before the particle reaches it, or now when it
+        // is there already.
+        const uint64_t lead = seconds_to_ticks(k_resweep_lead_seconds);
+        const uint64_t wake = until > lead ? until - lead : 0;
+        if(wake <= now_ticks_)
+        {
+            queue_sweep(slot);
+        }
+        else
+        {
+            state.resweep = wake;
+            resweeps_.push(wake, slot);
+        }
+        return casts;
     }
 
     /// The factor the speed curve and the easing apply to a particle's velocity at @p life (1 without them).
@@ -673,39 +1418,176 @@ private:
         return factor;
     }
 
-    /// The slot's particle reaches its plane at @p tick: a collision event, then a bounce, or its death.
+    /// The slot's particle reaches the surface it heads for at @p tick: a collision event, then what the emitter's
+    /// collision mode does there.
     void handle_contact(const emitter_desc& desc, uint32_t slot, uint64_t tick)
+    {
+        // An entry whose contact gave way to an earlier one, or whose particle is gone, is not the slot's.
+        if(!slots_.is_used(slot) || get_pending_tick(slot) != tick || !luts_ || holds_for_sweep(desc, slot, tick))
+        {
+            return;
+        }
+        ++contacts_handled_;
+        const pending_contact contact = pending_contacts_[slot];
+        pending_contacts_[slot] = pending_contact{};
+        particle_record& record = records_[slot];
+        const uint64_t birth = get_birth_tick(record.birth);
+        const collision_mode mode = desc.motion.collision;
+        // A contact outside the path it was found on, or of an emitter that stopped colliding while it waited, is
+        // none.
+        if(tick < birth + uint64_t(record.motion_offset) || tick > birth + record.lifespan || !finds_contacts(desc))
+        {
+            return;
+        }
+        // Where and how fast it arrives, before the contact takes any of its life.
+        const particle_state state = evaluate_at(record, tick);
+        if(!is_settling_hop(slot, tick, state, contact))
+        {
+            record_event(desc, particle_event_type::collision, record, tick, &contact);
+        }
+        // Kill, or out of bounces: it dies at this contact instead of sinking through the surface.
+        if(mode == collision_mode::kill || (mode == collision_mode::bounce && bounce_counts_[slot] >= desc.motion.max_bounces))
+        {
+            die_at(desc, slot, tick);
+            return;
+        }
+        if(!lose_lifetime(desc, slot, tick))
+        {
+            return;
+        }
+        if(mode == collision_mode::stick)
+        {
+            rest_at(desc, slot, tick, state, contact);
+            return;
+        }
+        const math::vec3 bounced = get_bounced_velocity(desc, slot, state.velocity, contact.get_normal());
+        if(math::length(bounced) < math::max(desc.motion.rest_speed, 0.0f))
+        {
+            rest_at(desc, slot, tick, state, contact);
+            return;
+        }
+        bounce_at(desc, slot, tick, state, contact.get_normal(), bounced);
+    }
+
+    /// Whether the contact of the slot's particle at @p tick ends a hop too short to see: it bounced a moment ago
+    /// and comes down slowly, as a particle with no bounce left does until its bounces run out. Its landing was
+    /// reported; these are not.
+    auto is_settling_hop(uint32_t slot, uint64_t tick, const particle_state& state, const pending_contact& contact) const -> bool
+    {
+        const particle_record& record = records_[slot];
+        const uint64_t segment_start = get_birth_tick(record.birth) + record.motion_offset;
+        return bounce_counts_[slot] > 0 && tick - segment_start < seconds_to_ticks(k_settling_hop_seconds) &&
+               math::abs(math::dot(state.velocity, contact.get_normal())) < k_settling_speed;
+    }
+
+    /// The slot's particle dies at @p tick: its life is cut there, so nothing draws it past that tick.
+    void die_at(const emitter_desc& desc, uint32_t slot, uint64_t tick)
+    {
+        particle_record& record = records_[slot];
+        // The event shows the particle as it was, before the cut changes how far through its life it is.
+        record_event(desc, particle_event_type::death, record, tick);
+        record.lifespan = math::max(uint32_t(tick - get_birth_tick(record.birth)), 1u);
+        restage(slot);
+        slots_.release(slot);
+        // Nothing of it waits for a sweep any more: the slot's next particle starts clean.
+        if(sweeps_.size() == capacity_)
+        {
+            sweeps_[slot].holds_contact = false;
+            sweeps_[slot].holds_death = false;
+        }
+    }
+
+    /// Takes the emitter's lifetime loss off the life the slot's particle has left at @p tick. False when none is
+    /// left: it died there.
+    auto lose_lifetime(const emitter_desc& desc, uint32_t slot, uint64_t tick) -> bool
+    {
+        const float loss = math::clamp(desc.motion.lifetime_loss, 0.0f, 1.0f);
+        if(loss <= 0.0f)
+        {
+            return true;
+        }
+        particle_record& record = records_[slot];
+        const uint64_t birth = get_birth_tick(record.birth);
+        const uint64_t left = uint64_t(double(birth + record.lifespan - tick) * double(1.0f - loss));
+        if(left == 0)
+        {
+            die_at(desc, slot, tick);
+            return false;
+        }
+        record.lifespan = uint32_t(tick - birth + left);
+        deaths_.push(birth + record.lifespan, slot);
+        return true;
+    }
+
+    /// The velocity the slot's particle leaves a surface of unit normal @p normal with when it arrives at
+    /// @p velocity: the emitter's restitution of its speed into the surface, less its friction along it, turned by
+    /// its bounce scatter.
+    auto get_bounced_velocity(const emitter_desc& desc, uint32_t slot, const math::vec3& velocity, const math::vec3& normal) const
+        -> math::vec3
+    {
+        const float approach = math::dot(velocity, normal);
+        const math::vec3 along = velocity - normal * approach;
+        // A particle already leaving the surface (a contact found late) keeps that speed.
+        const float away = approach < 0.0f ? -approach * math::clamp(desc.motion.restitution, 0.0f, 1.0f) : approach;
+        const math::vec3 bounced = along * (1.0f - math::clamp(desc.motion.friction, 0.0f, 1.0f)) + normal * away;
+        const float scatter = math::clamp(desc.motion.bounce_scatter, 0.0f, k_max_bounce_scatter) * k_degrees_to_radians;
+        const float speed = math::length(bounced);
+        if(scatter <= 0.0f || speed <= 0.0f)
+        {
+            return bounced;
+        }
+        // The same turn every time a fixed seed replays the particle: drawn from its seed and the bounce's number.
+        const uint32_t pick = records_[slot].seed + bounce_counts_[slot];
+        bx::RngMwc rng;
+        rng.reset(make_seed(pick) | 1u, make_seed(~pick) | 1u);
+        const math::vec3 turned = random_in_cone(rng, bounced / speed, scatter) * speed;
+        // Never into the surface: a turn that points into it is mirrored back out.
+        const float into = math::dot(turned, normal);
+        return into < 0.0f ? turned - normal * (2.0f * into) : turned;
+    }
+
+    /// The slot's particle stays where it is at @p tick (@p state) for the rest of its life, on the surface of
+    /// @p contact: flat on it when the emitter's quads lie on their surface.
+    void rest_at(const emitter_desc& desc, uint32_t slot, uint64_t tick, const particle_state& state, const pending_contact& contact)
+    {
+        particle_record& record = records_[slot];
+        const math::vec3 normal = contact.get_normal();
+        math::vec3 position = state.position;
+        if(lies_flat(desc))
+        {
+            position += normal * (k_rest_lift - contact.offset);
+        }
+        const uint64_t birth = get_birth_tick(record.birth);
+        record.set_start(position);
+        // A particle at rest moves nowhere, whatever its velocity: where the emitter aligns its particles to their
+        // surface it holds the surface's normal, else it stays what it was (a ribbon may face along it).
+        if(desc.motion.align_to_surface)
+        {
+            record.set_velocity(normal);
+        }
+        record.motion_offset = uint32_t(tick - birth) | motion_offset_rest_bit;
+        restage(slot);
+        const float remaining = float(double(birth + record.lifespan - tick) / ticks_per_second);
+        history_.add(double(tick) / ticks_per_second,
+                     position,
+                     0.0f,
+                     math::max(remaining, k_min_particle_lifespan),
+                     luts_->ranges.size_peak * record.size_factor + record.size_offset);
+    }
+
+    /// The slot's particle leaves the surface of unit normal @p normal at @p tick (@p state) with @p bounced: a new
+    /// segment of its path from there. It keeps its age, so its looks over life go on. Its speed curve and easing go
+    /// on too: they scale the segment's velocity, so that is the bounced velocity divided by their factor at the
+    /// contact.
+    void bounce_at(const emitter_desc& desc,
+                   uint32_t slot,
+                   uint64_t tick,
+                   const particle_state& state,
+                   const math::vec3& normal,
+                   const math::vec3& bounced)
     {
         particle_record& record = records_[slot];
         const uint64_t birth = get_birth_tick(record.birth);
-        if(!slots_.is_used(slot) || tick < birth + uint64_t(record.motion_offset) || tick > birth + record.lifespan ||
-           !luts_)
-        {
-            return;
-        }
-        record_event(desc, particle_event_type::collision, record, tick);
-        if(desc.motion.collision == collision_mode::kill)
-        {
-            return;
-        }
-        if(bounce_counts_[slot] >= desc.motion.max_bounces)
-        {
-            // Out of bounces: it dies at this contact instead of sinking through the plane.
-            record.lifespan = math::max(uint32_t(tick - birth), 1u);
-            record_event(desc, particle_event_type::death, record, tick);
-            restage(slot);
-            slots_.release(slot);
-            return;
-        }
-        const particle_state state = evaluate_at(record, tick);
-        const math::vec3 normal(desc.motion.collision_planes[contact_planes_[slot]]);
-        const float into = math::dot(state.velocity, normal);
-        const math::vec3 along = state.velocity - normal * into;
-        const math::vec3 bounced = along * (1.0f - math::clamp(desc.motion.friction, 0.0f, 1.0f)) -
-                                   normal * (into * math::clamp(desc.motion.restitution, 0.0f, 1.0f));
-        // A new motion segment from the contact; the particle keeps its age, so its looks over life go on. Its
-        // speed curve and easing go on too: they scale the segment's velocity, so that is the bounced velocity
-        // divided by their factor at the contact.
         const float lifespan = float(double(record.lifespan) / ticks_per_second);
         const float segment_factor = get_motion_factor(state.age / lifespan);
         record.set_start(state.position + normal * k_contact_lift);
@@ -720,7 +1602,7 @@ private:
             math::length(record.get_velocity()) * lifespan / math::max(remaining, k_min_particle_lifespan);
         history_.add(double(tick) / ticks_per_second, state.position, reach_speed, remaining,
                      size_peak * record.size_factor + record.size_offset);
-        schedule_contact(desc, slot);
+        start_path(desc, slot, tick);
     }
 
     void restage(uint32_t slot)
@@ -752,6 +1634,22 @@ private:
         has_lut_ = true;
         lut_base_ = block * lut_set_vec4s;
         luts_ = gpu.get_lut(key);
+    }
+
+    /// How the particles answer a contact with a scene surface (get_scene_collision_task).
+    void bake_scene_collision(const emitter_desc& desc)
+    {
+        collides_with_scene_ = collides_with_scene_surfaces(desc);
+        particle_gpu::collide_task& task = scene_collision_;
+        task.mode = desc.motion.collision;
+        task.max_bounces = desc.motion.max_bounces;
+        task.lies_flat = lies_flat(desc);
+        task.restitution = desc.motion.restitution;
+        task.friction = desc.motion.friction;
+        task.radius_scale = desc.motion.collision_radius_scale;
+        task.rest_speed = desc.motion.rest_speed;
+        task.lifetime_loss = desc.motion.lifetime_loss;
+        task.bounce_scatter = math::clamp(desc.motion.bounce_scatter, 0.0f, k_max_bounce_scatter) * k_degrees_to_radians;
     }
 
     void bake_params(const emitter_desc& desc, emitter_feature features, const emitter_transform_state& transform)
@@ -795,6 +1693,14 @@ private:
         params.ribbon_texture_mode = desc.render.ribbon_texture_mode;
         params.ribbon_tiles_per_second = 1.0f / math::max(desc.render.ribbon_tile_time, k_min_ribbon_tile_time);
         params.ribbon_facing = desc.render.ribbon_facing;
+        // A record keeps the ribbon it was born into, so the ribbons the live records can be of stay in use while one
+        // of them lives: a count that was lowered still orders and joins the ribbons that fade out.
+        const uint32_t wanted_ribbons = math::clamp(desc.render.ribbon_count, 1u, k_max_ribbon_count);
+        ribbons_in_use_ = get_live_count() == 0 ? wanted_ribbons : math::max(ribbons_in_use_, wanted_ribbons);
+        params.ribbon_count = ribbons_in_use_;
+        params.ribbon_segments = get_ribbon_segments(desc.render.ribbon_smoothing);
+        params.align_to_surface = desc.motion.align_to_surface;
+        bake_scene_collision(desc);
         params.stretch_speed_scale = desc.render.stretch_speed_scale;
         params.stretch_camera_velocity_scale = desc.render.stretch_camera_velocity_scale;
         params.facing_axis = desc.render.facing_axis;
@@ -1211,16 +2117,30 @@ private:
         {
             return false;
         }
-        shape_sample sample = sample_shape(desc.emission, rng_);
+        const uint32_t spawn_index = spawn_counter_++;
+        // Each particle joins the next of the emitter's ribbons in turn.
+        const bool forms_ribbons = desc.render.render_mode == render_mode::ribbon;
+        const uint32_t ribbon_count = forms_ribbons ? math::clamp(desc.render.ribbon_count, 1u, k_max_ribbon_count) : 1u;
+        const uint32_t ribbon = spawn_index % ribbon_count;
+        // Several ribbons are a stream each: the particles of one are born at one place of the shape and launched
+        // one way at one speed, picked once for the ribbon, so it runs through them in a clean line. One ribbon alone
+        // keeps a pick for every particle.
+        bx::RngMwc stream_rng;
+        if(ribbon_count > 1)
+        {
+            stream_rng.reset(make_seed(seed_ + ribbon) | 1u, make_seed(~seed_ + ribbon) | 1u);
+        }
+        bx::RngMwc& place_rng = ribbon_count > 1 ? stream_rng : rng_;
+        shape_sample sample = sample_shape(desc.emission, place_rng);
         const math::vec3 point = (desc.emission.shape_position + sample.point) * desc.emission.shape_scale;
         if(!has_shape_normal(desc.emission.shape))
         {
             sample.normal = direction_from_center(point);
         }
-        const math::vec3 direction = random_in_cone(rng_,
+        const math::vec3 direction = random_in_cone(place_rng,
                                                     shape_direction(desc.emission.direction, desc.emission.shape, sample),
                                                     desc.emission.direction_spread * k_degrees_to_radians);
-        const float speed = frand_range(rng_, desc.motion.start_speed.min, desc.motion.start_speed.max);
+        const float speed = frand_range(place_rng, desc.motion.start_speed.min, desc.motion.start_speed.max);
         math::vec3 start = point;
         math::vec3 velocity = direction * speed;
         if(desc.motion.space == simulation_space::world)
@@ -1261,17 +2181,18 @@ private:
         record.birth = uint32_t(birth);
         record.set_velocity(velocity);
         record.lifespan = uint32_t(lifespan_ticks);
-        record.seed = make_seed(seed_ + spawn_counter_++);
+        record.seed = make_seed(seed_ + spawn_index);
         record.size_picks = pack_size_picks(pick.start, pick.end);
         record.size_factor = pick.factor;
         record.size_offset = pick.offset;
         pack_tint(tint, record);
         record.emitter = index_;
+        record.ribbon = uint16_t(ribbon);
         record.motion_offset = 0;
         records_[slot] = record;
         bounce_counts_[slot] = 0;
-        schedule_contact(desc, slot);
-        deaths_.push(birth + records_[slot].lifespan, slot);
+        deaths_.push(birth + lifespan_ticks, slot);
+        start_path(desc, slot, birth);
         restage(slot);
         record_event(desc, particle_event_type::birth, records_[slot], birth);
         const float size_peak = luts_ ? luts_->ranges.size_peak : 1.0f;
@@ -1279,16 +2200,10 @@ private:
         return true;
     }
 
-    void update_bounds(const emitter_desc& desc, emitter_feature features, const emitter_transform_state& transform)
+    /// The world-space box the particles' centres stay in along their paths.
+    auto compute_center_bounds(const emitter_desc& desc, emitter_feature features, const emitter_transform_state& transform) -> math::bbox
     {
         const math::transform& world = transform.current;
-        if(desc.render.bounds_mode == bounds_mode::fixed)
-        {
-            math::bbox fixed = desc.render.fixed_bounds;
-            fixed.mul(world);
-            sim_.world_bounds = fixed;
-            return;
-        }
         const math::bbox unit = get_unit_spawn_region(desc.emission);
         const math::vec3 corner_a = (desc.emission.shape_position + unit.min) * desc.emission.shape_scale;
         const math::vec3 corner_b = (desc.emission.shape_position + unit.max) * desc.emission.shape_scale;
@@ -1307,10 +2222,40 @@ private:
         }
         motion.has_ease = has_feature(features, emitter_feature::non_linear_ease);
         motion.has_speed_curve = has_feature(features, emitter_feature::speed_curve);
+        motion.bounces_unseen = collides_with_scene_ && desc.motion.collision == collision_mode::bounce &&
+                                g_quality.scene_collision != scene_collision::off;
         math::bbox bounds = compute_motion_bounds(history_, region, motion);
         if(is_local)
         {
             bounds.mul(world);
+        }
+        return bounds;
+    }
+
+    void update_bounds(const emitter_desc& desc, emitter_feature features, const emitter_transform_state& transform)
+    {
+        const bool is_fixed = desc.render.bounds_mode == bounds_mode::fixed;
+        // An emitter with Fixed bounds walks no paths, unless its particles take the light of where they are: the
+        // probes of that light are kept around the particles, not through the whole fixed box.
+        const bool tracks_centers = !is_fixed || desc.render.ambient == particle_ambient::global_illumination;
+        math::bbox bounds;
+        if(tracks_centers)
+        {
+            bounds = compute_center_bounds(desc, features, transform);
+            // A particle is lit at its centre, which the turbulence and the camera offset move.
+            const math::vec3 lit_reach(params_.camera_offset + params_.turbulence.w);
+            sim_.lit_bounds = math::bbox(bounds.min - lit_reach, bounds.max + lit_reach);
+        }
+        if(is_fixed)
+        {
+            math::bbox fixed = desc.render.fixed_bounds;
+            fixed.mul(transform.current);
+            sim_.world_bounds = fixed;
+            if(!tracks_centers)
+            {
+                sim_.lit_bounds = fixed;
+            }
+            return;
         }
         // The largest particle: the live ones, and what the size curve gives new ones.
         float size = math::max(history_.get_max_size(), luts_ ? luts_->ranges.size_peak : 0.0f);
@@ -1322,18 +2267,7 @@ private:
         math::vec2 quad(size);
         if(desc.render.render_mode == render_mode::stretched)
         {
-            // Fastest a particle can move: its launch at the speed curve's peak plus what the acceleration adds
-            // over a life, at the easing's fastest rate.
-            float launch = 0.0f;
-            float longest_life = 0.0f;
-            for(const auto& bucket : history_.get_buckets())
-            {
-                launch = math::max(launch, bucket.max_speed);
-                longest_life = math::max(longest_life, bucket.max_lifespan);
-            }
-            const float top_speed = (launch * motion.ranges.speed_factor_max + math::length(params_.acceleration) * longest_life) *
-                                    motion.ranges.ease_rate_max;
-            quad.y = size * params_.stretch_length_scale + top_speed * params_.stretch_speed_scale;
+            quad.y = size * params_.stretch_length_scale + get_top_speed() * params_.stretch_speed_scale;
         }
         if(has_feature(features, emitter_feature::size_axis_curve) && luts_)
         {
@@ -1359,14 +2293,30 @@ private:
     uint32_t fixed_seed_ = 0;
     uint32_t seed_ = 0;
     uint32_t spawn_counter_ = 0;
+    /// The ribbons the live records can be of: the largest count particles were born with since the emitter was empty.
+    uint32_t ribbons_in_use_ = 1;
     particle_slot_allocator slots_;
     particle_death_queue deaths_;
     std::vector<particle_record> records_;
-    /// Per slot: bounces so far, and the plane of the next contact.
+    /// Per slot: bounces so far, the halvings of its contact radius its current path touches colliders with (it
+    /// started in contact with one), and the contact its path reaches next.
     std::vector<uint8_t> bounce_counts_;
-    std::vector<uint8_t> contact_planes_;
-    /// Particles in contact order (collision).
+    std::vector<uint8_t> radius_steps_;
+    std::vector<pending_contact> pending_contacts_;
+    /// Particles in contact order (collision): an entry is its slot's contact while their ticks match.
     particle_death_queue contacts_;
+    /// Sweeps against the scene (collision_source::physics_colliders). Per slot where its sweeps stand (sized when
+    /// the first is asked for), the slots that wait for one in the order they asked, and the paths that ask for
+    /// their next stretch by the tick they ask at.
+    std::vector<sweep_state> sweeps_;
+    std::vector<uint32_t> waiting_sweeps_;
+    particle_death_queue resweeps_;
+    /// The deaths that wait for their path's sweep, by the tick at which they stop waiting (give_up_sweep).
+    particle_death_queue death_holds_;
+    /// The last resolve swept: there is a physics world, and paths ask for their sweeps as they start.
+    bool sweeps_run_ = false;
+    /// Contacts handled since the emitter was made (resolve reports how many it handled).
+    uint32_t contacts_handled_ = 0;
     /// Events recorded for take_particle_events.
     std::vector<particle_event> events_;
     std::vector<uint8_t> staged_;
@@ -1378,6 +2328,11 @@ private:
     uint32_t lut_base_ = 0;
     const lut_set* luts_ = nullptr;
     emitter_eval_params params_{};
+    /// How the particles answer a contact with a scene surface, and whether they collide with those at all.
+    particle_gpu::collide_task scene_collision_{};
+    bool collides_with_scene_ = false;
+    /// The particles collided with scene surfaces at the last update: the GPU may have rewritten its records.
+    bool gpu_finds_contacts_ = false;
     math::quat previous_emitter_rotation_{1.0f, 0.0f, 0.0f, 0.0f};
     emitter_render_desc render_desc_{};
     static_row static_row_{};
@@ -1395,6 +2350,22 @@ struct cpu_sort_entry
     uint64_t key = 0;
     uint32_t slot = 0;
 };
+
+/// A CPU list's ribbon key: the age in its low bits (over two hours of ticks), the ribbon in the bits above.
+constexpr uint32_t k_cpu_ribbon_age_bits = 26;
+constexpr uint32_t k_cpu_ribbon_age_mask = (1u << k_cpu_ribbon_age_bits) - 1u;
+static_assert(k_max_ribbon_count <= (1u << (32u - k_cpu_ribbon_age_bits)), "a ribbon fits the key's bits above the age");
+
+/// The nearest a trail is taken to be to a camera inside its emitter's box, in metres.
+constexpr float k_min_trail_distance = 0.5f;
+
+/// The least depth of @p box as a camera at @p eye looking along @p forward sees it, in metres: the depth of the
+/// point of the box nearest the camera, 0 or less for a box the camera is inside of or that reaches behind it.
+auto get_depth_of_box(const math::vec3& eye, const math::vec3& forward, const math::bbox& box) -> float
+{
+    const math::vec3 nearest = math::clamp(eye, box.min, box.max);
+    return math::dot(nearest - eye, forward);
+}
 
 auto float_order(float value) -> uint32_t
 {
@@ -1423,7 +2394,6 @@ public:
     {
         emitter_alloc_ = std::make_unique<bx::DynamicHandleAlloc>(bx::AllocatorHandle{bx::kAllocatorHandleDefault}, max_emitters);
         emitters_.resize(max_emitters);
-        tex_color_ = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
         noise_ = bgfx::createUniform("s_particle_noise", bgfx::UniformType::Sampler);
         view_camera_ = bgfx::createUniform("u_viewCamera", bgfx::UniformType::Mat4);
         camera_velocity_ = bgfx::createUniform("u_particle_camera_velocity", bgfx::UniformType::Vec4);
@@ -1457,7 +2427,6 @@ public:
             }
         }
         gpu_.shutdown();
-        destroy_uniform(tex_color_);
         destroy_uniform(noise_);
         destroy_uniform(view_camera_);
         destroy_uniform(camera_velocity_);
@@ -1560,6 +2529,36 @@ public:
         gpu_.flush();
     }
 
+    auto collide_with_scene(const scene_collision_view& view, const emitter_handle* emitters, uint32_t count) -> uint32_t
+    {
+        if(count == 0 || !gpu_.can_collide())
+        {
+            return 0;
+        }
+        std::vector<particle_gpu::collide_task>& tasks = collide_tasks_scratch_;
+        tasks.clear();
+        for(uint32_t e = 0; e < count; ++e)
+        {
+            const emitter& em = emitters_[emitters[e].idx];
+            const bool has_particles = em.is_live() && em.get_pool_base() != particle_gpu::invalid_base && em.get_high_water() > 0;
+            if(has_particles && em.collides_with_scene())
+            {
+                tasks.push_back(em.get_scene_collision_task());
+            }
+        }
+        if(tasks.empty())
+        {
+            return 0;
+        }
+        particle_gpu::collide_scene scene;
+        scene.depth = view.depth;
+        scene.normals = view.normals;
+        scene.distance_field = view.distance_field;
+        scene.distance_field_levels = view.distance_field_levels;
+        scene.distance_field_params = view.distance_field_params;
+        return gpu_.collide_view(view.view, tasks, scene);
+    }
+
     auto render_view(const render_view_params& params, const render_batch* batches, uint32_t batch_count) -> render_view_stats
     {
         render_view_stats stats;
@@ -1612,9 +2611,13 @@ public:
                     gpu_batches[b].first_index = octagon_first_index;
                     break;
                 case particle_primitive::trail:
-                    gpu_batches[b].index_count = trail_index_count;
-                    gpu_batches[b].first_index = trail_first_index;
+                case particle_primitive::ribbon:
+                {
+                    const uint32_t segments = get_strip_segments(params, batch);
+                    gpu_batches[b].index_count = get_strip_index_count(segments);
+                    gpu_batches[b].first_index = get_strip_first_index(segments);
                     break;
+                }
                 case particle_primitive::cutout:
                     gpu_batches[b].index_count = cutout_index_count;
                     gpu_batches[b].first_index = cutout_first_index;
@@ -1636,7 +2639,13 @@ public:
                 {
                     continue;
                 }
-                tasks.push_back({em.get_pool_base(), em.get_high_water(), b, kind});
+                particle_gpu::view_task task{em.get_pool_base(), em.get_high_water(), b, kind};
+                if(kind == gpu_sort_kind::ribbon)
+                {
+                    task.ribbon_count = em.get_params().ribbon_count;
+                    task.longest_age_ticks = uint32_t(seconds_to_ticks(double(em.get_longest_life())));
+                }
+                tasks.push_back(task);
             }
         }
         if(!tasks.empty())
@@ -1666,12 +2675,7 @@ public:
             {
                 continue;
             }
-            const bool is_mask = batch.texture_mode == texture_mode::mask;
-            const float particle_params[4] = {has_depth ? 1.0f : 0.0f,
-                                              float(int(batch.blend_mode)),
-                                              is_mask ? 1.0f : 0.0f,
-                                              has_frame_blending(batch) ? 1.0f : 0.0f};
-            bgfx::setTexture(gpu_color_texture_stage, tex_color_, batch.texture, get_sampler_flags(batch));
+            const float particle_params[4] = {has_depth ? 1.0f : 0.0f, float(int(batch.blend_mode)), 0.0f, 0.0f};
             bgfx::setTexture(gpu_noise_stage, noise_, gpu_.get_noise_texture());
             // The programs declare the stage whether they fade or not, and WebGPU draws only with every stage bound.
             bgfx::setTexture(gpu_scene_depth_stage, scene_depth_, has_depth ? params.scene_depth : no_scene_depth_);
@@ -1689,19 +2693,35 @@ public:
             }
             particle_gpu::draw_params draw;
             draw.view = params.view;
-            draw.program = is_mask ? params.mask_program : params.program;
+            draw.program = params.overdraw_program;
             const bool is_overdraw = params.overdraw_weight > 0.0f;
-            const bool is_lit = batch.lighting != particle_lighting::unlit && params.prev_view_proj == nullptr &&
-                                !is_overdraw && bgfx::isValid(params.lit_program) &&
-                                bgfx::isValid(params.lit_mask_program) && params.bind_lighting;
+            const bool is_velocity = params.prev_view_proj != nullptr;
+            const bool is_lit = batch.lighting != particle_lighting::unlit && !is_velocity && !is_overdraw && params.bind_lighting;
             if(params.bind_fog)
             {
                 params.bind_fog(is_lit);
             }
-            if(is_lit)
+            const bool reads_gi = is_lit && params.bind_lighting(batch);
+            // The overdraw view counts every batch's quads with its own program: it shades nothing.
+            if(!is_overdraw)
             {
-                draw.program = is_mask ? params.lit_mask_program : params.lit_program;
-                params.bind_lighting(batch);
+                material_draw request;
+                request.is_lit = is_lit;
+                request.reads_gi = reads_gi;
+                request.is_velocity = is_velocity;
+                if(batch.primitive == particle_primitive::ribbon)
+                {
+                    request.address_mask = BGFX_SAMPLER_U_MASK | BGFX_SAMPLER_V_MASK;
+                    request.address_flags = get_ribbon_address_flags(batch);
+                }
+                draw.program = batch.material != nullptr && params.begin_material ? params.begin_material(batch, request)
+                                                                                    : bgfx::ProgramHandle(BGFX_INVALID_HANDLE);
+            }
+            if(!bgfx::isValid(draw.program))
+            {
+                // No program yet (a material still compiling): what was bound for the draw goes with it.
+                bgfx::discard();
+                continue;
             }
             // Trails and ribbons turn with their paths: both of their sides face the camera at some point.
             const bool is_two_sided = batch.primitive == particle_primitive::trail || batch.primitive == particle_primitive::ribbon;
@@ -1745,32 +2765,56 @@ private:
         }
     }
 
-    /// How @p batch samples its texture: as the texture says, except a ribbon, which clamps across itself and
-    /// along itself too unless its texture tiles (its head and tail must not filter into each other).
-    auto get_sampler_flags(const render_batch& batch) const -> uint32_t
+    /// The quads the strips of @p batch are drawn in for the view: a ribbon's by its emitter's smoothing, a trail's
+    /// by how many pixels the longest trail of the batch can cover, so far trails cost fewer vertices and near ones
+    /// bend smoothly.
+    auto get_strip_segments(const render_view_params& params, const render_batch& batch) const -> uint32_t
     {
-        constexpr uint32_t texture_flags = UINT32_MAX;
-        if(batch.primitive != particle_primitive::ribbon || batch.count == 0)
+        if(batch.count == 0)
         {
-            return texture_flags;
+            return trail_segments_medium;
+        }
+        if(batch.primitive == particle_primitive::ribbon)
+        {
+            return emitters_[batch.emitters[0].idx].get_params().ribbon_segments;
+        }
+        bool is_straight = true;
+        float pixels = 0.0f;
+        for(uint32_t e = 0; e < batch.count; ++e)
+        {
+            const emitter& em = emitters_[batch.emitters[e].idx];
+            is_straight = is_straight && em.moves_straight();
+            // Through a perspective a trail is largest at the least depth of the emitter's box.
+            const float nearest = params.is_orthographic ? 1.0f : math::max(get_depth_of_box(params.eye, params.forward, em.get_bounds()), k_min_trail_distance);
+            pixels = math::max(pixels, em.get_longest_trail() * params.pixels_per_metre / nearest);
+        }
+        // A straight trail's width, fade and texture run evenly along it: one quad draws it whole.
+        if(is_straight)
+        {
+            return trail_segments_straight;
+        }
+        if(params.pixels_per_metre <= 0.0f)
+        {
+            return trail_segments_medium;
+        }
+        if(pixels < trail_small_pixels)
+        {
+            return trail_segments_small;
+        }
+        return pixels < trail_large_pixels ? trail_segments_medium : trail_segments_large;
+    }
+
+    /// How a ribbon's batch addresses its material's textures: clamped across itself, and along itself too unless
+    /// its texture tiles (its head and tail must not filter into each other).
+    auto get_ribbon_address_flags(const render_batch& batch) const -> uint32_t
+    {
+        if(batch.count == 0)
+        {
+            return BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
         }
         const emitter_render_desc& render = emitters_[batch.emitters[0].idx].get_render_desc();
         const bool is_tiled = render.ribbon_texture_mode == ribbon_texture_mode::tile;
         return BGFX_SAMPLER_U_CLAMP | (is_tiled ? 0u : BGFX_SAMPLER_V_CLAMP);
-    }
-
-    /// True when an emitter of @p batch crossfades its texture sheet frames (the shaders sample twice then).
-    auto has_frame_blending(const render_batch& batch) const -> bool
-    {
-        for(uint32_t e = 0; e < batch.count; ++e)
-        {
-            const emitter_feature features = emitter_feature(emitters_[batch.emitters[e].idx].get_params().flags);
-            if(has_feature(features, emitter_feature::frame_blending))
-            {
-                return true;
-            }
-        }
-        return false;
     }
 
     /// The view matrix's rotation, transposed: its columns are the camera's axes.
@@ -1825,8 +2869,13 @@ private:
                             key = ~float_order(math::dot(to_particle, params.forward));
                             break;
                         case gpu_sort_kind::oldest_first:
-                        case gpu_sort_kind::ribbon:
                             key = ~age_ticks;
+                            break;
+                        case gpu_sort_kind::ribbon:
+                            // The ribbon above the age: a ribbon's particles follow the ones of the ribbon before it,
+                            // each ribbon oldest first.
+                            key = (uint64_t(record.ribbon) << k_cpu_ribbon_age_bits) |
+                                  uint64_t(k_cpu_ribbon_age_mask - std::min(age_ticks, k_cpu_ribbon_age_mask));
                             break;
                         case gpu_sort_kind::youngest_first:
                             key = age_ticks;
@@ -1871,7 +2920,6 @@ private:
     };
     /// Bakes in flight, by cutout key.
     std::unordered_map<uint64_t, std::shared_ptr<cutout_bake>> cutout_bakes_;
-    bgfx::UniformHandle tex_color_ = BGFX_INVALID_HANDLE;
     /// The turbulence noise volume (vertex stage 7).
     bgfx::UniformHandle noise_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle view_camera_ = BGFX_INVALID_HANDLE;
@@ -1881,6 +2929,7 @@ private:
     bgfx::TextureHandle no_scene_depth_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle particle_params_ = BGFX_INVALID_HANDLE;
     std::vector<particle_gpu::view_task> tasks_scratch_;
+    std::vector<particle_gpu::collide_task> collide_tasks_scratch_;
     std::vector<particle_gpu::view_batch> gpu_batches_scratch_;
     std::vector<uint32_t> cpu_firsts_;
     std::vector<uint32_t> cpu_counts_;
@@ -2016,6 +3065,11 @@ void get_aabb(emitter_handle handle, math::bbox& out_aabb)
     out_aabb = g_system.get(handle).get_bounds();
 }
 
+void get_lit_aabb(emitter_handle handle, math::bbox& out_aabb)
+{
+    out_aabb = g_system.get(handle).get_lit_bounds();
+}
+
 auto get_num_particles(emitter_handle handle) -> uint32_t
 {
     return g_system.get(handle).get_live_count();
@@ -2044,6 +3098,32 @@ void get_particle_states(emitter_handle handle, std::vector<particle_state>& out
 void take_particle_events(emitter_handle handle, std::vector<particle_event>& out_events)
 {
     g_system.get(handle).take_events(out_events);
+}
+
+auto resolve_collisions(emitter_handle handle, const emitter_desc& desc, const particle_sweep& sweep, uint32_t max_casts)
+    -> collision_resolve_stats
+{
+    return g_system.get(handle).resolve(desc, sweep, max_casts);
+}
+
+auto get_waiting_sweeps(emitter_handle handle) -> uint32_t
+{
+    return g_system.get(handle).get_waiting_sweep_count();
+}
+
+auto can_collide_with_scene() -> bool
+{
+    return g_system.get_gpu().can_collide();
+}
+
+auto collides_with_scene(emitter_handle handle) -> bool
+{
+    return g_system.get(handle).collides_with_scene();
+}
+
+auto collide_with_scene(const scene_collision_view& view, const emitter_handle* emitters, uint32_t count) -> uint32_t
+{
+    return g_system.collide_with_scene(view, emitters, count);
 }
 
 namespace
@@ -2088,7 +3168,12 @@ auto make_particle_mesh_transform(const particle_record& record,
     const float angle = evaluate_particle_angle(record, state, params, luts);
     const float speed = math::length(state.velocity);
     math::quat orientation;
-    if(has_feature(features, emitter_feature::align_to_direction) && speed > min_align_speed)
+    if(params.align_to_surface && is_at_rest(record))
+    {
+        // At rest on a surface: its up axis along the surface's normal, which its record's velocity holds.
+        orientation = get_rotation_from_up(record.get_velocity()) * math::angleAxis(angle, math::vec3(0.0f, 1.0f, 0.0f));
+    }
+    else if(has_feature(features, emitter_feature::align_to_direction) && speed > min_align_speed)
     {
         orientation = get_rotation_from_up(state.velocity / speed) * math::angleAxis(angle, math::vec3(0.0f, 1.0f, 0.0f));
     }

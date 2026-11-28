@@ -331,7 +331,8 @@ inline auto get_format_version<unravel::material>() -> uint64_t
     // 18: a binary document starting with 32 zero bytes: the binding's parameters, textures and static switches are
     //     lists, the material function copies one object keyed by function, vectors, quaternions and colors single
     //     values.
-    return 18;
+    // 19: a binding keeps whether its shader has the particle variants (Particle Use).
+    return 19;
 }
 
 template<>

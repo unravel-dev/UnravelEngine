@@ -37,7 +37,7 @@ enum class emitter_shape : int
     count
 };
 
-/// What a particle does where its path first crosses a collision plane.
+/// What a particle does where its path first touches what it collides with (collision_source).
 enum class collision_mode : int
 {
     none = 0,
@@ -45,8 +45,55 @@ enum class collision_mode : int
     kill,
     /// It bounces off (restitution, friction), up to max_bounces times, then dies at the next contact.
     bounce,
+    /// It stays where it touched for the rest of its life.
+    stick,
     count
 };
+
+/// What a particle can touch.
+enum class collision_source : int
+{
+    /// The emitter's collision planes.
+    planes = 0,
+    /// The planes and the colliders of the physics world, which exists while the game plays.
+    physics_colliders,
+    /// The surfaces a camera draws, found on the GPU for each view that shows the particles: no planes and no
+    /// physics world, and the CPU is told of no contact (no collision events).
+    scene_surfaces,
+    count
+};
+
+/// What particles that collide with scene surfaces (collision_source::scene_surfaces) are tested against.
+enum class scene_collision : int
+{
+    /// Nothing: they pass through.
+    off = 0,
+    /// The view's depth and normals: what the camera sees, nothing behind it or off screen.
+    depth_buffer,
+    /// The global illumination's distance field where the view has one (surfaces off screen too, as coarse as its
+    /// voxels), the depth and normals elsewhere.
+    distance_field,
+    count
+};
+
+/// How closely a particle's path is followed against physics colliders: how far ahead it is swept at a time (a
+/// collider that moves is noticed at the next sweep) and how far the swept pieces may leave the path.
+enum class collision_quality : int
+{
+    /// A second ahead, a few particle sizes off the path: the fewest casts.
+    low = 0,
+    /// Half a second ahead, within a particle's size of the path.
+    medium,
+    /// A quarter of a second ahead, within half a particle's size.
+    high,
+    count
+};
+
+/// Seconds of a particle's path one sweep against physics colliders covers at @p quality.
+constexpr auto get_collision_sweep_seconds(collision_quality quality) -> double
+{
+    return quality == collision_quality::low ? 1.0 : (quality == collision_quality::high ? 0.25 : 0.5);
+}
 
 /// What happened to a particle (sub-emitter triggers; bits of emitter_desc::event_mask).
 enum class particle_event_type : uint32_t
@@ -67,6 +114,17 @@ enum class particle_lighting : int
     /// Lit like a small sphere facing the camera: the sun per pixel with a soft wrap, sky and nearby lights per
     /// particle (debris, snow, leaves).
     surface,
+    count
+};
+
+/// Where lit particles take the light around them from.
+enum class particle_ambient : int
+{
+    /// The sky's light, the same wherever the particle is.
+    sky = 0,
+    /// The global illumination's light where the particle is (the light bounced off what is around it, the shade of a
+    /// room), in a view whose global illumination runs and keeps probes around the emitter; the sky's elsewhere.
+    global_illumination,
     count
 };
 
@@ -127,8 +185,9 @@ enum class render_mode : int
     /// A ribbon along the particle's own path over the last trail_length seconds, facing the camera (comets,
     /// tracers, magic streaks): each point of it is the particle evaluated at that earlier time.
     trail,
-    /// One ribbon through all of the emitter's particles in birth order, facing the camera (swords' arcs, smoke
-    /// streams behind a moving emitter, energy beams): each particle is a point of it, oldest at the tail.
+    /// A ribbon through the emitter's particles in birth order, or several through every few of them
+    /// (emitter_render_desc::ribbon_count), facing the camera (swords' arcs, smoke streams behind a moving emitter,
+    /// energy beams): each particle is a point of its ribbon, oldest at the tail.
     ribbon,
     /// A mesh per particle with its material, drawn with the scene's opaque geometry (debris, rocks, shells,
     /// leaves): lit, shadowed and with motion vectors like any model.
@@ -153,6 +212,31 @@ enum class ribbon_texture_mode : int
     tile,
     count
 };
+
+/// The most ribbons one emitter draws (emitter_render_desc::ribbon_count).
+constexpr uint32_t k_max_ribbon_count = 64;
+
+/// How finely a ribbon bends between two of its particles: the pieces each stretch is drawn in, along a smooth curve
+/// through the particles around it.
+enum class ribbon_smoothing : int
+{
+    /// One piece: straight from particle to particle.
+    none = 0,
+    /// Two pieces.
+    low,
+    /// Four pieces.
+    medium,
+    /// Eight pieces.
+    high,
+    count
+};
+
+/// The pieces a stretch of a ribbon between two particles is drawn in. A value past the last one draws as the last.
+constexpr auto get_ribbon_segments(ribbon_smoothing smoothing) -> uint32_t
+{
+    const int level = int(smoothing) < 0 ? 0 : (int(smoothing) > int(ribbon_smoothing::high) ? int(ribbon_smoothing::high) : int(smoothing));
+    return 1u << uint32_t(level);
+}
 
 /// Which way a ribbon's width runs at each of its particles (the width is the particle's size, centered on it).
 enum class ribbon_facing : int
@@ -202,9 +286,9 @@ enum class particle_primitive : int
     /// The square with its corners cut off (8 vertices): less overdraw for round, soft textures, whose
     /// corners are transparent anyway.
     octagon,
-    /// The strip trail mode draws (render_mode::trail picks it; not an authoring choice).
+    /// The strip trail mode draws along a particle's path (render_mode::trail picks it; not an authoring choice).
     trail,
-    /// The quad a ribbon segment draws between two particles, seen from both sides (render_mode::ribbon picks it).
+    /// The strip ribbon mode draws between two particles, seen from both sides (render_mode::ribbon picks it).
     ribbon,
     /// A polygon of 8 vertices around each texture sheet frame's opaque texels, baked from the texture: the
     /// transparent texels around sparks, flames and debris are not drawn. The whole quad until the bake is in.

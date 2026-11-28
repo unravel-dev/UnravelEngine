@@ -93,6 +93,9 @@ constexpr int ANDROID_MAX_BLOOM_MIPS = 5;
 constexpr uint32_t ANDROID_REFLECTION_PROBE_FACES_PER_FRAME = 2;
 /// The nearby lights a see-through surface of the translucency pass is lit by on a phone or in a browser.
 constexpr int ANDROID_TRANSLUCENT_LIGHTS = 2;
+/// The casts a frame a new Android profile spends on particles that collide with physics colliders: a quarter of a
+/// desktop's, as a phone's core is about that much slower.
+constexpr uint32_t ANDROID_MAX_COLLISION_CASTS = 512;
 
 /// profile.cfg: what a profile is, apart from its overrides.
 struct profile_header
@@ -233,6 +236,7 @@ void set_android_starting_values(settings& resolved)
     auto& particles = resolved.graphics.particles;
     particles.force_half_resolution = true;
     particles.max_lighting = std::min(particles.max_lighting, ps_soa::particle_lighting::volumetric);
+    particles.max_collision_casts = std::min(particles.max_collision_casts, ANDROID_MAX_COLLISION_CASTS);
     // The effects a phone's GPU cannot afford at frame rate: global illumination and screen space indirect
     // lighting cost hundreds of milliseconds there, the other screen space effects and temporal AA's extra
     // passes several, contact shadows and subsurface keep code that holds registers in every light program,
@@ -280,6 +284,9 @@ void set_web_starting_values(settings& resolved)
     resolved.graphics.limits.decal_surface_channels = false;
     resolved.graphics.limits.translucent_lights = std::min(resolved.graphics.limits.translucent_lights, ANDROID_TRANSLUCENT_LIGHTS);
     resolved.graphics.material_quality = material_graph_quality::low;
+    // A browser runs the game on one thread, on a phone's core too.
+    resolved.graphics.particles.max_collision_casts =
+        std::min(resolved.graphics.particles.max_collision_casts, ANDROID_MAX_COLLISION_CASTS);
 }
 
 /// The values a new profile of `platform` starts with, set on `resolved`, which holds the base.

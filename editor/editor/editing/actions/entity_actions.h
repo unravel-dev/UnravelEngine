@@ -239,6 +239,41 @@ struct entity_set_text_bounds_action_t : crtp_meta_type<entity_set_text_bounds_a
     void draw_in_inspector(rtti::context& ctx) override;
 };
 
+/// What an edit of a Line's points in the Scene view did.
+enum class line_points_edit : uint8_t
+{
+    /// A point moved: the steps of one drag are one step, and the prefab override is the point's.
+    move_point,
+    /// A point was taken out: the prefab override is the whole list's.
+    remove_point,
+};
+
+/// The points of the entity's Line: the Scene view moved one of them by its handle, or took one out. Undo takes back
+/// the prefab override the edit recorded.
+struct entity_set_line_points_action_t : crtp_meta_type<entity_set_line_points_action_t, editing_action_t>
+{
+    entt::uhandle entity{};
+    line_points_edit edit{};
+    /// The point that moved or was taken out.
+    size_t index{};
+    std::vector<math::vec3> old_points{};
+    std::vector<math::vec3> new_points{};
+    /// What do_action changed in the entity's prefab instance's override list.
+    prefab_override_record prefab_record{};
+
+    entity_set_line_points_action_t(entt::handle ent,
+                                    line_points_edit edit,
+                                    size_t index,
+                                    std::vector<math::vec3> old_points,
+                                    std::vector<math::vec3> new_points);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    void merge_with(const editing_action_t& previous) override;
+    auto is_valid() const -> bool override;
+};
+
 struct entity_set_ui_document_component_bounds_action_t : crtp_meta_type<entity_set_ui_document_component_bounds_action_t, editing_action_t>
 {
     entt::uhandle entity{};

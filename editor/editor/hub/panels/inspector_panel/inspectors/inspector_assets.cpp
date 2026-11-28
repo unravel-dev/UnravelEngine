@@ -229,20 +229,27 @@ auto pick_asset(editing_manager& em,
     {
         content.open_in = opener.target;
     }
+    content.has_problem = current_row_scope::has_warning(&data);
+    content.is_read_only = ImGui::IsReadonly();
     const asset_picker::field_request request = asset_picker::draw_field(content);
     if(request.is_open_pressed && data && opener.open)
     {
         opener.open(data);
+    }
+    if(request.is_locate_pressed)
+    {
+        em.foucs_asset(data);
+    }
+    // A read-only field takes no drop, clears nothing and opens no picker.
+    if(content.is_read_only)
+    {
+        return result;
     }
 
     const bool is_dropped = process_drag_drop_target(am, data);
     result.changed |= is_dropped;
     result.edit_finished |= is_dropped;
 
-    if(request.is_locate_pressed)
-    {
-        em.foucs_asset(data);
-    }
     if(request.is_clear_pressed && data)
     {
         data = asset_handle<T>::get_empty();
@@ -269,7 +276,21 @@ auto pick_asset(editing_manager& em,
     window.confirm_label = "Select";
     window.empty_text = "Nothing in the project or the engine is of this type.";
     const auto entries = make_picker_entries(assets, data, window.current);
-    const auto picked = asset_picker::draw_window(popup_id.c_str(), window, entries, make_picker_source(tm, assets));
+    auto source = make_picker_source(tm, assets);
+    // A row only some assets suit says which, and the picker shows it.
+    if(const asset_fit_rule* rule = current_row_scope::get_fit_rule(&data); rule != nullptr && rule->get_fit)
+    {
+        window.fit_use = rule->use;
+        source.get_fit = [&assets, rule](std::size_t index)
+        {
+            const asset_fit fit = rule->get_fit(assets[index].id());
+            const auto state = fit.is == asset_fit::state::fits    ? asset_picker::fit_state::fits
+                               : fit.is == asset_fit::state::unfit ? asset_picker::fit_state::unfit
+                                                                   : asset_picker::fit_state::unknown;
+            return asset_picker::entry_fit{state, fit.reason};
+        };
+    }
+    const auto picked = asset_picker::draw_window(popup_id.c_str(), window, entries, source);
     if(picked && !is_same_asset(assets[*picked], data))
     {
         data = assets[*picked];
@@ -352,7 +373,8 @@ auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_pro
                                                                    uint64_t execution_count) mutable
     {
         entt::meta_any var;
-        if(proxy.impl->getter(var) && var)
+        // An asset the project does not own keeps the values it ships with: an undo step never puts others into it.
+        if(asset_actions::is_project_asset(data.id()) && proxy.impl->getter(var) && var)
         {
             var.assign(value);
             parent_proxy.impl->setter(parent_proxy, var, execution_count);
@@ -413,7 +435,8 @@ void apply_import_edit_to_others(rtti::context& ctx, const Settings& before, con
     {
         auto meta = am.get_metadata(other.uid);
         auto importer = safe_pointer_cast<Settings>(meta.meta.importer);
-        if(!importer)
+        // An asset the project does not own keeps the settings it ships with.
+        if(!importer || !asset_actions::is_project_asset(other.key))
         {
             continue;
         }
@@ -430,17 +453,19 @@ void draw_import_selection_note()
     {
         return;
     }
-    ImGui::TextWrapped("%s",
-                       fmt::format("Apply also gives the {} other selected assets every setting changed here. Each of "
-                                   "them keeps the rest of its own settings.",
-                                   count)
-                           .c_str());
+    const std::string note =
+        count == 1 ? std::string("Apply also gives the other selected asset every setting changed here. It keeps the "
+                                 "rest of its own settings.")
+                   : fmt::format("Apply also gives the {} other selected assets every setting changed here. Each of "
+                                 "them keeps the rest of its own settings.",
+                                 count);
+    ImGui::TextWrapped("%s", note.c_str());
 }
 
 /**
  * @brief The Revert and Apply buttons under an asset's import settings, enabled while `edited` differs from
  * `applied`: Revert drops the edits, Apply writes them to the asset's .meta, which imports it again, and to the
- * other selected assets of its type.
+ * other selected assets of its type. Disabled for settings shown read only.
  */
 template<typename Settings>
 void draw_import_buttons(const std::string& key,
@@ -451,13 +476,13 @@ void draw_import_buttons(const std::string& key,
     ImGui::Spacing();
     draw_import_selection_note();
     const bool has_unapplied_edits = applied && edited && !is_same_import_settings(*edited, *applied);
-    ImGui::BeginDisabled(!has_unapplied_edits);
+    ImGui::BeginDisabled(!has_unapplied_edits || ImGui::IsReadonly());
     if(ImGui::Button("Revert"))
     {
         edited = {};
     }
     ImGui::SameLine();
-    if(ImGui::Button("Apply"))
+    if(ImGui::Button("Apply") && asset_actions::is_project_asset(key))
     {
         const Settings before = *applied;
         *applied = *edited;
@@ -649,7 +674,10 @@ void inspector_asset_handle_texture::draw_image(const asset_handle<gfx::texture>
         {
             if(tex->info.numMips > 1)
             {
+                // Which mip is looked at is the view's, not the texture's: it is picked for a read-only texture too.
+                ImGui::PushReadonlyExempt();
                 ImGui::KnobSliderScalarT("Mip", &inspected_mip_, 0, tex->info.numMips - 1);
+                ImGui::PopReadonlyExempt();
             }
         }
         return;
@@ -759,7 +787,7 @@ void draw_material_domain_mismatch(material_domain held, material_domain expecte
     const char* outcome = expected == material_domain::surface ? "the slot draws the default surface"
                           : expected == material_domain::decal ? "the decal draws nothing"
                                                                : "the entry runs nothing";
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.3f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_warning_color());
     ImGui::TextWrapped("%s", fmt::format(ICON_MDI_ALERT " This is a {} material, so {}. Pick a {} material.",
                                          get_material_domain_label(held),
                                          outcome,
@@ -795,7 +823,8 @@ auto inspector_asset_handle_material::inspect_as_property(rtti::context& ctx, as
         };
     }
     result |= pick_asset(em, tm, am, data, ex::get_type<material>(), opener, accepts);
-    if(expected && data)
+    // A row whose object's inspector warns about it says what is wrong itself, under the field.
+    if(expected && data && !current_row_scope::has_warning(&data))
     {
         if(const auto held = find_loaded_material_domain(data); held && *held != *expected)
         {
@@ -811,11 +840,22 @@ namespace
 /// The way to a graph material's graph, and a note while its shader is not compiled for the renderer that draws.
 void draw_graph_material_header(rtti::context& ctx, const asset_handle<material>& asset, const graph_material& mat)
 {
-    if(ImGui::Button(ICON_MDI_GRAPH " Open in Material Graph", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f)))
+    // The window shows the graph of a material that is read only here too.
+    ImGui::PushReadonlyExempt();
+    const bool is_open_pressed = ImGui::Button(ICON_MDI_GRAPH " Open in Material Graph", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f));
+    ImGui::PopReadonlyExempt();
+    if(is_open_pressed)
     {
         editor_actions::open_material_graph(ctx, asset);
     }
-    ImGui::SetItemTooltipEx("Edit the graph; every finished edit is saved to this material.");
+    if(asset_actions::is_project_asset(asset.id()))
+    {
+        ImGui::SetItemTooltipEx("Edits the graph, and every finished edit is saved to this material.");
+    }
+    else
+    {
+        ImGui::SetItemTooltipEx("Shows the graph. The window opens it for viewing only.");
+    }
     if(!mat.get_shader())
     {
         ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
@@ -858,54 +898,7 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
 
 namespace
 {
-constexpr float IMPORT_BANNER_ROUNDING = 4.0f;
-constexpr float IMPORT_BANNER_ICON_GAP_EM = 0.4f;
-/// The banner is tinted with its color at this alpha, as the inspector's notes are.
-constexpr float IMPORT_BANNER_BACKGROUND_ALPHA = 0.12f;
 constexpr const char* MISSING_SOURCE_NAME = "a model no longer in the project";
-
-/// The icon in the banner's color at the cursor; the cursor moves past it, to where the text starts.
-void draw_import_banner_icon(const char* icon, ImU32 color)
-{
-    const float icon_width = ImGui::GetFontSize();
-    const ImVec2 min = ImGui::GetCursorScreenPos();
-    ImGui::RenderIconCentered(ImGui::GetWindowDrawList(),
-                              ImVec2(min.x + icon_width * 0.5f, min.y + ImGui::GetTextLineHeight() * 0.5f),
-                              icon,
-                              color);
-    ImGui::SetCursorScreenPos(ImVec2(min.x + icon_width * (1.0f + IMPORT_BANNER_ICON_GAP_EM), min.y));
-}
-
-/// A bold title over a muted, wrapped message.
-void draw_import_banner_text(const std::string& title, const std::string& message)
-{
-    ImGui::PushFont(ImGui::Font::Bold);
-    ImGui::TextUnformatted(title.c_str());
-    ImGui::PopFont();
-    ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(message.c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::PopStyleColor();
-}
-
-/// The banner's text and, for an edited asset, Reset to Imported.
-void draw_import_banner_body(rtti::context& ctx, const asset_actions::generated_status& status, const std::string& key)
-{
-    const std::string source = status.source_name.empty() ? MISSING_SOURCE_NAME : status.source_name;
-    if(!status.is_edited)
-    {
-        draw_import_banner_text("Imported from " + source,
-                                "Each reimport of " + source + " rewrites this material until it is edited.");
-        return;
-    }
-    draw_import_banner_text("Edited import of " + source, "Reimports of " + source + " keep these changes.");
-    if(ImGui::Button(ICON_MDI_RESTORE " Reset to Imported"))
-    {
-        asset_actions::reset_to_imported(ctx, key);
-    }
-    ImGui::SetItemTooltipEx("Discards the edits and reimports %s.", source.c_str());
-}
 } // namespace
 
 void inspector_asset_handle_material::inspect_import_origin(rtti::context& ctx, const asset_handle<material>& data)
@@ -915,25 +908,29 @@ void inspector_asset_handle_material::inspect_import_origin(rtti::context& ctx, 
     {
         return;
     }
-    const ImU32 color =
-        status.is_edited ? imgui_style::get_edited_import_color_u32() : imgui_style::get_imported_asset_color_u32();
-    ImVec4 background = ImGui::ColorConvertU32ToFloat4(color);
-    background.w = IMPORT_BANNER_BACKGROUND_ALPHA;
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, IMPORT_BANNER_ROUNDING);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImGui::GetStyle().FramePadding);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, background);
-    if(ImGui::BeginChild("##import_banner",
-                         ImVec2(0.0f, 0.0f),
-                         ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_AutoResizeY))
+    const std::string source = status.source_name.empty() ? MISSING_SOURCE_NAME : status.source_name;
+    if(!status.is_edited)
     {
-        draw_import_banner_icon(status.is_edited ? ICON_MDI_PENCIL_OUTLINE : ICON_MDI_IMPORT, color);
-        ImGui::BeginGroup();
-        draw_import_banner_body(ctx, status, data.id());
-        ImGui::EndGroup();
+        draw_inspector_banner("##import_banner",
+                              ICON_MDI_IMPORT,
+                              imgui_style::get_imported_asset_color_u32(),
+                              "Imported from " + source,
+                              "Each reimport of " + source + " rewrites this material until it is edited.");
+        return;
     }
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar(2);
+    draw_inspector_banner("##import_banner",
+                          ICON_MDI_PENCIL_OUTLINE,
+                          imgui_style::get_edited_import_color_u32(),
+                          "Edited import of " + source,
+                          "Reimports of " + source + " keep these changes.",
+                          [&]()
+                          {
+                              if(ImGui::Button(ICON_MDI_RESTORE " Reset to Imported"))
+                              {
+                                  asset_actions::reset_to_imported(ctx, data.id());
+                              }
+                              ImGui::SetItemTooltipEx("Discards the edits and reimports %s.", source.c_str());
+                          });
 }
 
 namespace
@@ -970,7 +967,7 @@ void draw_instance_status(const material_instance& instance, const entt::meta_ty
     if(!instance.has_overrides())
     {
         ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextDisabled("No overrides: the model draws exactly like %s.", shared.c_str());
+        ImGui::TextDisabled("No overrides: it draws exactly like %s.", shared.c_str());
         ImGui::PopTextWrapPos();
         return;
     }
@@ -1136,7 +1133,7 @@ void draw_graph_parameter_row(rtti::context& ctx,
     property_layout layout;
     layout.set_data(make_graph_row_label(parameter.name),
                     make_graph_row_tooltip(parameter.description,
-                                           "A parameter of the material graph. Overriding it keeps the model in its "
+                                           "A parameter of the material graph. Overriding it keeps a model in its "
                                            "shared material's draw while it is among the graph's first four registers."));
     layout.set_mixed_path(make_graph_row_path(ctx, GRAPH_PARAMETERS_SEGMENT, parameter.name));
     layout.push_layout();
@@ -1155,7 +1152,7 @@ void draw_graph_texture_row(rtti::context& ctx, material_instance& instance, con
     property_layout layout;
     layout.set_data(make_graph_row_label(texture.name),
                     make_graph_row_tooltip(texture.description,
-                                           "A texture node of the material graph. Overriding it gives the model a draw "
+                                           "A texture node of the material graph. Overriding it gives a model a draw "
                                            "of its own."));
     layout.set_mixed_path(make_graph_row_path(ctx, GRAPH_TEXTURES_SEGMENT, texture.name));
     layout.push_layout();
@@ -1181,6 +1178,10 @@ auto is_code_edit(const material_graph& before, const material_graph& after) -> 
 /// shader its compile makes.
 void write_graph_material_graph(rtti::context& ctx, const asset_handle<material>& asset, const material_graph& graph)
 {
+    if(!asset_actions::is_project_asset(asset.id()))
+    {
+        return;
+    }
     const auto loaded = asset.try_get();
     auto* mat = loaded && !asset_handle<material>::is_empty(loaded) ? loaded->safe_cast<graph_material>() : nullptr;
     if(mat == nullptr || is_code_edit(mat->get_graph(), graph))
@@ -1196,9 +1197,15 @@ void write_graph_material_graph(rtti::context& ctx, const asset_handle<material>
     ctx.get_cached<thumbnail_manager>().regenerate_thumbnail(asset.uid());
 }
 
-/// Records a finished edit of a graph material's rows, from @p before to @p after, as one undo step.
+} // namespace
+
 void record_graph_material_edit(rtti::context& ctx, const asset_handle<material>& asset, material_graph before, material_graph after)
 {
+    if(!asset_actions::is_project_asset(asset.id()))
+    {
+        APPLOG_ERROR("{} Its graph was not changed.", asset_actions::get_shipped_asset_note(asset.id()));
+        return;
+    }
     auto& em = ctx.get_cached<editing_manager>();
     em.do_action<tracked_editor_state_action_t>(
         "Edit Material Graph Values",
@@ -1212,6 +1219,8 @@ void record_graph_material_edit(rtti::context& ctx, const asset_handle<material>
         });
 }
 
+namespace
+{
 /// Whether a parameter or texture of @p mat comes from a node of its own graph, so the graph's rows can edit it: one
 /// inside a material function is the function's.
 auto is_own_graph_node(const graph_material& mat, const std::string& node_id) -> bool
@@ -1234,7 +1243,7 @@ void draw_graph_default_row(rtti::context& ctx,
                                                            "material instances and scripts may change."
                                                          : "A parameter of a material function the graph calls: its "
                                                            "default is the function's."));
-    ImGui::BeginDisabled(!is_own);
+    ImGui::BeginDisabled(!is_own || ImGui::IsReadonly());
     const auto edit = inspect_vector_value(ctx, value, make_parameter_value_style(mat.get_graph(), parameter));
     ImGui::EndDisabled();
     changes.is_finished = changes.is_finished || edit.edit_finished;
@@ -1289,7 +1298,10 @@ void draw_graph_static_switch_row(const graph_material& mat,
                                                   "A Static Switch of the material graph: it picks code when the "
                                                   "material compiles, so a change compiles the material again."));
     bool value = entry.value;
-    if(!ImGui::Checkbox(("##" + entry.node_id).c_str(), &value))
+    ImGui::BeginDisabled(ImGui::IsReadonly());
+    const bool is_toggled = ImGui::Checkbox(("##" + entry.node_id).c_str(), &value);
+    ImGui::EndDisabled();
+    if(!is_toggled)
     {
         return;
     }
@@ -1349,6 +1361,7 @@ void draw_graph_blend_mode_row(rtti::context& ctx,
     const material_blend_mode current = get_material_graph_blend_mode(edited ? *edited : mat.get_graph());
     hpp::optional<material_blend_mode> picked;
     ImGui::SetNextItemWidth(-1.0f);
+    ImGui::BeginDisabled(ImGui::IsReadonly());
     if(ImGui::BeginCombo("##blend_mode", get_material_blend_mode_label(current)))
     {
         for(uint32_t i = 0; i < MATERIAL_BLEND_MODE_COUNT; ++i)
@@ -1361,6 +1374,7 @@ void draw_graph_blend_mode_row(rtti::context& ctx,
         }
         ImGui::EndCombo();
     }
+    ImGui::EndDisabled();
     if(!picked)
     {
         return;
@@ -1631,6 +1645,12 @@ auto inspector_asset_handle_material::inspect_graph(rtti::context& ctx, const as
         inspect_without_undo_scope no_undo;
         draw_graph_default_rows(ctx, mat, edited, changes);
     }
+    // The rows of a material the project does not own are drawn read only, and nothing they report reaches the
+    // loaded material, which every project's scenes draw.
+    if(!asset_actions::is_project_asset(data.id()))
+    {
+        return {};
+    }
     if(edited && changes.is_changed && is_code_edit(mat.get_graph(), *edited))
     {
         // A Static Switch is one finished step that changes the code: it goes to the file alone (write_graph_material_graph).
@@ -1712,7 +1732,7 @@ auto inspector_material_instance::inspect(rtti::context& ctx,
     const auto shared = shared_handle.get();
     if(!shared || asset_handle<material>::is_empty(shared))
     {
-        ImGui::TextDisabled("The slot has no shared material.");
+        ImGui::TextDisabled("No shared material is set.");
         return result;
     }
     // A block: the slot's row folds the values out, and they line up with the model's other rows.
@@ -1752,7 +1772,7 @@ auto inspector_material_instance::inspect(rtti::context& ctx,
             result.changed = true;
             result.edit_finished = true;
         }
-        ImGui::SetItemTooltipEx("Drop every override: the model draws exactly like its shared material.");
+        ImGui::SetItemTooltipEx("Drop every override: it draws exactly like its shared material.");
     }
     return result;
 }
@@ -1884,12 +1904,13 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
             }
 
             draw_import_selection_note();
+            ImGui::BeginDisabled(ImGui::IsReadonly());
             if(ImGui::Button("Revert"))
             {
                 importer_ = {};
             }
             ImGui::SameLine();
-            if(ImGui::Button("Apply"))
+            if(ImGui::Button("Apply") && asset_actions::is_project_asset(data.id()))
             {
                 if(importer_ && importer)
                 {
@@ -1900,6 +1921,7 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
 
                 editor_actions::save_import_settings(data.id(), meta.meta);
             }
+            ImGui::EndDisabled();
 
             ImGui::EndTabItem();
         }
@@ -1926,7 +1948,7 @@ void inspector_asset_handle_animation::apply_import_settings(rtti::context& ctx)
     auto& am = ctx.get_cached<asset_manager>();
     auto meta = am.get_metadata(inspected_asset_.uid());
     auto importer = safe_pointer_cast<animation_importer_meta>(meta.meta.importer);
-    if(importer && importer_)
+    if(importer && importer_ && asset_actions::is_project_asset(inspected_asset_.id()))
     {
         *importer = *importer_;
         editor_actions::save_import_settings(inspected_asset_.id(), meta.meta);
@@ -2092,14 +2114,20 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
                                                        ImGuiTabBarFlags_FittingPolicyScroll))
                 {
                     inspect_without_undo_scope no_undo;
+                    // The timelines are widgets of their own: shown read only, they take no input.
+                    const bool is_read_only = ImGui::IsReadonly();
                     if(ImGui::BeginTabItem(ICON_MDI_MAP_MARKER " Events"))
                     {
+                        ImGui::BeginDisabled(is_read_only);
                         import_result |= timeline_.draw_events(ctx, data, *importer_);
+                        ImGui::EndDisabled();
                         ImGui::EndTabItem();
                     }
                     if(ImGui::BeginTabItem(ICON_MDI_CHART_BELL_CURVE " Curves"))
                     {
+                        ImGui::BeginDisabled(is_read_only);
                         import_result |= timeline_.draw_curves(ctx, data, *importer_);
+                        ImGui::EndDisabled();
                         ImGui::EndTabItem();
                     }
                     if(ImGui::BeginTabItem("Root Motion"))
@@ -2109,7 +2137,7 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
                     }
                     ImGui::EndTabBar();
                 }
-                if(import_result.edit_finished && importer_)
+                if(import_result.edit_finished && importer_ && !ImGui::IsReadonly())
                 {
                     record_import_edit(ctx);
                 }
@@ -2117,6 +2145,7 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
                 result.edit_finished |= import_result.edit_finished;
             }
 
+            ImGui::BeginDisabled(ImGui::IsReadonly());
             if(ImGui::Button("Revert"))
             {
                 drop_staged_edits();
@@ -2126,6 +2155,7 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
             {
                 apply_import_settings(ctx);
             }
+            ImGui::EndDisabled();
 
             ImGui::EndTabItem();
         }
@@ -2219,8 +2249,13 @@ auto inspector_asset_handle_prefab::inspect(rtti::context& ctx,
             }
             else if(data)
             {
+                // A prefab the project does not own shows its content and takes no input: its entity's rows, menus
+                // and buttons would edit the file.
+                const bool is_editable = asset_actions::is_project_asset(data.id());
+                ImGui::BeginDisabled(!is_editable);
                 result |= ::unravel::inspect(ctx, prefab_entity);
-                if(result.edit_finished)
+                ImGui::EndDisabled();
+                if(result.edit_finished && is_editable)
                 {
                     fs::path absolute_key = fs::absolute(fs::resolve_protocol(data.id()));
                     asset_writer::atomic_save_to_file(absolute_key.string(), prefab_entity);
@@ -2233,10 +2268,12 @@ auto inspector_asset_handle_prefab::inspect(rtti::context& ctx,
         {
             ImGui::TextUnformatted("Import options");
 
+            ImGui::BeginDisabled(ImGui::IsReadonly());
             if(ImGui::Button("Reimport"))
             {
                 asset_actions::reimport(data);
             }
+            ImGui::EndDisabled();
 
             ImGui::EndTabItem();
         }
@@ -2288,10 +2325,12 @@ auto inspector_asset_handle_scene_prefab::inspect(rtti::context& ctx,
 
             ImGui::TextUnformatted("Import options");
 
+            ImGui::BeginDisabled(ImGui::IsReadonly());
             if(ImGui::Button("Reimport"))
             {
                 asset_actions::reimport(data);
             }
+            ImGui::EndDisabled();
 
             ImGui::EndChild();
             ImGui::EndTabItem();
@@ -2339,7 +2378,7 @@ auto inspector_asset_handle_physics_material::inspect(rtti::context& ctx,
             result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
         }
     }
-    if(result.edit_finished)
+    if(result.edit_finished && asset_actions::is_project_asset(data.id()))
     {
         asset_writer::atomic_save_to_file(data.id(), data);
     }
@@ -2568,7 +2607,10 @@ auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
 
                 if(clip)
                 {
+                    // Listening to a clip changes nothing of it: a read-only clip plays too.
+                    ImGui::PushReadonlyExempt();
                     inspect_clip(clip);
+                    ImGui::PopReadonlyExempt();
                 }
             }
 
@@ -2684,7 +2726,7 @@ auto inspector_asset_handle_ui_tree::inspect(rtti::context& ctx,
             result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
         }
     }
-    if(result.edit_finished)
+    if(result.edit_finished && asset_actions::is_project_asset(data.id()))
     {
         asset_writer::atomic_save_to_file(data.id(), data);
     }
@@ -2729,7 +2771,7 @@ auto inspector_asset_handle_style_sheet::inspect(rtti::context& ctx,
             result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
         }
     }
-    if(result.edit_finished)
+    if(result.edit_finished && asset_actions::is_project_asset(data.id()))
     {
         asset_writer::atomic_save_to_file(data.id(), data);
     }

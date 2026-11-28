@@ -6,24 +6,19 @@
  * particle from the draw's range of the sorted list (stage 4: interleaved key / slot pairs), and the particle
  * is evaluated at the emitter's current time from its birth record (particle_common.sh) - no per-particle data
  * is written per frame. The including shader declares the shader buffers of particle_common.sh and
- * s_particle_sorted at stage 4, then includes particle_common.sh.
+ * s_particle_sorted at stage 4, then includes particle_common.sh. The vertex shaders' buffers stay below stage 8
+ * (particle_gpu_schema.h): the cutout tables are blocks of s_particle_luts, and each GPU batch's live count follows
+ * the entries of s_particle_sorted.
  */
 
 #include "../view_origin.sh"
-
-#if !SHADER_BUFFER_TEXTURES
-/// Each GPU batch's live count (cs_particle_draw_args.eshader): a ribbon reads its neighbours within it. The vertex
-/// shaders' buffers stay below stage 8 (particle_gpu_schema.h).
-BUFFER_RO(s_particle_batch_counts, uint, 5);
-#endif
-/// Cutout tables (particle_cutout.h): per sheet frame 4 vec4, two polygon points (texture coordinates) each.
-SHADER_BUFFER_FLOAT4(s_particle_cutouts, 6);
 
 // View matrix (glm column-major upload). Billboard uses camera axes from the view matrix.
 uniform mat4 u_viewCamera;
 /// xyz = the camera's velocity (m/s), for particles that stretch against it.
 uniform vec4 u_particle_camera_velocity;
-/// x = the draw's first entry in the sorted list, y = its GPU batch, z = a CPU list's count (-1 on the GPU path).
+/// x = the draw's first entry in the sorted list, y = its GPU batch, z = a CPU list's count (-1 on the GPU path),
+/// w = where the GPU path's list holds its first batch count (cs_particle_draw_args.eshader).
 uniform vec4 u_particle_draw;
 
 /// Below this squared length a direction is too short to orient a quad.
@@ -33,6 +28,8 @@ uniform vec4 u_particle_draw;
 #define PARTICLE_RIBBON_TEXTURE_TILE 1.5
 /// Threshold of the ribbon facing stored as a float (ribbon_facing: camera 0, launch direction 1).
 #define PARTICLE_RIBBON_FACING_LAUNCH 0.5
+/// Steps of the search for a ribbon's first particle in a draw's list: a list holds fewer than 2^24 particles.
+#define PARTICLE_RIBBON_SEARCH_STEPS 24u
 
 /// The normal of a quad with axes @p axis_x and @p axis_y, on the side of @p toward_camera (the frame a lit particle
 /// is shaded in stays orthonormal in every render mode).
@@ -156,12 +153,26 @@ struct particle_vertex
 	/// This sheet frame's uv and the next one's (frame blending).
 	vec2 texcoord0;
 	vec2 texcoord1;
+	/// The particle's colour with the view's fades in its alpha (the camera fade, the draw distance fade, a width
+	/// below a pixel, a trail's taper): what the overdraw view draws.
 	vec4 color;
 	/// Frame blend, soft fade distance, view depth, erosion threshold.
 	vec4 particle;
 	uint emitter;
 	/// The unit quad's corner (-0.5..0.5) this vertex stands at, on the cutout once it moved there.
 	vec2 quad_corner;
+#if PARTICLE_GRAPH
+	// What a material reads besides (vs_particle.eshader's graph variants):
+	/// The particle's colour without the view's fades, and their product.
+	vec4 base_color;
+	float view_fade;
+	/// The whole quad's uv, 0..1 from its top left corner whatever the sheet frame; a trail's or ribbon's own.
+	vec2 surface_uv;
+	/// Age (seconds), life (0..1), a random number of the particle's own, speed (metres per second).
+	vec4 data;
+	/// The emitter's Custom Data curves at the particle's life, and the quad's width and height in world units.
+	vec4 custom;
+#endif
 };
 
 /// particle_place_at for this view: the position as an offset from the view origin (view_origin.sh), as the view's
@@ -205,6 +216,10 @@ void particle_trail_corner(particle_record record, vec2 corner, float width, vec
 	vertex.texcoord0 = vec2(corner.x + 0.5, corner.y);
 	vertex.texcoord1 = vertex.texcoord0;
 	vertex.color.a *= 1.0 - corner.y;
+#if PARTICLE_GRAPH
+	vertex.view_fade *= 1.0 - corner.y;
+	vertex.surface_uv = vertex.texcoord0;
+#endif
 	vertex.particle.z = vertex.clip.w;
 	// A lit trail shades as a tube: across it in its own plane, never along it.
 	vertex.axis_x = side;
@@ -213,14 +228,19 @@ void particle_trail_corner(particle_record record, vec2 corner, float width, vec
 	vertex.quad_corner = vec2(corner.x, 0.0);
 }
 
-/// The live particles the draw's list holds (a CPU list's count, or its GPU batch's).
+/// The live particles the draw's list holds (a CPU list's count, or its GPU batch's: a ribbon reads its neighbours
+/// within it).
 uint particle_draw_count()
 {
 #if SHADER_BUFFER_TEXTURES
 	// The texture variants draw CPU lists only: the CPU culls and sorts where the GPU cannot.
 	return uint(u_particle_draw.z);
 #else
-	return u_particle_draw.z >= 0.0 ? uint(u_particle_draw.z) : s_particle_batch_counts[uint(u_particle_draw.y)];
+	if(u_particle_draw.z >= 0.0)
+	{
+		return uint(u_particle_draw.z);
+	}
+	return shader_buffer_uint(s_particle_sorted, uint(u_particle_draw.w) + uint(u_particle_draw.y));
 #endif
 }
 
@@ -230,10 +250,11 @@ uint particle_sorted_slot(uint entry)
 	return shader_buffer_uint(s_particle_sorted, entry * 2u + 1u);
 }
 
-/// Entry @p index of the cutout tables.
+/// Entry @p index of the cutout tables (particle_cutout.h): per sheet frame 4 vec4 of the curve-set atlas, two polygon
+/// points (texture coordinates) each.
 vec4 particle_cutout_points(uint index)
 {
-	return shader_buffer_float4(s_particle_cutouts, index);
+	return shader_buffer_float4(s_particle_luts, index);
 }
 
 /// The particle of the draw's list entry @p index (its first entry is 0), and its position.
@@ -244,80 +265,238 @@ particle_state particle_ribbon_point(uint index, out particle_record record)
 	return particle_place_in_view(record);
 }
 
+/// The ribbon of the particle of the draw's list entry @p index: one uint of its record.
+uint particle_ribbon_of(uint index)
+{
+	uint slot = particle_sorted_slot(uint(u_particle_draw.x) + index);
+	return particle_record_quad(slot * (PARTICLE_RECORD_UINTS / 4u) + 3u).z >> 16u;
+}
+
+/// The first of the draw's @p count list entries whose particle is of ribbon @p ribbon or of a later one: the list
+/// holds the ribbons one after the other. A list holds fewer than 2^PARTICLE_RIBBON_SEARCH_STEPS particles.
+uint particle_ribbon_first(uint count, uint ribbon)
+{
+	uint low = 0u;
+	uint high = count;
+	for(uint search_step = 0u; search_step < PARTICLE_RIBBON_SEARCH_STEPS; ++search_step)
+	{
+		if(low < high)
+		{
+			uint middle = (low + high) / 2u;
+			if(particle_ribbon_of(middle) < ribbon)
+			{
+				low = middle + 1u;
+			}
+			else
+			{
+				high = middle;
+			}
+		}
+	}
+	return low;
+}
+
+/// The point at @p t between @p b and @p c on the smooth curve through @p a, @p b, @p c and @p d (Catmull-Rom).
+vec3 particle_curve_point(vec3 a, vec3 b, vec3 c, vec3 d, float t)
+{
+	float t2 = t * t;
+	float t3 = t2 * t;
+	return 0.5 * ((2.0 * b) + (c - a) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2 + (3.0 * b - a - 3.0 * c + d) * t3);
+}
+
+/// The way that curve runs at @p t.
+vec3 particle_curve_direction(vec3 a, vec3 b, vec3 c, vec3 d, float t)
+{
+	return 0.5 * ((c - a) + (2.0 * a - 5.0 * b + 4.0 * c - d) * (2.0 * t) + (3.0 * b - a - 3.0 * c + d) * (3.0 * t * t));
+}
+
 /**
- * A ribbon segment's corner of @p vertex: segment @p segment joins the list's particles segment (corner.y < 0) and
- * segment + 1 (oldest first), each end as wide as its particle, facing the camera across the ribbon's direction
- * there, or with its width along the particle's launch direction (ribbon_facing). The last segment has no far end
- * and collapses.
+ * Adds @p weight of what a ribbon carries at one of its particles, the list entry @p index, to @p vertex: its
+ * colour, its erosion, what a material reads of it, the texture coordinate along the ribbon (in texcoord0.y), and to
+ * @p width and @p fade its width and how far the view fades it (its distance, and a width below a pixel keeping one
+ * pixel and fading by the rest). @p ribbon_first and @p ribbon_last are the first and the last entry of its ribbon.
+ */
+void particle_ribbon_add(particle_record record,
+                         particle_state state,
+                         float weight,
+                         uint index,
+                         uint ribbon_first,
+                         uint ribbon_last,
+                         vec3 camera_position,
+                         inout float width,
+                         inout float fade,
+                         inout particle_vertex vertex)
+{
+	uint flags = particle_flags(record.emitter);
+	float own_width = particle_quad(record, state).x * particle_static(record.emitter, PARTICLE_STATIC_SIZE_AXES).x;
+	float distance = max(length(state.position - camera_position), 1e-4);
+	float own_fade = particle_distance_fade(record.emitter, flags, distance);
+	float pixel_size = particle_pixel_size(distance);
+	if((flags & PARTICLE_FLAG_SUBPIXEL_FADE) != 0u && own_width > 0.0 && own_width < pixel_size)
+	{
+		own_fade *= own_width / pixel_size;
+		own_width = pixel_size;
+	}
+	width += own_width * weight;
+	fade += own_fade * weight;
+	// Along the ribbon (ribbon_texture_mode in z): the particle's life, its place from its ribbon's head (the
+	// youngest, last of the ribbon in the list) to its tail, or its age in texture repeats (w per second).
+	vec4 texture_mode = particle_static(record.emitter, PARTICLE_STATIC_TRAIL);
+	float along_ribbon = state.life;
+	if(texture_mode.z > PARTICLE_RIBBON_TEXTURE_TILE)
+	{
+		along_ribbon = state.age * texture_mode.w;
+	}
+	else if(texture_mode.z > PARTICLE_RIBBON_TEXTURE_STRETCH)
+	{
+		along_ribbon = float(ribbon_last - index) / float(max(ribbon_last - ribbon_first, 1u));
+	}
+	vertex.texcoord0.y += along_ribbon * weight;
+	vertex.color += particle_color(record, state) * weight;
+	vertex.particle.w += particle_erosion(record, state) * weight;
+#if PARTICLE_GRAPH
+	vertex.data += particle_material_data(record, state) * weight;
+	vertex.custom.xy += particle_custom_data(record, state) * weight;
+#endif
+}
+
+/**
+ * A corner of a ribbon's stretch in @p vertex: instance @p segment joins the list's particle @p segment to the next
+ * one of its ribbon (the list is oldest first, ribbon after ribbon). @p corner.x runs across the ribbon (-0.5..0.5)
+ * and corner.y along the stretch, 0 at the older particle to 1 at the younger. Each end is as wide as its particle,
+ * facing the camera across the ribbon's direction there, or with its width along the particle's launch direction
+ * (ribbon_facing). Between the two the ribbon follows the smooth curve through the particles around them, and
+ * carries a mix of what the two carry. The last particle of a ribbon starts no stretch: its instance collapses.
+ *
+ * A row that stands on a particle is worked out from that particle and its two neighbours alone, the same way by
+ * the stretch before it and the one after it, so the two meet without a gap.
  */
 void particle_ribbon_corner(uint segment, vec2 corner, vec3 camera_position, inout particle_vertex vertex)
 {
 	uint count = particle_draw_count();
-	bool is_far = corner.y > 0.0;
-	uint index = min(segment + (is_far ? 1u : 0u), max(count, 1u) - 1u);
-	particle_record record;
-	particle_state anchor = particle_ribbon_point(index, record);
-	particle_record before_record;
-	particle_record after_record;
-	particle_state before = particle_ribbon_point(index > 0u ? index - 1u : index, before_record);
-	particle_state after = particle_ribbon_point(min(index + 1u, max(count, 1u) - 1u), after_record);
-	vec3 along = after.position - before.position;
+	uint last = max(count, 1u) - 1u;
+	uint older_index = min(segment, last);
+	uint younger_index = min(segment + 1u, last);
+	float t = clamp(corner.y, 0.0, 1.0);
+	uint own_ribbon = particle_ribbon_of(older_index);
+	bool is_joined = younger_index != older_index && particle_ribbon_of(younger_index) == own_ribbon;
+	if(!is_joined)
+	{
+		younger_index = older_index;
+	}
+	// Where the particle's ribbon starts and ends in the list: all of it for an emitter of one ribbon.
+	uint ribbon_first = 0u;
+	uint ribbon_last = last;
+	uint emitter = vertex.emitter;
+	vec4 ribbon = particle_static(emitter, PARTICLE_STATIC_RIBBON);
+	vec4 texture_mode = particle_static(emitter, PARTICLE_STATIC_TRAIL);
+	bool is_stretched = texture_mode.z > PARTICLE_RIBBON_TEXTURE_STRETCH && texture_mode.z <= PARTICLE_RIBBON_TEXTURE_TILE;
+	if(is_stretched && ribbon.y > 1.5)
+	{
+		ribbon_first = particle_ribbon_first(count, own_ribbon);
+		ribbon_last = max(particle_ribbon_first(count, own_ribbon + 1u), 1u) - 1u;
+	}
+	float width = 0.0;
+	float fade = 0.0;
+	vertex.texcoord0 = vec2(corner.x + 0.5, 0.0);
+	vertex.color = vec4_splat(0.0);
+	vertex.particle.w = 0.0;
+#if PARTICLE_GRAPH
+	vertex.data = vec4_splat(0.0);
+	vertex.custom = vec4_splat(0.0);
+#endif
+	vec3 position = vec3_splat(0.0);
+	vec3 along = vec3_splat(0.0);
+	vec3 launch = vec3_splat(0.0);
+	if(t <= 0.0 || t >= 1.0)
+	{
+		// A row on a particle: the particle, and the direction from the one before it in its ribbon to the one
+		// after, where it has them.
+		uint anchor_index = t >= 1.0 ? younger_index : older_index;
+		particle_record anchor_record;
+		particle_state anchor = particle_ribbon_point(anchor_index, anchor_record);
+		particle_record before_record;
+		particle_record after_record;
+		particle_state before = particle_ribbon_point(anchor_index > 0u ? anchor_index - 1u : anchor_index, before_record);
+		particle_state after = particle_ribbon_point(min(anchor_index + 1u, last), after_record);
+		vec3 before_position = before_record.ribbon == anchor_record.ribbon ? before.position : anchor.position;
+		vec3 after_position = after_record.ribbon == anchor_record.ribbon ? after.position : anchor.position;
+		position = anchor.position;
+		along = after_position - before_position;
+		launch = anchor_record.velocity;
+		vertex.velocity = anchor.velocity;
+		particle_ribbon_add(anchor_record, anchor, 1.0, anchor_index, ribbon_first, ribbon_last, camera_position, width, fade, vertex);
+	}
+	else
+	{
+		// A row between two particles: on the curve through them and their neighbours, which runs straight on past
+		// an end of the ribbon.
+		particle_record older_record;
+		particle_record younger_record;
+		particle_state older = particle_ribbon_point(older_index, older_record);
+		particle_state younger = particle_ribbon_point(younger_index, younger_record);
+		vec3 curve_before = older.position * 2.0 - younger.position;
+		vec3 curve_after = younger.position * 2.0 - older.position;
+		if(older_index > 0u)
+		{
+			particle_record previous_record;
+			particle_state previous = particle_ribbon_point(older_index - 1u, previous_record);
+			if(previous_record.ribbon == older_record.ribbon)
+			{
+				curve_before = previous.position;
+			}
+		}
+		if(younger_index < last)
+		{
+			particle_record next_record;
+			particle_state next = particle_ribbon_point(younger_index + 1u, next_record);
+			if(next_record.ribbon == younger_record.ribbon)
+			{
+				curve_after = next.position;
+			}
+		}
+		position = particle_curve_point(curve_before, older.position, younger.position, curve_after, t);
+		along = particle_curve_direction(curve_before, older.position, younger.position, curve_after, t);
+		launch = older_record.velocity * (1.0 - t) + younger_record.velocity * t;
+		vertex.velocity = older.velocity * (1.0 - t) + younger.velocity * t;
+		particle_ribbon_add(older_record, older, 1.0 - t, older_index, ribbon_first, ribbon_last, camera_position, width, fade, vertex);
+		particle_ribbon_add(younger_record, younger, t, younger_index, ribbon_first, ribbon_last, camera_position, width, fade, vertex);
+	}
+	if(!is_joined)
+	{
+		width = 0.0;
+	}
 	if(dot(along, along) < PARTICLE_MIN_DIRECTION_SQ)
 	{
 		along = vertex.axis_y;
 	}
-	vec3 side = cross(along, anchor.position - camera_position);
+	vec3 side = cross(along, position - camera_position);
 	side = dot(side, side) > PARTICLE_MIN_DIRECTION_SQ ? normalize(side) : vertex.axis_x;
-	uint flags = particle_flags(record.emitter);
-	if(particle_static(record.emitter, PARTICLE_STATIC_RIBBON).x > PARTICLE_RIBBON_FACING_LAUNCH)
+	if(ribbon.x > PARTICLE_RIBBON_FACING_LAUNCH)
 	{
 		// The launch velocity as it was at birth: a blade's direction then, wherever the blade is now.
-		vec3 launch = record.velocity;
-		if((flags & PARTICLE_FLAG_LOCAL_SPACE) != 0u)
+		if((particle_flags(emitter) & PARTICLE_FLAG_LOCAL_SPACE) != 0u)
 		{
-			launch = particle_local_to_world_vector(record.emitter, launch);
+			launch = particle_local_to_world_vector(emitter, launch);
 		}
 		side = dot(launch, launch) > PARTICLE_MIN_DIRECTION_SQ ? normalize(launch) : side;
 	}
-	float width = particle_quad(record, anchor).x * particle_static(record.emitter, PARTICLE_STATIC_SIZE_AXES).x;
-	if(segment + 1u >= count)
-	{
-		width = 0.0;
-	}
-	// The anchor's own fades: its distance, and a width below a pixel keeping one pixel and fading by the rest.
-	float distance = max(length(anchor.position - camera_position), 1e-4);
-	float fade = particle_distance_fade(record.emitter, flags, distance);
-	float pixel_size = particle_pixel_size(distance);
-	if((flags & PARTICLE_FLAG_SUBPIXEL_FADE) != 0u && width > 0.0 && width < pixel_size)
-	{
-		fade *= width / pixel_size;
-		width = pixel_size;
-	}
-	vertex.world_position = anchor.position + side * (corner.x * width);
+	vertex.world_position = position + side * (corner.x * width);
 	vertex.clip = mul(u_modelViewProj, vec4(vertex.world_position, 1.0));
-	// Along the ribbon (ribbon_texture_mode in z): the particle's life, its place from the head (the youngest,
-	// last in the list) to the tail, or its age in texture repeats (w per second).
-	vec4 texture_mode = particle_static(record.emitter, PARTICLE_STATIC_TRAIL);
-	float along_ribbon = anchor.life;
-	if(texture_mode.z > PARTICLE_RIBBON_TEXTURE_TILE)
-	{
-		along_ribbon = anchor.age * texture_mode.w;
-	}
-	else if(texture_mode.z > PARTICLE_RIBBON_TEXTURE_STRETCH)
-	{
-		along_ribbon = float(max(count, 1u) - 1u - index) / float(max(count, 2u) - 1u);
-	}
-	vertex.texcoord0 = vec2(corner.x + 0.5, along_ribbon);
 	vertex.texcoord1 = vertex.texcoord0;
-	vertex.color = particle_color(record, anchor);
+#if PARTICLE_GRAPH
+	vertex.base_color = vertex.color;
+	vertex.view_fade = fade;
+	vertex.surface_uv = vertex.texcoord0;
+	vertex.custom.zw = vec2_splat(width);
+#endif
 	vertex.color.a *= fade;
 	vertex.particle.z = vertex.clip.w;
-	vertex.particle.w = particle_erosion(record, anchor);
 	// A lit ribbon shades as a tube across it.
-	vertex.position = anchor.position;
+	vertex.position = position;
 	vertex.axis_x = side;
 	vertex.axis_y = normalize(along);
-	vertex.normal = particle_facing_normal(vertex.axis_x, vertex.axis_y, normalize(camera_position - anchor.position));
+	vertex.normal = particle_facing_normal(vertex.axis_x, vertex.axis_y, normalize(camera_position - position));
 	vertex.quad_corner = vec2(corner.x, 0.0);
 }
 
@@ -335,12 +514,17 @@ particle_vertex particle_build_vertex(vec3 corner_position, vec2 corner_uv, uint
 	vec3 stretch_velocity = state.velocity - u_particle_camera_velocity.xyz * facing.w;
 	vec2 quad = particle_quad_stretched(record, state, stretch_velocity);
 	vec4 color = particle_color(record, state);
+#if PARTICLE_GRAPH
+	vec4 base_color = color;
+#endif
+	// What the view fades the particle by: a size below a pixel and its distance.
+	float view_fade = 1.0;
 	float angle = particle_angle(record, state);
 	vec2 uv_scale;
 	float frame_blend;
 	vec4 sheet = particle_sheet(record, state, uv_scale, frame_blend);
 	// The cutout primitive (corner z = its vertex + 1) moves onto its frame's polygon once the table is in
-	// (the distance slot's w = its first vec4 + 1); until then it outlines the whole quad.
+	// (the distance slot's w = its first vec4 in the atlas + 1); until then it outlines the whole quad.
 	float cutout_table = particle_static(emitter, PARTICLE_STATIC_DISTANCE).w;
 	if(corner_position.z > 0.5 && cutout_table > 0.5)
 	{
@@ -377,15 +561,26 @@ particle_vertex particle_build_vertex(vec3 corner_position, vec2 corner_uv, uint
 		// Each axis below a pixel keeps one pixel; the opacity falls by the area the widening added, so a thin
 		// streak stays as long as it is and only fades.
 		vec2 widened = max(quad, vec2_splat(pixel_size));
-		color.a *= (quad.x * quad.y) / max(widened.x * widened.y, 1e-12);
+		view_fade *= (quad.x * quad.y) / max(widened.x * widened.y, 1e-12);
 		quad = widened;
 	}
-	color.a *= particle_distance_fade(emitter, flags, distance);
+	view_fade *= particle_distance_fade(emitter, flags, distance);
+	color.a *= view_fade;
 	vec3 camera_right = mtxGetColumn(u_viewCamera, 0).xyz;
 	vec3 camera_up = mtxGetColumn(u_viewCamera, 1).xyz;
 	vec3 right;
 	vec3 up;
 	particle_axes(camera_right, camera_up, view_direction, stretch_velocity, render.w, emitter_quat, facing.xyz, right, up);
+	// A particle at rest lies flat on its surface when its emitter aligns it (the ribbon slot's z): its record's
+	// velocity is the surface's normal then, and the quad's plane the surface's. Its front is the side the normal
+	// points to, as a billboard's is the side its camera is on.
+	if((record.motion_offset & PARTICLE_MOTION_REST_BIT) != 0u && particle_static(emitter, PARTICLE_STATIC_RIBBON).z > 0.5)
+	{
+		vec3 surface_normal = record.velocity;
+		vec3 across = abs(surface_normal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+		right = normalize(cross(across, surface_normal));
+		up = cross(right, surface_normal);
+	}
 	// align_to_direction: the quad turns in its own plane - the camera's, the emitter's XZ plane or the
 	// upright one - so the texture's top edge follows the motion projected into that plane. A stretched
 	// quad is aligned already.
@@ -428,6 +623,13 @@ particle_vertex particle_build_vertex(vec3 corner_position, vec2 corner_uv, uint
 	// Clip w is the view depth for a perspective projection; the soft fade compares it with the scene's.
 	vertex.particle = vec4(frame_blend, render.z, vertex.clip.w, particle_erosion(record, state));
 	vertex.color = color;
+#if PARTICLE_GRAPH
+	vertex.base_color = base_color;
+	vertex.view_fade = view_fade;
+	vertex.surface_uv = corner_uv;
+	vertex.data = particle_material_data(record, state);
+	vertex.custom = vec4(particle_custom_data(record, state), scale);
+#endif
 	if(abs(render.w - PARTICLE_RENDER_MODE_TRAIL) < 0.5)
 	{
 		particle_trail_corner(record, corner_position.xy, state.is_alive ? scale.x : 0.0, camera_position, vertex);

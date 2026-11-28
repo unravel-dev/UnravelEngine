@@ -77,20 +77,127 @@ namespace Unravel.Core
         /// <summary>It dies there.</summary>
         Kill = 1,
         /// <summary>It bounces off (restitution, friction), up to maxBounces times.</summary>
-        Bounce = 2
+        Bounce = 2,
+        /// <summary>It stays where it touched for the rest of its life.</summary>
+        Stick = 3
     }
 
     /// <summary>
-    /// What fires a sub-emitter. Matches C++ ps_soa::particle_event_type.
+    /// What a particle can touch. Matches C++ ps_soa::collision_source.
     /// </summary>
+    public enum ParticleCollisionSource
+    {
+        /// <summary>The emitter's collision planes.</summary>
+        Planes = 0,
+        /// <summary>The planes and the colliders of the physics world, while the game plays.</summary>
+        PhysicsColliders = 1,
+        /// <summary>
+        /// What a camera draws, found on the GPU while the camera shows the particles: no planes and no physics.
+        /// Such contacts send no events, leave no decals and fire no sub-emitters, and count 63 bounces at most.
+        /// </summary>
+        SceneSurfaces = 2
+    }
+
+    /// <summary>
+    /// How closely a particle's path is followed against physics colliders. Matches C++ ps_soa::collision_quality.
+    /// </summary>
+    public enum ParticleCollisionQuality
+    {
+        /// <summary>A second ahead, a few particle sizes off the path: the fewest casts.</summary>
+        Low = 0,
+        /// <summary>Half a second ahead, within a particle's size of the path.</summary>
+        Medium = 1,
+        /// <summary>A quarter of a second ahead, within half a particle's size.</summary>
+        High = 2
+    }
+
+    /// <summary>
+    /// What happened to a particle: what fires a sub-emitter, and the kinds of events an emitter sends to scripts
+    /// (combine them for <see cref="ParticleEmitterComponent.sendEvents"/>). Matches C++ ps_soa::particle_event_type.
+    /// </summary>
+    [Flags]
     public enum ParticleEventType
     {
+        /// <summary>No event.</summary>
+        None = 0,
         /// <summary>A particle is born.</summary>
         Birth = 1,
         /// <summary>A particle dies.</summary>
         Death = 2,
-        /// <summary>A particle reaches a collision plane.</summary>
+        /// <summary>A particle touches a collision plane or a collider.</summary>
         Collision = 4
+    }
+
+    /// <summary>
+    /// Something that happened to a particle, as <see cref="ScriptComponent.OnParticleEvents"/> and
+    /// <see cref="ScriptComponent.OnParticleHits"/> receive it.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ParticleEvent
+    {
+        /// <summary>What happened.</summary>
+        public ParticleEventType type;
+        /// <summary>Where the particle was, in world space.</summary>
+        public Vector3 position;
+        /// <summary>Its velocity then, in metres per second. A collision: the velocity it arrived with.</summary>
+        public Vector3 velocity;
+        /// <summary>A collision: the normal of the surface it touched.</summary>
+        public Vector3 normal;
+        /// <summary>A collision: where on the surface it touched (its position less its radius). Else its position.</summary>
+        public Vector3 surfacePoint;
+        /// <summary>Its color then, without the emitter's intensity: what <see cref="EmitParams.color"/> takes.</summary>
+        public Color color;
+        /// <summary>Its size then, in metres.</summary>
+        public float size;
+        /// <summary>A collision: the entity whose collider it touched. Invalid for a collision plane.</summary>
+        public Entity entity;
+    }
+
+    /// <summary>
+    /// The particle events of one emitter since the scripts were last told.
+    /// </summary>
+    public class ParticleEventBatch
+    {
+        /// <summary>The entity of the emitter the particles are of.</summary>
+        public Entity emitter;
+        /// <summary>The events, oldest first.</summary>
+        public ParticleEvent[] events;
+    }
+
+    /// <summary>
+    /// A decal an emitter leaves where one of its particles touches a surface, while the game plays.
+    /// </summary>
+    public struct ParticleCollisionDecal
+    {
+        /// <summary>Whether contacts leave decals.</summary>
+        public bool enabled;
+        /// <summary>The Decal material; null takes the engine's Default Decal.</summary>
+        public Material material;
+        /// <summary>Side of the square decal in metres, random between min and max.</summary>
+        public Range<float> size;
+        /// <summary>Seconds a decal stays before it fades out; 0 keeps it until newer decals take its place.</summary>
+        public float lifetime;
+        /// <summary>Seconds a decal takes to fade out.</summary>
+        public float fadeOut;
+        /// <summary>Chance (0..1) that a contact leaves one.</summary>
+        public float probability;
+        /// <summary>The decal follows the entity whose collider the particle touched.</summary>
+        public bool attachToEntity;
+    }
+
+    /// <summary>
+    /// The numbers of a <see cref="ParticleCollisionDecal"/> as native code reads them.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ParticleCollisionDecalValues
+    {
+        public int enabled;
+        public float sizeMin;
+        public float sizeMax;
+        public float lifetime;
+        public float fadeOut;
+        public float probability;
+        public int attachToEntity;
     }
 
     /// <summary>
@@ -148,6 +255,20 @@ namespace Unravel.Core
     }
 
     /// <summary>
+    /// Where lit particles take the light around them from. Matches C++ ps_soa::particle_ambient.
+    /// </summary>
+    public enum ParticleAmbientLight
+    {
+        /// <summary>The sky's light, the same wherever the particle is.</summary>
+        Sky = 0,
+        /// <summary>
+        /// The global illumination's light where the particle is, in a view whose global illumination runs, and the
+        /// sky's light elsewhere.
+        /// </summary>
+        GlobalIllumination = 1
+    }
+
+    /// <summary>
     /// How a ribbon's texture runs along it. Matches C++ ps_soa::ribbon_texture_mode.
     /// </summary>
     public enum ParticleRibbonTextureMode
@@ -169,6 +290,21 @@ namespace Unravel.Core
         Camera = 0,
         /// <summary>Along each particle's launch direction as it was at birth (a blade's arc as one sheet).</summary>
         LaunchDirection = 1
+    }
+
+    /// <summary>
+    /// How finely a ribbon bends between two particles. Matches C++ ps_soa::ribbon_smoothing.
+    /// </summary>
+    public enum ParticleRibbonSmoothing
+    {
+        /// <summary>Straight from particle to particle.</summary>
+        None = 0,
+        /// <summary>Two pieces a stretch, along a smooth curve.</summary>
+        Low = 1,
+        /// <summary>Four pieces a stretch.</summary>
+        Medium = 2,
+        /// <summary>Eight pieces a stretch.</summary>
+        High = 3
     }
 
     /// <summary>
@@ -770,7 +906,10 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Mesh render mode: the material of every part of the mesh (null: the mesh keeps its own materials).
+        /// What the particles draw. Sprites, trails and ribbons draw a Surface material whose output has Particle Use
+        /// on (<see cref="Material.particleUse"/>); null draws the engine's plain particle material. In Mesh render
+        /// mode it is the material of every part of the mesh (null, or one of the engine's particle materials: the
+        /// mesh keeps its own).
         /// </summary>
         public Material renderMaterial
         {
@@ -780,6 +919,32 @@ namespace Unravel.Core
                 return uid == Guid.Empty ? null : new Material { uid = uid };
             }
             set => internal_m2n_particle_emitter_set_render_material(owner, value?.uid ?? Guid.Empty);
+        }
+
+        /// <summary>
+        /// This emitter's overrides of its material: set a parameter or a texture here and only this emitter changes.
+        /// Emitters whose overrides hold the same values still draw together.
+        /// </summary>
+        public MaterialInstance materialInstance => instance ??= new MaterialInstance(owner, MaterialInstance.ParticleEmitterSlot);
+        private MaterialInstance instance;
+
+        /// <summary>
+        /// A value over each particle's life that the material reads through its Particle Custom Data node (X) and
+        /// gives a meaning, such as a dissolve amount or a glow.
+        /// </summary>
+        public Curve customDataX
+        {
+            get => new Curve(internal_m2n_particle_emitter_get_custom_data_x(owner).ToStructArray<CurveKey>());
+            set => internal_m2n_particle_emitter_set_custom_data_x(owner, RequireKeys(value?.keys, nameof(customDataX)).ToByteArray());
+        }
+
+        /// <summary>
+        /// A second value over each particle's life for the material's Particle Custom Data node (Y).
+        /// </summary>
+        public Curve customDataY
+        {
+            get => new Curve(internal_m2n_particle_emitter_get_custom_data_y(owner).ToStructArray<CurveKey>());
+            set => internal_m2n_particle_emitter_set_custom_data_y(owner, RequireKeys(value?.keys, nameof(customDataY)).ToByteArray());
         }
 
         /// <summary>
@@ -886,7 +1051,9 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Surface lighting: a tangent-space normal map (green up) laid out like the texture (null: spheres).
+        /// Surface lighting: a tangent-space normal map (green up) laid out like the texture (null: spheres). It is
+        /// the emitter's override of its material's Normal Map texture; an emitter drawing one of the engine's
+        /// particle materials takes the one that reads a normal map.
         /// </summary>
         public Texture normalTexture
         {
@@ -908,12 +1075,25 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// How the particles are lit; lit particles take their color as albedo (multiply blend stays unlit).
+        /// How a material that is lit shows on the particles: its Base Color as the light they give off (Unlit), or
+        /// lit by the scene. A material whose Shading Model is Unlit, as one that filters the scene, ignores it.
         /// </summary>
         public ParticleLighting lighting
         {
             get => (ParticleLighting)internal_m2n_particle_emitter_get_lighting(owner);
             set => internal_m2n_particle_emitter_set_lighting(owner, (int)value);
+        }
+
+        /// <summary>
+        /// Where lit particles take the light around them from. GlobalIllumination gives smoke in a dark room the
+        /// room's light. It needs a view whose global illumination runs and a material with at most two textures
+        /// that reads no Scene Color, and the emitters of a view lit this way share the probes for a box of
+        /// particles about eight metres a side near the camera. The particles keep the sky's light otherwise.
+        /// </summary>
+        public ParticleAmbientLight ambientLight
+        {
+            get => (ParticleAmbientLight)internal_m2n_particle_emitter_get_ambient_light(owner);
+            set => internal_m2n_particle_emitter_set_ambient_light(owner, (int)value);
         }
 
         /// <summary>
@@ -989,12 +1169,136 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// What a particle does where its path first crosses one of collisionPlanes (world-space emitters).
+        /// What a particle does where its path first touches a surface (world-space emitters): one of
+        /// collisionPlanes, a collider when collideWith is PhysicsColliders, or what a camera draws when it is
+        /// SceneSurfaces.
         /// </summary>
         public ParticleCollisionMode collision
         {
             get => (ParticleCollisionMode)internal_m2n_particle_emitter_get_collision(owner);
             set => internal_m2n_particle_emitter_set_collision(owner, (int)value);
+        }
+
+        /// <summary>
+        /// What the particles can touch: the collision planes alone, the colliders of the physics world too, or
+        /// the surfaces a camera draws.
+        /// </summary>
+        public ParticleCollisionSource collideWith
+        {
+            get => (ParticleCollisionSource)internal_m2n_particle_emitter_get_collide_with(owner);
+            set => internal_m2n_particle_emitter_set_collide_with(owner, (int)value);
+        }
+
+        /// <summary>
+        /// Physics colliders: the layers whose colliders the particles touch.
+        /// </summary>
+        public LayerMask collisionLayers
+        {
+            get => internal_m2n_particle_emitter_get_collision_layers(owner);
+            set => internal_m2n_particle_emitter_set_collision_layers(owner, value);
+        }
+
+        /// <summary>
+        /// Physics colliders: how closely the particles' paths are followed.
+        /// </summary>
+        public ParticleCollisionQuality collisionQuality
+        {
+            get => (ParticleCollisionQuality)internal_m2n_particle_emitter_get_collision_quality(owner);
+            set => internal_m2n_particle_emitter_set_collision_quality(owner, (int)value);
+        }
+
+        /// <summary>
+        /// Bounce: a particle that leaves a bounce slower than this, in metres per second, rests on the surface for
+        /// the rest of its life. 0 never rests.
+        /// </summary>
+        public float restSpeed
+        {
+            get => internal_m2n_particle_emitter_get_rest_speed(owner);
+            set => internal_m2n_particle_emitter_set_rest_speed(owner, value);
+        }
+
+        /// <summary>
+        /// Share (0..1) of the life a particle has left that each bounce and each stick takes.
+        /// </summary>
+        public float lifetimeLoss
+        {
+            get => internal_m2n_particle_emitter_get_lifetime_loss(owner);
+            set => internal_m2n_particle_emitter_set_lifetime_loss(owner, value);
+        }
+
+        /// <summary>
+        /// Bounce: half angle, in degrees, of the cone a bounce's direction is turned within at random.
+        /// </summary>
+        public float bounceScatter
+        {
+            get => internal_m2n_particle_emitter_get_bounce_scatter(owner);
+            set => internal_m2n_particle_emitter_set_bounce_scatter(owner, value);
+        }
+
+        /// <summary>
+        /// Particles at rest lie flat on the surface they rest on, and meshes stand upright on it.
+        /// </summary>
+        public bool alignToSurface
+        {
+            get => internal_m2n_particle_emitter_get_align_to_surface(owner);
+            set => internal_m2n_particle_emitter_set_align_to_surface(owner, value);
+        }
+
+        /// <summary>
+        /// The kinds of particle events the scripts on this entity (or on its nearest parent with scripts) receive in
+        /// <see cref="ScriptComponent.OnParticleEvents"/>. None by default: an emitter that sends nothing records
+        /// nothing.
+        /// </summary>
+        public ParticleEventType sendEvents
+        {
+            get => (ParticleEventType)internal_m2n_particle_emitter_get_send_events(owner);
+            set => internal_m2n_particle_emitter_set_send_events(owner, (int)value);
+        }
+
+        /// <summary>
+        /// The scripts on an entity whose collider a particle touches receive the collision in
+        /// <see cref="ScriptComponent.OnParticleHits"/>. Needs collideWith set to PhysicsColliders.
+        /// </summary>
+        public bool notifyHitEntities
+        {
+            get => internal_m2n_particle_emitter_get_notify_hit_entities(owner);
+            set => internal_m2n_particle_emitter_set_notify_hit_entities(owner, value);
+        }
+
+        /// <summary>
+        /// The decal each contact leaves on the surface, while the game plays.
+        /// </summary>
+        public ParticleCollisionDecal collisionDecal
+        {
+            get
+            {
+                var values = internal_m2n_particle_emitter_get_collision_decal(owner);
+                var uid = internal_m2n_particle_emitter_get_collision_decal_material(owner);
+                return new ParticleCollisionDecal
+                {
+                    enabled = values.enabled != 0,
+                    material = uid == Guid.Empty ? null : new Material { uid = uid },
+                    size = new Range<float>(values.sizeMin, values.sizeMax),
+                    lifetime = values.lifetime,
+                    fadeOut = values.fadeOut,
+                    probability = values.probability,
+                    attachToEntity = values.attachToEntity != 0
+                };
+            }
+            set
+            {
+                var values = new ParticleCollisionDecalValues
+                {
+                    enabled = value.enabled ? 1 : 0,
+                    sizeMin = value.size.Min,
+                    sizeMax = value.size.Max,
+                    lifetime = value.lifetime,
+                    fadeOut = value.fadeOut,
+                    probability = value.probability,
+                    attachToEntity = value.attachToEntity ? 1 : 0
+                };
+                internal_m2n_particle_emitter_set_collision_decal(owner, values, value.material?.uid ?? Guid.Empty);
+            }
         }
 
         /// <summary>
@@ -1058,6 +1362,27 @@ namespace Unravel.Core
         {
             get => (ParticleRibbonFacing)internal_m2n_particle_emitter_get_ribbon_facing(owner);
             set => internal_m2n_particle_emitter_set_ribbon_facing(owner, (int)value);
+        }
+
+        /// <summary>
+        /// Ribbon render mode: how many ribbons the particles form, 1 to 64. Each particle joins the next ribbon in
+        /// turn as it is born. Several ribbons are a stream each: its particles are born at one place of the shape and
+        /// launched one way at one speed. Ribbons a lower count leaves over fade out as they are.
+        /// </summary>
+        public int ribbonCount
+        {
+            get => (int)internal_m2n_particle_emitter_get_ribbon_count(owner);
+            set => internal_m2n_particle_emitter_set_ribbon_count(owner, (uint)Math.Max(value, 1));
+        }
+
+        /// <summary>
+        /// Ribbon render mode: how finely the ribbon bends between two particles, along a smooth curve through the
+        /// particles around them.
+        /// </summary>
+        public ParticleRibbonSmoothing ribbonSmoothing
+        {
+            get => (ParticleRibbonSmoothing)internal_m2n_particle_emitter_get_ribbon_smoothing(owner);
+            set => internal_m2n_particle_emitter_set_ribbon_smoothing(owner, (int)value);
         }
 
         /// <summary>
@@ -1200,7 +1525,11 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Gets or sets the texture asset used for particles.
+        /// The texture each particle shows: the emitter's override of its material's Texture node
+        /// (<see cref="materialInstance"/>), which the engine's particle materials read. An emitter without a
+        /// material takes the engine's plain particle material first. <see cref="Guid.Empty"/> drops the override,
+        /// so the material's own texture shows (white on the engine's particle materials). Nothing shows of it on a
+        /// material without that node.
         /// </summary>
         public Guid texture
         {
@@ -1435,7 +1764,8 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Whether the texture is used as color or as an alpha mask.
+        /// Whether the texture is used as color or as an alpha mask: which of the engine's particle materials the
+        /// emitter draws. Setting it does nothing while <see cref="renderMaterial"/> is a material of the project's own.
         /// </summary>
         public ParticleTextureMode textureMode
         {
@@ -1471,7 +1801,9 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// How particles blend over the scene.
+        /// How particles blend over the scene: their material's Blend Mode. Setting it picks the engine's particle
+        /// material of that blend, and does nothing while <see cref="renderMaterial"/> is a material of the project's
+        /// own, which keeps its Blend Mode.
         /// </summary>
         public ParticleBlendMode blendMode
         {
@@ -2236,7 +2568,19 @@ namespace Unravel.Core
         private static extern void internal_m2n_particle_emitter_set_render_mesh(Entity eid, Guid uid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Guid internal_m2n_particle_emitter_get_render_material(Entity eid);
+        internal static extern Guid internal_m2n_particle_emitter_get_render_material(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_custom_data_x(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_custom_data_x(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_custom_data_y(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_custom_data_y(Entity eid, byte[] keys);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_particle_emitter_set_render_material(Entity eid, Guid uid);
@@ -2326,6 +2670,12 @@ namespace Unravel.Core
         private static extern void internal_m2n_particle_emitter_set_lighting(Entity eid, int value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_ambient_light(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_ambient_light(Entity eid, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern uint internal_m2n_particle_emitter_get_light_count(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
@@ -2392,6 +2742,69 @@ namespace Unravel.Core
         private static extern void internal_m2n_particle_emitter_set_sub_emitters(Entity eid, byte[] subEmitters);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_collide_with(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_collide_with(Entity eid, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern LayerMask internal_m2n_particle_emitter_get_collision_layers(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_collision_layers(Entity eid, LayerMask layers);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_collision_quality(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_collision_quality(Entity eid, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_rest_speed(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_rest_speed(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_lifetime_loss(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_lifetime_loss(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_bounce_scatter(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_bounce_scatter(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_align_to_surface(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_align_to_surface(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_send_events(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_send_events(Entity eid, int mask);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_notify_hit_entities(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_notify_hit_entities(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern ParticleCollisionDecalValues internal_m2n_particle_emitter_get_collision_decal(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Guid internal_m2n_particle_emitter_get_collision_decal_material(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_collision_decal(Entity eid, ParticleCollisionDecalValues values, Guid material);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern float internal_m2n_particle_emitter_get_trail_length(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
@@ -2414,6 +2827,18 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_particle_emitter_set_ribbon_facing(Entity eid, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern uint internal_m2n_particle_emitter_get_ribbon_count(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_ribbon_count(Entity eid, uint count);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_ribbon_smoothing(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_ribbon_smoothing(Entity eid, int value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern float internal_m2n_particle_emitter_get_trail_width_end(Entity eid);

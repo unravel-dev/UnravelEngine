@@ -406,6 +406,8 @@ auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -
 auto deferred::run_gi_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool
 {
     gi_front_reflection_ = nullptr;
+    // Until this run's GI marks the radiance cache around its emitters, none of them reads it.
+    set_particle_gi_emitters({});
     if(!is_camera_run(rparams))
     {
         return false;

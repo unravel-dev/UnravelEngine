@@ -146,9 +146,60 @@ SAVE(prefab_statements)
 SAVE_INSTANTIATE(prefab_statements, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(prefab_statements, ser20::oarchive_binary_t);
 
+namespace
+{
+/// The overrides @p stated stands for when the component has no property of the name it states and others hold what
+/// that name stands for (their "replaces" attribute): one on each of them, as a whole. Empty when the component has
+/// the property, or none holds it.
+auto get_replacing_overrides(const prefab_property_override_data& stated) -> std::vector<prefab_property_override_data>
+{
+    std::vector<prefab_property_override_data> replacing;
+    const auto component_end = stated.component_path.find('/');
+    if(component_end == std::string::npos)
+    {
+        return replacing;
+    }
+    const auto property_end = stated.component_path.find_first_of("/[", component_end + 1);
+    const std::string component = stated.component_path.substr(0, component_end);
+    const std::string property = stated.component_path.substr(component_end + 1, property_end - component_end - 1);
+    const auto type = entt::resolve(entt::hashed_string::value(component.data(), component.size()));
+    if(!type || find_statement_property(type, property))
+    {
+        return replacing;
+    }
+    for(const auto& prop : entt::find_replacing_properties(type, property))
+    {
+        replacing.emplace_back(stated.instance_path,
+                               stated.entity_uuid,
+                               component + "/" + entt::get_name(prop),
+                               entt::get_pretty_name(type) + "/" + entt::get_pretty_name(prop));
+    }
+    return replacing;
+}
+
+/// Restates the overrides of names other properties hold the values of, on those properties.
+void restate_replaced_overrides(std::set<prefab_property_override_data>& overrides)
+{
+    std::vector<prefab_property_override_data> restated;
+    for(auto it = overrides.begin(); it != overrides.end();)
+    {
+        auto replacing = get_replacing_overrides(*it);
+        if(replacing.empty())
+        {
+            ++it;
+            continue;
+        }
+        restated.insert(restated.end(), std::make_move_iterator(replacing.begin()), std::make_move_iterator(replacing.end()));
+        it = overrides.erase(it);
+    }
+    overrides.insert(std::make_move_iterator(restated.begin()), std::make_move_iterator(restated.end()));
+}
+} // namespace
+
 LOAD(prefab_statements)
 {
     try_load(ar, ser20::make_nvp("overrides", obj.overrides));
+    restate_replaced_overrides(obj.overrides);
     try_load(ar, ser20::make_nvp("removed_entities", obj.removed_entities));
     try_load(ar, ser20::make_nvp("removed_instances", obj.removed_instances));
 }
@@ -237,6 +288,7 @@ LOAD(prefab_component)
         // (convert_legacy_override_state).
         legacy_override_state legacy;
         bool any = try_load(ar, ser20::make_nvp("property_overrides", legacy.property_overrides));
+        restate_replaced_overrides(legacy.property_overrides);
         any |= try_load(ar, ser20::make_nvp("removed_entities", legacy.removed_entities));
         if(any)
         {

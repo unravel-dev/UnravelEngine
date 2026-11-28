@@ -1,5 +1,6 @@
 #include "script_glue_common.h"
 #include "script_bindings.h"
+#include "gradient_script_helpers.h"
 
 #include "../script_interop.h"
 
@@ -33,7 +34,7 @@ auto to_reflected_enum(int value, const char* property) -> hpp::optional<Enum>
             return *as_enum;
         }
     }
-    APPLOG_WARNING("ParticleEmitterComponent.{}: {} is not one of its values; ignored.", property, value);
+    APPLOG_WARNING("ParticleEmitterComponent.{}: {} is not one of its values, so it is ignored.", property, value);
     return hpp::nullopt;
 }
 
@@ -707,6 +708,26 @@ void internal_m2n_particle_emitter_set_lighting(entt::entity id, int value)
     }
 }
 
+auto internal_m2n_particle_emitter_get_ambient_light(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_ambient_light());
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_ambient_light(entt::entity id, int value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        if(const auto valid = to_reflected_enum<ps_soa::particle_ambient>(value, "ambient light"))
+        {
+            comp->set_ambient_light(*valid);
+        }
+    }
+}
+
 auto internal_m2n_particle_emitter_get_light_count(entt::entity id) -> uint32_t
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
@@ -913,6 +934,43 @@ void internal_m2n_particle_emitter_set_ribbon_facing(entt::entity id, int value)
         if(const auto valid = to_reflected_enum<ps_soa::ribbon_facing>(value, "ribbonFacing"))
         {
             comp->set_ribbon_facing(*valid);
+        }
+    }
+}
+
+auto internal_m2n_particle_emitter_get_ribbon_count(entt::entity id) -> uint32_t
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_ribbon_count();
+    }
+    return 1;
+}
+
+void internal_m2n_particle_emitter_set_ribbon_count(entt::entity id, uint32_t count)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_ribbon_count(count);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_ribbon_smoothing(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_ribbon_smoothing());
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_ribbon_smoothing(entt::entity id, int value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        if(const auto valid = to_reflected_enum<ps_soa::ribbon_smoothing>(value, "ribbonSmoothing"))
+        {
+            comp->set_ribbon_smoothing(*valid);
         }
     }
 }
@@ -1714,22 +1772,7 @@ void internal_m2n_particle_emitter_set_texture_sheet_randomize(entt::entity id, 
 }
 
 //------------------------------
-// Gradients cross as arrays of keys. Managed code passes and receives them as raw bytes
-// (byte[] <-> the key structs below), which carry any blittable layout.
-
-/// Managed GradientKey.
-struct gradient_key
-{
-    float time{};
-    dotnetpp_backend::managed_interface::color color{};
-};
-
-/// Managed CurveKey.
-struct curve_value_key
-{
-    float time{};
-    float value{};
-};
+// Gradients cross as arrays of keys (gradient_script_helpers.h): the keys of the kinds only an emitter has.
 
 /// Managed MinMaxKey.
 struct curve_range_key
@@ -1757,68 +1800,6 @@ struct managed_emit_params
     uint32_t mask{};
 };
 
-/// @p base with the points of @p keys: keys that stay where @p base has keys keep their interpolation and
-/// tangents, so a curve read by a script and written back is unchanged.
-template<typename T, typename Key, typename ToElement>
-auto make_gradient(const std::vector<Key>& keys, ToElement&& to_element, const math::gradient<T>& base) -> math::gradient<T>
-{
-    typename math::gradient<T>::points_t points;
-    points.reserve(keys.size());
-    for(const Key& key : keys)
-    {
-        points.push_back({key.time, to_element(key)});
-    }
-    std::sort(points.begin(), points.end());
-    math::gradient<T> gradient = base;
-    gradient.set_points_keeping_shape(points);
-    return gradient;
-}
-
-auto to_value_keys(const math::gradient<float>& curve) -> std::vector<curve_value_key>
-{
-    std::vector<curve_value_key> keys;
-    for(const auto& point : curve.get_points())
-    {
-        keys.push_back({point.progress, point.element});
-    }
-    return keys;
-}
-
-auto to_value_curve(const std::vector<curve_value_key>& keys, const math::gradient<float>& base) -> math::gradient<float>
-{
-    return make_gradient<float>(keys,
-                                [](const curve_value_key& key)
-                                {
-                                    return key.value;
-                                },
-                                base);
-}
-
-auto to_color_keys(const math::gradient<math::color>& gradient) -> std::vector<gradient_key>
-{
-    using converter = dotnet::managed_interface::converter;
-    std::vector<gradient_key> keys;
-    for(const auto& point : gradient.get_points())
-    {
-        keys.push_back({point.progress,
-                        converter::convert<math::color, dotnetpp_backend::managed_interface::color>(point.element)});
-    }
-    return keys;
-}
-
-auto to_color_gradient(const std::vector<gradient_key>& keys, const math::gradient<math::color>& base)
-    -> math::gradient<math::color>
-{
-    using converter = dotnet::managed_interface::converter;
-    return make_gradient<math::color>(keys,
-                                      [](const gradient_key& key)
-                                      {
-                                          return converter::convert<dotnetpp_backend::managed_interface::color,
-                                                                    math::color>(key.color);
-                                      },
-                                      base);
-}
-
 auto to_range_keys(const math::gradient<frange_t>& gradient) -> std::vector<curve_range_key>
 {
     std::vector<curve_range_key> keys;
@@ -1832,12 +1813,12 @@ auto to_range_keys(const math::gradient<frange_t>& gradient) -> std::vector<curv
 auto to_range_gradient(const std::vector<curve_range_key>& keys, const math::gradient<frange_t>& base)
     -> math::gradient<frange_t>
 {
-    return make_gradient<frange_t>(keys,
-                                   [](const curve_range_key& key)
-                                   {
-                                       return frange_t(key.min, key.max);
-                                   },
-                                   base);
+    return make_script_gradient<frange_t>(keys,
+                                          [](const curve_range_key& key)
+                                          {
+                                              return frange_t(key.min, key.max);
+                                          },
+                                          base);
 }
 
 auto to_vector3_keys(const math::gradient<math::vec3>& curve) -> std::vector<curve_vector3_key>
@@ -1856,13 +1837,13 @@ auto to_vector3_curve(const std::vector<curve_vector3_key>& keys, const math::gr
     -> math::gradient<math::vec3>
 {
     using converter = dotnet::managed_interface::converter;
-    return make_gradient<math::vec3>(keys,
-                                     [](const curve_vector3_key& key)
-                                     {
-                                         return converter::convert<dotnetpp_backend::managed_interface::vector3,
-                                                                   math::vec3>(key.value);
-                                     },
-                                     base);
+    return make_script_gradient<math::vec3>(keys,
+                                            [](const curve_vector3_key& key)
+                                            {
+                                                return converter::convert<dotnetpp_backend::managed_interface::vector3,
+                                                                          math::vec3>(key.value);
+                                            },
+                                            base);
 }
 
 auto internal_m2n_particle_emitter_get_color_gradient(entt::entity id) -> std::vector<gradient_key>
@@ -2157,6 +2138,40 @@ void internal_m2n_particle_emitter_set_intensity_over_life(entt::entity id, cons
     }
 }
 
+auto internal_m2n_particle_emitter_get_custom_data_x(entt::entity id) -> std::vector<curve_value_key>
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return to_value_keys(comp->get_custom_data_x());
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_custom_data_x(entt::entity id, const std::vector<curve_value_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_custom_data_x(to_value_curve(keys, comp->get_custom_data_x()));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_custom_data_y(entt::entity id) -> std::vector<curve_value_key>
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return to_value_keys(comp->get_custom_data_y());
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_custom_data_y(entt::entity id, const std::vector<curve_value_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_custom_data_y(to_value_curve(keys, comp->get_custom_data_y()));
+    }
+}
+
 auto internal_m2n_particle_emitter_get_spin_over_life(entt::entity id) -> std::vector<curve_value_key>
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
@@ -2338,6 +2353,221 @@ void internal_m2n_particle_emitter_set_sub_emitters(entt::entity id, const std::
             sub_emitters.push_back(sub_emitter);
         }
         comp->set_sub_emitters(sub_emitters);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_collide_with(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_collide_with());
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_collide_with(entt::entity id, int value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        if(const auto valid = to_reflected_enum<ps_soa::collision_source>(value, "collideWith"))
+        {
+            comp->set_collide_with(*valid);
+        }
+    }
+}
+
+auto internal_m2n_particle_emitter_get_collision_layers(entt::entity id) -> int32_t
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_collision_layers().mask;
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_collision_layers(entt::entity id, int32_t mask)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_collision_layers(layer_mask{mask});
+    }
+}
+
+auto internal_m2n_particle_emitter_get_collision_quality(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_collision_quality());
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_collision_quality(entt::entity id, int value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        if(const auto valid = to_reflected_enum<ps_soa::collision_quality>(value, "collisionQuality"))
+        {
+            comp->set_collision_quality(*valid);
+        }
+    }
+}
+
+auto internal_m2n_particle_emitter_get_rest_speed(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_rest_speed();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_rest_speed(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_rest_speed(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_lifetime_loss(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_lifetime_loss();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_lifetime_loss(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_lifetime_loss(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_bounce_scatter(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_bounce_scatter();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_bounce_scatter(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_bounce_scatter(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_align_to_surface(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_align_to_surface();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_align_to_surface(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_align_to_surface(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_send_events(entt::entity id) -> int32_t
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return int32_t(comp->get_send_events());
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_send_events(entt::entity id, int32_t mask)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_send_events(uint32_t(mask));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_notify_hit_entities(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_notify_hit_entities();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_notify_hit_entities(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_notify_hit_entities(value);
+    }
+}
+
+/// The numbers of a managed ParticleCollisionDecal (ints where C# would marshal a bool differently from its layout);
+/// its material crosses as an asset id.
+struct collision_decal_values
+{
+    int32_t enabled{};
+    float size_min{};
+    float size_max{};
+    float lifetime{};
+    float fade_out{};
+    float probability{};
+    int32_t attach_to_entity{};
+};
+
+auto internal_m2n_particle_emitter_get_collision_decal(entt::entity id) -> collision_decal_values
+{
+    collision_decal_values values;
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        const particle_collision_decal& decal = comp->get_collision_decal();
+        values = {decal.enabled ? 1 : 0,
+                  decal.size.min,
+                  decal.size.max,
+                  decal.lifetime,
+                  decal.fade_out,
+                  decal.probability,
+                  decal.attach_to_entity ? 1 : 0};
+    }
+    return values;
+}
+
+auto internal_m2n_particle_emitter_get_collision_decal_material(entt::entity id) -> hpp::uuid
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_collision_decal().material.uid();
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_collision_decal(entt::entity id, const collision_decal_values& values, const hpp::uuid& material_uid)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        auto& am = engine::context().get_cached<asset_manager>();
+        particle_collision_decal decal;
+        decal.enabled = values.enabled != 0;
+        decal.material = material_uid.is_nil() ? asset_handle<material>{} : am.get_asset<material>(material_uid);
+        decal.size = frange_t(values.size_min, values.size_max);
+        decal.lifetime = values.lifetime;
+        decal.fade_out = values.fade_out;
+        decal.probability = values.probability;
+        decal.attach_to_entity = values.attach_to_entity != 0;
+        comp->set_collision_decal(decal);
     }
 }
 
@@ -2534,6 +2764,14 @@ void register_particle_emitter_component_script_bindings()
                             script_internal_call(internal_m2n_particle_emitter_get_intensity_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_set_intensity_over_life",
                             script_internal_call(internal_m2n_particle_emitter_set_intensity_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_custom_data_x",
+                            script_internal_call(internal_m2n_particle_emitter_get_custom_data_x));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_custom_data_x",
+                            script_internal_call(internal_m2n_particle_emitter_set_custom_data_x));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_custom_data_y",
+                            script_internal_call(internal_m2n_particle_emitter_get_custom_data_y));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_custom_data_y",
+                            script_internal_call(internal_m2n_particle_emitter_set_custom_data_y));
     reg.add_internal_call("internal_m2n_particle_emitter_get_spin_over_life",
                             script_internal_call(internal_m2n_particle_emitter_get_spin_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_set_spin_over_life",
@@ -2630,6 +2868,10 @@ void register_particle_emitter_component_script_bindings()
                             script_internal_call(internal_m2n_particle_emitter_get_lighting));
     reg.add_internal_call("internal_m2n_particle_emitter_set_lighting",
                             script_internal_call(internal_m2n_particle_emitter_set_lighting));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_ambient_light",
+                            script_internal_call(internal_m2n_particle_emitter_get_ambient_light));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_ambient_light",
+                            script_internal_call(internal_m2n_particle_emitter_set_ambient_light));
     reg.add_internal_call("internal_m2n_particle_emitter_get_light_count",
                             script_internal_call(internal_m2n_particle_emitter_get_light_count));
     reg.add_internal_call("internal_m2n_particle_emitter_set_light_count",
@@ -2674,6 +2916,48 @@ void register_particle_emitter_component_script_bindings()
                             script_internal_call(internal_m2n_particle_emitter_get_sub_emitters));
     reg.add_internal_call("internal_m2n_particle_emitter_set_sub_emitters",
                             script_internal_call(internal_m2n_particle_emitter_set_sub_emitters));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_collide_with",
+                            script_internal_call(internal_m2n_particle_emitter_get_collide_with));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_collide_with",
+                            script_internal_call(internal_m2n_particle_emitter_set_collide_with));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_collision_layers",
+                            script_internal_call(internal_m2n_particle_emitter_get_collision_layers));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_collision_layers",
+                            script_internal_call(internal_m2n_particle_emitter_set_collision_layers));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_collision_quality",
+                            script_internal_call(internal_m2n_particle_emitter_get_collision_quality));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_collision_quality",
+                            script_internal_call(internal_m2n_particle_emitter_set_collision_quality));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_rest_speed",
+                            script_internal_call(internal_m2n_particle_emitter_get_rest_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_rest_speed",
+                            script_internal_call(internal_m2n_particle_emitter_set_rest_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_lifetime_loss",
+                            script_internal_call(internal_m2n_particle_emitter_get_lifetime_loss));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_lifetime_loss",
+                            script_internal_call(internal_m2n_particle_emitter_set_lifetime_loss));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_bounce_scatter",
+                            script_internal_call(internal_m2n_particle_emitter_get_bounce_scatter));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_bounce_scatter",
+                            script_internal_call(internal_m2n_particle_emitter_set_bounce_scatter));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_align_to_surface",
+                            script_internal_call(internal_m2n_particle_emitter_get_align_to_surface));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_align_to_surface",
+                            script_internal_call(internal_m2n_particle_emitter_set_align_to_surface));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_send_events",
+                            script_internal_call(internal_m2n_particle_emitter_get_send_events));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_send_events",
+                            script_internal_call(internal_m2n_particle_emitter_set_send_events));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_notify_hit_entities",
+                            script_internal_call(internal_m2n_particle_emitter_get_notify_hit_entities));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_notify_hit_entities",
+                            script_internal_call(internal_m2n_particle_emitter_set_notify_hit_entities));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_collision_decal",
+                            script_internal_call(internal_m2n_particle_emitter_get_collision_decal));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_collision_decal_material",
+                            script_internal_call(internal_m2n_particle_emitter_get_collision_decal_material));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_collision_decal",
+                            script_internal_call(internal_m2n_particle_emitter_set_collision_decal));
     reg.add_internal_call("internal_m2n_particle_emitter_get_trail_length",
                             script_internal_call(internal_m2n_particle_emitter_get_trail_length));
     reg.add_internal_call("internal_m2n_particle_emitter_set_trail_length",
@@ -2690,6 +2974,14 @@ void register_particle_emitter_component_script_bindings()
                             script_internal_call(internal_m2n_particle_emitter_get_ribbon_facing));
     reg.add_internal_call("internal_m2n_particle_emitter_set_ribbon_facing",
                             script_internal_call(internal_m2n_particle_emitter_set_ribbon_facing));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_ribbon_count",
+                            script_internal_call(internal_m2n_particle_emitter_get_ribbon_count));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_ribbon_count",
+                            script_internal_call(internal_m2n_particle_emitter_set_ribbon_count));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_ribbon_smoothing",
+                            script_internal_call(internal_m2n_particle_emitter_get_ribbon_smoothing));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_ribbon_smoothing",
+                            script_internal_call(internal_m2n_particle_emitter_set_ribbon_smoothing));
     reg.add_internal_call("internal_m2n_particle_emitter_get_trail_width_end",
                             script_internal_call(internal_m2n_particle_emitter_get_trail_width_end));
     reg.add_internal_call("internal_m2n_particle_emitter_set_trail_width_end",

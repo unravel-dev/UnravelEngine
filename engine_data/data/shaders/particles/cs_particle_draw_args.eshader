@@ -13,10 +13,11 @@ BUFFER_RW(s_particle_counters, uint, 0);
 BUFFER_WO(s_particle_draw_args, uvec4, 1);
 /// Per batch: index count, first index.
 BUFFER_RO(s_particle_batches, uint, 2);
-/// Per batch: its live count, for the vertex shaders (ribbons read their neighbours within it).
-BUFFER_WO(s_particle_batch_counts, uint, 3);
+/// The view's sorted list: each batch's live count goes after its entries, where the vertex shaders read it
+/// (ribbons read their neighbours within it).
+BUFFER_WO(s_particle_sort, uint, 3);
 
-/// x = batches.
+/// x = batches, y = where s_particle_sort holds the first batch count.
 uniform vec4 u_particle_args;
 
 NUM_THREADS(64, 1, 1)
@@ -29,7 +30,7 @@ void main()
 	}
 	uint count = s_particle_counters[batch];
 	s_particle_counters[batch] = 0u;
-	s_particle_batch_counts[batch] = count;
+	s_particle_sort[uint(u_particle_args.y) + batch] = count;
 	uint index_count = s_particle_batches[batch * PARTICLE_BATCH_UINTS];
 	uint first_index = s_particle_batches[batch * PARTICLE_BATCH_UINTS + 1u];
 	// The layout of drawIndexedIndirect (bgfx_compute.sh), without its argument base: the particle index

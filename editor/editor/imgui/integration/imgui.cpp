@@ -719,8 +719,21 @@ void RenderIconCentered(ImDrawList* draw_list, const ImVec2& center, const char*
     draw_list->AddText(font, font_size, ImFloor(center - ink_center), color, icon);
 }
 
+namespace
+{
+/// An open PushReadonly scope: the text color where it opened, and whether it is the one that made its values read
+/// only (a scope inside a read-only one changes nothing).
+struct readonly_scope
+{
+    ImVec4 text_color{};
+    bool turns_readonly_on{};
+};
+ImVector<readonly_scope> g_readonly_scopes;
+} // namespace
+
 void PushReadonly(bool _enabled)
 {
+    g_readonly_scopes.push_back({GetStyleColorVec4(ImGuiCol_Text), _enabled && !IsReadonly()});
     _enabled |= IsReadonly();
     extern void PushItemFlag(int option, bool enabled);
     PushItemFlag(ImGuiItemFlags_ReadOnly, _enabled);
@@ -734,6 +747,31 @@ void PopReadonly()
     PopItemFlag();
     PopStyleColor();
     //PopStyleVar();
+    g_readonly_scopes.pop_back();
+}
+
+void PushReadonlyExempt()
+{
+    // The text color from before the scope that made the values around read only.
+    ImVec4 text = GetStyleColorVec4(ImGuiCol_Text);
+    for(int index = g_readonly_scopes.Size - 1; index >= 0 && IsReadonly(); --index)
+    {
+        if(g_readonly_scopes[index].turns_readonly_on)
+        {
+            text = g_readonly_scopes[index].text_color;
+            break;
+        }
+    }
+    extern void PushItemFlag(int option, bool enabled);
+    PushItemFlag(ImGuiItemFlags_ReadOnly, false);
+    PushStyleColor(ImGuiCol_Text, text);
+}
+
+void PopReadonlyExempt()
+{
+    extern void PopItemFlag();
+    PopItemFlag();
+    PopStyleColor();
 }
 
 void PushWindowFontSize(int size)

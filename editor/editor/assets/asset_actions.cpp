@@ -21,6 +21,8 @@
 #include <logging/logging.h>
 #include <string_utils/utils.h>
 
+#include <hpp/string_view.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -31,9 +33,63 @@
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
 
 namespace unravel::asset_actions
 {
+
+namespace
+{
+constexpr hpp::string_view PROJECT_PROTOCOL = "app:/";
+constexpr hpp::string_view PROJECT_DATA_FOLDER_NAME = "data";
+constexpr hpp::string_view ENGINE_PROTOCOL = "engine:/";
+} // namespace
+
+auto is_project_asset(const std::string& key) -> bool
+{
+    const hpp::string_view view(key);
+    if(!view.starts_with(PROJECT_PROTOCOL))
+    {
+        return false;
+    }
+    // The first folder under app:/ is the data folder, and no ".." leads out of it.
+    bool is_in_data = false;
+    bool is_first_folder = true;
+    for(size_t start = PROJECT_PROTOCOL.size(); start <= view.size();)
+    {
+        const size_t end = std::min(view.find('/', start), view.size());
+        const hpp::string_view segment = view.substr(start, end - start);
+        if(segment == "..")
+        {
+            return false;
+        }
+        if(!segment.empty() && segment != "." && std::exchange(is_first_folder, false))
+        {
+            is_in_data = segment == PROJECT_DATA_FOLDER_NAME;
+        }
+        start = end + 1;
+    }
+    return is_in_data;
+}
+
+auto get_asset_shipper(const std::string& key) -> std::string
+{
+    if(is_project_asset(key))
+    {
+        return {};
+    }
+    return hpp::string_view(key).starts_with(ENGINE_PROTOCOL) ? "the engine" : "the editor";
+}
+
+auto get_shipped_asset_note(const std::string& key) -> std::string
+{
+    const std::string shipper = get_asset_shipper(key);
+    if(shipper.empty())
+    {
+        return {};
+    }
+    return fs::path(key).filename().string() + " ships with " + shipper + ", so it is not changed here.";
+}
 
 auto create_animation_controller(rtti::context& ctx, const fs::path& absolute_path)
     -> asset_handle<animation_controller>
@@ -176,10 +232,28 @@ auto create_material_graph(rtti::context& ctx, const fs::path& absolute_path, co
 {
     auto& am = ctx.get_cached<asset_manager>();
     const auto key = fs::convert_to_protocol(absolute_path).generic_string();
+    if(!is_project_asset(key))
+    {
+        APPLOG_ERROR("{} is outside the project's data folder, so no material was made there.", key);
+        return {};
+    }
+    // A material made in a folder that does not exist yet makes the folder.
+    fs::error_code ec;
+    fs::create_directories(absolute_path.parent_path(), ec);
     auto mat = std::make_shared<graph_material>();
     mat->set_graph(graph);
     auto handle = am.get_asset_from_instance<material>(key, mat);
-    if(!handle || !asset_writer::atomic_save_to_file(handle.id(), handle))
+    if(!handle)
+    {
+        return {};
+    }
+    // The path holds a material already: the handle is that one's, not the new object's, and its file takes the
+    // graph. Asked of the loaded handle: a handle made from an instance gives it once its job has run.
+    if(handle.get() != mat)
+    {
+        return save_material_graph(ctx, handle, graph) ? handle : asset_handle<material>{};
+    }
+    if(!asset_writer::atomic_save_to_file(handle.id(), handle))
     {
         return {};
     }
@@ -208,6 +282,11 @@ auto save_material_graph(rtti::context& ctx, const asset_handle<material>& asset
 {
     if(!asset)
     {
+        return {};
+    }
+    if(!is_project_asset(asset.id()))
+    {
+        APPLOG_ERROR("{} Its graph was not saved.", get_shipped_asset_note(asset.id()));
         return {};
     }
     // Written from a copy: the loaded material keeps drawing its graph with its shader until the recompile this
@@ -519,6 +598,77 @@ auto duplicate_entry(const fs::path& absolute_path, std::string* error) -> fs::p
         }
     }
     return copy;
+}
+
+auto find_project_copy_obstacle(const std::string& key) -> std::string
+{
+    const std::string extension = fs::path(key).extension().string();
+    if(ex::is_format<gfx::shader>(extension))
+    {
+        return "A shader reads the files beside it, so a copy of it alone does not compile.";
+    }
+    if(ex::is_format<script>(extension))
+    {
+        return "A copy of a script would define its types a second time.";
+    }
+    return {};
+}
+
+auto copy_asset_into_project(rtti::context& ctx, const std::string& key, const fs::path& absolute_path, std::string* error)
+    -> std::string
+{
+    const fs::path source = fs::absolute(fs::resolve_protocol(key));
+    const std::string copy_key = fs::convert_to_protocol(absolute_path).generic_string();
+    fs::error_code ec;
+    if(const std::string obstacle = find_project_copy_obstacle(key); !obstacle.empty())
+    {
+        report_error(error, key + " was not copied. " + obstacle);
+        return {};
+    }
+    if(!is_project_asset(copy_key))
+    {
+        report_error(error, "A copy of " + key + " goes into the project, under its data folder.");
+        return {};
+    }
+    if(!fs::is_regular_file(source, ec))
+    {
+        report_error(error, key + " is not a file that can be copied.");
+        return {};
+    }
+    if(fs::exists(absolute_path, ec))
+    {
+        report_error(error, copy_key + " exists already.");
+        return {};
+    }
+    fs::create_directories(absolute_path.parent_path(), ec);
+    // The import settings go first, under an id of the copy's own: the watcher imports the file with the .meta it
+    // finds beside it.
+    auto& am = ctx.get_cached<asset_manager>();
+    const fs::path copy_meta = asset_writer::resolve_meta_file_for_key(copy_key);
+    asset_meta meta = am.get_metadata_for_key(key).meta;
+    const bool has_settings = !meta.uid.is_nil();
+    if(has_settings)
+    {
+        meta.uid = am.generate_metadata(fs::path(copy_key)).uid;
+        meta.generated = {};
+        if(!asset_writer::atomic_save_to_file(copy_meta.string(), meta))
+        {
+            report_error(error, "Could not write the import settings of " + copy_key + ".");
+            return {};
+        }
+    }
+    fs::copy_file(source, absolute_path, ec);
+    if(ec)
+    {
+        const std::string reason = ec.message();
+        if(has_settings)
+        {
+            fs::remove(copy_meta, ec);
+        }
+        report_error(error, "Could not copy " + key + " to " + copy_key + " (" + reason + ").");
+        return {};
+    }
+    return copy_key;
 }
 
 namespace

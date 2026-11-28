@@ -26,6 +26,10 @@ public:
 
     auto get_window_flags() const -> ImGuiWindowFlags override;
 
+    /// The folder its grid shows: where the editor puts a new asset the user gave no place for. The project's data
+    /// folder until the panel is first drawn.
+    auto get_current_folder() const -> fs::path;
+
 private:
     void draw(rtti::context& ctx);
     /// The folders under path as a tree; a click makes a folder the current one.
