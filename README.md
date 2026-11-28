@@ -8,11 +8,13 @@ A cross-platform C++20 game engine and editor with C# scripting.
 ![linux](https://github.com/unravel-dev/UnravelEngine/actions/workflows/linux.yml/badge.svg)
 ![macos](https://github.com/unravel-dev/UnravelEngine/actions/workflows/macos.yml/badge.svg)
 [![Release](https://img.shields.io/github/v/release/unravel-dev/UnravelEngine)](https://github.com/unravel-dev/UnravelEngine/releases)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/y8KjZ8MMP)
 
 [Download](https://github.com/unravel-dev/UnravelEngine/releases) |
 [Scripting API](https://unravel-dev.github.io/UnravelEngine/script-api/html/) |
 [Engine API](https://unravel-dev.github.io/UnravelEngine/engine-api/html/) |
-[Issues](https://github.com/unravel-dev/UnravelEngine/issues)
+[Issues](https://github.com/unravel-dev/UnravelEngine/issues) |
+[Discord](https://discord.gg/y8KjZ8MMP)
 
 </div>
 
@@ -311,6 +313,7 @@ bound to localhost only. **Windows > MCP Server** shows its status, the endpoint
 
 Bug reports and pull requests are welcome on [GitHub](https://github.com/unravel-dev/UnravelEngine).
 Please keep pull requests focused and follow the style of the surrounding code.
+For questions, help and discussion, join the [Discord server](https://discord.gg/y8KjZ8MMP).
 
 ## Third-party libraries
 
