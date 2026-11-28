@@ -110,6 +110,8 @@ vec3 v_normal = vec3(0.0, 0.0, 1.0)
 
 HLSL (fxc, D3D11; D3D12 compiles `s_6_0`):
 
+- Identifiers that are HLSL keywords: `vector`, `matrix`, `sample`, `point`, `line`, `triangle`, `linear`. They
+  fail the dxbc, dxil and spirv targets alike (shaderc parses HLSL for all three); GLSL accepts them.
 - `&&`, `||` and `?:` evaluate both sides: an expensive call behind a flag still runs. Use an explicit `if`.
 - A `continue` or `break` after an inner loop inside a branched block skips the outer loop's remaining iterations
   under DXBC: set a flag and test it at the outer loop's level.

@@ -162,6 +162,24 @@ Pipeline, targets and draws:
   (`PARTICLE_MOTION_REST_BIT`): the other bits are the age it came to rest at, its start is where it rests and its
   velocity holds the surface's unit normal. Both evaluators give it no velocity and no turbulence and stop its spin
   at that age.
+- An emitter's forces (Orbit, Radial, Converge To Point) warp the particle's own closed-form path in simulation
+  space, after drag, gravity and the speed curve and before turbulence (`apply_forces` in `particle_eval.cpp`,
+  `particle_apply_forces` in `particle_common.sh`): a particle keeps no state for them. Radial moves it along the
+  direction its path segment started in from the axis (the way it leaves when it starts on the axis), Orbit turns
+  the result about the axis, Converge blends it to the target: no step divides by the particle's distance from the
+  axis, so a path that crosses the axis stays smooth. The orbit and radial integrals count from the path segment's
+  start, and a segment that began after birth (a bounce) counts the converge curve from its value there, so a
+  segment begins where its record says; a bounce stores the velocity it left with minus what the forces add there
+  (`get_force_start_velocity`, in `cs_particle_collide.eshader` too). `PARTICLE_FLAG_FORCES` is the one force bit
+  the shaders read; which force is on they read from the static row.
+- The forces' paths hang on what moves between updates: the axis and its origin (the emitter, in world space) and
+  the point the particles converge on (`resolve_converge_target` reads that entity on one thread before the
+  emitters update in parallel). The bounds come from `widen_by_forces`. The forces' top speed is measured from the
+  box of the paths the CPU knows as of the last update (`force_reach_` in `bake_forces`), never from a box that
+  speed widens (bounces the CPU does not see): such a box would feed itself. Contacts found ahead of time are found
+  again when those inputs change (`follow_moved_forces`): while they keep changing, a particle touches the plane it
+  was before at the last update and is behind now (`schedule_carried_contact`, with `pending_contact::depth` to put
+  it back on the surface), and sweeps start over.
 - Particles collide with physics colliders through a cast function (`ps_soa::particle_sweep`) that
   `particle_system::resolve_collisions` builds from the scene's physics world: `ps_soa` includes no physics. The
   sweeps run on one thread after the parallel emitter update, at most `graphics.particles.max_collision_casts` a

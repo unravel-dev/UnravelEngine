@@ -82,6 +82,7 @@ SERIALIZE_INLINE(gizmos_data)
     try_serialize(ar, ser20::make_nvp("show_particle_emitter_bounds", obj.show_particle_emitter_bounds));
     try_serialize(ar, ser20::make_nvp("show_particle_emitter_shape", obj.show_particle_emitter_shape));
     try_serialize(ar, ser20::make_nvp("show_particle_emitter_direction", obj.show_particle_emitter_direction));
+    try_serialize(ar, ser20::make_nvp("show_particle_emitter_forces", obj.show_particle_emitter_forces));
 }
 
 SERIALIZE_INLINE(gizmo_setup)

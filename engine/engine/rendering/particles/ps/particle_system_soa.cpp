@@ -49,6 +49,8 @@ constexpr uint32_t k_contact_refine_steps = 16;
 constexpr float k_min_segment_factor = min_segment_factor;
 /// Below this scale determinant the emitter's basis cannot be inverted (a local-space emitter scaled to zero).
 constexpr float k_min_basis_determinant = 1.0e-12f;
+/// Below this length the forces' axis, turned by the emitter's transform, has no direction (a scale of zero along it).
+constexpr float k_min_force_axis_length = 1.0e-6f;
 constexpr float k_contact_lift = contact_lift;
 constexpr float k_rest_lift = rest_lift;
 /// Widest bounce scatter, degrees.
@@ -131,6 +133,10 @@ struct pending_contact
     float offset = 0.0f;
     /// The entity the collider belongs to (no_particle_entity for a plane).
     uint32_t entity = no_particle_entity;
+    /// How far behind that touching place the particle's path is at the tick, metres: the contact happens that far
+    /// back along the normal. More than 0 only where what moves the forces carried the particle through the surface
+    /// between two updates.
+    float depth = 0.0f;
 
     auto get_normal() const -> math::vec3
     {
@@ -342,6 +348,7 @@ public:
         backend_override_ = particle_sort_backend::gpu;
         has_backend_override_ = false;
         pending_bursts_.clear();
+        forget_forces();
         static_dirty_ = true;
         is_live_ = true;
     }
@@ -395,6 +402,7 @@ public:
         staged_slots_.clear();
         // A fixed seed replays from its start; a free one starts a fresh sequence.
         has_seed_ = false;
+        forget_forces();
     }
 
     void update(float dt,
@@ -423,12 +431,14 @@ public:
         }
         // The clock moves first and the parameters follow it, so contacts and deaths up to now are settled
         // (and their events placed) with this frame's transform.
+        const uint64_t settled = now_ticks_;
         advance_clock(double(sim_dt) + double(catch_up));
         const emitter_feature features = cap_features(desc.bake_features());
         sim_.features = features;
         refresh_luts(desc, features, gpu);
         bake_params(desc, features, transform);
         follow_contact_owner(desc);
+        follow_moved_forces(desc, features, settled);
         settle_particles(desc);
         wake_sweeps(desc);
         history_.expire(clock_seconds_);
@@ -568,7 +578,7 @@ public:
     }
 
     /// The fastest a particle can move, in metres per second: its launch at the speed curve's peak plus what the
-    /// acceleration adds over a life, at the easing's fastest rate.
+    /// acceleration adds over a life, at the easing's fastest rate, and what the forces add.
     auto get_top_speed() const -> float
     {
         float launch = 0.0f;
@@ -577,7 +587,8 @@ public:
             launch = math::max(launch, bucket.max_speed);
         }
         const lut_ranges ranges = luts_ ? luts_->ranges : lut_ranges{};
-        return (launch * ranges.speed_factor_max + math::length(params_.acceleration) * get_longest_life()) * ranges.ease_rate_max;
+        return (launch * ranges.speed_factor_max + math::length(params_.acceleration) * get_longest_life()) * ranges.ease_rate_max +
+               force_speed_;
     }
 
     /// The longest a trail of the emitter can be in the world, in metres: what the fastest particle covers in the
@@ -593,11 +604,12 @@ public:
         return reach + params_.turbulence.w;
     }
 
-    /// Whether every particle of the emitter moves along a straight line: nothing accelerates it and no turbulence
-    /// pushes it, so its trail is one straight piece.
+    /// Whether every particle of the emitter moves along a straight line: nothing accelerates it, no turbulence
+    /// pushes it and no force carries it off its path, so its trail is one straight piece.
     auto moves_straight() const -> bool
     {
-        return math::length(params_.acceleration) <= 0.0f && params_.turbulence.w <= 0.0f;
+        return math::length(params_.acceleration) <= 0.0f && params_.turbulence.w <= 0.0f &&
+               !has_feature(emitter_feature(params_.flags), emitter_feature::forces);
     }
 
     /// Points the emitter at the cutout table of @p key (0: none), releasing the one it held. Main thread.
@@ -895,6 +907,7 @@ private:
         if(contact)
         {
             event.normal = contact->get_normal();
+            event.position += event.normal * contact->depth;
             event.surface_point = event.position - event.normal * contact->offset;
             event.entity = contact->entity;
         }
@@ -965,11 +978,154 @@ private:
         }
     }
 
-    /// The first tick the particle's current path crosses a collision plane from its open side, before it dies;
-    /// 0 when it never does. @p out_plane receives the plane's index and @p out_radius how far from the plane the
-    /// particle's centre is then.
-    auto find_plane_contact(const emitter_desc& desc, const particle_record& record, uint32_t& out_plane, float& out_radius) const
-        -> uint64_t
+    /// What the forces' paths hang on besides each particle's record: the speeds, the axis and where it passes, and
+    /// the point the particles converge on, in simulation space.
+    struct force_anchor
+    {
+        math::vec3 forces{0.0f};
+        math::vec3 axis{0.0f, 1.0f, 0.0f};
+        math::vec3 origin{0.0f};
+        math::vec3 target{0.0f};
+
+        auto is_same(const force_anchor& other) const -> bool
+        {
+            return forces == other.forces && axis == other.axis && origin == other.origin && target == other.target;
+        }
+    };
+
+    /// What the emitter keeps of its forces from one update to the next starts over: a new emitter in the slot, or
+    /// the same one replayed.
+    void forget_forces()
+    {
+        force_speed_ = 0.0f;
+        force_reach_ = math::bbox(math::vec3(1.0f), math::vec3(-1.0f));
+        force_anchor_ = force_anchor{};
+        paths_searched_whole_ = true;
+    }
+
+    /**
+     * @brief The forces carry the particles along paths that hang on more than their records: the speeds, the axis
+     * and where it passes, the point they converge on. A contact found before any of those changed was found on
+     * another path, so the live paths' contacts are found again from @p settled, where the clock last stood. While
+     * those keep changing, a particle touches the plane it was before at the last update and is behind now
+     * (find_carried_contact); once they hold still, the rest of each path is searched as a new path's is.
+     */
+    void follow_moved_forces(const emitter_desc& desc, emitter_feature features, uint64_t settled)
+    {
+        force_anchor anchor;
+        if(has_feature(features, emitter_feature::forces))
+        {
+            anchor.forces = params_.forces;
+            anchor.axis = params_.force_axis;
+            anchor.origin = has_feature(features, emitter_feature::local_space) ? math::vec3(0.0f) : math::vec3(params_.local_to_world[3]);
+            anchor.target = params_.force_target;
+        }
+        const bool moved = !anchor.is_same(force_anchor_);
+        force_anchor_ = anchor;
+        if(!finds_contacts(desc) || !luts_ || get_live_count() == 0)
+        {
+            paths_searched_whole_ = true;
+            return;
+        }
+        if(!moved && paths_searched_whole_)
+        {
+            return;
+        }
+        const bool sweeps = sweeps_run_ && uses_scene_sweeps(desc);
+        const uint32_t high_water = slots_.get_high_water();
+        for(uint32_t slot = 0; slot < high_water; ++slot)
+        {
+            const particle_record& record = records_[slot];
+            if(!slots_.is_used(slot) || is_at_rest(record))
+            {
+                continue;
+            }
+            if(!pending_contacts_.empty())
+            {
+                pending_contacts_[slot] = pending_contact{};
+            }
+            if(moved)
+            {
+                schedule_carried_contact(desc, slot, settled);
+            }
+            else
+            {
+                schedule_plane_contact(desc, slot, settled);
+            }
+            if(sweeps)
+            {
+                restart_sweeps(slot, std::max(settled, get_birth_tick(record.birth) + record.motion_offset));
+            }
+        }
+        paths_searched_whole_ = !moved;
+    }
+
+    /**
+     * @brief Schedules, for now, the contact of the slot's particle with the collision plane that what moves the
+     * forces carried it through since @p settled: the plane it was before then, with the parameters of that update,
+     * and is behind now. Of several, the one it reached first on the straight way between the two places.
+     */
+    void schedule_carried_contact(const emitter_desc& desc, uint32_t slot, uint64_t settled)
+    {
+        const auto& planes = desc.motion.collision_planes;
+        const particle_record& record = records_[slot];
+        if(planes.empty() || desc.motion.space != simulation_space::world)
+        {
+            return;
+        }
+        const uint64_t birth = get_birth_tick(record.birth);
+        const uint64_t path_start = birth + record.motion_offset;
+        const uint64_t before = std::max(path_start, settled);
+        const uint64_t now = std::min(birth + record.lifespan, now_ticks_);
+        if(now <= before)
+        {
+            return;
+        }
+        emitter_eval_params earlier = previous_params_;
+        earlier.now = uint32_t(before);
+        const math::vec3 was = evaluate_particle(record, earlier, *luts_).position;
+        const math::vec3 is = evaluate_at(record, now).position;
+        const math::vec3 was_origin(previous_params_.local_to_world[3]);
+        const math::vec3 origin(params_.local_to_world[3]);
+        const particle_state start_state = evaluate_at(record, path_start);
+        const float radius = get_contact_radius(desc, record, start_state);
+        float earliest = 2.0f;
+        uint32_t touched = 0;
+        float touched_radius = 0.0f;
+        float depth = 0.0f;
+        for(uint32_t plane = 0; plane < uint32_t(planes.size()); ++plane)
+        {
+            // As in find_plane_contact: it touches with its edge, never further than its path starts from the plane.
+            const float reach = math::clamp(plane_distance(planes[plane], start_state.position, origin), 0.0f, radius);
+            const float open = plane_distance(planes[plane], was, was_origin) - reach;
+            const float closed = plane_distance(planes[plane], is, origin) - reach;
+            if(open < 0.0f || closed >= 0.0f)
+            {
+                continue;
+            }
+            const float share = open / (open - closed);
+            if(share < earliest)
+            {
+                earliest = share;
+                touched = plane;
+                touched_radius = reach;
+                depth = -closed;
+            }
+        }
+        if(earliest <= 1.0f)
+        {
+            set_pending_contact(slot, now, math::vec3(planes[touched]), touched_radius, no_particle_entity, depth);
+        }
+    }
+
+    /// The first tick, from clock tick @p from on, the particle's current path crosses a collision plane from its
+    /// open side, before it dies; 0 when it never does. @p out_plane receives the plane's index and @p out_radius how
+    /// far from the plane the particle's centre is then.
+    auto find_plane_contact(const emitter_desc& desc,
+                            const particle_record& record,
+                            uint64_t from,
+                            uint32_t& out_plane,
+                            float& out_radius) const -> uint64_t
     {
         const auto& planes = desc.motion.collision_planes;
         if(!finds_contacts(desc) || planes.empty() || !luts_ || desc.motion.space != simulation_space::world ||
@@ -979,7 +1135,8 @@ private:
         }
         const math::vec3 origin(params_.local_to_world[3]);
         const uint64_t birth = get_birth_tick(record.birth);
-        const uint64_t start = birth + record.motion_offset;
+        const uint64_t path_start = birth + record.motion_offset;
+        const uint64_t start = std::max(path_start, from);
         const uint64_t end = birth + record.lifespan;
         if(end <= start)
         {
@@ -987,7 +1144,7 @@ private:
         }
         // The particle touches a plane with its edge: half its size (at the start of this path) from it, and never
         // further than it starts, so one born or bounced closer than that still touches instead of passing through.
-        const particle_state start_state = evaluate_at(record, start);
+        const particle_state start_state = evaluate_at(record, path_start);
         const float radius = get_contact_radius(desc, record, start_state);
         hpp::small_vector<float, 8> radii;
         for(const auto& plane : planes)
@@ -1056,12 +1213,13 @@ private:
         }
     }
 
-    /// Schedules the slot's contact with the first collision plane its path crosses.
-    void schedule_plane_contact(const emitter_desc& desc, uint32_t slot)
+    /// Schedules the slot's contact with the first collision plane its path crosses from clock tick @p from on (all
+    /// of the path by default).
+    void schedule_plane_contact(const emitter_desc& desc, uint32_t slot, uint64_t from = 0)
     {
         uint32_t plane = 0;
         float radius = 0.0f;
-        const uint64_t contact = find_plane_contact(desc, records_[slot], plane, radius);
+        const uint64_t contact = find_plane_contact(desc, records_[slot], from, plane, radius);
         if(contact != 0)
         {
             set_pending_contact(slot, contact, math::vec3(desc.motion.collision_planes[plane]), radius, no_particle_entity);
@@ -1070,7 +1228,7 @@ private:
 
     /// The slot's particle reaches a surface of unit normal @p normal at @p tick, its centre @p offset metres from
     /// it: the contact it heads for from now on, in place of a later one.
-    void set_pending_contact(uint32_t slot, uint64_t tick, const math::vec3& normal, float offset, uint32_t entity)
+    void set_pending_contact(uint32_t slot, uint64_t tick, const math::vec3& normal, float offset, uint32_t entity, float depth = 0.0f)
     {
         // Sized when an emitter's first particle heads for a surface: most emitters collide with nothing.
         if(pending_contacts_.empty())
@@ -1084,6 +1242,7 @@ private:
         pending.normal[2] = normal.z;
         pending.offset = offset;
         pending.entity = entity;
+        pending.depth = depth;
         contacts_.push(tick, slot);
     }
 
@@ -1439,8 +1598,10 @@ private:
         {
             return;
         }
-        // Where and how fast it arrives, before the contact takes any of its life.
-        const particle_state state = evaluate_at(record, tick);
+        // Where and how fast it arrives, before the contact takes any of its life: at the surface, also when its path
+        // is behind it by then.
+        particle_state state = evaluate_at(record, tick);
+        state.position += contact.get_normal() * contact.depth;
         if(!is_settling_hop(slot, tick, state, contact))
         {
             record_event(desc, particle_event_type::collision, record, tick, &contact);
@@ -1572,7 +1733,8 @@ private:
                      position,
                      0.0f,
                      math::max(remaining, k_min_particle_lifespan),
-                     luts_->ranges.size_peak * record.size_factor + record.size_offset);
+                     luts_->ranges.size_peak * record.size_factor + record.size_offset,
+                     float(double(record.lifespan) / ticks_per_second));
     }
 
     /// The slot's particle leaves the surface of unit normal @p normal at @p tick (@p state) with @p bounced: a new
@@ -1589,9 +1751,14 @@ private:
         particle_record& record = records_[slot];
         const uint64_t birth = get_birth_tick(record.birth);
         const float lifespan = float(double(record.lifespan) / ticks_per_second);
-        const float segment_factor = get_motion_factor(state.age / lifespan);
-        record.set_start(state.position + normal * k_contact_lift);
-        record.set_velocity(math::abs(segment_factor) >= k_min_segment_factor ? bounced / segment_factor : bounced);
+        const float life = state.age / lifespan;
+        const float segment_factor = get_motion_factor(life);
+        const math::vec3 start = state.position + normal * k_contact_lift;
+        // The forces go on moving the particle from its new start: the path stores the bounce less what they add
+        // there, so it leaves the surface at the bounced velocity.
+        const math::vec3 launched = bounced - get_force_start_velocity(params_, *luts_, start, bounced, life, lifespan);
+        record.set_start(start);
+        record.set_velocity(math::abs(segment_factor) >= k_min_segment_factor ? launched / segment_factor : launched);
         record.motion_offset = uint32_t(tick - birth);
         ++bounce_counts_[slot];
         restage(slot);
@@ -1601,7 +1768,7 @@ private:
         const float reach_speed =
             math::length(record.get_velocity()) * lifespan / math::max(remaining, k_min_particle_lifespan);
         history_.add(double(tick) / ticks_per_second, state.position, reach_speed, remaining,
-                     size_peak * record.size_factor + record.size_offset);
+                     size_peak * record.size_factor + record.size_offset, lifespan);
         start_path(desc, slot, tick);
     }
 
@@ -1733,6 +1900,7 @@ private:
                                              particle_random(seed_, k_noise_offset_salt + 2u));
         }
         params.local_to_world = transform.current;
+        bake_forces(desc, features, transform, scale, params);
         // Sizes follow the scale's magnitude: a mirrored emitter draws its particles at full size.
         const math::vec3 magnitude = math::abs(scale);
         params.system_scale = (magnitude.x + magnitude.y + magnitude.z) / 3.0f;
@@ -1764,6 +1932,7 @@ private:
             params.origin_motion = transform.current.get_position() - transform.previous.get_position();
             previous_emitter_rotation_ = transform.previous.get_rotation();
         }
+        previous_params_ = sim_.first_update ? params : params_;
         params_ = params;
         render_desc_ = desc.render;
         const static_row row = pack_static_row(params);
@@ -1772,6 +1941,69 @@ private:
             static_row_ = row;
             static_dirty_ = true;
         }
+    }
+
+    /**
+     * @brief Fills the forces of @p params (its local_to_world set): the speeds, the axis and the target in simulation
+     * space, and the fastest the forces move a particle, from the box its paths were in last frame (force_reach_).
+     */
+    void bake_forces(const emitter_desc& desc,
+                     emitter_feature features,
+                     const emitter_transform_state& transform,
+                     const math::vec3& scale,
+                     emitter_eval_params& params)
+    {
+        force_speed_ = 0.0f;
+        if(!has_feature(features, emitter_feature::forces))
+        {
+            return;
+        }
+        const bool is_local = desc.motion.space == simulation_space::local;
+        const math::mat3 basis(params.local_to_world);
+        const math::vec3 axis = get_force_axis(desc.motion);
+        const math::vec3 world_origin(params.local_to_world[3]);
+        const math::vec3 turned = basis * axis;
+        const math::vec3 world_axis = math::length(turned) > k_min_force_axis_length ? math::normalize(turned) : axis;
+        params.forces = math::vec3(has_feature(features, emitter_feature::orbit) ? math::radians(desc.motion.orbit_speed) : 0.0f,
+                                   has_feature(features, emitter_feature::radial) ? desc.motion.radial_speed : 0.0f,
+                                   has_feature(features, emitter_feature::converge) ? 1.0f : 0.0f);
+        params.force_axis = is_local ? axis : world_axis;
+        params.force_target = transform.converge_target;
+        if(is_local)
+        {
+            // A basis scaled flat has no inverse: its particles converge on the emitter's origin.
+            const bool is_invertible = math::abs(glm::determinant(basis)) > k_min_basis_determinant;
+            params.force_target = is_invertible ? math::vec3(glm::inverse(params.local_to_world) * math::vec4(transform.converge_target, 1.0f))
+                                                : math::vec3(0.0f);
+        }
+        // How far the particles were from the axis and from the target, at most, in the world.
+        const math::bbox& box = force_reach_;
+        float radius = 0.0f;
+        float distance = 0.0f;
+        for(uint32_t corner = 0; corner < 8 && box.min.x <= box.max.x; ++corner)
+        {
+            const math::vec3 point((corner & 1u) != 0u ? box.max.x : box.min.x,
+                                   (corner & 2u) != 0u ? box.max.y : box.min.y,
+                                   (corner & 4u) != 0u ? box.max.z : box.min.z);
+            const math::vec3 offset = point - world_origin;
+            radius = math::max(radius, math::length(offset - world_axis * math::dot(offset, world_axis)));
+            distance = math::max(distance, math::distance(point, transform.converge_target));
+        }
+        const lut_ranges ranges = luts_ ? luts_->ranges : lut_ranges{};
+        const float world_scale = is_local ? get_max_axis_scale(scale) : 1.0f;
+        // The shortest life a live particle has: what the emitter gives, or less where a burst or a contact cut it.
+        const float authored_life = math::min(desc.motion.lifetime.min, desc.motion.lifetime.max);
+        const float live_life = history_.get_shortest_life();
+        const float shortest_life = math::max(live_life > 0.0f ? math::min(live_life, authored_life) : authored_life, k_min_particle_lifespan);
+        float speed = math::abs(params.forces.x) * ranges.orbit_factor_max * radius +
+                      math::abs(params.forces.y) * ranges.radial_factor_max * world_scale;
+        if(params.forces.z != 0.0f)
+        {
+            speed += distance * ranges.converge_slope_max / shortest_life;
+        }
+        params.force_speed = speed;
+        // get_top_speed counts in the simulation's own lengths.
+        force_speed_ = world_scale > 0.0f ? speed / world_scale : speed;
     }
 
     /// The largest of @p scale's axes, by magnitude.
@@ -2196,7 +2428,7 @@ private:
         restage(slot);
         record_event(desc, particle_event_type::birth, records_[slot], birth);
         const float size_peak = luts_ ? luts_->ranges.size_peak : 1.0f;
-        history_.add(clock_seconds_ - double(age), start, math::length(velocity), lifespan, size_peak * pick.factor + pick.offset);
+        history_.add(clock_seconds_ - double(age), start, math::length(velocity), lifespan, size_peak * pick.factor + pick.offset, lifespan);
         return true;
     }
 
@@ -2224,11 +2456,35 @@ private:
         motion.has_speed_curve = has_feature(features, emitter_feature::speed_curve);
         motion.bounces_unseen = collides_with_scene_ && desc.motion.collision == collision_mode::bounce &&
                                 g_quality.scene_collision != scene_collision::off;
+        if(has_feature(features, emitter_feature::forces))
+        {
+            const float radial = math::abs(params_.forces.y);
+            const bool is_outward = params_.forces.y > 0.0f;
+            motion.orbits = params_.forces.x != 0.0f;
+            motion.moves_radially = params_.forces.y != 0.0f;
+            motion.radial_out_per_second = radial * (is_outward ? motion.ranges.radial_rise : motion.ranges.radial_fall);
+            motion.radial_in_per_second = radial * (is_outward ? motion.ranges.radial_fall : motion.ranges.radial_rise);
+            motion.converges = params_.forces.z != 0.0f;
+            motion.force_origin = is_local ? math::vec3(0.0f) : math::vec3(params_.local_to_world[3]);
+            motion.force_axis = params_.force_axis;
+            motion.force_target = params_.force_target;
+            motion.force_speed = force_speed_;
+        }
         math::bbox bounds = compute_motion_bounds(history_, region, motion);
+        // The reach of bounces the CPU does not see grows with the forces' speed: that speed is measured from the
+        // paths without them, or the box would feed itself.
+        math::bbox known = bounds;
+        if(motion.bounces_unseen && has_feature(features, emitter_feature::forces))
+        {
+            motion.bounces_unseen = false;
+            known = compute_motion_bounds(history_, region, motion);
+        }
         if(is_local)
         {
             bounds.mul(world);
+            known.mul(world);
         }
+        force_reach_ = known;
         return bounds;
     }
 
@@ -2254,6 +2510,7 @@ private:
             if(!tracks_centers)
             {
                 sim_.lit_bounds = fixed;
+                force_reach_ = fixed;
             }
             return;
         }
@@ -2339,6 +2596,17 @@ private:
     /// The cutout table the emitter points at, and its first vec4 + 1 as last read (0 while it bakes).
     uint64_t cutout_key_ = 0;
     float cutout_table_ = 0.0f;
+    /// The fastest the forces move a particle, in the simulation space's lengths per second (bake_forces).
+    float force_speed_ = 0.0f;
+    /// The world-space box the forces' speed is measured from: the particles' paths as the CPU knows them, as of the
+    /// last update (the fixed bounds of an emitter that walks no paths). Empty until then.
+    math::bbox force_reach_{math::vec3(1.0f), math::vec3(-1.0f)};
+    /// What the forces' paths hung on at the last update, and whether the live paths' contacts were searched over
+    /// all that is left of them since those last changed (follow_moved_forces).
+    force_anchor force_anchor_{};
+    bool paths_searched_whole_ = true;
+    /// The parameters of the update before this one: where the particles were then (schedule_carried_contact).
+    emitter_eval_params previous_params_{};
     bool static_dirty_ = true;
     particle_sort_backend backend_override_ = particle_sort_backend::gpu;
     bool has_backend_override_ = false;

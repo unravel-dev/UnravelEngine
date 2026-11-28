@@ -73,6 +73,10 @@ Running and testing
   ("N failing check(s); M suite(s) did not pass"). With more than one suite it runs them in
   worker processes and prints a failing suite's whole output at its end; `--jobs 1` runs them in
   one process as they go.
+- A suite that hits an assert in the Debug runner puts an assert dialog on the screen and is reported as
+  `CRASH ... exit code -2147483645 (0x80000003)`. Keep the runner's whole output in a file and read its summary
+  lines ("N suites: ... crashed", "N checks, ..."): with more than one suite a result line starts with `[ n/m]`,
+  so a filter for lines that start with PASS or FAIL hides a crash.
 - A runner whose own CPU time stays flat while `shaderc` children run is working, not hung.
 - A test that asserts a duration waits on the clock it checks (loop on `steady_clock::now()`
   with short sleeps); one `sleep_for` can end early by part of a timer tick (15.6 ms on

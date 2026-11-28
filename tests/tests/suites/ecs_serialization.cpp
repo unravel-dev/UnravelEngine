@@ -2098,11 +2098,14 @@ SAVE_INLINE(legacy_emitter_document)
     try_save(ar, ser20::make_nvp("normal_texture", obj.normal_texture));
 }
 
+/// Saves @p emitter as component_meta saves a component on its own: inside the save context its references to
+/// entities need.
 template<typename T>
 auto save_emitter_document(const T& emitter) -> std::string
 {
     std::stringstream stream;
     {
+        const component_save_scope scope{entt::const_handle{}};
         ser20::oarchive_associative_t ar(stream);
         try_save(ar, ser20::make_nvp("emitter", emitter));
     }
@@ -2110,8 +2113,10 @@ auto save_emitter_document(const T& emitter) -> std::string
 }
 
 /// Loads @p document over @p emitter: whole, or only the members @p paths lists, as a prefab instance's overrides load.
+/// The emitter knows its entity: its references to entities are found through that entity's registry.
 void load_emitter_document(particle_emitter_component& emitter, const std::string& document, const serialization::path_set* paths = nullptr)
 {
+    const component_load_scope scope(emitter.get_owner());
     hpp::optional<serialization::scoped_path_filter> filter;
     if(paths != nullptr)
     {
@@ -2160,7 +2165,9 @@ void test_particle_emitter_legacy_look()
         const auto add_emitter = [&registry]() -> particle_emitter_component&
         {
             entt::handle entity(registry, registry.create());
-            return entity.emplace<particle_emitter_component>();
+            auto& emitter = entity.emplace<particle_emitter_component>();
+            emitter.set_owner(entity);
+            return emitter;
         };
 
         legacy_emitter_document smoke;
@@ -2660,10 +2667,107 @@ void test_reflected_rows_are_saved_under_their_names()
         }
         entity.get<camera_component>().set_projection_mode(projection_mode::orthographic);
         check_rows_name_document_nodes<camera_component>(entity, "orthographic");
+        // An emitter shows its forces' rows once the forces are on.
+        auto& emitter = entity.get<particle_emitter_component>();
+        emitter.set_orbit_speed(90.0f);
+        emitter.set_radial_speed(-1.0f);
+        emitter.set_converge_to_point(true);
+        check_rows_name_document_nodes<particle_emitter_component>(entity, "forces on");
         reflection_probe sphere = entity.get<reflection_probe_component>().get_probe();
         sphere.type = probe_type::sphere;
         entity.get<reflection_probe_component>().set_probe(sphere);
         check_rows_name_document_nodes<reflection_probe_component>(entity, "sphere");
+    }
+    ps_soa::shutdown();
+}
+
+/// What a scene saved before the emitter had forces holds of it: none of their keys.
+struct emitter_document_without_forces
+{
+    float emission_rate{12.0f};
+};
+
+SAVE_INLINE(emitter_document_without_forces)
+{
+    try_save(ar, ser20::make_nvp("emission_rate", obj.emission_rate));
+}
+
+/// An emitter's forces are saved with it, and the entity its particles converge on is a link like any other: a copy
+/// of the emitter and that entity converges on the copy.
+void test_particle_emitter_forces_are_saved()
+{
+    begin_test("a particle emitter's forces are saved, and its converge target is a link a copy keeps inside itself");
+
+    const test_device device;
+    if(!device.is_up)
+    {
+        return;
+    }
+    ps_soa::init(16);
+    {
+        scene scn("scn");
+        auto root = scn.create_entity("root");
+        auto child = scn.create_entity("child", root);
+        auto outside = scn.create_entity("outside");
+        math::gradient<float> rising;
+        rising.add_point(0.0f, 0.0f);
+        rising.add_point(2.0f, 1.0f);
+        math::gradient<float> late;
+        late.add_point(0.0f, 0.0f);
+        late.add_point(0.0f, 0.5f);
+        late.add_point(1.0f, 1.0f);
+        auto& emitter = root.emplace<particle_emitter_component>();
+        emitter.set_orbit_speed(-120.0f);
+        emitter.set_orbit_over_life(rising);
+        emitter.set_radial_speed(0.75f);
+        emitter.set_radial_over_life(rising);
+        emitter.set_force_axis(math::vec3(1.0f, 2.0f, 0.0f));
+        emitter.set_converge_to_point(true);
+        emitter.set_converge_over_life(late);
+        emitter.set_converge_target(child);
+        emitter.set_converge_offset(math::vec3(0.0f, 0.5f, 0.0f));
+
+        auto copy = scn.clone_entity(root, true, false);
+        check(copy && copy.all_of<particle_emitter_component>(), "the copy has the emitter");
+        if(copy && copy.all_of<particle_emitter_component>())
+        {
+            const auto& copied = copy.get<particle_emitter_component>();
+            const float tolerance = 1.0e-5f;
+            check(std::abs(copied.get_orbit_speed() + 120.0f) < tolerance && std::abs(copied.get_radial_speed() - 0.75f) < tolerance &&
+                      copied.get_converge_to_point(),
+                  "the forces' speeds and the converge switch are saved");
+            check(math::length(copied.get_force_axis() - math::vec3(1.0f, 2.0f, 0.0f)) < tolerance &&
+                      math::length(copied.get_converge_offset() - math::vec3(0.0f, 0.5f, 0.0f)) < tolerance,
+                  "the axis is saved as it was set, and the target's offset");
+            bool has_same_curves = true;
+            for(const float life : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f})
+            {
+                has_same_curves = has_same_curves &&
+                                  std::abs(copied.get_orbit_over_life().sample(life) - emitter.get_orbit_over_life().sample(life)) < tolerance &&
+                                  std::abs(copied.get_radial_over_life().sample(life) - emitter.get_radial_over_life().sample(life)) < tolerance &&
+                                  std::abs(copied.get_converge_over_life().sample(life) - emitter.get_converge_over_life().sample(life)) < tolerance;
+            }
+            check(has_same_curves && copied.get_orbit_over_life().sample(1.0f) > 1.9f && copied.get_converge_over_life().sample(0.4f) < 0.05f,
+                  "the forces' curves are saved");
+            const auto copied_child = find_child_by_name(copy, "child");
+            check(static_cast<bool>(copied_child) && copied_child != child && copied.get_converge_target() == copied_child,
+                  "the copy converges on its own child");
+        }
+        check(root.get<particle_emitter_component>().get_converge_target() == child, "the original still converges on its child");
+
+        // A target outside the copied entities stays that entity.
+        root.get<particle_emitter_component>().set_converge_target(outside);
+        auto second = scn.clone_entity(root, true, false);
+        check(second && second.all_of<particle_emitter_component>() && second.get<particle_emitter_component>().get_converge_target() == outside,
+              "a target outside the copy stays the same entity");
+
+        // A document from before the forces loads with none of them.
+        particle_emitter_component& fresh = scn.create_entity("fresh").emplace<particle_emitter_component>();
+        fresh.set_orbit_speed(30.0f);
+        load_emitter_document(fresh, save_emitter_document(emitter_document_without_forces{}));
+        check(std::abs(fresh.get_emission_rate() - 12.0f) < 1.0e-5f && std::abs(fresh.get_orbit_speed() - 30.0f) < 1.0e-5f &&
+                  !fresh.get_converge_to_point() && !fresh.get_converge_target(),
+              "a document without the forces' keys leaves them as they are");
     }
     ps_soa::shutdown();
 }
@@ -8839,6 +8943,7 @@ void run_ecs_serialization_cases()
         RUN_CASE(test_text_loads_keep_the_members_they_leave_out());
         RUN_CASE(test_probe_shape_values_are_saved_under_their_reflected_names());
         RUN_CASE(test_reflected_rows_are_saved_under_their_names());
+        RUN_CASE(test_particle_emitter_forces_are_saved());
         RUN_CASE(test_camera_and_light_documents_in_earlier_layouts_load());
         RUN_CASE(test_camera_settings_are_rows_of_its_camera());
         RUN_CASE(test_statements_follow_rows_into_a_flattened_member());

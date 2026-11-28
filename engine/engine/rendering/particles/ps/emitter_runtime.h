@@ -21,6 +21,8 @@ struct emitter_transform_state
 {
     math::transform current{};
     math::transform previous{};
+    /// The point the emitter's particles converge on, in world space (emitter_motion_desc::converge).
+    math::vec3 converge_target{0.0f};
 };
 
 /**

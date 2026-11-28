@@ -125,6 +125,11 @@ reset state there instead of in `OnStart`, which runs only once per instance.
   `turbulenceOverLife`, ...). Setting `emissionRate` or `lifetime` keeps the live particles;
   changing `simulationSpace` or `startDelay` clears them, and `maxParticles` rebuilds the emitter. `startSpeed` (`Range<float>`, m/s),
   `drag`, `gravityScale` and `acceleration` (`Vector3`, m/s^2) set the motion;
+  `orbitSpeed` (degrees per second) turns the particles about `forceAxis` (`Vector3`, a
+  direction in the emitter's space) and `radialSpeed` (m/s) moves them away from it, or onto it
+  when negative (`orbitOverLife`, `radialOverLife` multiply them over life);
+  `convergeToPoint` brings them to `convergeOffset` in the space of `convergeTarget` (an
+  `Entity`; none is the emitter itself) by `convergeOverLife`, and the target may move;
   `startRotation` / `spinSpeed` (`Range<float>`, degrees), `randomSpinDirection`, `sizeAxes`,
   `softFadeDistance`, `frameBlending` and `sortPriority` (lower draws first) are the
   per-emitter look settings; `prewarm` starts a looping emitter full and

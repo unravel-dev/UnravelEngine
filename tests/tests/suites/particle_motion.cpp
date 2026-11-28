@@ -30,6 +30,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <functional>
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -298,6 +300,17 @@ auto base_desc() -> ps_soa::emitter_desc
     desc.emission.shape = ps_soa::emitter_shape::sphere;
     desc.emission.direction = ps_soa::emitter_direction::outward;
     return desc;
+}
+
+auto make_exact_emit(const math::vec3& position, const math::vec3& velocity, float lifetime) -> ps_soa::emit_params
+{
+    ps_soa::emit_params params;
+    params.position = position;
+    params.velocity = velocity;
+    params.lifetime = lifetime;
+    params.mask = ps_soa::emit_params::position_flag | ps_soa::emit_params::velocity_flag |
+                  ps_soa::emit_params::lifetime_flag;
+    return params;
 }
 
 auto positions(ps_soa::emitter_handle handle) -> std::vector<math::vec3>
@@ -571,8 +584,421 @@ void test_turbulence()
     ps_soa::destroy_emitter(stormy_run.handle);
 }
 
-/// Collision planes kill or bounce particles where their paths first cross them, and the emitter reports
-/// births, deaths and contacts where they happened.
+/// The parameters of @p desc at @p age with its forces as the emitter fills them for a world-space emitter at the
+/// origin: the speeds, the axis and @p target.
+auto make_force_params(const ps_soa::emitter_desc& desc, float age, const math::vec3& target) -> ps_soa::emitter_eval_params
+{
+    auto params = make_params(desc, age);
+    params.forces = math::vec3(math::radians(desc.motion.orbit_speed), desc.motion.radial_speed, desc.motion.converge ? 1.0f : 0.0f);
+    params.force_axis = ps_soa::get_force_axis(desc.motion);
+    params.force_target = target;
+    return params;
+}
+
+/// The emitter's forces in closed form: an orbit turns a particle about the axis at its height and distance, a radial
+/// speed moves it out or onto the axis, a converge blend brings it to the target, the velocity reported is the
+/// position's rate, and a path segment starts where its record says.
+void test_forces()
+{
+    constexpr float lifespan = 4.0f;
+    constexpr float k_derivative_step = 1.0f / 512.0f;
+    const math::vec3 nowhere(0.0f);
+    const auto evaluate = [](const ps_soa::emitter_desc& desc, const ps_soa::particle_record& record, float age, const math::vec3& target)
+    {
+        ps_soa::lut_set luts;
+        ps_soa::bake_lut_set(desc, desc.bake_features(), luts);
+        return ps_soa::evaluate_particle(record, make_force_params(desc, age, target), luts);
+    };
+    // A particle that stays where it was born on its own path, 2 m from the up axis at a height of 1 m.
+    const auto still = make_record(math::vec3(2.0f, 1.0f, 0.0f), math::vec3(0.0f), lifespan);
+    {
+        auto desc = base_desc();
+        desc.motion.orbit_speed = 90.0f;
+        const auto quarter = evaluate(desc, still, 1.0f, nowhere);
+        check(is_near(quarter.position, math::vec3(0.0f, 1.0f, -2.0f), 1.0e-3f), "an orbit of 90 degrees a second turns a particle a quarter round the axis in a second");
+        check(std::abs(math::length(quarter.velocity) - math::half_pi<float>() * 2.0f) < 1.0e-2f, "an orbiting particle moves at its turn rate times its distance from the axis");
+        desc.motion.orbit_speed = -90.0f;
+        check(is_near(evaluate(desc, still, 1.0f, nowhere).position, math::vec3(0.0f, 1.0f, 2.0f), 1.0e-3f), "a negative orbit speed turns the other way");
+        // A multiplier that rises from 0 to 2 over the life: the angle is the speed x the lifetime x life squared.
+        desc.motion.orbit_speed = 90.0f;
+        desc.motion.orbit_over_life = math::gradient<float>();
+        desc.motion.orbit_over_life.add_point(0.0f, 0.0f);
+        desc.motion.orbit_over_life.add_point(2.0f, 1.0f);
+        check(is_near(evaluate(desc, still, 2.0f, nowhere).position, math::vec3(0.0f, 1.0f, -2.0f), 2.0e-2f), "the orbit turns by the integral of its curve over life");
+        desc.motion.force_axis = math::vec3(1.0f, 0.0f, 0.0f);
+        desc.motion.orbit_over_life = ps_soa::make_flat_curve(1.0f);
+        const auto about_x = evaluate(desc, still, 1.0f, nowhere);
+        check(std::abs(about_x.position.x - 2.0f) < 1.0e-3f && std::abs(math::length(math::vec2(about_x.position.y, about_x.position.z)) - 1.0f) < 1.0e-3f,
+              "the orbit keeps a particle's place along the force axis and its distance from it");
+    }
+    {
+        auto desc = base_desc();
+        desc.motion.radial_speed = 1.5f;
+        check(is_near(evaluate(desc, still, 2.0f, nowhere).position, math::vec3(5.0f, 1.0f, 0.0f), 1.0e-3f), "a radial speed moves a particle away from the axis");
+        desc.motion.radial_speed = -1.5f;
+        check(is_near(evaluate(desc, still, 1.0f, nowhere).position, math::vec3(0.5f, 1.0f, 0.0f), 1.0e-3f), "a negative radial speed moves it toward the axis");
+        const auto arrived = evaluate(desc, still, 3.0f, nowhere);
+        check(is_near(arrived.position, math::vec3(0.0f, 1.0f, 0.0f), 1.0e-3f) && math::length(arrived.velocity) < 1.0e-3f,
+              "a particle the radial speed brought to the axis stays on it");
+        // The push keeps the direction the particle lay in from the axis at its start: a path of its own that crosses
+        // the axis does not throw it to the other side.
+        desc.motion.radial_speed = 1.0f;
+        const auto crossing = make_record(math::vec3(-1.0f, 0.0f, 0.0f), math::vec3(1.0f, 0.0f, 0.0f), lifespan);
+        const auto before = evaluate(desc, crossing, 0.99f, nowhere);
+        const auto after = evaluate(desc, crossing, 1.01f, nowhere);
+        check(is_near(before.position, after.position, 0.1f) && is_near(after.position, math::vec3(-1.0f, 0.0f, 0.0f), 0.05f),
+              "a particle whose own path crosses the axis is not thrown across it");
+        const auto centred = make_record(math::vec3(0.0f), math::vec3(1.0f, 2.0f, 0.0f), lifespan);
+        check(is_near(evaluate(desc, centred, 1.0f, nowhere).position, math::vec3(2.0f, 2.0f, 0.0f), 1.0e-3f),
+              "a particle born on the axis is moved away from it the way it leaves");
+    }
+    {
+        auto desc = base_desc();
+        desc.motion.converge = true;
+        const math::vec3 target(10.0f, 0.0f, 0.0f);
+        const auto rising = make_record(math::vec3(0.0f), math::vec3(0.0f, 2.0f, 0.0f), lifespan);
+        check(is_near(evaluate(desc, rising, 2.0f, target).position, math::vec3(5.0f, 2.0f, 0.0f), 1.0e-2f), "half way through a linear converge a particle is half way from its own path to the target");
+        check(is_near(evaluate(desc, rising, lifespan - 1.0e-3f, target).position, target, 2.0e-2f), "a particle is at the target when the converge curve reaches 1");
+        // The curve's value is the share of the way, from birth on.
+        desc.motion.converge_over_life = ps_soa::make_flat_curve(0.5f);
+        check(is_near(evaluate(desc, rising, 1.0e-3f, target).position, math::vec3(5.0f, 0.0f, 0.0f), 2.0e-2f) &&
+                  is_near(evaluate(desc, rising, 2.0f, target).position, math::vec3(5.0f, 2.0f, 0.0f), 2.0e-2f),
+              "a converge curve held at a half keeps a particle half way to the target from its birth");
+        desc.motion.converge_over_life = math::gradient<float>();
+        desc.motion.converge_over_life.add_point(1.0f, 0.0f);
+        desc.motion.converge_over_life.add_point(0.0f, 1.0f);
+        check(is_near(evaluate(desc, rising, 1.0e-3f, target).position, target, 2.0e-2f) &&
+                  is_near(evaluate(desc, rising, lifespan - 1.0e-3f, target).position, math::vec3(0.0f, 8.0f, 0.0f), 2.0e-2f),
+              "a converge curve that falls from 1 lets a particle out of the target and onto its own path");
+    }
+    // Every force at once, with gravity and drag: the velocity is the rate of the position, at any age.
+    auto desc = base_desc();
+    desc.motion.orbit_speed = 140.0f;
+    desc.motion.radial_speed = 0.8f;
+    desc.motion.converge = true;
+    desc.motion.gravity_scale = 0.5f;
+    desc.motion.drag = 0.4f;
+    desc.motion.force_axis = math::normalize(math::vec3(0.3f, 1.0f, -0.2f));
+    desc.motion.orbit_over_life = math::gradient<float>();
+    desc.motion.orbit_over_life.add_point(0.5f, 0.0f);
+    desc.motion.orbit_over_life.add_point(1.5f, 1.0f);
+    desc.motion.converge_over_life = math::gradient<float>();
+    desc.motion.converge_over_life.add_point(0.2f, 0.0f);
+    desc.motion.converge_over_life.add_point(0.9f, 1.0f);
+    const math::vec3 target(3.0f, 6.0f, -2.0f);
+    ps_soa::lut_set luts;
+    ps_soa::bake_lut_set(desc, desc.bake_features(), luts);
+    auto record = make_record(math::vec3(1.5f, 0.5f, -1.0f), math::vec3(1.0f, 2.5f, 0.5f), lifespan);
+    bool velocity_matches = true;
+    for(const float age : {0.3f, 1.1f, 2.2f, 3.4f})
+    {
+        const auto state = ps_soa::evaluate_particle(record, make_force_params(desc, age, target), luts);
+        const auto ahead = ps_soa::evaluate_particle(record, make_force_params(desc, age + k_derivative_step, target), luts);
+        const math::vec3 slope = (ahead.position - state.position) / (ahead.age - state.age);
+        velocity_matches = velocity_matches && is_near(slope, state.velocity, 0.05f * (1.0f + math::length(state.velocity)));
+    }
+    check(velocity_matches, "the velocity of a particle under every force is the rate of its position");
+    // A path segment that began 1.5 s into the life (a bounce): the particle is at the segment's start then, moving
+    // at the velocity its record holds plus what the forces add there.
+    constexpr float segment_age = 1.5f;
+    record.motion_offset = uint32_t(ps_soa::seconds_to_ticks(segment_age));
+    const auto params = make_force_params(desc, segment_age, target);
+    const auto restarted = ps_soa::evaluate_particle(record, params, luts);
+    const math::vec3 added =
+        ps_soa::get_force_start_velocity(params, luts, record.get_start(), record.get_velocity(), segment_age / lifespan, lifespan);
+    check(is_near(restarted.position, record.get_start(), 1.0e-3f), "a path segment begins where its record says, whatever the forces did before it");
+    check(is_near(restarted.velocity, record.get_velocity() + added, 2.0e-2f * (1.0f + math::length(restarted.velocity))),
+          "at a segment's start a particle moves at its record's velocity plus what the forces add there");
+    check(math::length(added) > 0.1f, "the forces add a velocity at a segment's start");
+}
+
+/// The analytic bounds hold every particle the forces move: about a moving, turning emitter, in both spaces, on the
+/// way to a target that moves, and toward an axis the particles' own paths stay away from.
+void test_force_bounds_hold_every_particle()
+{
+    struct force_case
+    {
+        float orbit;
+        float radial;
+        /// The radial speed's multiplier at birth and at death.
+        float radial_start;
+        float radial_end;
+        bool converge;
+        ps_soa::simulation_space space;
+        float gravity;
+        math::vec3 axis;
+        /// Where the spawn shape is, in units of its scale.
+        math::vec3 shape_position;
+    };
+    const auto world = ps_soa::simulation_space::world;
+    const auto local = ps_soa::simulation_space::local;
+    const math::vec3 up(0.0f, 1.0f, 0.0f);
+    const math::vec3 centred(0.0f);
+    const force_case cases[] = {
+        {180.0f, 0.0f, 1.0f, 1.0f, false, world, 0.0f, up, centred},
+        {0.0f, 2.0f, 2.0f, -0.5f, false, local, 0.0f, up, centred},
+        {-120.0f, -1.5f, 2.0f, -0.5f, false, world, 0.5f, math::vec3(1.0f, 1.0f, 0.0f), centred},
+        {0.0f, 0.0f, 1.0f, 1.0f, true, world, 1.0f, up, centred},
+        {90.0f, 1.0f, 2.0f, -0.5f, true, local, 0.0f, math::vec3(0.0f, 0.0f, 1.0f), centred},
+        // Toward the axis alone: the particles end between their own paths and an axis those stay away from.
+        {0.0f, -2.0f, 1.0f, 1.0f, false, world, 0.0f, up, math::vec3(4.0f, 0.0f, 0.0f)},
+        {0.0f, -5.0f, 1.0f, 1.0f, false, world, 1.0f, math::vec3(1.0f, 1.0f, 0.0f), centred},
+        {0.0f, -2.0f, 1.0f, 1.0f, false, local, 0.0f, math::vec3(0.0f, 0.0f, 1.0f), math::vec3(0.0f, 3.0f, 0.0f)},
+    };
+    bool holds = true;
+    int case_index = 0;
+    for(const auto& force : cases)
+    {
+        auto desc = base_desc();
+        desc.emission.shape_scale = math::vec3(2.0f, 1.0f, 3.0f);
+        desc.emission.shape_position = force.shape_position;
+        desc.emission.direction_spread = 30.0f;
+        desc.motion.start_speed = frange_t(1.0f, 4.0f);
+        desc.motion.space = force.space;
+        desc.motion.gravity_scale = force.gravity;
+        desc.motion.orbit_speed = force.orbit;
+        desc.motion.radial_speed = force.radial;
+        desc.motion.converge = force.converge;
+        desc.motion.force_axis = force.axis;
+        desc.motion.radial_over_life = math::gradient<float>();
+        desc.motion.radial_over_life.add_point(force.radial_start, 0.0f);
+        desc.motion.radial_over_life.add_point(force.radial_end, 1.0f);
+        auto run = make_run(512, desc);
+        for(int frame = 0; frame < 240; ++frame)
+        {
+            const float t = float(frame) * k_frame_seconds;
+            run.transform.current.set_position(math::vec3(3.0f * t, 0.0f, 0.0f));
+            run.transform.current.set_rotation(math::angleAxis(t * 0.7f, math::vec3(0.0f, 0.0f, 1.0f)));
+            run.transform.converge_target = math::vec3(8.0f - 2.0f * t, 5.0f, 4.0f * std::sin(t));
+            step(run, k_frame_seconds);
+            math::bbox box;
+            ps_soa::get_aabb(run.handle, box);
+            std::vector<ps_soa::particle_state> states;
+            std::vector<float> sizes;
+            ps_soa::get_particle_states(run.handle, states);
+            ps_soa::get_particle_sizes(run.handle, sizes);
+            for(size_t i = 0; i < states.size(); ++i)
+            {
+                const math::vec3 pad(sizes[i] * 0.5f);
+                const math::vec3 low = states[i].position - pad - box.min;
+                const math::vec3 high = box.max - (states[i].position + pad);
+                const bool inside = math::all(math::greaterThanEqual(low, math::vec3(-1.0e-3f))) &&
+                                    math::all(math::greaterThanEqual(high, math::vec3(-1.0e-3f)));
+                if(!inside && holds)
+                {
+                    std::printf("    force case %d frame %d: particle at %.3f %.3f %.3f outside [%.3f %.3f %.3f]..[%.3f %.3f %.3f]\n",
+                                case_index,
+                                frame,
+                                states[i].position.x,
+                                states[i].position.y,
+                                states[i].position.z,
+                                box.min.x,
+                                box.min.y,
+                                box.min.z,
+                                box.max.x,
+                                box.max.y,
+                                box.max.z);
+                }
+                holds = holds && inside;
+            }
+        }
+        ps_soa::destroy_emitter(run.handle);
+        ++case_index;
+    }
+    check(holds, "the analytic bounds hold every particle the forces move (orbit, radial out and in, converge, both spaces, moving emitters)");
+}
+
+/// The emitter's rows carry the forces to the shaders: the speeds in the static row, and the axis, the target and the
+/// forces' top speed in the dynamic row.
+void test_force_rows()
+{
+    ps_soa::emitter_eval_params params;
+    params.forces = math::vec3(1.5f, -2.5f, 1.0f);
+    params.force_axis = math::vec3(0.0f, 0.0f, 1.0f);
+    params.force_target = math::vec3(4.0f, 5.0f, 6.0f);
+    params.force_speed = 7.0f;
+    const ps_soa::static_row fixed = ps_soa::pack_static_row(params);
+    const math::vec4 speeds = fixed[ps_soa::static_slot_forces];
+    check(speeds.x == 1.5f && speeds.y == -2.5f && speeds.z == 1.0f,
+          "the static row holds the orbit speed, the radial speed and the converge switch");
+    const ps_soa::dynamic_row moving = ps_soa::pack_dynamic_row(params);
+    const auto float_at = [&](uint32_t slot)
+    {
+        float value = 0.0f;
+        std::memcpy(&value, &moving[slot], sizeof(value));
+        return value;
+    };
+    check(float_at(ps_soa::dynamic_slot_force_axis) == 0.0f && float_at(ps_soa::dynamic_slot_force_axis + 1) == 0.0f &&
+              float_at(ps_soa::dynamic_slot_force_axis + 2) == 1.0f,
+          "the dynamic row holds the forces' axis");
+    check(float_at(ps_soa::dynamic_slot_force_target) == 4.0f && float_at(ps_soa::dynamic_slot_force_target + 1) == 5.0f &&
+              float_at(ps_soa::dynamic_slot_force_target + 2) == 6.0f && float_at(ps_soa::dynamic_slot_force_speed) == 7.0f,
+          "the dynamic row holds the point the particles converge on and the forces' top speed");
+}
+
+/// Emitters share a set of curves only when their forces' curves are the same, and the curve of a force that is off
+/// keys nothing.
+void test_force_curves_key_the_curve_set()
+{
+    math::gradient<float> rising;
+    rising.add_point(0.0f, 0.0f);
+    rising.add_point(2.0f, 1.0f);
+    const auto key_of = [](const ps_soa::emitter_desc& desc)
+    {
+        return ps_soa::compute_lut_key(desc, desc.bake_features());
+    };
+    const uint64_t plain = key_of(base_desc());
+    auto orbiting = base_desc();
+    orbiting.motion.orbit_speed = 90.0f;
+    const uint64_t flat_orbit = key_of(orbiting);
+    orbiting.motion.orbit_over_life = rising;
+    check(key_of(orbiting) != flat_orbit && flat_orbit != plain, "two orbit curves are two sets of curves");
+    orbiting.motion.orbit_speed = 0.0f;
+    check(key_of(orbiting) == plain, "the curve of an orbit that is off keys nothing");
+    auto pushed = base_desc();
+    pushed.motion.radial_speed = 1.0f;
+    const uint64_t flat_radial = key_of(pushed);
+    pushed.motion.radial_over_life = rising;
+    check(key_of(pushed) != flat_radial, "two radial curves are two sets of curves");
+    auto gathered = base_desc();
+    gathered.motion.converge = true;
+    const uint64_t ramp = key_of(gathered);
+    gathered.motion.converge_over_life = ps_soa::make_flat_curve(0.5f);
+    check(key_of(gathered) != ramp, "two converge curves are two sets of curves");
+}
+
+/// The forces follow the emitter's transform: a local emitter's particles converge on the target where it is in the
+/// world, whatever the emitter's place, turn and scale, and a world emitter's turn about the axis as its transform
+/// turns it.
+void test_forces_follow_the_emitter_transform()
+{
+    auto gathering = base_desc();
+    gathering.emission.particles_per_second = 200.0f;
+    gathering.motion.lifetime = frange_t(1.0f, 1.0f);
+    gathering.motion.space = ps_soa::simulation_space::local;
+    gathering.motion.converge = true;
+    auto local = make_run(512, gathering);
+    local.transform.current.set_position(math::vec3(3.0f, 1.0f, -2.0f));
+    local.transform.current.set_rotation(math::angleAxis(0.7f, math::normalize(math::vec3(0.3f, 0.2f, 1.0f))));
+    local.transform.current.set_scale(math::vec3(2.0f, 1.0f, 0.5f));
+    const math::vec3 target(-4.0f, 5.0f, 2.0f);
+    local.transform.converge_target = target;
+    for(int frame = 0; frame < 120; ++frame)
+    {
+        step(local, k_frame_seconds);
+    }
+    std::vector<ps_soa::particle_state> states;
+    ps_soa::get_particle_states(local.handle, states);
+    int late = 0;
+    bool arrives = true;
+    for(const auto& state : states)
+    {
+        if(state.life > 0.9f)
+        {
+            ++late;
+            // A tenth of the way is left: of a way that starts within a few metres of the emitter.
+            arrives = arrives && math::distance(state.position, target) < 2.0f;
+        }
+    }
+    check(late > 5 && arrives, "a local emitter's particles converge on the target's place in the world");
+    ps_soa::destroy_emitter(local.handle);
+
+    auto turning = base_desc();
+    turning.emission.particles_per_second = 0.0f;
+    turning.motion.orbit_speed = 180.0f;
+    auto world = make_run(16, turning);
+    const math::vec3 origin(3.0f, 0.0f, 0.0f);
+    world.transform.current.set_position(origin);
+    world.transform.current.set_rotation(math::angleAxis(math::half_pi<float>(), math::vec3(0.0f, 0.0f, 1.0f)));
+    const math::vec3 axis = math::normalize(math::mat3(world.transform.current.get_matrix()) * math::vec3(0.0f, 1.0f, 0.0f));
+    step(world, k_frame_seconds);
+    ps_soa::emit(world.handle, 1, make_exact_emit(math::vec3(4.0f, 2.0f, 1.0f), math::vec3(0.0f), 4.0f));
+    bool has_reference = false;
+    float along = 0.0f;
+    float radius = 0.0f;
+    math::vec3 first(0.0f);
+    float farthest = 0.0f;
+    bool keeps_its_ring = true;
+    for(int frame = 0; frame < 60; ++frame)
+    {
+        step(world, k_frame_seconds);
+        const auto places = positions(world.handle);
+        if(places.empty())
+        {
+            continue;
+        }
+        const math::vec3 offset = places[0] - origin;
+        const float along_now = math::dot(offset, axis);
+        const float radius_now = math::length(offset - axis * along_now);
+        if(!has_reference)
+        {
+            has_reference = true;
+            along = along_now;
+            radius = radius_now;
+            first = places[0];
+        }
+        farthest = math::max(farthest, math::distance(places[0], first));
+        keeps_its_ring = keeps_its_ring && std::abs(along_now - along) < 1.0e-2f && std::abs(radius_now - radius) < 1.0e-2f;
+    }
+    check(has_reference && farthest > 0.5f && keeps_its_ring,
+          "a world emitter's particles turn about the axis as the emitter's transform turns it");
+    ps_soa::destroy_emitter(world.handle);
+}
+
+/// The paths the forces bend follow the point the particles converge on, and so do their contacts: a plane the path
+/// crossed before the target moved is no contact once the path is off it, and a plane the moved path crosses is one.
+void test_contacts_follow_a_moved_target()
+{
+    struct outcome
+    {
+        float lowest = 100.0f;
+        uint32_t alive = 0;
+    };
+    // One particle 2 m above the ground plane that converges on a target at first for a second, then on what
+    // move(seconds since) gives.
+    const auto run_with = [](const math::vec3& first, const std::function<math::vec3(float)>& move)
+    {
+        auto desc = base_desc();
+        desc.emission.particles_per_second = 0.0f;
+        desc.motion.converge = true;
+        desc.motion.collision = ps_soa::collision_mode::kill;
+        desc.motion.collision_radius_scale = 0.0f;
+        desc.motion.collision_planes = {math::vec4(0.0f, 1.0f, 0.0f, 0.0f)};
+        auto run = make_run(16, desc);
+        run.transform.converge_target = first;
+        step(run, k_frame_seconds);
+        ps_soa::emit(run.handle, 1, make_exact_emit(math::vec3(0.0f, 2.0f, 0.0f), math::vec3(0.0f), 4.0f));
+        outcome result;
+        for(int frame = 0; frame < 180; ++frame)
+        {
+            if(frame >= 60)
+            {
+                run.transform.converge_target = move(float(frame - 60) * k_frame_seconds);
+            }
+            step(run, k_frame_seconds);
+            const auto places = positions(run.handle);
+            result.alive = uint32_t(places.size());
+            for(const auto& place : places)
+            {
+                result.lowest = math::min(result.lowest, place.y);
+            }
+        }
+        ps_soa::destroy_emitter(run.handle);
+        return result;
+    };
+    const math::vec3 below(0.0f, -2.0f, 0.0f);
+    const math::vec3 above(0.0f, 6.0f, 0.0f);
+    // Down through the plane at first (a contact two seconds in), then up and away from it.
+    const outcome lifted = run_with(below, [&](float) { return above; });
+    check(lifted.alive == 1 && lifted.lowest > 0.5f, "a contact of the path before the target moved does not happen on the path after");
+    // Up at first (no contact), then down through the plane.
+    const outcome lowered = run_with(above, [&](float) { return below; });
+    check(lowered.alive == 0 && lowered.lowest > -0.05f, "a path the moved target bends through a plane ends at the plane");
+    // A target that keeps sinking: the particle ends at the plane all the same.
+    const outcome sinking = run_with(above, [&](float seconds) { return above - math::vec3(0.0f, 6.0f * seconds, 0.0f); });
+    check(sinking.alive == 0 && sinking.lowest > -0.1f, "a path a moving target bends through a plane ends at the plane");
+}
+
 void test_collision_and_events()
 {
     constexpr float floor = -1.0f;
@@ -1241,17 +1667,6 @@ void test_cutout_tables_live_in_the_curve_atlas()
 }
 
 /// An emitted particle with an exact start and launch, living @p lifetime seconds.
-auto make_exact_emit(const math::vec3& position, const math::vec3& velocity, float lifetime) -> ps_soa::emit_params
-{
-    ps_soa::emit_params params;
-    params.position = position;
-    params.velocity = velocity;
-    params.lifetime = lifetime;
-    params.mask = ps_soa::emit_params::position_flag | ps_soa::emit_params::velocity_flag |
-                  ps_soa::emit_params::lifetime_flag;
-    return params;
-}
-
 /// A prewarmed emitter starts in its steady state: particles of every age, not one shell born together.
 void test_prewarm_spreads_ages()
 {
@@ -1405,6 +1820,65 @@ void test_bounce_keeps_speed_curve()
     }
     check(after > 0.0f && std::abs(after - before) < 0.05f * before, "the speed curve goes on through a bounce");
     ps_soa::destroy_emitter(run.handle);
+}
+
+/// A bounce under the forces: the particle leaves its plane at the velocity it bounced with, so an orbit goes on at
+/// its distance from the axis and at its speed, also while a speed curve scales the velocity the bounce stores.
+void test_forces_carry_through_a_bounce()
+{
+    constexpr float radius = 2.0f;
+    constexpr float tolerance = 2.0e-2f;
+    const auto keeps_its_orbit = [&](bool has_speed_curve, int least_bounces)
+    {
+        auto desc = base_desc();
+        desc.emission.particles_per_second = 0.0f;
+        desc.motion.gravity_scale = 1.0f;
+        desc.motion.orbit_speed = 90.0f;
+        desc.motion.collision = ps_soa::collision_mode::bounce;
+        desc.motion.restitution = 1.0f;
+        desc.motion.friction = 0.0f;
+        desc.motion.max_bounces = 8;
+        desc.motion.collision_radius_scale = 0.0f;
+        desc.motion.collision_planes = {math::vec4(0.0f, 1.0f, 0.0f, 0.0f)};
+        if(has_speed_curve)
+        {
+            desc.motion.speed_over_life = math::gradient<float>();
+            desc.motion.speed_over_life.add_point(2.0f, 0.0f);
+            desc.motion.speed_over_life.add_point(0.5f, 1.0f);
+        }
+        auto run = make_run(16, desc);
+        ps_soa::emit(run.handle, 1, make_exact_emit(math::vec3(radius, 1.0f, 0.0f), math::vec3(0.0f), 4.0f));
+        const float orbit_speed = math::half_pi<float>() * radius;
+        bool stays_above = true;
+        bool keeps_radius = true;
+        bool keeps_speed = true;
+        int bounces = 0;
+        float previous_vertical = 0.0f;
+        for(int i = 0; i < 360; ++i)
+        {
+            step(run, 1.0f / 240.0f);
+            std::vector<ps_soa::particle_state> states;
+            ps_soa::get_particle_states(run.handle, states);
+            if(states.empty())
+            {
+                continue;
+            }
+            const auto& state = states[0];
+            stays_above = stays_above && state.position.y >= -tolerance;
+            keeps_radius = keeps_radius && std::abs(math::length(math::vec2(state.position.x, state.position.z)) - radius) < tolerance;
+            keeps_speed = keeps_speed && std::abs(math::length(math::vec2(state.velocity.x, state.velocity.z)) - orbit_speed) < 0.05f * orbit_speed;
+            bounces += previous_vertical < 0.0f && state.velocity.y > 0.0f ? 1 : 0;
+            previous_vertical = state.velocity.y;
+        }
+        ps_soa::destroy_emitter(run.handle);
+        if(!(bounces >= least_bounces && stays_above && keeps_radius && keeps_speed))
+        {
+            std::printf("    bounces %d, above %d, radius kept %d, speed kept %d\n", bounces, int(stays_above), int(keeps_radius), int(keeps_speed));
+        }
+        return bounces >= least_bounces && stays_above && keeps_radius && keeps_speed;
+    };
+    check(keeps_its_orbit(false, 2), "an orbit goes on through a bounce at its distance from the axis and at its speed");
+    check(keeps_its_orbit(true, 1), "an orbit goes on through a bounce while a speed curve scales the bounced velocity");
 }
 
 /// A mirrored emitter draws its particles at the size of an unmirrored one, and a local emitter scaled flat
@@ -1628,6 +2102,8 @@ void test_shader_layout_matches_cpp()
         {"PARTICLE_LUT_ROW_SHAPE", ps_soa::lut_row_shape},
         {"PARTICLE_LUT_ROW_COLOR_B", ps_soa::lut_row_color_b},
         {"PARTICLE_LUT_ROW_TURBULENCE_SIZE_Z", ps_soa::lut_row_turbulence_size_z},
+        {"PARTICLE_LUT_ROW_FORCES", ps_soa::lut_row_forces},
+        {"PARTICLE_LUT_ROW_FORCE_RATES", ps_soa::lut_row_force_rates},
         {"PARTICLE_STATIC_APPEARANCE", ps_soa::static_slot_appearance},
         {"PARTICLE_STATIC_SIZE_AXES", ps_soa::static_slot_size_axes},
         {"PARTICLE_STATIC_SIZE_BY_SPEED", ps_soa::static_slot_size_by_speed},
@@ -1644,6 +2120,7 @@ void test_shader_layout_matches_cpp()
         {"PARTICLE_STATIC_FACING", ps_soa::static_slot_facing},
         {"PARTICLE_STATIC_SPEED_BOUND", ps_soa::static_slot_speed_bound},
         {"PARTICLE_STATIC_RIBBON", ps_soa::static_slot_ribbon},
+        {"PARTICLE_STATIC_FORCES", ps_soa::static_slot_forces},
         {"PARTICLE_DYNAMIC_LOCAL_TO_WORLD", ps_soa::dynamic_slot_local_to_world},
         {"PARTICLE_DYNAMIC_ROTATION", ps_soa::dynamic_slot_rotation},
         {"PARTICLE_DYNAMIC_ACCELERATION", ps_soa::dynamic_slot_acceleration},
@@ -1652,6 +2129,9 @@ void test_shader_layout_matches_cpp()
         {"PARTICLE_DYNAMIC_SYSTEM_SCALE", ps_soa::dynamic_slot_system_scale},
         {"PARTICLE_DYNAMIC_FRAME_TIME", ps_soa::dynamic_slot_frame_time},
         {"PARTICLE_DYNAMIC_ORIGIN_MOTION", ps_soa::dynamic_slot_origin_motion},
+        {"PARTICLE_DYNAMIC_FORCE_AXIS", ps_soa::dynamic_slot_force_axis},
+        {"PARTICLE_DYNAMIC_FORCE_TARGET", ps_soa::dynamic_slot_force_target},
+        {"PARTICLE_DYNAMIC_FORCE_SPEED", ps_soa::dynamic_slot_force_speed},
         {"PARTICLE_FLAG_ALIGN", flag(ps_soa::emitter_feature::align_to_direction)},
         {"PARTICLE_FLAG_TEXSHEET", flag(ps_soa::emitter_feature::texsheet)},
         {"PARTICLE_FLAG_COLOR_BY_SPEED", flag(ps_soa::emitter_feature::color_by_speed)},
@@ -1674,7 +2154,7 @@ void test_shader_layout_matches_cpp()
         {"PARTICLE_FLAG_RANDOM_ROW", flag(ps_soa::emitter_feature::texsheet_random_row)},
         {"PARTICLE_FLAG_TURBULENCE", flag(ps_soa::emitter_feature::turbulence)},
         {"PARTICLE_FLAG_DRAW_DISTANCE", flag(ps_soa::emitter_feature::draw_distance)},
-        {"PARTICLE_FLAG_LIT_VOLUMETRIC", flag(ps_soa::emitter_feature::lit_volumetric)},
+        {"PARTICLE_FLAG_FORCES", flag(ps_soa::emitter_feature::forces)},
         {"PARTICLE_FLAG_LIT_SURFACE", flag(ps_soa::emitter_feature::lit_surface)},
         {"PARTICLE_SALT_ROTATION", ps_soa::salt_rotation},
         {"PARTICLE_SALT_SPIN", ps_soa::salt_spin},
@@ -1815,6 +2295,15 @@ void test_collide_kernel_matches_cpp()
     check(decimal_of("PARTICLE_CONTACT_LIFT") == ps_soa::contact_lift && decimal_of("PARTICLE_REST_LIFT") == ps_soa::rest_lift &&
               decimal_of("PARTICLE_MIN_SEGMENT_FACTOR") == ps_soa::min_segment_factor,
           "a bounce and a rest lift a particle off its surface, and carry its curves on, as the CPU's contacts do");
+    const auto shared = parse_particle_shader_decimals(folder + "particle_common.sh");
+    const auto shared_of = [&](const char* name)
+    {
+        const auto found = shared.find(name);
+        return found != shared.end() ? found->second : -1.0f;
+    };
+    check(shared_of("PARTICLE_MIN_FORCE_RADIUS") == ps_soa::min_force_radius &&
+              shared_of("PARTICLE_MIN_CONVERGE_SPAN") == ps_soa::min_converge_span,
+          "the shaders' forces treat a particle on the axis, and one at its target, as the CPU's do");
     // The mode's byte, the bounces' byte and the flat bit do not overlap, and the bounces C++ packs fit their byte.
     check(ps_soa::gpu_collide_bounces_shift == 8 && ps_soa::gpu_collide_flat_bit == (1u << 16u) &&
               uint32_t(ps_soa::collision_mode::count) <= 0xffu && ps_soa::motion_offset_bounce_mask <= 0xffu,
@@ -2633,6 +3122,48 @@ void test_scene_surfaces_leave_the_cpu_records()
     ps_soa::destroy_emitter(run.handle);
 }
 
+/// The forces' speed is measured from the paths the CPU knows, never from a box that grows with that speed: the bounds
+/// of orbiting particles that bounce off scene surfaces settle, as do those of orbiting stretched particles.
+void test_force_bounds_settle()
+{
+    const auto settles = [](ps_soa::emitter_desc desc)
+    {
+        desc.emission.particles_per_second = 30.0f;
+        desc.motion.lifetime = frange_t(4.0f, 4.0f);
+        desc.motion.orbit_speed = 300.0f;
+        desc.motion.converge = true;
+        auto run = make_run(256, desc);
+        run.transform.converge_target = math::vec3(6.0f, 2.0f, 0.0f);
+        math::bbox early;
+        math::bbox late;
+        for(int frame = 0; frame < 900; ++frame)
+        {
+            step(run, k_frame_seconds);
+            if(frame == 400)
+            {
+                ps_soa::get_aabb(run.handle, early);
+            }
+        }
+        ps_soa::get_aabb(run.handle, late);
+        ps_soa::destroy_emitter(run.handle);
+    const math::vec3 early_size = early.max - early.min;
+        const math::vec3 late_size = late.max - late.min;
+        const float early_extent = math::max(early_size.x, math::max(early_size.y, early_size.z));
+        const float late_extent = math::max(late_size.x, math::max(late_size.y, late_size.z));
+        if(!(std::isfinite(late_extent) && late_extent <= early_extent * 1.05f))
+        {
+            std::printf("    bounds extent %.3f m after 400 frames, %.3f m after 900\n", early_extent, late_extent);
+        }
+        return std::isfinite(late_extent) && late_extent <= early_extent * 1.05f;
+    };
+    auto bouncing = make_collider_desc(ps_soa::collision_mode::bounce);
+    bouncing.motion.collide_with = ps_soa::collision_source::scene_surfaces;
+    check(settles(bouncing), "the bounds of orbiting particles that bounce off scene surfaces settle");
+    auto stretched = base_desc();
+    stretched.render.render_mode = ps_soa::render_mode::stretched;
+    check(settles(stretched), "the bounds of orbiting stretched particles settle");
+}
+
 /// A particle that bounces off surfaces the CPU does not know can be carried any way by the speed gravity gave it:
 /// the emitter's bounds reach as far up and sideways as down. A particle that dies or sticks there stays on its path.
 void test_scene_surface_bounds()
@@ -2741,6 +3272,12 @@ void run_particle_motion_suite(rtti::context& /*ctx*/)
     RUN_CASE(test_bursts_and_distance());
     RUN_CASE(test_shapes());
     RUN_CASE(test_turbulence());
+    RUN_CASE(test_forces());
+    RUN_CASE(test_force_bounds_hold_every_particle());
+    RUN_CASE(test_force_rows());
+    RUN_CASE(test_force_curves_key_the_curve_set());
+    RUN_CASE(test_forces_follow_the_emitter_transform());
+    RUN_CASE(test_contacts_follow_a_moved_target());
     RUN_CASE(test_collision_and_events());
     RUN_CASE(test_mesh_transforms());
     RUN_CASE(test_mesh_size_axes_curve());
@@ -2753,6 +3290,7 @@ void run_particle_motion_suite(rtti::context& /*ctx*/)
     RUN_CASE(test_mesh_spin_rate());
     RUN_CASE(test_earliest_plane_wins());
     RUN_CASE(test_bounce_keeps_speed_curve());
+    RUN_CASE(test_forces_carry_through_a_bounce());
     RUN_CASE(test_scale_edge_cases());
     RUN_CASE(test_rate_increase());
     RUN_CASE(test_burst_catch_up_keeps_newest());
@@ -2770,6 +3308,7 @@ void run_particle_motion_suite(rtti::context& /*ctx*/)
     RUN_CASE(test_contact_lifetime_loss_and_scatter());
     RUN_CASE(test_scene_surfaces_leave_the_cpu_records());
     RUN_CASE(test_scene_surface_bounds());
+    RUN_CASE(test_force_bounds_settle());
     ps_soa::shutdown();
     gfx::shutdown();
 }

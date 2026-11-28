@@ -133,8 +133,16 @@ auto estimate_collision_casts_per_second(const emitter_desc& desc, uint32_t capa
     constexpr float bent_path_casts = 4.0f;
     const float sweep_seconds = float(get_collision_sweep_seconds(desc.motion.collision_quality));
     const bool bends = desc.motion.gravity_scale != 0.0f || desc.motion.acceleration != math::vec3(0.0f) ||
-                       desc.motion.turbulence_strength > 0.0f;
+                       desc.motion.turbulence_strength > 0.0f || desc.motion.orbit_speed != 0.0f ||
+                       desc.motion.radial_speed != 0.0f || desc.motion.converge;
     return born * math::max(lifetime / sweep_seconds, 1.0f) * (bends ? bent_path_casts : 1.0f);
+}
+
+auto get_force_axis(const emitter_motion_desc& motion) -> math::vec3
+{
+    constexpr float min_axis_length = 1.0e-4f;
+    const float length = math::length(motion.force_axis);
+    return length > min_axis_length ? motion.force_axis / length : math::vec3(0.0f, 1.0f, 0.0f);
 }
 
 void emitter_motion_desc::reset()
@@ -154,6 +162,17 @@ void emitter_motion_desc::reset()
     turbulence_frequency = 1.0f;
     turbulence_speed = 0.5f;
     turbulence_over_life = make_flat_curve(1.0f);
+    force_axis = math::vec3(0.0f, 1.0f, 0.0f);
+    orbit_speed = 0.0f;
+    orbit_over_life = make_flat_curve(1.0f);
+    radial_speed = 0.0f;
+    radial_over_life = make_flat_curve(1.0f);
+    converge = false;
+    // On its own path at birth, at the target at death.
+    converge_over_life = math::gradient<float>();
+    converge_over_life.add_point(0.0f, 0.0f);
+    converge_over_life.add_point(1.0f, 1.0f);
+    converge_over_life.bake(curve_bake_resolution);
     collision = collision_mode::none;
     collision_planes.clear();
     restitution = 0.5f;
@@ -381,6 +400,18 @@ auto emitter_desc::bake_features() const -> emitter_feature
     if(motion.turbulence_strength > 0.0f)
     {
         features = features | emitter_feature::turbulence;
+    }
+    if(motion.orbit_speed != 0.0f)
+    {
+        features = features | emitter_feature::orbit | emitter_feature::forces;
+    }
+    if(motion.radial_speed != 0.0f)
+    {
+        features = features | emitter_feature::radial | emitter_feature::forces;
+    }
+    if(motion.converge)
+    {
+        features = features | emitter_feature::converge | emitter_feature::forces;
     }
     if(render.max_draw_distance > 0.0f)
     {

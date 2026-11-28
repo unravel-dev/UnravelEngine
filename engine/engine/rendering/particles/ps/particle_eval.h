@@ -80,6 +80,9 @@ struct emitter_eval_params
     /// Fastest a particle moves: x multiples of its launch speed (the speed curve's peak x the easing's fastest
     /// rate) plus y multiples of the speed the acceleration gave it (the easing's fastest rate).
     math::vec2 speed_bound{1.0f, 1.0f};
+    /// Forces (emitter_feature::forces): radians per second the particles turn about the force axis, metres per
+    /// second they move away from it (toward it when negative), and 1 when they converge on force_target.
+    math::vec3 forces{0.0f};
     // Per frame (dynamic row).
     math::mat4 local_to_world{1.0f};
     math::quat emitter_rotation{1.0f, 0.0f, 0.0f, 0.0f};
@@ -91,6 +94,12 @@ struct emitter_eval_params
     float frame_time = 0.0f;
     /// World displacement of a local-space emitter's origin since the last frame (motion vectors).
     math::vec3 origin_motion{0.0f};
+    /// The forces' axis, unit, and the point the particles converge on, in simulation space. The axis passes through
+    /// the emitter's origin.
+    math::vec3 force_axis{0.0f, 1.0f, 0.0f};
+    math::vec3 force_target{0.0f};
+    /// The fastest the forces move a particle, metres per second in world space (how far a trail reaches back).
+    float force_speed = 0.0f;
 };
 
 using static_row = std::array<math::vec4, static_row_vec4s>;
@@ -121,6 +130,15 @@ struct lut_ranges
     float size_axis_peak = 1.0f;
     /// Largest |turbulence strength multiplier| over a life.
     float turbulence_peak = 1.0f;
+    /// Largest |orbit multiplier| and |radial multiplier| over a life.
+    float orbit_factor_max = 1.0f;
+    float radial_factor_max = 1.0f;
+    /// The most the radial multiplier's integral rises, and falls, between two moments of a life, in lifetimes: how
+    /// far a radial speed carries a particle out (a negative one, the fall), whenever its path segment began.
+    float radial_rise = 1.0f;
+    float radial_fall = 0.0f;
+    /// Steepest the converge blend changes, per lifetime.
+    float converge_slope_max = 0.0f;
 };
 
 /**
@@ -153,6 +171,18 @@ auto drag_gamma(float drag, float time, float lambda) -> float;
 
 auto evaluate_particle(const particle_record& record, const emitter_eval_params& params, const lut_set& luts)
     -> particle_state;
+/**
+ * @brief The velocity the emitter's forces add to a particle whose path segment starts at @p position (simulation
+ * space) @p life into its life (0..1) of @p lifespan seconds. A bounce takes it off the velocity it stores, so the
+ * particle leaves the surface at the velocity it bounced with (particle_force_start_velocity in particle_common.sh).
+ * @p launch is the velocity it leaves with: the way the radial force moves a segment that starts on the axis.
+ */
+auto get_force_start_velocity(const emitter_eval_params& params,
+                              const lut_set& luts,
+                              const math::vec3& position,
+                              const math::vec3& launch,
+                              float life,
+                              float lifespan) -> math::vec3;
 auto evaluate_particle_size(const particle_record& record,
                             const particle_state& state,
                             const emitter_eval_params& params,

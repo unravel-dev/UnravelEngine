@@ -84,6 +84,11 @@ inspectors and undo to `unravel-editor-panel`.
   `engine/engine/meta/ecs/components/particle_emitter_component.cpp`).
 - A nested struct field needs its own `REFLECT` and `SAVE` / `LOAD` (`named_anim` in
   `engine/engine/meta/ecs/components/test_component.cpp`).
+- A reference to an entity is saved with `save_entity_reference` / `load_entity_reference`
+  (`engine/engine/meta/ecs/entity_reference.hpp`), whose serializer needs the save or load context of an entity
+  save. A component saved or loaded on its own gets it from `component_save_scope` / `component_load_scope`
+  (`engine/engine/ecs/components/basic_component.h`), as `component_meta` does; a test that calls `try_save` /
+  `try_load` on such a component opens them too, or the serializer asserts in Debug and reads no context elsewhere.
 - Reflection registers at static initialization of any translation unit that includes the
   `REFLECT_EXTERN` header; a component's meta `.hpp` is included from `all_components.h`, which
   is how the editor, the player and the tests all see it.

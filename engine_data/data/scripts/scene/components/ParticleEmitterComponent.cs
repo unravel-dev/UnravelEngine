@@ -1015,6 +1015,90 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Degrees per second the particles turn about the force axis (0 = off). The sign picks the way round.
+        /// </summary>
+        public float orbitSpeed
+        {
+            get => internal_m2n_particle_emitter_get_orbit_speed(owner);
+            set => internal_m2n_particle_emitter_set_orbit_speed(owner, value);
+        }
+
+        /// <summary>
+        /// Multiplier of the orbit speed over life (1 throughout = constant).
+        /// </summary>
+        public Curve orbitOverLife
+        {
+            get => new Curve(internal_m2n_particle_emitter_get_orbit_over_life(owner).ToStructArray<CurveKey>());
+            set => internal_m2n_particle_emitter_set_orbit_over_life(owner, RequireKeys(value?.keys, nameof(orbitOverLife)).ToByteArray());
+        }
+
+        /// <summary>
+        /// Metres per second each particle moves straight away from the force axis, the way it lay from it at birth, or
+        /// toward it when negative, where it stops (0 = off).
+        /// </summary>
+        public float radialSpeed
+        {
+            get => internal_m2n_particle_emitter_get_radial_speed(owner);
+            set => internal_m2n_particle_emitter_set_radial_speed(owner, value);
+        }
+
+        /// <summary>
+        /// Multiplier of the radial speed over life (1 throughout = constant).
+        /// </summary>
+        public Curve radialOverLife
+        {
+            get => new Curve(internal_m2n_particle_emitter_get_radial_over_life(owner).ToStructArray<CurveKey>());
+            set => internal_m2n_particle_emitter_set_radial_over_life(owner, RequireKeys(value?.keys, nameof(radialOverLife)).ToByteArray());
+        }
+
+        /// <summary>
+        /// The axis Orbit and Radial act about, as a direction in the emitter's space. It passes through the emitter's origin.
+        /// Only its direction counts, and a zero axis is up.
+        /// </summary>
+        public Vector3 forceAxis
+        {
+            get => internal_m2n_particle_emitter_get_force_axis(owner);
+            set => internal_m2n_particle_emitter_set_force_axis(owner, value);
+        }
+
+        /// <summary>
+        /// The particles leave their own paths and go to the converge target over their life.
+        /// </summary>
+        public bool convergeToPoint
+        {
+            get => internal_m2n_particle_emitter_get_converge_to_point(owner);
+            set => internal_m2n_particle_emitter_set_converge_to_point(owner, value);
+        }
+
+        /// <summary>
+        /// How far a particle has gone to the target over its life: 0 is on its own path and 1 is at the target.
+        /// </summary>
+        public Curve convergeOverLife
+        {
+            get => new Curve(internal_m2n_particle_emitter_get_converge_over_life(owner).ToStructArray<CurveKey>());
+            set => internal_m2n_particle_emitter_set_converge_over_life(owner, RequireKeys(value?.keys, nameof(convergeOverLife)).ToByteArray());
+        }
+
+        /// <summary>
+        /// The entity the particles go to. Without one they go to the emitter itself. Once the entity is destroyed they
+        /// go on to where it was last.
+        /// </summary>
+        public Entity convergeTarget
+        {
+            get => internal_m2n_particle_emitter_get_converge_target(owner);
+            set => internal_m2n_particle_emitter_set_converge_target(owner, value);
+        }
+
+        /// <summary>
+        /// The point the particles go to, in the target's space, or in the emitter's without a target.
+        /// </summary>
+        public Vector3 convergeOffset
+        {
+            get => internal_m2n_particle_emitter_get_converge_offset(owner);
+            set => internal_m2n_particle_emitter_set_converge_offset(owner, value);
+        }
+
+        /// <summary>
         /// Metres from the camera beyond which the emitter is not drawn (0 = no limit).
         /// </summary>
         public float maxDrawDistance
@@ -2626,6 +2710,60 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_particle_emitter_set_turbulence_over_life(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_orbit_speed(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_orbit_speed(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_orbit_over_life(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_orbit_over_life(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_radial_speed(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_radial_speed(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_radial_over_life(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_radial_over_life(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector3 internal_m2n_particle_emitter_get_force_axis(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_force_axis(Entity eid, Vector3 value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_converge_to_point(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_converge_to_point(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_converge_over_life(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_converge_over_life(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Entity internal_m2n_particle_emitter_get_converge_target(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_converge_target(Entity eid, Entity value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector3 internal_m2n_particle_emitter_get_converge_offset(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_converge_offset(Entity eid, Vector3 value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern float internal_m2n_particle_emitter_get_max_draw_distance(Entity eid);

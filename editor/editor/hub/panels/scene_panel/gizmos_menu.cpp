@@ -141,6 +141,9 @@ constexpr auto EMITTER_DETAILS = std::to_array<detail_option>({
     {"Bounds", "The bounds of the particles.", &gizmos_data::show_particle_emitter_bounds},
     {"Shape", "The shape particles are emitted from.", &gizmos_data::show_particle_emitter_shape},
     {"Direction", "The direction particles leave in.", &gizmos_data::show_particle_emitter_direction},
+    {"Forces",
+     "The axis Orbit and Radial act about, and the point the particles converge on.",
+     &gizmos_data::show_particle_emitter_forces},
 });
 
 constexpr auto MODEL_DETAILS = std::to_array<detail_option>({
@@ -173,7 +176,7 @@ constexpr auto ROWS = std::to_array<row_desc>({
     {.icon = ICON_MDI_CREATION,
      .name = "Particle Emitter",
      .objects = OBJECTS<particle_emitter_component>,
-     .gizmo_tooltip = "The emitter's bounds, shape and direction.",
+     .gizmo_tooltip = "The emitter's bounds, shape, direction and forces.",
      .icon_flag = &billboard_gizmos::show_particle_emitter,
      .gizmo_flag = &gizmos_data::show_particle_emitter,
      .details = EMITTER_DETAILS},

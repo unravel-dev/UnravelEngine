@@ -19,7 +19,7 @@ auto compute_lut_key(const emitter_desc& desc, emitter_feature features) -> uint
 /**
  * @brief Bakes the emitter's curve rows (particle_common.sh, lut_row): color, (eased life, its rate, size
  * min, size max), color by speed, (speed integral, speed factor, erosion, sheet frame), (size x, size y,
- * spin integral, intensity), the second color, and their ranges.
+ * spin integral, intensity), the second color, the turbulence row, the forces' two rows, and their ranges.
  */
 void bake_lut_set(const emitter_desc& desc, emitter_feature features, lut_set& out_luts);
 

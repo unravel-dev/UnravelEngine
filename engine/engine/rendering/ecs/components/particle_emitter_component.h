@@ -13,6 +13,7 @@
 #include <bx/rng.h>
 #include <math/math.h>
 #include <base/basetypes.hpp>
+#include <hpp/optional.hpp>
 #include <chrono>
 
 namespace unravel
@@ -627,6 +628,59 @@ public:
     void set_turbulence_over_life(const math::gradient<float>& value);
     auto get_turbulence_over_life() const -> const math::gradient<float>&;
 
+    /// The axis Orbit and Radial act about, in the emitter's space; it passes through the emitter's origin. Only its
+    /// direction counts, and a zero axis is up.
+    void set_force_axis(const math::vec3& value);
+    auto get_force_axis() const -> math::vec3;
+
+    /// The force axis as the simulation uses it: a unit vector in the emitter's space.
+    auto get_force_direction() const -> math::vec3;
+
+    /// Degrees per second the particles turn about the force axis (0 = off; the sign picks the way).
+    void set_orbit_speed(float value);
+    auto get_orbit_speed() const -> float;
+
+    /// Multiplier of the orbit speed over life (1 throughout = constant).
+    void set_orbit_over_life(const math::gradient<float>& value);
+    auto get_orbit_over_life() const -> const math::gradient<float>&;
+
+    /// Metres per second the particles move away from the force axis, or toward it when negative, where they stop on
+    /// it (0 = off).
+    void set_radial_speed(float value);
+    auto get_radial_speed() const -> float;
+
+    /// Multiplier of the radial speed over life (1 throughout = constant).
+    void set_radial_over_life(const math::gradient<float>& value);
+    auto get_radial_over_life() const -> const math::gradient<float>&;
+
+    /// The particles go to the converge target over their life, by the converge curve.
+    void set_converge_to_point(bool value);
+    auto get_converge_to_point() const -> bool;
+
+    /// How far a particle has gone from its own path to the target over its life: 0 = on its path, 1 = at the target.
+    void set_converge_over_life(const math::gradient<float>& value);
+    auto get_converge_over_life() const -> const math::gradient<float>&;
+
+    /// The entity the particles converge on; none: the emitter itself. Once that entity is destroyed the particles
+    /// go on to where it was last.
+    void set_converge_target(entt::handle value);
+    auto get_converge_target() const -> entt::handle;
+
+    /// The point the particles converge on, in the target entity's space (the emitter's own without one).
+    void set_converge_offset(const math::vec3& value);
+    auto get_converge_offset() const -> math::vec3;
+
+    /**
+     * @brief Reads where the entity the particles converge on is this frame. On one thread, before the emitters
+     * update in their own tasks: update_emitter then only reads its own entity.
+     */
+    void resolve_converge_target();
+
+    /// The point the particles converge on, in the world, for an emitter at @p world_transform: the offset in the
+    /// target entity's space where that entity is now (where it was last once it is gone), or in the emitter's own
+    /// space without a target. Reads the target's transform: not for the emitters' update tasks.
+    auto get_converge_point(const math::transform& world_transform) const -> math::vec3;
+
     /// Cone shape: angle, degrees, between the axis and the slant the rim launches along.
     void set_cone_angle(float value);
     auto get_cone_angle() const -> float;
@@ -807,6 +861,16 @@ private:
     ps_soa::emitter_handle emitter_handle_{};
     ps_soa::emitter_desc desc_{};
     ps_soa::emitter_transform_state transform_state_{};
+    /// Where the entity the particles converge on is now, with the offset in its space; none without a live one.
+    auto find_converge_target_point() const -> hpp::optional<math::vec3>;
+    /// The point resolve_converge_target left, or the offset in the space of an emitter at @p world_transform.
+    auto get_resolved_converge_point(const math::transform& world_transform) const -> math::vec3;
+
+    /// Converge To Point: the entity the particles go to (none: the emitter), the point in its space, and that point
+    /// in the world as resolve_converge_target last found it (none while the emitter itself is the target).
+    entt::handle converge_target_{};
+    math::vec3 converge_offset_{0.0f};
+    hpp::optional<math::vec3> resolved_converge_target_{};
     /// Mesh render mode: evaluates the particles' world matrices and the box they fill.
     void update_mesh_instances();
 

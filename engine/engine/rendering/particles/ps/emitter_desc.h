@@ -124,6 +124,22 @@ struct emitter_motion_desc
     float turbulence_frequency = 1.0f;
     float turbulence_speed = 0.5f;
     math::gradient<float> turbulence_over_life;
+    /// Forces carry each particle off the path its launch, gravity and drag give it, in closed form like that path.
+    /// Orbit and Radial act about the force axis: the line through the emitter's origin along force_axis, in the
+    /// emitter's space.
+    math::vec3 force_axis{0.0f, 1.0f, 0.0f};
+    /// Orbit: degrees per second the particles turn about the force axis (0 = off; the sign picks the way), and a
+    /// multiplier of it over life.
+    float orbit_speed = 0.0f;
+    math::gradient<float> orbit_over_life;
+    /// Radial: metres per second the particles move away from the force axis, or toward it when negative, where they
+    /// stop on it (0 = off), and a multiplier of it over life.
+    float radial_speed = 0.0f;
+    math::gradient<float> radial_over_life;
+    /// Converge To Point: the particles go to the emitter's target (emitter_transform_state::converge_target) over
+    /// their life, by converge_over_life: 0 = on their own path, 1 = at the target.
+    bool converge = false;
+    math::gradient<float> converge_over_life;
     /// Collision (world-space emitters): planes with a world normal and an offset from the emitter's origin along
     /// it (normal . (p - origin) = offset; the normal's side is open). A bounce keeps restitution of the speed into
     /// the surface and loses friction of the speed along it. Particles that collide with scene surfaces
@@ -352,6 +368,12 @@ auto collides_with_scene_surfaces(const emitter_desc& desc) -> bool;
  * collide with them.
  */
 auto estimate_collision_casts_per_second(const emitter_desc& desc, uint32_t capacity) -> float;
+
+/**
+ * @brief The unit axis the emitter's forces act about, in its space: force_axis, or up for one too short to have a
+ * direction.
+ */
+auto get_force_axis(const emitter_motion_desc& motion) -> math::vec3;
 
 /**
  * @brief True when @p curve holds @p value everywhere.

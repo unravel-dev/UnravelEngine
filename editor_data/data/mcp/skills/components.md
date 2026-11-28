@@ -109,6 +109,32 @@ Motion (exact at any frame rate; there is no per-frame integration):
   field: smoke billows, embers wander, magic churns. turbulence_frequency
   (swirls per metre), turbulence_speed (swirls per second, 0 freezes the field),
   turbulence_over_life multiplies the strength over life.
+- Forces bend the particles' own paths, exact at any frame rate like the rest
+  of the motion. orbit_speed (degrees per second, 0 = off, the sign picks the
+  way round) turns them about force_axis, a direction in the emitter's space
+  through its origin (any length; [0,0,0] is up): vortices, tornadoes, swirls
+  around a pickup. radial_speed (m/s, 0 = off) moves each particle straight
+  away from that axis, the way it lay from it at birth, or toward it when
+  negative, no further than the axis. orbit_over_life and radial_over_life
+  [{progress,value}] multiply the two speeds over life. In world simulation
+  space the axis stays with the emitter: move the emitter and the live
+  particles turn about its new place, so a vortex that travels reads best in
+  local simulation space.
+- converge_to_point true brings the particles to a point over their life:
+  converge_over_life [{progress,value}] is how far each has gone (0 = on its
+  own path, 1 = at the point; it rises from 0 to 1 by default, and a curve
+  that falls from 1 lets the particles out of the point instead).
+  converge_target is the entity they go to (an entity id; null = the emitter
+  itself) and converge_offset [x,y,z] the point in that entity's space. The
+  target may move: pickups flying to the player, energy gathering before a
+  blast. Once the target is destroyed the particles go on to where it was
+  last. The Scene view draws the axis and the point for a selected emitter
+  (Gizmos > Particle Emitter > Forces).
+- Collisions follow the paths the forces bend. While what the forces hang on
+  moves (the target, or a world emitter that orbits or pushes its particles),
+  an emitter that collides with planes or physics_colliders looks for its
+  contacts again every frame: keep such emitters to a few thousand particles,
+  or collide with scene_surfaces.
 - collision kill | bounce | stick with collision_planes [[nx,ny,nz,offset]]
   (world normal and offset from the emitter along it; [[0,1,0,0]] is the ground
   at the emitter's height); restitution, friction and max_bounces shape the

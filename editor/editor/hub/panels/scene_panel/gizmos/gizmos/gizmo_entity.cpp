@@ -68,6 +68,95 @@ void draw_light_source_shape(gfx::dd_raii& dd, const light& light_data, const ma
     dd.encoder.lineTo(vec3_to_bx(center + half_axis));
 }
 
+/// Colour of a particle emitter's forces (ABGR), apart from its bounds, shape and direction gizmos.
+constexpr uint32_t EMITTER_FORCE_COLOR = 0xffff60e0;
+/// The ring the axis forces are drawn on, in the simulation's units, the arrows on it, and the marker of the point the
+/// particles converge on.
+constexpr float EMITTER_FORCE_RING_RADIUS = 1.0f;
+constexpr float EMITTER_FORCE_ARROW_LENGTH = 0.3f;
+constexpr float EMITTER_FORCE_TARGET_SIZE = 0.15f;
+constexpr int EMITTER_FORCE_ARROWS = 4;
+
+/// An arrow from @p from along the unit vector @p direction, its head spread along @p side.
+void draw_emitter_force_arrow(gfx::dd_raii& dd, const math::vec3& from, const math::vec3& direction, const math::vec3& side)
+{
+    const math::vec3 tip = from + direction * EMITTER_FORCE_ARROW_LENGTH;
+    const math::vec3 back = tip - direction * (EMITTER_FORCE_ARROW_LENGTH * 0.4f);
+    const math::vec3 spread = side * (EMITTER_FORCE_ARROW_LENGTH * 0.2f);
+    dd.encoder.moveTo(vec3_to_bx(from));
+    dd.encoder.lineTo(vec3_to_bx(tip));
+    dd.encoder.lineTo(vec3_to_bx(back + spread));
+    dd.encoder.moveTo(vec3_to_bx(tip));
+    dd.encoder.lineTo(vec3_to_bx(back - spread));
+}
+
+/// The axis Orbit and Radial act about: a line through @p origin along the unit vector @p axis, and a ring about it
+/// whose arrows show the way round (@p orbit_speed) and the way out or in (@p radial_speed).
+void draw_emitter_force_axis(gfx::dd_raii& dd, const math::vec3& origin, const math::vec3& axis, float orbit_speed, float radial_speed)
+{
+    const math::vec3 reference = math::abs(axis.y) < 0.99f ? math::vec3(0.0f, 1.0f, 0.0f) : math::vec3(1.0f, 0.0f, 0.0f);
+    const math::vec3 first = math::normalize(math::cross(reference, axis));
+    const math::vec3 second = math::cross(axis, first);
+    dd.encoder.moveTo(vec3_to_bx(origin - axis * EMITTER_FORCE_RING_RADIUS));
+    dd.encoder.lineTo(vec3_to_bx(origin + axis * EMITTER_FORCE_RING_RADIUS));
+    draw_emitter_force_arrow(dd, origin + axis * EMITTER_FORCE_RING_RADIUS, axis, first);
+    dd.encoder.drawCircle(vec3_to_bx(axis), vec3_to_bx(origin), EMITTER_FORCE_RING_RADIUS);
+    for(int i = 0; i < EMITTER_FORCE_ARROWS; ++i)
+    {
+        const float turn = math::two_pi<float>() * float(i) / float(EMITTER_FORCE_ARROWS);
+        const math::vec3 outward = first * math::cos(turn) + second * math::sin(turn);
+        // The way a positive orbit speed carries a particle that is outward of the axis.
+        const math::vec3 around = math::cross(axis, outward);
+        const math::vec3 on_ring = origin + outward * EMITTER_FORCE_RING_RADIUS;
+        if(orbit_speed != 0.0f)
+        {
+            draw_emitter_force_arrow(dd, on_ring, orbit_speed > 0.0f ? around : -around, outward);
+        }
+        if(radial_speed != 0.0f)
+        {
+            draw_emitter_force_arrow(dd, on_ring, radial_speed > 0.0f ? outward : -outward, around);
+        }
+    }
+}
+
+/// A particle emitter's forces: the axis Orbit and Radial act about, and the point its particles converge on with a
+/// line to it from the emitter.
+void draw_emitter_forces(gfx::dd_raii& dd, const particle_emitter_component& emitter, const math::transform& world)
+{
+    const bool has_axis_force = emitter.get_orbit_speed() != 0.0f || emitter.get_radial_speed() != 0.0f;
+    if(!has_axis_force && !emitter.get_converge_to_point())
+    {
+        return;
+    }
+    DebugDrawEncoderScopePush scope(dd.encoder);
+    dd.encoder.setColor(EMITTER_FORCE_COLOR);
+    dd.encoder.setWireframe(true);
+    if(has_axis_force && emitter.get_simulation_space() == ps_soa::simulation_space::local)
+    {
+        // Local particles turn about the axis in the emitter's space, scale and all.
+        dd.encoder.pushTransform((const float*)world);
+        draw_emitter_force_axis(dd, math::vec3(0.0f), emitter.get_force_direction(), emitter.get_orbit_speed(), emitter.get_radial_speed());
+        dd.encoder.popTransform();
+    }
+    else if(has_axis_force)
+    {
+        const math::vec3 turned = world.transform_vector(emitter.get_force_direction());
+        const float length = math::length(turned);
+        const math::vec3 axis = length > math::epsilon<float>() ? turned / length : emitter.get_force_direction();
+        draw_emitter_force_axis(dd, math::vec3(world.get_position()), axis, emitter.get_orbit_speed(), emitter.get_radial_speed());
+    }
+    if(emitter.get_converge_to_point())
+    {
+        const math::vec3 origin(world.get_position());
+        const math::vec3 target = emitter.get_converge_point(world);
+        dd.encoder.moveTo(vec3_to_bx(origin));
+        dd.encoder.lineTo(vec3_to_bx(target));
+        dd.encoder.drawCircle(Axis::X, target.x, target.y, target.z, EMITTER_FORCE_TARGET_SIZE);
+        dd.encoder.drawCircle(Axis::Y, target.x, target.y, target.z, EMITTER_FORCE_TARGET_SIZE);
+        dd.encoder.drawCircle(Axis::Z, target.x, target.y, target.z, EMITTER_FORCE_TARGET_SIZE);
+    }
+}
+
 /// The world bounds of a model, and of its submeshes when asked for, colored by LOD. An early return leaves only
 /// this part, so that the gizmos of the entity's other components still draw.
 void draw_model_bounds(model_component& model_comp,
@@ -517,6 +606,11 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 aabb.max = vec3_to_bx(mesh_bounds.max);
                 dd.encoder.draw(aabb);
             }
+        }
+
+        if(em.gizmos.show_particle_emitter_forces)
+        {
+            draw_emitter_forces(dd, particle_emitter_comp, world_transform);
         }
 
         // Draw emission shape

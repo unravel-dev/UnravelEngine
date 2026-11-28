@@ -169,6 +169,8 @@ void particle_system::on_frame_before_render(scene& scn, const frame_times& time
     for(const auto entity : view)
     {
         view.get<transform_component>(entity).resolve_shared_ancestors();
+        // An emitter whose particles converge on another entity reads where that one is here, on this thread.
+        view.get<particle_emitter_component>(entity).resolve_converge_target();
     }
     static const std::string thread_name = "Particle/Pool Thread";
     // Each task works with one emitter and only reads the ancestors resolved above.

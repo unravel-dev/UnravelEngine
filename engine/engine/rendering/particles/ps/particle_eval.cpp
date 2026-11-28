@@ -18,6 +18,8 @@ namespace
 /// particle_common.sh).
 constexpr float k_small_drag_time = 0.1f;
 constexpr float k_unorm16_max = 65535.0f;
+constexpr float k_min_force_radius = min_force_radius;
+constexpr float k_min_converge_span = min_converge_span;
 constexpr float k_min_pick_weight = 1.0e-6f;
 constexpr uint32_t k_salt_multiplier = 2654435769u;
 
@@ -44,6 +46,118 @@ auto size_pick_blend(float life, float width_start, float width_end) -> float
     const float end_weight = life * width_end;
     const float total = start_weight + end_weight;
     return total > k_min_pick_weight ? end_weight / total : life;
+}
+
+/// Where the forces' axis passes through, in simulation space: the emitter's origin.
+auto get_force_origin(const emitter_eval_params& params) -> math::vec3
+{
+    return has_flag(params.flags, emitter_feature::local_space) ? math::vec3(0.0f) : math::vec3(params.local_to_world[3]);
+}
+
+/// @p arm turned by @p angle radians about the unit vector @p axis (particle_turn_about_axis in
+/// particle_common.sh).
+auto turn_about_axis(const math::vec3& axis, const math::vec3& arm, float angle) -> math::vec3
+{
+    const float cosine = std::cos(angle);
+    return arm * cosine + math::cross(axis, arm) * std::sin(angle) + axis * (math::dot(axis, arm) * (1.0f - cosine));
+}
+
+/**
+ * @brief The unit direction the radial force moves the particle of a path segment along: away from the axis where the
+ * segment starts (@p start), or the way it leaves (@p launch) when it starts on the axis; zero when neither points
+ * across the axis. @p out_radius receives how far from the axis the segment starts (particle_radial_direction in
+ * particle_common.sh).
+ */
+auto get_radial_direction(const emitter_eval_params& params, const math::vec3& start, const math::vec3& launch, float& out_radius)
+    -> math::vec3
+{
+    const math::vec3 offset = start - get_force_origin(params);
+    const math::vec3 across = offset - params.force_axis * math::dot(offset, params.force_axis);
+    const float radius = math::length(across);
+    if(radius > k_min_force_radius)
+    {
+        out_radius = radius;
+        return across / radius;
+    }
+    out_radius = 0.0f;
+    const math::vec3 leaving = launch - params.force_axis * math::dot(launch, params.force_axis);
+    const float speed = math::length(leaving);
+    return speed > k_min_force_radius ? leaving / speed : math::vec3(0.0f);
+}
+
+/**
+ * @brief How far the radial force has moved a particle along its direction (x, metres; negative is toward the axis)
+ * and how fast it moves it now (y, metres per second), for a force of @p speed whose multiplier is @p factor now and
+ * has added up to @p integral lifetimes since the segment began. Toward the axis the particle goes no further than
+ * @p start_radius, the segment's distance from it, and stays there until the force turns outward
+ * (particle_radial_push in particle_common.sh).
+ */
+auto get_radial_push(float speed, float integral, float factor, float lifespan, float start_radius) -> math::vec2
+{
+    const float moved = speed * integral * lifespan;
+    const float rate = speed * factor;
+    if(moved < -start_radius || (moved == -start_radius && rate < 0.0f))
+    {
+        return math::vec2(-start_radius, 0.0f);
+    }
+    return math::vec2(moved, rate);
+}
+
+/**
+ * @brief Carries a particle from its own path's @p position and @p velocity (simulation space) to where the emitter's
+ * forces put it @p life into its life, on the path segment of @p record, which began at @p segment_life
+ * (particle_apply_forces in particle_common.sh).
+ *
+ * The radial force moves it along the direction that points away from the axis where the segment started, by the
+ * radial speed's integral since then. The orbit turns it about the axis by the orbit speed's integral since then. Then
+ * it goes the converge curve's share of the way to the target. A segment that began later in the life (a bounce)
+ * counts the rest of the way from the curve's value where it began, so every segment begins where its record says.
+ * The velocity is the rate of that position.
+ */
+void apply_forces(const particle_record& record,
+                  const emitter_eval_params& params,
+                  const lut_set& luts,
+                  float life,
+                  float segment_life,
+                  float lifespan,
+                  math::vec3& position,
+                  math::vec3& velocity)
+{
+    const math::vec4 now = luts.sample(lut_row_forces, life);
+    const math::vec4 start = luts.sample(lut_row_forces, segment_life);
+    const math::vec4 rates = luts.sample(lut_row_force_rates, life);
+    if(params.forces.y != 0.0f)
+    {
+        float start_radius = 0.0f;
+        const math::vec3 direction = get_radial_direction(params, record.get_start(), record.get_velocity(), start_radius);
+        const math::vec2 push = get_radial_push(params.forces.y, now.y - start.y, rates.y, lifespan, start_radius);
+        position += direction * push.x;
+        velocity += direction * push.y;
+    }
+    if(params.forces.x != 0.0f)
+    {
+        const math::vec3 origin = get_force_origin(params);
+        const float angle = params.forces.x * (now.x - start.x) * lifespan;
+        const math::vec3 turned = turn_about_axis(params.force_axis, position - origin, angle);
+        velocity = turn_about_axis(params.force_axis, velocity, angle) +
+                   math::cross(params.force_axis, turned) * (params.forces.x * rates.x);
+        position = origin + turned;
+    }
+    if(params.forces.z != 0.0f)
+    {
+        const float base = segment_life > 0.0f ? start.z : 0.0f;
+        const float span = 1.0f - base;
+        const bool blends = span > k_min_converge_span;
+        const float blend_raw = blends ? (now.z - base) / span : 1.0f;
+        const float blend = math::clamp(blend_raw, 0.0f, 1.0f);
+        // The blend moves between its ends, and at an end while the curve heads back inside.
+        const bool is_inside = blend_raw > 0.0f && blend_raw < 1.0f;
+        const bool leaves_an_end = (blend_raw == 0.0f && rates.z > 0.0f) || (blend_raw == 1.0f && rates.z < 0.0f);
+        const float rate = blends && (is_inside || leaves_an_end) ? rates.z / (span * lifespan) : 0.0f;
+        const math::vec3 to_target = params.force_target - position;
+        velocity = velocity * (1.0f - blend) + to_target * rate;
+        position += to_target * blend;
+    }
 }
 
 } // namespace
@@ -98,6 +212,7 @@ auto pack_static_row(const emitter_eval_params& params) -> static_row
                                          float(params.ribbon_count),
                                          params.align_to_surface ? 1.0f : 0.0f,
                                          0.0f);
+    row[static_slot_forces] = math::vec4(params.forces, 0.0f);
     return row;
 }
 
@@ -119,7 +234,10 @@ auto pack_dynamic_row(const emitter_eval_params& params) -> dynamic_row
     {
         row[dynamic_slot_acceleration + i] = float_bits(params.acceleration[int(i)]);
         row[dynamic_slot_origin_motion + i] = float_bits(params.origin_motion[int(i)]);
+        row[dynamic_slot_force_axis + i] = float_bits(params.force_axis[int(i)]);
+        row[dynamic_slot_force_target + i] = float_bits(params.force_target[int(i)]);
     }
+    row[dynamic_slot_force_speed] = float_bits(params.force_speed);
     row[dynamic_slot_drag] = float_bits(params.drag);
     row[dynamic_slot_now] = params.now;
     row[dynamic_slot_system_scale] = float_bits(params.system_scale);
@@ -165,6 +283,40 @@ auto drag_gamma(float drag, float time, float lambda) -> float
         return time * time * (1.0f / 2.0f - x * (1.0f / 6.0f - x * (1.0f / 24.0f - x * (1.0f / 120.0f - x * (1.0f / 720.0f)))));
     }
     return (time - lambda) / drag;
+}
+
+auto get_force_start_velocity(const emitter_eval_params& params,
+                              const lut_set& luts,
+                              const math::vec3& position,
+                              const math::vec3& launch,
+                              float life,
+                              float lifespan) -> math::vec3
+{
+    math::vec3 added(0.0f);
+    if(!has_flag(params.flags, emitter_feature::forces))
+    {
+        return added;
+    }
+    const math::vec4 rates = luts.sample(lut_row_force_rates, life);
+    if(params.forces.y != 0.0f)
+    {
+        float start_radius = 0.0f;
+        const math::vec3 direction = get_radial_direction(params, position, launch, start_radius);
+        added += direction * get_radial_push(params.forces.y, 0.0f, rates.y, lifespan, start_radius).y;
+    }
+    if(params.forces.x != 0.0f)
+    {
+        added += math::cross(params.force_axis, position - get_force_origin(params)) * (params.forces.x * rates.x);
+    }
+    if(params.forces.z != 0.0f)
+    {
+        const float span = 1.0f - (life > 0.0f ? luts.sample(lut_row_forces, life).z : 0.0f);
+        if(span > k_min_converge_span && rates.z > 0.0f)
+        {
+            added += (params.force_target - position) * (rates.z / (span * lifespan));
+        }
+    }
+    return added;
 }
 
 auto evaluate_particle(const particle_record& record, const emitter_eval_params& params, const lut_set& luts)
@@ -217,6 +369,10 @@ auto evaluate_particle(const particle_record& record, const emitter_eval_params&
     if(rests)
     {
         velocity = math::vec3(0.0f);
+    }
+    if(has_flag(params.flags, emitter_feature::forces) && !rests)
+    {
+        apply_forces(record, params, luts, state.life, math::clamp(segment_age / lifespan, 0.0f, 1.0f), lifespan, position, velocity);
     }
     if(has_flag(params.flags, emitter_feature::turbulence) && !rests)
     {
@@ -326,7 +482,7 @@ auto evaluate_particle_quad(const particle_record& record,
             acceleration = math::mat3(params.local_to_world) * acceleration;
         }
         const float top_speed = math::length(launch) * params.speed_bound.x +
-                                math::length(acceleration) * state.age * params.speed_bound.y;
+                                math::length(acceleration) * state.age * params.speed_bound.y + params.force_speed;
         quad.y = size + 2.0f * (top_speed * params.trail_length + params.turbulence.w);
     }
     if(has_flag(params.flags, emitter_feature::size_axis_curve))

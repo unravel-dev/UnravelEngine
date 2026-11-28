@@ -121,6 +121,9 @@ struct gizmos_data
     bool show_particle_emitter_bounds {true};
     bool show_particle_emitter_shape {true};
     bool show_particle_emitter_direction {true};
+    /// The axis Orbit and Radial act about and the point the particles converge on. Drawn while
+    /// show_particle_emitter is on.
+    bool show_particle_emitter_forces {true};
 
     auto operator==(const gizmos_data&) const -> bool = default;
 };
@@ -178,6 +181,7 @@ inline auto merge_gizmo_change(gizmo_setup saved, const gizmo_setup& before, con
     carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_particle_emitter_bounds);
     carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_particle_emitter_shape);
     carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_particle_emitter_direction);
+    carry_change(saved.selection, before.selection, after.selection, &gizmos_data::show_particle_emitter_forces);
     return saved;
 }
 

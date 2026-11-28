@@ -20,10 +20,10 @@
 #include "../shader_buffer.sh"
 
 #define PARTICLE_RECORD_UINTS 16u
-#define PARTICLE_STATIC_VEC4S 16u
-#define PARTICLE_DYNAMIC_UINTS 28u
+#define PARTICLE_STATIC_VEC4S 17u
+#define PARTICLE_DYNAMIC_UINTS 36u
 #define PARTICLE_LUT_SIZE 256u
-#define PARTICLE_LUT_ROWS 7u
+#define PARTICLE_LUT_ROWS 9u
 #define PARTICLE_TICKS_PER_SECOND 8192.0
 /// The bit of a record's motion_offset that marks a particle at rest (particle_record.h, motion_offset_rest_bit):
 /// the other bits are the age, ticks, it came to rest at, and its velocity holds the unit normal of its surface.
@@ -52,6 +52,7 @@
 #define PARTICLE_STATIC_FACING 13u
 #define PARTICLE_STATIC_SPEED_BOUND 14u
 #define PARTICLE_STATIC_RIBBON 15u
+#define PARTICLE_STATIC_FORCES 16u
 
 /// Slots of the emitter dynamic row (particle_record.h, dynamic_slot).
 #define PARTICLE_DYNAMIC_LOCAL_TO_WORLD 0u
@@ -62,6 +63,9 @@
 #define PARTICLE_DYNAMIC_SYSTEM_SCALE 21u
 #define PARTICLE_DYNAMIC_FRAME_TIME 22u
 #define PARTICLE_DYNAMIC_ORIGIN_MOTION 23u
+#define PARTICLE_DYNAMIC_FORCE_AXIS 26u
+#define PARTICLE_DYNAMIC_FORCE_TARGET 29u
+#define PARTICLE_DYNAMIC_FORCE_SPEED 32u
 
 #define PARTICLE_LUT_ROW_COLOR 0u
 #define PARTICLE_LUT_ROW_LIFE 1u
@@ -70,6 +74,8 @@
 #define PARTICLE_LUT_ROW_SHAPE 4u
 #define PARTICLE_LUT_ROW_COLOR_B 5u
 #define PARTICLE_LUT_ROW_TURBULENCE_SIZE_Z 6u
+#define PARTICLE_LUT_ROW_FORCES 7u
+#define PARTICLE_LUT_ROW_FORCE_RATES 8u
 
 #define PARTICLE_FLAG_ALIGN 1u
 #define PARTICLE_FLAG_TEXSHEET 2u
@@ -93,7 +99,7 @@
 #define PARTICLE_FLAG_RANDOM_ROW 524288u
 #define PARTICLE_FLAG_TURBULENCE 1048576u
 #define PARTICLE_FLAG_DRAW_DISTANCE 2097152u
-#define PARTICLE_FLAG_LIT_VOLUMETRIC 4194304u
+#define PARTICLE_FLAG_FORCES 4194304u
 #define PARTICLE_FLAG_LIT_SURFACE 8388608u
 
 #define PARTICLE_RENDER_MODE_CAMERA_FACING 3.0
@@ -114,6 +120,11 @@
 /// Below this drag x time the exponential forms lose precision (the gravity term divides a small difference by
 /// drag squared); their series are used instead, exact to float precision up to it.
 #define PARTICLE_SMALL_DRAG_TIME 0.1
+/// Metres from the forces' axis below which a particle is on it and has no direction to turn or move along, and the
+/// least the converge blend has left to go at a path segment's start for the segment to blend on (particle_record.h,
+/// min_force_radius and min_converge_span).
+#define PARTICLE_MIN_FORCE_RADIUS 0.00001
+#define PARTICLE_MIN_CONVERGE_SPAN 0.0001
 
 struct particle_record
 {
@@ -295,10 +306,173 @@ float particle_drag_gamma(float drag, float time, float lambda)
 	return (time - lambda) / drag;
 }
 
+vec3 particle_dynamic_vec3(uint emitter, uint index)
+{
+	return vec3(particle_dynamic_float(emitter, index), particle_dynamic_float(emitter, index + 1u), particle_dynamic_float(emitter, index + 2u));
+}
+
+/// Where the forces' axis passes through, in simulation space: the emitter's origin (particle_eval.cpp,
+/// get_force_origin).
+vec3 particle_force_origin(uint emitter)
+{
+	if((particle_flags(emitter) & PARTICLE_FLAG_LOCAL_SPACE) != 0u)
+	{
+		return vec3_splat(0.0);
+	}
+	return vec3(particle_dynamic_float(emitter, PARTICLE_DYNAMIC_LOCAL_TO_WORLD + 3u),
+	            particle_dynamic_float(emitter, PARTICLE_DYNAMIC_LOCAL_TO_WORLD + 7u),
+	            particle_dynamic_float(emitter, PARTICLE_DYNAMIC_LOCAL_TO_WORLD + 11u));
+}
+
+/// @p arm turned by @p angle radians about the unit vector @p axis (particle_eval.cpp, turn_about_axis).
+vec3 particle_turn_about_axis(vec3 axis, vec3 arm, float angle)
+{
+	float cosine = cos(angle);
+	return arm * cosine + cross(axis, arm) * sin(angle) + axis * (dot(axis, arm) * (1.0 - cosine));
+}
+
+/**
+ * The unit direction the radial force moves the particle of a path segment along (xyz): away from the axis where the
+ * segment starts (@p start), or the way it leaves (@p launch) when it starts on the axis; zero when neither points
+ * across the axis. w is how far from the axis the segment starts (particle_eval.cpp, get_radial_direction).
+ */
+vec4 particle_radial_direction(uint emitter, vec3 start, vec3 launch)
+{
+	vec3 axis = particle_dynamic_vec3(emitter, PARTICLE_DYNAMIC_FORCE_AXIS);
+	vec3 offset = start - particle_force_origin(emitter);
+	vec3 across = offset - axis * dot(offset, axis);
+	float radius = length(across);
+	if(radius > PARTICLE_MIN_FORCE_RADIUS)
+	{
+		return vec4(across / radius, radius);
+	}
+	vec3 leaving = launch - axis * dot(launch, axis);
+	float speed = length(leaving);
+	if(speed > PARTICLE_MIN_FORCE_RADIUS)
+	{
+		return vec4(leaving / speed, 0.0);
+	}
+	return vec4_splat(0.0);
+}
+
+/**
+ * How far the radial force has moved a particle along its direction (x, metres; negative is toward the axis) and how
+ * fast it moves it now (y, metres per second), for a force of @p speed whose multiplier is @p factor now and has added
+ * up to @p integral lifetimes since the segment began. Toward the axis the particle goes no further than
+ * @p start_radius, the segment's distance from it, and stays there until the force turns outward (particle_eval.cpp,
+ * get_radial_push).
+ */
+vec2 particle_radial_push(float speed, float integral, float factor, float lifespan, float start_radius)
+{
+	float moved = speed * integral * lifespan;
+	float rate = speed * factor;
+	if(moved < -start_radius || (moved == -start_radius && rate < 0.0))
+	{
+		return vec2(-start_radius, 0.0);
+	}
+	return vec2(moved, rate);
+}
+
+/**
+ * Carries a particle from its own path's @p position and @p velocity (simulation space) to where the emitter's forces
+ * put it @p life into its life, on the path segment that began at @p segment_life at @p segment_start, leaving with
+ * @p launch (particle_eval.cpp, apply_forces).
+ *
+ * The radial force moves it along the direction that points away from the axis where the segment started, by the
+ * radial speed's integral since then. The orbit turns it about the axis by the orbit speed's integral since then. Then
+ * it goes the converge curve's share of the way to the target. A segment that began later in the life (a bounce)
+ * counts the rest of the way from the curve's value where it began, so every segment begins where its record says.
+ * The velocity is the rate of that position.
+ */
+void particle_apply_forces(uint emitter,
+                           vec3 segment_start,
+                           vec3 launch,
+                           float life,
+                           float segment_life,
+                           float lifespan,
+                           inout vec3 position,
+                           inout vec3 velocity)
+{
+	vec4 forces = particle_static(emitter, PARTICLE_STATIC_FORCES);
+	vec4 now = particle_lut(emitter, PARTICLE_LUT_ROW_FORCES, life);
+	vec4 start = particle_lut(emitter, PARTICLE_LUT_ROW_FORCES, segment_life);
+	vec4 rates = particle_lut(emitter, PARTICLE_LUT_ROW_FORCE_RATES, life);
+	if(forces.y != 0.0)
+	{
+		vec4 direction = particle_radial_direction(emitter, segment_start, launch);
+		vec2 push = particle_radial_push(forces.y, now.y - start.y, rates.y, lifespan, direction.w);
+		position += direction.xyz * push.x;
+		velocity += direction.xyz * push.y;
+	}
+	if(forces.x != 0.0)
+	{
+		vec3 origin = particle_force_origin(emitter);
+		vec3 axis = particle_dynamic_vec3(emitter, PARTICLE_DYNAMIC_FORCE_AXIS);
+		float angle = forces.x * (now.x - start.x) * lifespan;
+		vec3 turned = particle_turn_about_axis(axis, position - origin, angle);
+		velocity = particle_turn_about_axis(axis, velocity, angle) + cross(axis, turned) * (forces.x * rates.x);
+		position = origin + turned;
+	}
+	if(forces.z != 0.0)
+	{
+		float base = segment_life > 0.0 ? start.z : 0.0;
+		float span = 1.0 - base;
+		bool blends = span > PARTICLE_MIN_CONVERGE_SPAN;
+		// Both sides of a choice are worked out on some compilers: the divisor stays off zero.
+		float safe_span = max(span, PARTICLE_MIN_CONVERGE_SPAN);
+		float blend_raw = blends ? (now.z - base) / safe_span : 1.0;
+		float blend = clamp(blend_raw, 0.0, 1.0);
+		// The blend moves between its ends, and at an end while the curve heads back inside.
+		bool is_inside = blend_raw > 0.0 && blend_raw < 1.0;
+		bool leaves_an_end = (blend_raw == 0.0 && rates.z > 0.0) || (blend_raw == 1.0 && rates.z < 0.0);
+		float rate = blends && (is_inside || leaves_an_end) ? rates.z / (safe_span * lifespan) : 0.0;
+		vec3 to_target = particle_dynamic_vec3(emitter, PARTICLE_DYNAMIC_FORCE_TARGET) - position;
+		velocity = velocity * (1.0 - blend) + to_target * rate;
+		position += to_target * blend;
+	}
+}
+
+/**
+ * The velocity the emitter's forces add to a particle whose path segment starts at @p position (simulation space)
+ * @p life into its life of @p lifespan seconds: what a bounce takes off the velocity it stores, so the particle leaves
+ * the surface at the velocity it bounced with. @p launch is the velocity it leaves with: the way the radial force
+ * moves a segment that starts on the axis (particle_eval.cpp, get_force_start_velocity).
+ */
+vec3 particle_force_start_velocity(uint emitter, vec3 position, vec3 launch, float life, float lifespan)
+{
+	vec3 added = vec3_splat(0.0);
+	if((particle_flags(emitter) & PARTICLE_FLAG_FORCES) == 0u)
+	{
+		return added;
+	}
+	vec4 forces = particle_static(emitter, PARTICLE_STATIC_FORCES);
+	vec4 rates = particle_lut(emitter, PARTICLE_LUT_ROW_FORCE_RATES, life);
+	if(forces.y != 0.0)
+	{
+		vec4 direction = particle_radial_direction(emitter, position, launch);
+		added += direction.xyz * particle_radial_push(forces.y, 0.0, rates.y, lifespan, direction.w).y;
+	}
+	if(forces.x != 0.0)
+	{
+		vec3 axis = particle_dynamic_vec3(emitter, PARTICLE_DYNAMIC_FORCE_AXIS);
+		added += cross(axis, position - particle_force_origin(emitter)) * (forces.x * rates.x);
+	}
+	if(forces.z != 0.0)
+	{
+		float base = life > 0.0 ? particle_lut(emitter, PARTICLE_LUT_ROW_FORCES, life).z : 0.0;
+		float span = 1.0 - base;
+		if(span > PARTICLE_MIN_CONVERGE_SPAN && rates.z > 0.0)
+		{
+			added += (particle_dynamic_vec3(emitter, PARTICLE_DYNAMIC_FORCE_TARGET) - position) * (rates.z / (span * lifespan));
+		}
+	}
+	return added;
+}
+
 /**
  * The particle's age, life and motion at the emitter's current time. Motion is the closed form of a
  * constant acceleration under linear drag (exact at any age); position easing and the speed curve
- * reshape it through the curve set.
+ * reshape it through the curve set, and the emitter's forces carry it on from there.
  */
 particle_state particle_evaluate_at(particle_record record, uint now)
 {
@@ -351,6 +525,17 @@ particle_state particle_evaluate_at(particle_record record, uint now)
 	if((record.motion_offset & PARTICLE_MOTION_REST_BIT) != 0u)
 	{
 		velocity = vec3_splat(0.0);
+	}
+	else if((flags & PARTICLE_FLAG_FORCES) != 0u)
+	{
+		particle_apply_forces(emitter,
+		                      record.start,
+		                      record.velocity,
+		                      state.life,
+		                      clamp(segment_age / lifespan, 0.0, 1.0),
+		                      lifespan,
+		                      position,
+		                      velocity);
 	}
 	if((flags & PARTICLE_FLAG_LOCAL_SPACE) != 0u)
 	{
@@ -580,7 +765,8 @@ vec2 particle_quad_stretched(particle_record record, particle_state state, vec3 
 			launch = particle_local_to_world_vector(emitter, launch);
 			acceleration = particle_local_to_world_vector(emitter, acceleration);
 		}
-		float top_speed = length(launch) * speed_bound.x + length(acceleration) * state.age * speed_bound.y;
+		float top_speed = length(launch) * speed_bound.x + length(acceleration) * state.age * speed_bound.y +
+		                  particle_dynamic_float(emitter, PARTICLE_DYNAMIC_FORCE_SPEED);
 		quad.y = size + 2.0 * (top_speed * trail_length + particle_static(emitter, PARTICLE_STATIC_TURBULENCE).w);
 	}
 	if((particle_flags(emitter) & PARTICLE_FLAG_SIZE_AXIS_CURVE) != 0u)

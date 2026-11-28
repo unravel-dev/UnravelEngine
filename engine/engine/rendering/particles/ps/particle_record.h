@@ -15,10 +15,10 @@ namespace ps_soa
 /// count wraps after ~6 days, far beyond max_particle_lifetime.
 constexpr double ticks_per_second = 8192.0;
 constexpr uint32_t record_uints = 16;
-constexpr uint32_t static_row_vec4s = 16;
-constexpr uint32_t dynamic_row_uints = 28;
+constexpr uint32_t static_row_vec4s = 17;
+constexpr uint32_t dynamic_row_uints = 36;
 constexpr uint32_t lut_size = 256;
-constexpr uint32_t lut_rows = 7;
+constexpr uint32_t lut_rows = 9;
 constexpr uint32_t lut_set_vec4s = lut_size * lut_rows;
 
 /// Slots of the emitter static row (PARTICLE_STATIC_* in particle_common.sh; the particle motion suite checks the two match).
@@ -57,6 +57,9 @@ enum static_slot : uint32_t
     /// Ribbon facing (ribbon_facing), the ribbons the emitter's live particles are of, 1 when particles at rest lie
     /// flat on their surface, unused w.
     static_slot_ribbon = 15,
+    /// Forces: radians per second about the force axis, metres per second away from it, 1 when the particles converge
+    /// on the target, unused w.
+    static_slot_forces = 16,
 };
 
 /// Slots of the emitter dynamic row (PARTICLE_DYNAMIC_* in particle_common.sh; the particle motion suite checks the two match).
@@ -78,6 +81,12 @@ enum dynamic_slot : uint32_t
     dynamic_slot_frame_time = 22,
     /// A local emitter's origin motion since the last frame, xyz.
     dynamic_slot_origin_motion = 23,
+    /// The forces' axis, unit, in simulation space, xyz.
+    dynamic_slot_force_axis = 26,
+    /// The point the particles converge on, in simulation space, xyz.
+    dynamic_slot_force_target = 29,
+    /// The fastest the forces move a particle, metres per second in world space. The three uints after it are unused.
+    dynamic_slot_force_speed = 32,
 };
 
 enum lut_row : uint32_t
@@ -93,6 +102,12 @@ enum lut_row : uint32_t
     /// (turbulence strength, size z multiplier, Custom Data X, Custom Data Y) over life: the z multiplier sizes mesh
     /// particles, the custom data is what the emitter's material reads.
     lut_row_turbulence_size_z = 6,
+    /// The forces over life: the integrals of the orbit and of the radial multiplier (in lifetimes), the converge
+    /// blend (0..1), unused w.
+    lut_row_forces = 7,
+    /// What lut_row_forces changes by: the orbit and the radial multiplier, the converge blend's slope per lifetime,
+    /// unused w.
+    lut_row_force_rates = 8,
 };
 
 /**
@@ -164,6 +179,11 @@ constexpr uint32_t motion_offset_rest_bit = 0x80000000u;
 /// cs_particle_collide.eshader).
 constexpr float contact_lift = 1.0e-3f;
 constexpr float rest_lift = 5.0e-3f;
+/// Metres from the forces' axis below which a particle is on it and has no direction to turn or move along, and the
+/// least the converge blend has left to go at a path segment's start for the segment to blend on: with less the
+/// particle is at the target (PARTICLE_MIN_FORCE_RADIUS and PARTICLE_MIN_CONVERGE_SPAN in particle_common.sh).
+constexpr float min_force_radius = 1.0e-5f;
+constexpr float min_converge_span = 1.0e-4f;
 /// Smallest speed factor (speed curve times easing rate) a bounce divides by when it carries a particle's curves on
 /// past its contact; below it the bounced velocity is kept as it is (PARTICLE_MIN_SEGMENT_FACTOR).
 constexpr float min_segment_factor = 1.0e-2f;

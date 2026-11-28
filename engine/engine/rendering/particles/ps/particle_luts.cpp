@@ -207,7 +207,8 @@ auto compute_lut_key(const emitter_desc& desc, emitter_feature features) -> uint
         features & (emitter_feature::non_linear_ease | emitter_feature::speed_curve | emitter_feature::color_by_speed |
                     emitter_feature::erosion | emitter_feature::size_axis_curve | emitter_feature::spin_curve |
                     emitter_feature::intensity_curve | emitter_feature::two_gradients |
-                    emitter_feature::texsheet_frame_curve | emitter_feature::turbulence));
+                    emitter_feature::texsheet_frame_curve | emitter_feature::turbulence | emitter_feature::orbit |
+                    emitter_feature::radial | emitter_feature::converge));
     hasher.add(lut_features);
     hasher.add_curve(desc.appearance.color_gradient);
     hasher.add_curve(desc.appearance.size_over_life);
@@ -252,6 +253,18 @@ auto compute_lut_key(const emitter_desc& desc, emitter_feature features) -> uint
     if(has_feature(features, emitter_feature::turbulence))
     {
         hasher.add_curve(desc.motion.turbulence_over_life);
+    }
+    if(has_feature(features, emitter_feature::orbit))
+    {
+        hasher.add_curve(desc.motion.orbit_over_life);
+    }
+    if(has_feature(features, emitter_feature::radial))
+    {
+        hasher.add_curve(desc.motion.radial_over_life);
+    }
+    if(has_feature(features, emitter_feature::converge))
+    {
+        hasher.add_curve(desc.motion.converge_over_life);
     }
     hasher.add_curve(desc.appearance.custom_data_x);
     hasher.add_curve(desc.appearance.custom_data_y);
@@ -311,6 +324,75 @@ void bake_shape_row(const emitter_desc& desc, emitter_feature features, lut_set&
     }
 }
 
+/**
+ * @brief The forces' rows: the integrals of the orbit and the radial multiplier over life (in lifetimes: the angle is
+ * the orbit speed x the lifetime x the integral) and the converge blend, then what each changes by. The multipliers
+ * are 1 and the blend 0 for a force that is off.
+ */
+void bake_force_rows(const emitter_desc& desc, emitter_feature features, lut_set& luts, lut_ranges& ranges)
+{
+    const bool has_orbit = has_feature(features, emitter_feature::orbit);
+    const bool has_radial = has_feature(features, emitter_feature::radial);
+    const bool has_converge = has_feature(features, emitter_feature::converge);
+    const auto orbit = [&](float u)
+    {
+        return has_orbit ? desc.motion.orbit_over_life.sample(u) : 1.0f;
+    };
+    const auto radial = [&](float u)
+    {
+        return has_radial ? desc.motion.radial_over_life.sample(u) : 1.0f;
+    };
+    const auto converge = [&](float u)
+    {
+        return has_converge ? math::clamp(desc.motion.converge_over_life.sample(u), 0.0f, 1.0f) : 0.0f;
+    };
+    const uint32_t base = uint32_t(lut_row_forces) * lut_size;
+    const uint32_t rates_base = uint32_t(lut_row_force_rates) * lut_size;
+    const float sample_step = 1.0f / float(lut_size - 1);
+    const float substep = sample_step / float(k_speed_integral_substeps);
+    float orbit_integral = 0.0f;
+    float radial_integral = 0.0f;
+    float previous_orbit = orbit(0.0f);
+    float previous_radial = radial(0.0f);
+    // The radial integral's lowest and highest value so far: how much it has risen and fallen since any earlier moment.
+    float radial_lowest = 0.0f;
+    float radial_highest = 0.0f;
+    ranges.orbit_factor_max = math::abs(previous_orbit);
+    ranges.radial_factor_max = math::abs(previous_radial);
+    ranges.radial_rise = 0.0f;
+    ranges.radial_fall = 0.0f;
+    ranges.converge_slope_max = 0.0f;
+    for(uint32_t i = 0; i < lut_size; ++i)
+    {
+        const float t = float(i) * sample_step;
+        if(i > 0)
+        {
+            for(uint32_t s = 1; s <= k_speed_integral_substeps; ++s)
+            {
+                const float u = t - sample_step + float(s) * substep;
+                const float orbit_value = orbit(u);
+                const float radial_value = radial(u);
+                orbit_integral += (previous_orbit + orbit_value) * 0.5f * substep;
+                radial_integral += (previous_radial + radial_value) * 0.5f * substep;
+                previous_orbit = orbit_value;
+                previous_radial = radial_value;
+                ranges.orbit_factor_max = math::max(ranges.orbit_factor_max, math::abs(orbit_value));
+                ranges.radial_factor_max = math::max(ranges.radial_factor_max, math::abs(radial_value));
+                ranges.radial_rise = math::max(ranges.radial_rise, radial_integral - radial_lowest);
+                ranges.radial_fall = math::max(ranges.radial_fall, radial_highest - radial_integral);
+                radial_lowest = math::min(radial_lowest, radial_integral);
+                radial_highest = math::max(radial_highest, radial_integral);
+            }
+        }
+        const float before = math::max(t - k_ease_rate_step, 0.0f);
+        const float after = math::min(t + k_ease_rate_step, 1.0f);
+        const float slope = (converge(after) - converge(before)) / (after - before);
+        luts.data[base + i] = math::vec4(orbit_integral, radial_integral, converge(t), 0.0f);
+        luts.data[rates_base + i] = math::vec4(previous_orbit, previous_radial, slope, 0.0f);
+        ranges.converge_slope_max = math::max(ranges.converge_slope_max, math::abs(slope));
+    }
+}
+
 void bake_lut_set(const emitter_desc& desc, emitter_feature features, lut_set& out_luts)
 {
     lut_ranges& out_ranges = out_luts.ranges;
@@ -351,6 +433,7 @@ void bake_lut_set(const emitter_desc& desc, emitter_feature features, lut_set& o
         out_luts.data[turbulence_base + i] = math::vec4(strength, size_z, custom_x, custom_y);
         out_ranges.turbulence_peak = math::max(out_ranges.turbulence_peak, math::abs(strength));
     }
+    bake_force_rows(desc, features, out_luts, out_ranges);
 }
 
 } // namespace ps_soa

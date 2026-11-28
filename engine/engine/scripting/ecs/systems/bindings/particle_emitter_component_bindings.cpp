@@ -2260,6 +2260,159 @@ void internal_m2n_particle_emitter_set_turbulence_over_life(entt::entity id, con
     }
 }
 
+auto internal_m2n_particle_emitter_get_orbit_speed(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_orbit_speed();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_orbit_speed(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_orbit_speed(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_orbit_over_life(entt::entity id) -> std::vector<curve_value_key>
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return to_value_keys(comp->get_orbit_over_life());
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_orbit_over_life(entt::entity id, const std::vector<curve_value_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_orbit_over_life(to_value_curve(keys, comp->get_orbit_over_life()));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_radial_speed(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_radial_speed();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_radial_speed(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_radial_speed(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_radial_over_life(entt::entity id) -> std::vector<curve_value_key>
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return to_value_keys(comp->get_radial_over_life());
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_radial_over_life(entt::entity id, const std::vector<curve_value_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_radial_over_life(to_value_curve(keys, comp->get_radial_over_life()));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_force_axis(entt::entity id) -> math::vec3
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_force_axis();
+    }
+    return math::vec3{0.0f, 0.0f, 0.0f};
+}
+
+void internal_m2n_particle_emitter_set_force_axis(entt::entity id, const math::vec3& value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_force_axis(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_converge_to_point(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_converge_to_point();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_converge_to_point(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_converge_to_point(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_converge_over_life(entt::entity id) -> std::vector<curve_value_key>
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return to_value_keys(comp->get_converge_over_life());
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_converge_over_life(entt::entity id, const std::vector<curve_value_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_converge_over_life(to_value_curve(keys, comp->get_converge_over_life()));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_converge_target(entt::entity id) -> entt::entity
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_converge_target() ? comp->get_converge_target().entity() : entt::entity(0);
+    }
+    return entt::entity(0);
+}
+
+void internal_m2n_particle_emitter_set_converge_target(entt::entity id, entt::entity value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_converge_target(get_entity_from_id(value));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_converge_offset(entt::entity id) -> math::vec3
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_converge_offset();
+    }
+    return math::vec3{0.0f, 0.0f, 0.0f};
+}
+
+void internal_m2n_particle_emitter_set_converge_offset(entt::entity id, const math::vec3& value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_converge_offset(value);
+    }
+}
+
 auto internal_m2n_particle_emitter_get_collision(entt::entity id) -> int
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
@@ -2840,6 +2993,42 @@ void register_particle_emitter_component_script_bindings()
                             script_internal_call(internal_m2n_particle_emitter_get_turbulence_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_set_turbulence_over_life",
                             script_internal_call(internal_m2n_particle_emitter_set_turbulence_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_orbit_speed",
+                            script_internal_call(internal_m2n_particle_emitter_get_orbit_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_orbit_speed",
+                            script_internal_call(internal_m2n_particle_emitter_set_orbit_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_orbit_over_life",
+                            script_internal_call(internal_m2n_particle_emitter_get_orbit_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_orbit_over_life",
+                            script_internal_call(internal_m2n_particle_emitter_set_orbit_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_radial_speed",
+                            script_internal_call(internal_m2n_particle_emitter_get_radial_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_radial_speed",
+                            script_internal_call(internal_m2n_particle_emitter_set_radial_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_radial_over_life",
+                            script_internal_call(internal_m2n_particle_emitter_get_radial_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_radial_over_life",
+                            script_internal_call(internal_m2n_particle_emitter_set_radial_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_force_axis",
+                            script_internal_call(internal_m2n_particle_emitter_get_force_axis));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_force_axis",
+                            script_internal_call(internal_m2n_particle_emitter_set_force_axis));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_converge_to_point",
+                            script_internal_call(internal_m2n_particle_emitter_get_converge_to_point));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_converge_to_point",
+                            script_internal_call(internal_m2n_particle_emitter_set_converge_to_point));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_converge_over_life",
+                            script_internal_call(internal_m2n_particle_emitter_get_converge_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_converge_over_life",
+                            script_internal_call(internal_m2n_particle_emitter_set_converge_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_converge_target",
+                            script_internal_call(internal_m2n_particle_emitter_get_converge_target));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_converge_target",
+                            script_internal_call(internal_m2n_particle_emitter_set_converge_target));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_converge_offset",
+                            script_internal_call(internal_m2n_particle_emitter_get_converge_offset));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_converge_offset",
+                            script_internal_call(internal_m2n_particle_emitter_set_converge_offset));
     reg.add_internal_call("internal_m2n_particle_emitter_get_max_draw_distance",
                             script_internal_call(internal_m2n_particle_emitter_get_max_draw_distance));
     reg.add_internal_call("internal_m2n_particle_emitter_set_max_draw_distance",

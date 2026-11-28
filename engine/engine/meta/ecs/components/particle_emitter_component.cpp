@@ -12,6 +12,7 @@
 #include <engine/meta/core/common/basetypes.hpp>
 #include <engine/meta/assets/asset_handle.hpp>
 #include <engine/meta/ecs/entity.hpp>
+#include <engine/meta/ecs/entity_reference.hpp>
 #include <engine/meta/layers/layer_mask.hpp>
 #include <engine/meta/rendering/material_instance.hpp>
 #include <engine/rendering/material_graph/graph_material.h>
@@ -993,6 +994,10 @@ REFLECT(particle_emitter_component)
                                                        (e.get_collision() == ps_soa::collision_mode::bounce && e.get_rest_speed() > 0.0f);
                                             });
     const auto has_turbulence = when([](const emitter& e) { return e.get_turbulence_strength() > 0.0f; });
+    const auto has_orbit = when([](const emitter& e) { return e.get_orbit_speed() != 0.0f; });
+    const auto has_radial = when([](const emitter& e) { return e.get_radial_speed() != 0.0f; });
+    const auto has_axis_force = when([](const emitter& e) { return e.get_orbit_speed() != 0.0f || e.get_radial_speed() != 0.0f; });
+    const auto has_converge = when([](const emitter& e) { return e.get_converge_to_point(); });
     const auto has_two_gradients = when([](const emitter& e) { return e.get_random_between_gradients(); });
     const auto is_sprite_mode = when(is_sprite);
     const auto is_sheet = when(has_texture_sheet);
@@ -1343,6 +1348,75 @@ REFLECT(particle_emitter_component)
             entt::attribute{"tooltip", "Multiplier of the strength over the particle's life: calm at birth and churning as it rises, or the other way."},
             entt::attribute{"group", "Turbulence"},
             entt::attribute{"predicate", has_turbulence},
+        })
+        .data<&particle_emitter_component::set_orbit_speed, &particle_emitter_component::get_orbit_speed>("orbit_speed"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "orbit_speed"},
+            entt::attribute{"pretty_name", "Orbit Speed (deg/s)"},
+            entt::attribute{"tooltip", "Turns the particles about the force axis by this many degrees per second: vortices, tornadoes, swirls around a pickup. The sign picks the way round, and 0 turns it off."},
+            entt::attribute{"group", "Forces"},
+        })
+        .data<&particle_emitter_component::set_orbit_over_life, &particle_emitter_component::get_orbit_over_life>("orbit_over_life"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "orbit_over_life"},
+            entt::attribute{"pretty_name", "Orbit Over Life"},
+            entt::attribute{"tooltip", "Multiplier of the orbit speed over the particle's life: slow at birth and fast at the end, or the other way."},
+            entt::attribute{"group", "Forces"},
+            entt::attribute{"predicate", has_orbit},
+        })
+        .data<&particle_emitter_component::set_radial_speed, &particle_emitter_component::get_radial_speed>("radial_speed"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "radial_speed"},
+            entt::attribute{"pretty_name", "Radial Speed (m/s)"},
+            entt::attribute{"tooltip", "Moves each particle straight away from the force axis by this many metres per second, the way it lay from the axis at birth, or toward the axis when negative, where it stops. 0 turns it off."},
+            entt::attribute{"group", "Forces"},
+        })
+        .data<&particle_emitter_component::set_radial_over_life, &particle_emitter_component::get_radial_over_life>("radial_over_life"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "radial_over_life"},
+            entt::attribute{"pretty_name", "Radial Over Life"},
+            entt::attribute{"tooltip", "Multiplier of the radial speed over the particle's life."},
+            entt::attribute{"group", "Forces"},
+            entt::attribute{"predicate", has_radial},
+        })
+        .data<&particle_emitter_component::set_force_axis, &particle_emitter_component::get_force_axis>("force_axis"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "force_axis"},
+            entt::attribute{"pretty_name", "Axis"},
+            entt::attribute{"tooltip", "The line Orbit and Radial act about, as a direction in the emitter's space. It passes through the emitter's origin. Only the direction counts, not the length, and a zero axis is up. In World simulation space the live particles follow the axis when the emitter moves, so a vortex that travels reads best in Local."},
+            entt::attribute{"group", "Forces"},
+            entt::attribute{"predicate", has_axis_force},
+        })
+        .data<&particle_emitter_component::set_converge_to_point, &particle_emitter_component::get_converge_to_point>("converge_to_point"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "converge_to_point"},
+            entt::attribute{"pretty_name", "Converge To Point"},
+            entt::attribute{"tooltip", "The particles leave their own paths and go to a target over their life: pickups flying to the player, energy gathering before a blast."},
+            entt::attribute{"group", "Forces"},
+        })
+        .data<&particle_emitter_component::set_converge_over_life, &particle_emitter_component::get_converge_over_life>("converge_over_life"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "converge_over_life"},
+            entt::attribute{"pretty_name", "Converge Over Life"},
+            entt::attribute{"tooltip", "How far a particle has gone to the target over its life: 0 is on its own path and 1 is at the target."},
+            entt::attribute{"group", "Forces"},
+            entt::attribute{"predicate", has_converge},
+        })
+        .data<&particle_emitter_component::set_converge_target, &particle_emitter_component::get_converge_target>("converge_target"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "converge_target"},
+            entt::attribute{"pretty_name", "Target"},
+            entt::attribute{"tooltip", "The entity the particles go to. Without one they go to the emitter itself. Once the entity is destroyed they go on to where it was last."},
+            entt::attribute{"group", "Forces"},
+            entt::attribute{"predicate", has_converge},
+        })
+        .data<&particle_emitter_component::set_converge_offset, &particle_emitter_component::get_converge_offset>("converge_offset"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "converge_offset"},
+            entt::attribute{"pretty_name", "Target Offset"},
+            entt::attribute{"tooltip", "The point the particles go to, in the target's space, or in the emitter's without a target."},
+            entt::attribute{"group", "Forces"},
+            entt::attribute{"predicate", has_converge},
         })
         .data<&particle_emitter_component::set_collision, &particle_emitter_component::get_collision>("collision"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -2184,6 +2258,15 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("turbulence_frequency", obj.get_turbulence_frequency()));
     try_save(ar, ser20::make_nvp("turbulence_speed", obj.get_turbulence_speed()));
     try_save(ar, ser20::make_nvp("turbulence_over_life", obj.get_turbulence_over_life()));
+    try_save(ar, ser20::make_nvp("orbit_speed", obj.get_orbit_speed()));
+    try_save(ar, ser20::make_nvp("orbit_over_life", obj.get_orbit_over_life()));
+    try_save(ar, ser20::make_nvp("radial_speed", obj.get_radial_speed()));
+    try_save(ar, ser20::make_nvp("radial_over_life", obj.get_radial_over_life()));
+    try_save(ar, ser20::make_nvp("force_axis", obj.get_force_axis()));
+    try_save(ar, ser20::make_nvp("converge_to_point", obj.get_converge_to_point()));
+    try_save(ar, ser20::make_nvp("converge_over_life", obj.get_converge_over_life()));
+    save_entity_reference(ar, "converge_target", obj.get_converge_target());
+    try_save(ar, ser20::make_nvp("converge_offset", obj.get_converge_offset()));
     try_save(ar, ser20::make_nvp("collision", obj.get_collision()));
     try_save(ar, ser20::make_nvp("collision_planes", obj.get_collision_planes()));
     try_save(ar, ser20::make_nvp("collision_radius_scale", obj.get_collision_radius_scale()));
@@ -2518,6 +2601,17 @@ LOAD(particle_emitter_component)
     load_property(ar, "turbulence_frequency", obj.get_turbulence_frequency(), [&](const auto& v) { obj.set_turbulence_frequency(v); });
     load_property(ar, "turbulence_speed", obj.get_turbulence_speed(), [&](const auto& v) { obj.set_turbulence_speed(v); });
     load_property(ar, "turbulence_over_life", obj.get_turbulence_over_life(), [&](const auto& v) { obj.set_turbulence_over_life(v); });
+    load_property(ar, "orbit_speed", obj.get_orbit_speed(), [&](const auto& v) { obj.set_orbit_speed(v); });
+    load_property(ar, "orbit_over_life", obj.get_orbit_over_life(), [&](const auto& v) { obj.set_orbit_over_life(v); });
+    load_property(ar, "radial_speed", obj.get_radial_speed(), [&](const auto& v) { obj.set_radial_speed(v); });
+    load_property(ar, "radial_over_life", obj.get_radial_over_life(), [&](const auto& v) { obj.set_radial_over_life(v); });
+    load_property(ar, "force_axis", obj.get_force_axis(), [&](const auto& v) { obj.set_force_axis(v); });
+    load_property(ar, "converge_to_point", obj.get_converge_to_point(), [&](const auto& v) { obj.set_converge_to_point(v); });
+    load_property(ar, "converge_over_life", obj.get_converge_over_life(), [&](const auto& v) { obj.set_converge_over_life(v); });
+    entt::handle converge_target = obj.get_converge_target();
+    load_entity_reference(ar, "converge_target", converge_target);
+    obj.set_converge_target(converge_target);
+    load_property(ar, "converge_offset", obj.get_converge_offset(), [&](const auto& v) { obj.set_converge_offset(v); });
     load_property(ar, "collision", obj.get_collision(), [&](const auto& v) { obj.set_collision(v); });
     load_property(ar, "collision_planes", obj.get_collision_planes(), [&](const auto& v) { obj.set_collision_planes(v); });
     load_property(ar, "collision_radius_scale", obj.get_collision_radius_scale(), [&](const auto& v) { obj.set_collision_radius_scale(v); });

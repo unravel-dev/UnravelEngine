@@ -270,10 +270,37 @@ void test_curve_features()
           "a key off 1 makes a speed curve");
 }
 
+/// A force is a feature of its own, and any of them sets the bit the shaders read.
+void test_force_features()
+{
+    ps_soa::emitter_desc desc;
+    desc.reset();
+    check(!ps_soa::has_feature(desc.bake_features(), ps_soa::emitter_feature::forces), "an emitter has no forces until one is set");
+    desc.motion.orbit_speed = -45.0f;
+    check(ps_soa::has_feature(desc.bake_features(), ps_soa::emitter_feature::orbit) &&
+              ps_soa::has_feature(desc.bake_features(), ps_soa::emitter_feature::forces),
+          "an orbit speed, whichever way round, turns the orbit and the forces on");
+    desc.motion.orbit_speed = 0.0f;
+    desc.motion.radial_speed = 0.5f;
+    check(ps_soa::has_feature(desc.bake_features(), ps_soa::emitter_feature::radial) &&
+              !ps_soa::has_feature(desc.bake_features(), ps_soa::emitter_feature::orbit),
+          "a radial speed turns the radial force on, and no other");
+    desc.motion.radial_speed = 0.0f;
+    desc.motion.converge = true;
+    check(ps_soa::has_feature(desc.bake_features(), ps_soa::emitter_feature::converge) &&
+              ps_soa::has_feature(desc.bake_features(), ps_soa::emitter_feature::forces),
+          "Converge To Point turns the converge force on");
+    desc.motion.force_axis = math::vec3(0.0f);
+    check(ps_soa::get_force_axis(desc.motion) == math::vec3(0.0f, 1.0f, 0.0f), "a force axis without a direction is up");
+    desc.motion.force_axis = math::vec3(0.0f, 0.0f, 4.0f);
+    check(ps_soa::get_force_axis(desc.motion) == math::vec3(0.0f, 0.0f, 1.0f), "the force axis is a direction, whatever its length");
+}
+
 void run_particle_emitter_desc_suite(rtti::context& /*ctx*/)
 {
     RUN_CASE(test_texture_sheet_feature());
     RUN_CASE(test_curve_features());
+    RUN_CASE(test_force_features());
     RUN_CASE(test_two_key_size_is_linear());
     RUN_CASE(test_every_size_key_counts());
     RUN_CASE(test_burst_size_scales_the_curve());

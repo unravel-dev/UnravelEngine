@@ -417,8 +417,12 @@ void main()
 	// their factor at the contact.
 	float lifespan_seconds = max(float(lifespan), 1.0) / PARTICLE_TICKS_PER_SECOND;
 	float factor = particle_motion_factor(emitter, state.age / lifespan_seconds);
-	store_vec3(base, contact + normal * PARTICLE_CONTACT_LIFT);
-	store_vec3(base + 4u, abs(factor) >= PARTICLE_MIN_SEGMENT_FACTOR ? bounced / factor : bounced);
+	// The forces go on moving the particle from its new start: the path stores the bounce less what they add there,
+	// so it leaves the surface at the bounced velocity (particle_system_soa.cpp, bounce_at).
+	vec3 start = contact + normal * PARTICLE_CONTACT_LIFT;
+	vec3 launched = bounced - particle_force_start_velocity(emitter, start, bounced, state.age / lifespan_seconds, lifespan_seconds);
+	store_vec3(base, start);
+	store_vec3(base + 4u, abs(factor) >= PARTICLE_MIN_SEGMENT_FACTOR ? launched / factor : launched);
 	s_particle_records[lifespan_index] = lifespan;
 	uint bounces = min(record.bounces + 1u, PARTICLE_MOTION_BOUNCE_MASK);
 	s_particle_records[motion_index] = age_ticks | (bounces << PARTICLE_MOTION_BOUNCE_SHIFT);

@@ -345,12 +345,20 @@ enum class emitter_feature : uint32_t
     turbulence = 1u << 20,
     /// Particles beyond the max draw distance are culled, and fade out before it.
     draw_distance = 1u << 21,
-    /// Lit as small clouds (particle_lighting::volumetric).
-    lit_volumetric = 1u << 22,
-    /// Lit as small spheres (particle_lighting::surface).
+    /// The emitter's forces carry the particles off their own paths (orbit, radial or converge).
+    forces = 1u << 22,
+    /// Lit as small spheres (particle_lighting::surface). A lit emitter without the bit is lit as small clouds.
     lit_surface = 1u << 23,
     /// CPU only: the lifetime of new particles follows the emitter's speed.
     lifetime_by_emitter_speed = 1u << 24,
+    /// CPU only: lit as small clouds (particle_lighting::volumetric).
+    lit_volumetric = 1u << 25,
+    /// CPU only: which of the forces are on. The particles turn about the emitter's force axis.
+    orbit = 1u << 26,
+    /// CPU only: the particles move away from the force axis, or toward it.
+    radial = 1u << 27,
+    /// CPU only: the particles converge on the emitter's target.
+    converge = 1u << 28,
     /// CPU only: the particles are lit (either lighting mode).
     lit = lit_volumetric | lit_surface,
 };

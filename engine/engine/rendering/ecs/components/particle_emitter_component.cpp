@@ -1808,6 +1808,152 @@ auto particle_emitter_component::get_turbulence_over_life() const -> const math:
     return desc_.motion.turbulence_over_life;
 }
 
+void particle_emitter_component::set_force_axis(const math::vec3& value)
+{
+    desc_.motion.force_axis = value;
+}
+
+auto particle_emitter_component::get_force_axis() const -> math::vec3
+{
+    return desc_.motion.force_axis;
+}
+
+auto particle_emitter_component::get_force_direction() const -> math::vec3
+{
+    return ps_soa::get_force_axis(desc_.motion);
+}
+
+void particle_emitter_component::set_orbit_speed(float value)
+{
+    desc_.motion.orbit_speed = value;
+}
+
+auto particle_emitter_component::get_orbit_speed() const -> float
+{
+    return desc_.motion.orbit_speed;
+}
+
+void particle_emitter_component::set_orbit_over_life(const math::gradient<float>& value)
+{
+    desc_.motion.orbit_over_life = value;
+    desc_.motion.orbit_over_life.bake(ps_soa::curve_bake_resolution);
+}
+
+auto particle_emitter_component::get_orbit_over_life() const -> const math::gradient<float>&
+{
+    return desc_.motion.orbit_over_life;
+}
+
+void particle_emitter_component::set_radial_speed(float value)
+{
+    desc_.motion.radial_speed = value;
+}
+
+auto particle_emitter_component::get_radial_speed() const -> float
+{
+    return desc_.motion.radial_speed;
+}
+
+void particle_emitter_component::set_radial_over_life(const math::gradient<float>& value)
+{
+    desc_.motion.radial_over_life = value;
+    desc_.motion.radial_over_life.bake(ps_soa::curve_bake_resolution);
+}
+
+auto particle_emitter_component::get_radial_over_life() const -> const math::gradient<float>&
+{
+    return desc_.motion.radial_over_life;
+}
+
+void particle_emitter_component::set_converge_to_point(bool value)
+{
+    desc_.motion.converge = value;
+}
+
+auto particle_emitter_component::get_converge_to_point() const -> bool
+{
+    return desc_.motion.converge;
+}
+
+void particle_emitter_component::set_converge_over_life(const math::gradient<float>& value)
+{
+    desc_.motion.converge_over_life = value;
+    desc_.motion.converge_over_life.bake(ps_soa::curve_bake_resolution);
+}
+
+auto particle_emitter_component::get_converge_over_life() const -> const math::gradient<float>&
+{
+    return desc_.motion.converge_over_life;
+}
+
+void particle_emitter_component::set_converge_target(entt::handle value)
+{
+    if(converge_target_ != value)
+    {
+        // Where the entity before was is no place of the new one's.
+        resolved_converge_target_.reset();
+    }
+    converge_target_ = value;
+}
+
+auto particle_emitter_component::get_converge_target() const -> entt::handle
+{
+    return converge_target_;
+}
+
+void particle_emitter_component::set_converge_offset(const math::vec3& value)
+{
+    converge_offset_ = value;
+}
+
+auto particle_emitter_component::get_converge_offset() const -> math::vec3
+{
+    return converge_offset_;
+}
+
+auto particle_emitter_component::find_converge_target_point() const -> hpp::optional<math::vec3>
+{
+    if(!converge_target_)
+    {
+        return {};
+    }
+    const auto* target = converge_target_.try_get<transform_component>();
+    if(target == nullptr)
+    {
+        return {};
+    }
+    return math::vec3(target->get_transform_global().transform_coord(converge_offset_));
+}
+
+auto particle_emitter_component::get_resolved_converge_point(const math::transform& world_transform) const -> math::vec3
+{
+    return resolved_converge_target_ ? *resolved_converge_target_ : math::vec3(world_transform.transform_coord(converge_offset_));
+}
+
+auto particle_emitter_component::get_converge_point(const math::transform& world_transform) const -> math::vec3
+{
+    if(const auto found = find_converge_target_point())
+    {
+        return *found;
+    }
+    return get_resolved_converge_point(world_transform);
+}
+
+void particle_emitter_component::resolve_converge_target()
+{
+    const bool names_entity = converge_target_.registry() != nullptr && converge_target_.entity() != entt::null;
+    if(!desc_.motion.converge || !names_entity)
+    {
+        resolved_converge_target_.reset();
+        return;
+    }
+    // A target that is gone leaves the point where it was last: the particles on their way do not jump.
+    if(const auto found = find_converge_target_point())
+    {
+        resolved_converge_target_ = found;
+    }
+}
+
 void particle_emitter_component::set_cone_angle(float value)
 {
     desc_.emission.cone_angle = math::clamp(value, 0.0f, 90.0f);
@@ -2589,6 +2735,7 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
         return;
     }
     transform_state_.current = world_transform;
+    transform_state_.converge_target = get_resolved_converge_point(world_transform);
     const auto frame = uint64_t(gfx::get_render_frame());
     // Updates were skipped (the entity was inactive or the emitter disabled): where it was then is not
     // where it moved from, and a path from there would fill with particles.
